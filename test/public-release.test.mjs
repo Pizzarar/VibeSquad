@@ -49,10 +49,15 @@ function fakeReq({ url = "/", method = "GET", headers = {}, local = false, remot
 }
 
 describe("repo hygiene", () => {
+  // Real user-profile paths (Windows/macOS/Linux). JSON-escaped and mixed-slashed forms are
+  // caught; a placeholder is skipped only when it ends the username (so "alice.smith" is a real
+  // path), and CI/shared OS names (runner, shared, public, ...) are allowed.
+  const hardcodedHomePath = /(?:[A-Za-z]:(?:\\{1,2}|\/)Users(?:\\{1,2}|\/)|\/Users\/|\/home\/)(?!(?:you|user|alice|example|runner|runneradmin|shared|public)(?![A-Za-z0-9._-])|<)[A-Za-z0-9._-]+/i;
+
   test("no personal identifiers in tracked or untracked-unignored files", async () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
-      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|lanes\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
+      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
     const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]168[.]", "50[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
     const personal = new RegExp(parts.map((p) => p.join("")).join("|"), "i");
     const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b", "i");
@@ -67,7 +72,14 @@ describe("repo hygiene", () => {
       } catch {
         continue;
       }
-      if (personal.test(text) || name.test(text) || legacyLabel.test(text)) hits.push(f);
+      // Lane docs legitimately mention the owner by first name, so skip the bare
+      // first-name check there — but still flag the personal regex and hardcoded
+      // user-profile paths.
+      const isLaneDoc = f.startsWith("docs/lanes/");
+      const hit = isLaneDoc
+        ? personal.test(text) || legacyLabel.test(text) || hardcodedHomePath.test(text)
+        : personal.test(text) || name.test(text) || legacyLabel.test(text);
+      if (hit) hits.push(f);
     }
     assert.deepEqual(hits, []);
   });
@@ -76,7 +88,6 @@ describe("repo hygiene", () => {
     const files = execFileSync("git", ["ls-files", "src/", "server/", "cli/"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
       .filter(Boolean);
-    const hardcodedHomePath = /(?:[A-Za-z]:\\Users\\|\/Users\/|\/home\/)(?!you\b|user\b|alice\b|example\b|<)[A-Za-z0-9._-]+/i;
     const skip = /\.(png|ico|exe|woff2?|icns|jpg|webp)$/i;
     const hits = [];
     for (const f of files) {
@@ -90,6 +101,28 @@ describe("repo hygiene", () => {
       if (hardcodedHomePath.test(text)) hits.push(f);
     }
     assert.deepEqual(hits, []);
+  });
+
+  test("hardcodedHomePath flags real paths and skips placeholders", () => {
+    const BS = "\\";
+    const realUser = ["js", "mi", "th"].join(""); // real-looking username built from split parts
+    // Positive: real-looking paths are flagged.
+    assert.match(`C:${BS}Users${BS}${realUser}${BS}AppData`, hardcodedHomePath);
+    assert.match(`C:${BS}${BS}Users${BS}${BS}${realUser}${BS}${BS}AppData`, hardcodedHomePath); // JSON-escaped
+    assert.match(`C:/Users/${realUser}/AppData`, hardcodedHomePath); // forward/mixed slashes
+    assert.match(`C:${BS}Users${BS}alice.smith${BS}x`, hardcodedHomePath); // dotted full name, not the "alice" placeholder
+    assert.match(`/Users/${realUser}/x`, hardcodedHomePath);
+    assert.match(`/home/${realUser}/x`, hardcodedHomePath);
+    // Negative: placeholders and CI/shared OS usernames are allowed.
+    assert.doesNotMatch(`C:${BS}Users${BS}<user>${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}you${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}USER${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}alice${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}example${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}runner${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}runneradmin${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}shared${BS}x`, hardcodedHomePath);
+    assert.doesNotMatch(`C:${BS}Users${BS}public${BS}x`, hardcodedHomePath);
   });
 });
 

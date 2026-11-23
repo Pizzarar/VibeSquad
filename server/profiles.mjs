@@ -114,7 +114,7 @@ const CAUSE_GATE_NOTE =
   'Cause-vs-symptom gate: your verdict must answer "Does this fix the cause or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.';
 
 const VERDICT_LINE_NOTE =
-  "Final verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`).";
+  "Final verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`). For a docs-only review of untracked lane docs (no commit), put a docs target in the sha slot instead: `docs:<repo-relative path>` (e.g. `PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md`) or a bare repo-relative path ending in `.md` (e.g. `PASS 0/0/0 EXP3.md`).";
 
 const NOTE_BODIES = {
   "Lead - Claude": LEAD_NOTE_BODY,

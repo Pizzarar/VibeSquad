@@ -3,7 +3,7 @@
 **Verdict: AS-IS.** Use Erodenn/godot-mcp-runtime's MCP server and its `McpBridge` autoload unchanged. Our `VSPlaytest` autoload needs no bridge code: the agent reaches `VSPlaytest.state()` / `.cheat(id,args)` through the server's `run_script` verb (verified below). Option (b), "our autoload speaks its wire", is not needed for v1.
 
 - Repo: https://github.com/Erodenn/godot-mcp-runtime, commit `3b8a4f311d29f96af166632e710429d072a1f372` (v4.0.1, MIT, "Copyright (c) 2025-2026 Owen Sterling").
-- Spike date 2026-11-21, Godot 4.7.2 on Windows 11, Node 24. Everything ran in `C:\Users\Fugma\AppData\Local\Temp\pto-b0\` (clone, scratch project, client scripts). Nothing from the clone was run before reading `bridge-protocol.ts` and `mcp_bridge.gd`; `npm ci --ignore-scripts` + `tsc` + `scripts/copy-scripts.js` only inside the clone.
+- Spike date 2026-11-21, Godot 4.7.2 on Windows 11, Node 24. Everything ran in `C:\Users\<user>\AppData\Local\Temp\pto-b0\` (clone, scratch project, client scripts). Nothing from the clone was run before reading `bridge-protocol.ts` and `mcp_bridge.gd`; `npm ci --ignore-scripts` + `tsc` + `scripts/copy-scripts.js` only inside the clone.
 - Drive method: a ~30-line node client (`client/drive.mjs`, newline-delimited JSON-RPC over the server's stdio) called `run_project {attach:true}`, launched Godot itself (`godot --path <scratch>`), then called the runtime tools.
 
 ## Wire protocol (bridge, game side)
