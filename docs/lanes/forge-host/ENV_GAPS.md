@@ -5,7 +5,7 @@ Method: `command -v` on forge for ~40 tools; scanned the 8 Squad repos for manif
 ## Present on forge
 python3 3.14.4, node/npm, gh, jq, rg, git.
 
-## Owner: one apt line (sudo)
+## Owner: one apt line (sudo) — DONE 2026-11-23 ~21:48Z (all 17 packages `ii`, dpkg --audit clean)
 ```bash
 sudo apt install -y python3-pip python3-venv pipx python3-lupa lua5.4 lua-busted python3-numpy python3-pil python3-pytest python3-jsonschema python3-yaml zip unzip build-essential sqlite3 libfontconfig1 xvfb
 ```
@@ -60,3 +60,5 @@ Smoke: `git archive HEAD` export of each repo into a temp dir (live checkouts ha
 | SportsBallBattles `8235006` | godot-4.7.2 | 0 | 0 |
 
 Runner follow-ups (repo-side, not this lane): EFI `run_godot.sh` GODOT_BIN + coreutils timeout = idea-635; SBB default `GODOT=godot` -> idea-639; ForgeWirk runner -> idea-640.
+
+**2026-11-23 ~22:00Z:** apt line installed (pip 25.1.1, venv, zip, lua5.4 etc. present). RF lupa follow-up: Ubuntu pip is PEP 668 externally-managed, so use the venv path (`python3 -m venv ~/.venvs/rf && ~/.venvs/rf/bin/pip install 'lupa>=2.8'`), not `pip --user`; then remove the hand-unpacked `~/.local/.../lupa`.
