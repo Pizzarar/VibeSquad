@@ -15,6 +15,7 @@ import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
+import { decideArm, readPerfectionVerdict } from "../exp6-arm.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -374,9 +375,23 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const given = { provider: clean(args.provider), model: clean(args.model), modeId: clean(pick(args, "modeId", "mode")) };
   let spawn = {};
   let profile = null;
+  // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
+  let ab = null;
+  let pickedProfile = profileName;
+  if (profileName) {
+    const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
+    const abLane = clean(args.labels?.lane) || clean(ctx.identity.lane);
+    ab = await decideArm({
+      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane,
+      endIso: ctx.env?.VS_EXP6_END,
+      verdictProbe: () => readPerfectionVerdict({ team: clean(ctx.identity.team) || "vibesquad" }),
+      listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
+    });
+    if (ab?.swapped) pickedProfile = ab.profile;
+  }
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const hit = await ctx.resolveProfile(profileName, profiles, { stakes: clean(args.labels?.stakes) || clean(args.stakes) });
+    const hit = await ctx.resolveProfile(pickedProfile, profiles, { stakes: clean(args.labels?.stakes) || clean(args.stakes) });
     if (!hit) {
       const known = profiles.map((p) => p.name).join(", ");
       throw new Error(`unknown profile "${profileName}". Known: ${known}`);
@@ -467,6 +482,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   if (callerAgentId(ctx)) labels["vs.parent"] = callerAgentId(ctx); // the verified caller (or the claimed id under the fallback)
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
+  if (ab?.swapped) labels.wf = ab.arm; // the stamp matches the swapped profile; the hook keeps a caller wf
   // Which of model/thinking came from the profile rather than the caller: the before.agent.create hook must not read those as an explicit override of the stakes ladder.
   delete labels["vs.profile-derived"];
   const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);
@@ -490,6 +506,10 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   );
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  if (ab) {
+    result.ab = { arm: ab.arm, swapped: ab.swapped, counts: ab.counts };
+    if (ab.swapped) await ctx.writeLog({ type: "metric", text: `exp6-arm swap: ${profileName} -> ${ab.profile} wf=${ab.arm} lane=${labels.lane ?? ""} counts=sonnet:${ab.counts.sonnet},dsp:${ab.counts.dsp}` }).catch(() => {});
+  }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;
   if (partnerName) {
