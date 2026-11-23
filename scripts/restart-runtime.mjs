@@ -15,7 +15,8 @@
 //   wait runner running:0 + held:0 -> stop runner -> stop server ->
 //   start server (POSIX + the server belongs to the systemd user unit, VIBESQUAD_SYSTEMD_UNIT default vibesquad:
 //   `systemctl --user start <unit>`, the unit's VIBESQUAD_START_RUNNER boots the runner; a systemctl failure or an unhealthy
-//   unit falls back to the detached launch, loudly; result relaunch.mode records which ran) (it boots the runner; a live runner.lock holder still booting is waited on up to RUNNER_BOOT_MAX_MS; fallback,
+//   unit falls back to the detached launch, loudly; a failed `systemctl stop` of the unit's MainPID aborts instead of SIGTERM,
+//   which Restart= would race; result relaunch.mode records which ran) (it boots the runner; a live runner.lock holder still booting is waited on up to RUNNER_BOOT_MAX_MS; fallback,
 //   only with no live holder: start the runner directly) -> verify -> resume lost agents -> check each
 //   resumed agent leaves `starting` (retry once, then mark it failed) -> clear drain (if that runner is still up) -> clear marker ->
 //   result file.
@@ -328,8 +329,27 @@ export function systemctlUser(args, { env = process.env, run = spawnSync, uid = 
     return { status: r.status ?? null, stdout: String(r.stdout ?? ''), stderr: String(r.stderr || r.error?.message || (r.signal ? `killed by ${r.signal}` : '')).trim() };
   } catch (e2) { return { status: null, stdout: '', stderr: String(e2?.message ?? e2) }; }
 }
-/** The real systemd deps (CLI entry only): ctl = systemctl --user, cgroup = /proc/<pid>/cgroup text or null. */
-export const realSystemd = (env = process.env) => ({ ctl: (args) => systemctlUser(args, { env }), cgroup: (pid) => { try { return readFileSync(`/proc/${pid}/cgroup`, 'utf8'); } catch { return null; } } });
+/**
+ * idea-666 nit: `systemctl --user <args>` without blocking the event loop -> Promise<{ status, stdout, stderr }>; never rejects.
+ * Used for stop/start, which can block up to TimeoutStopSec: under spawnSync the 30s marker refresh could not run and the
+ * desktop's 120s restart marker went stale mid-restart. Same env handling and 150s cap as systemctlUser (status null on timeout).
+ */
+export function systemctlUserAsync(args, { env = process.env, spawnFn = spawn, uid = typeof process.getuid === 'function' ? process.getuid() : null, timeoutMs = 150000 } = {}) {
+  const e = stripAgentEnv(env);
+  if (!e.XDG_RUNTIME_DIR && uid != null) e.XDG_RUNTIME_DIR = `/run/user/${uid}`;
+  return new Promise((resolve) => {
+    let out = ''; let err = ''; let done = false; let child; let timer = null;
+    const finish = (status, why = '') => { if (done) return; done = true; if (timer) clearTimeout(timer); resolve({ status, stdout: out, stderr: (err || why).trim() }); };
+    try { child = spawnFn('systemctl', ['--user', ...args], { env: e, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e2) { finish(null, String(e2?.message ?? e2)); return; }
+    child.stdout?.on('data', (c) => { out += c; });
+    child.stderr?.on('data', (c) => { err += c; });
+    child.on('error', (e2) => finish(null, String(e2?.message ?? e2)));
+    child.on('close', (code, signal) => finish(code ?? null, signal ? `killed by ${signal}` : ''));
+    timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch { /* gone */ } finish(null, `timed out after ${Math.round(timeoutMs / 1000)}s`); }, timeoutMs);
+  });
+}
+/** The real systemd deps (CLI entry only): ctl = systemctl --user (sync: show), ctlAsync = the same off the event loop (stop/start), cgroup = /proc/<pid>/cgroup text or null. */
+export const realSystemd = (env = process.env) => ({ ctl: (args) => systemctlUser(args, { env }), ctlAsync: (args) => systemctlUserAsync(args, { env }), cgroup: (pid) => { try { return readFileSync(`/proc/${pid}/cgroup`, 'utf8'); } catch { return null; } } });
 const SHOW_PROPS = ['LoadState', 'ActiveState', 'SubState', 'UnitFileState', 'MainPID', 'ControlGroup', 'Environment', 'EnvironmentFiles', 'WorkingDirectory', 'KillMode'];
 /** `systemctl --user show <unit>` -> { ok, props } (props: key -> value), or { ok: false, error }. */
 export function systemdShow(sd, unit) {
@@ -725,7 +745,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         ...(opts.wait ? [`drain: runner POST /drain (ttl ${Math.round(drainTtlMs(opts) / 1000)}s): new background work is refused while waiting; cleared at the end`] : []),
         opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : det.runner.identity === 'unknown' && det.runner.pid ? `runner pid ${det.runner.pid} alive, identity unknown: stop only via token /shutdown (never killed by pid)` : 'runner not running: nothing to stop',
-        det.systemd?.refuse ? `REFUSE: ${det.systemd.refuse}` : det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : det.systemd?.use && det.systemd.mainPid === det.server.pid ? `systemctl --user stop ${det.systemd.unit} (KillMode=process: the main pid only), force after ${opts.stopTimeoutSec}s` : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
+        det.systemd?.refuse ? `REFUSE: ${det.systemd.refuse}` : det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : det.systemd?.use && det.systemd.mainPid === det.server.pid ? `systemctl --user stop ${det.systemd.unit} (KillMode=process: the main pid only); a failed stop aborts the restart (no SIGTERM: Restart= would race the relaunch)` : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
         det.systemd?.use
           ? `start server: systemctl --user start ${det.systemd.unit} (systemd user unit, ${det.systemd.reason}; unit env + drop-ins apply, code from the unit WorkingDirectory ${det.systemd.workingDirectory ?? '(unset)'}${det.systemd.serverStartsRunner ? '; it boots the runner' : '; unit sets VIBESQUAD_START_RUNNER off: runner started directly below'}); if systemctl fails or the server is not healthy in time: systemctl --user stop ${det.systemd.unit}, free the port (a serve.mjs is stopped, anything else aborts), then detached ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}), logged loudly`
           : `start server: ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}, from ${det.serverLaunch.source}, log ${det.serverLaunch.logFile}); it boots the runner`,
@@ -762,6 +782,13 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
   };
   let markerTimer = null;
+  // idea-666 nit: systemctl stop/start can block up to TimeoutStopSec (90s default; capped at 150s). Run them off the event loop
+  // (ctlAsync: the 30s marker refresh keeps firing) and touch the marker right before and after, so the desktop never sees a
+  // stale (>120s) marker mid-call. A deps.systemd without ctlAsync (tests, importers) uses its ctl.
+  const ctlLong = async (args) => {
+    touchMarker();
+    try { return await (d.systemd.ctlAsync ? d.systemd.ctlAsync(args) : d.systemd.ctl(args)); } finally { touchMarker(); }
+  };
   let drainOn = null; // { runner: { port, token } }: the runner this restart set a drain on (cleared in the finally)
   // R2 L (idea-375): an adopted replacement runner booted without our drain (drain.json may still hold the old one's until): set the
   // drain on it and point drainOn there, so an abort after the adoption (preflight refusal, a failed stop) clears it instead of
@@ -1042,14 +1069,27 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // The runner went first, so the supervisor inside this server may have respawned one: swept below.
     // forge-host R: the unit's own MainPID is stopped through systemd (an explicit stop is never auto-restarted; serve.mjs
     // exits 128 on SIGTERM, which Restart=on-failure would restart). An orphan in its cgroup (not the MainPID) gets SIGTERM.
+    // idea-666 L1: a failed `systemctl stop` of the MainPID is never followed by a SIGTERM (or the stopProc SIGKILL): the nonzero
+    // exit would be restarted by Restart= after RestartSec, racing this restart's own start (and its detached fallback) for the
+    // port. Re-check the unit: inactive with the pid gone means the stop took effect anyway (go on); anything else aborts loudly
+    // with the server left as systemd has it (one server at most, never two).
     const sysd = det.systemd;
     const stopServerGracefully = async (pid) => {
       if (sysd?.use && sysd.killMode === 'process') { // R1 M1: detection already refuses other modes; never stop a cgroup-killing unit
         const now = systemdShow(d.systemd, sysd.unit);
-        if (now.ok && (Number(now.props.MainPID) || 0) === pid) {
-          const r = d.systemd.ctl(['stop', `${sysd.unit}.service`]);
+        // A failed show cannot clear the pid: the detection's MainPID still counts (SIGTERMing it is the L1 race).
+        if (now.ok ? (Number(now.props.MainPID) || 0) === pid : sysd.mainPid === pid) {
+          const r = await ctlLong(['stop', `${sysd.unit}.service`]);
           if (r.status === 0) { step('server stop via systemd', { unit: sysd.unit, pid }); return; }
-          step('systemctl stop failed, SIGTERM instead', { unit: sysd.unit, pid, status: r.status, error: r.stderr });
+          const after = systemdShow(d.systemd, sysd.unit);
+          const state = after.ok ? `${after.props.ActiveState ?? '?'}${after.props.SubState ? `/${after.props.SubState}` : ''}, MainPID ${Number(after.props.MainPID) || 0}` : after.error;
+          if (after.ok && !ACTIVE_STATES.has(after.props.ActiveState) && !(Number(after.props.MainPID) || 0) && !d.pidAlive(pid)) {
+            step('server stop via systemd (systemctl reported a failure, unit now inactive)', { unit: sysd.unit, pid, status: r.status, error: r.stderr, state });
+            return;
+          }
+          step('SYSTEMCTL STOP FAILED, not signalling the unit MainPID', { unit: sysd.unit, pid, status: r.status, error: r.stderr, state });
+          fail('server stop', `systemctl --user stop ${sysd.unit}.service failed (${r.stderr || `exit ${r.status}`}); unit now: ${state}. pid ${pid} is the unit's MainPID: a SIGTERM/SIGKILL exits nonzero and Restart= would start it again while this restart starts its own server on port ${det.port}, so nothing was signalled and nothing is started. The server is ${d.pidAlive(pid) ? `still up (pid ${pid}, under ${sysd.unit}.service)` : 'down; the unit owns its restart'}. Check systemctl --user status ${sysd.unit}, then restart again`);
+          throw new Error('abort');
         }
       }
       d.termGracefully(pid);
@@ -1110,7 +1150,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // active, Restart= may try again after RestartSec: the detached server holds the port by then and that retry fails (warned).
     // Returns the unitStop text for the fallback record; throws 'abort' (after fail()) when the port cannot be freed.
     const freePortForFallback = async (what, unitMain) => {
-      const stop = d.systemd.ctl(['stop', `${sysd.unit}.service`]);
+      const stop = await ctlLong(['stop', `${sysd.unit}.service`]);
       const unitStop = stop.status === 0 ? 'ok' : `failed (${stop.stderr || `exit ${stop.status}`})`;
       const after = systemdShow(d.systemd, sysd.unit); // Restart= may have cycled the MainPID since the start
       const mainNow = after.ok ? Number(after.props.MainPID) || null : null;
@@ -1136,13 +1176,37 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       step('server already up, not starting another', { port: det.port });
       if (sysd) result.relaunch.mode = 'already-up';
     } else if (sysd?.use) {
-      const r = d.systemd.ctl(['start', `${sysd.unit}.service`]);
-      if (r.status === 0) {
-        const now = systemdShow(d.systemd, sysd.unit);
-        const pid = now.ok ? Number(now.props.MainPID) || null : null;
+      const r = await ctlLong(['start', `${sysd.unit}.service`]);
+      const now = systemdShow(d.systemd, sysd.unit);
+      let pid = now.ok ? Number(now.props.MainPID) || null : null;
+      // idea-666 L2: no exit status (systemctl timed out or was killed) does not mean the start failed: the job may have run.
+      // Re-check the unit and the port before discarding the unit server for a detached fallback: a unit active/activating
+      // with a live MainPID, or a server already answering /api/health, is kept (the boot wait and the after-check below then
+      // judge it like any systemd start; a never-healthy one still gets the stop + fallback).
+      let keptAfterNull = null;
+      if (r.status === null) {
+        const st = now.ok ? now.props.ActiveState : null;
+        if (now.ok && ['active', 'activating', 'reloading'].includes(st) && pid) keptAfterNull = `unit ${st}, MainPID ${pid}`;
+        else if (await healthy()) {
+          // Only a serve.mjs listener is kept (the identity check preflight, the stop and freePortForFallback make). Anything
+          // else answering on the port is not adopted: the start counts as failed and freePortForFallback, seeing a foreign
+          // listener, aborts before any detached launch, so this path can never add a second server.
+          const lp = d.listenerPid(det.port) ?? null;
+          const li = lp != null ? d.procInfo(lp) : null;
+          if (lp != null && li && /serve\.mjs/.test(li.cmd ?? '')) {
+            if (!(pid && d.pidAlive(pid))) pid = lp;
+            keptAfterNull = `server answers /api/health on port ${det.port} (${now.ok ? `unit ${st}` : now.error})`;
+          } else warn(`systemctl --user start ${sysd.unit}.service returned no status (${r.stderr || 'no exit code'}) and port ${det.port} answers /api/health, but ${lp == null ? 'its listener pid is unknown' : notServeMsg(lp, li)}: not adopted as the unit server; treating the start as failed`);
+        }
+      }
+      if (r.status === 0 || keptAfterNull) {
         result.relaunch.mode = 'systemd';
         if (pid) { spawnedServerPid = pid; try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* best effort */ } }
-        step('server started via systemd', { unit: sysd.unit, pid, activeState: now.ok ? now.props.ActiveState : null });
+        if (keptAfterNull) {
+          result.relaunch.startNoStatus = { error: r.stderr, kept: keptAfterNull };
+          warn(`systemctl --user start ${sysd.unit}.service returned no status (${r.stderr || 'no exit code'}), but ${keptAfterNull}: kept the unit server, no detached fallback`);
+        }
+        step('server started via systemd', { unit: sysd.unit, pid, activeState: now.ok ? now.props.ActiveState : null, ...(keptAfterNull ? { startStatus: null, kept: keptAfterNull } : {}) });
       } else await fallBackFreed(`systemctl --user start ${sysd.unit}.service failed`, { status: r.status, error: r.stderr }, null);
     } else {
       startDetached();
