@@ -352,9 +352,17 @@ const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, mode
 // heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
 // /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
 const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
-export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; repoHeadCheck.clear(); };
+// usa-42: pre-cutover agent logs restored by scripts/usage-import-archive.mjs into <home>/runner/agents-archive/ (read-only here,
+// deduped by agent id; live runner/agents wins). The archive is immutable once imported, so its listing is cached per home and
+// keyed by the archive dir's mtime: an import adds entries, which moves the dir mtime. While the dir stat matches, a request
+// skips the readdir and, once one pass has folded every archived file, every per-file stat too: it reuses the usageFiles
+// entries as they are. A moved dir mtime rescans the listing; files already folded with an unchanged size/mtime are not re-read.
+const archiveIndex = new Map(); // homeDir -> { mtimeMs, names, folded }
+let archiveScans = 0; // listings built (readdir of agents-archive)
+let archiveFolds = 0; // per-file stat passes over the archive
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); archiveIndex.clear(); squadReposCache = null; repoHeadCheck.clear(); };
 let usageReadBytes = 0;
-export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes });
+export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes, archive: { scans: archiveScans, folds: archiveFolds, files: [...archiveIndex.values()].reduce((n, a) => n + a.names.length, 0) } });
 
 /** YYYY-MM-DD for a ts, or null when it is not a valid date (never throws). */
 const dayOf = (ts) => {
@@ -381,6 +389,69 @@ const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
   (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
 );
 
+
+// ---- usa-44: unit evidence for implementers that ran in the MAIN checkout (cwd is not a `unit-*` worktree), so the
+// worktree-basename path in attributeImplementer() can't see them. Folded during the existing event fold (no second pass),
+// only for worker runs whose cwd basename is not a unit worktree. Ranked by precision:
+//   1. labels.unit on the run (explicit spawn label)                                     -> st.unitLabel
+//   2. the work order (first input) assigns it: `vs worktree create <u>` / `branch unit-x`  -> st.unitAssigned (Set)
+//   3. the run's own tool calls enter/create it: `cd .../worktrees/<repo>/<u>`, `vs worktree create <u>`,
+//      `git checkout|switch [-b|-c] unit-x`                                              -> st.unitWorked (Map name -> calls)
+const UNIT_REF_CAP = 12;
+const ASSIGN_CREATE_RE = /vs\s+worktree\s+create\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._-]{2,80})/gi;
+const ASSIGN_BRANCH_RE = /\bbranch\s+[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const WORK_PATH_RE = /[\\/]worktrees[\\/][^\\/\s"'`]+[\\/]([A-Za-z0-9][A-Za-z0-9._-]{2,80})(?=[\\/\s"'`;&|)]|$)/gi;
+const WORK_GIT_RE = /\bgit\s+(?:checkout|switch)\s+(?:-[bcB]\s+)?[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const isMainCheckoutWorker = (st) => st.role === "worker" && !/^unit-/i.test(unitNameOfCwd(st.cwd));
+const stripName = (n) => n.replace(/[.,;:)\]]+$/, "").toLowerCase();
+function foldUnitLabel(st, m) {
+  const u = m?.labels?.unit;
+  // gated like the other signals (usa-44 R1 M2): a run that already owns a worktree cwd must not also claim a label unit
+  if (typeof u === "string" && u.trim() && isMainCheckoutWorker(st)) st.unitLabel = u.trim().toLowerCase();
+}
+function foldAssignedUnits(st, text) {
+  if (typeof text !== "string" || !isMainCheckoutWorker(st)) return;
+  // `vs worktree create <u>` is an explicit assignment (strong); `branch unit-x` also matches prose ("branch unit-x is already
+  // merged"), so it is only a mention (weak): usa-44 R1 M3.
+  for (const [re, key] of [[ASSIGN_CREATE_RE, "unitAssigned"], [ASSIGN_BRANCH_RE, "unitMentioned"]]) {
+    const set = (st[key] ??= new Set());
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(text)) && set.size < UNIT_REF_CAP;) set.add(stripName(m[1]));
+  }
+}
+function foldWorkedUnits(st, input) {
+  if (!isMainCheckoutWorker(st)) return;
+  const cmd = typeof input?.command === "string" ? input.command : (typeof input?.cmd === "string" ? input.cmd : (typeof input === "string" ? input : ""));
+  if (!cmd || cmd.length > 20_000) return;
+  const map = (st.unitWorked ??= new Map());
+  const inCall = new Set(); // L1: one call counts a unit once, however often the command repeats its path
+  for (const re of [WORK_PATH_RE, ASSIGN_CREATE_RE, WORK_GIT_RE]) {
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(cmd));) inCall.add(stripName(m[1]));
+  }
+  for (const n of inCall) {
+    if (map.has(n) || map.size < UNIT_REF_CAP) map.set(n, (map.get(n) ?? 0) + 1);
+    else st.unitWorkedOverflow = true; // L2: a dropped unit means the tallies are no longer a trustworthy ranking
+  }
+}
+/** The single unit a main-checkout run is attributed to (never two): label > the work order's one `worktree create` unit > the
+ * unique most-worked unit (>= 2 calls, strictly ahead, no overflow). A unit only mentioned as `branch unit-x` in the work order
+ * counts when the tool calls don't point elsewhere. A run that spread over several units stays unattributed (no splitting, no guessing). */
+function primaryUnitRef(st) {
+  if (st.unitLabel) return st.unitLabel;
+  if (st.unitAssigned?.size === 1) return [...st.unitAssigned][0];
+  if (st.unitAssigned?.size > 1) return null;
+  const w = st.unitWorked && !st.unitWorkedOverflow ? [...st.unitWorked].sort((a, b) => b[1] - a[1]) : [];
+  const worked = w.length && w[0][1] >= 2 && (w.length === 1 || w[0][1] > w[1][1]) ? w[0][0] : null;
+  if (st.unitMentioned?.size > 1) return null;
+  if (st.unitMentioned?.size === 1) {
+    const m = [...st.unitMentioned][0];
+    if (st.unitWorkedOverflow) return null;
+    return !worked || worked === m ? m : null; // tool calls disagree with the prose mention -> ambiguous
+  }
+  return worked;
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -394,6 +465,7 @@ function foldEvent(st, ev) {
     if (ev.cwd !== undefined) st.cwd = ev.cwd;
     if (st.createdAt === undefined && t !== null) st.createdAt = t;
     foldIdentity(st, ev.meta);
+    foldUnitLabel(st, ev.meta);
     if (ev.meta?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "resume") {
     st.restartedOrResumed = true;
@@ -404,6 +476,7 @@ function foldEvent(st, ev) {
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+    foldUnitLabel(st, ev.patch);
     if (ev.patch?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "status") {
     if (t !== null) {
@@ -438,6 +511,7 @@ function foldEvent(st, ev) {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
     st.lastLine = "";
@@ -465,6 +539,7 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "tool") {
     if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
+    else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -966,7 +1041,8 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const rounds = maxR > 0 ? maxR : fixCount;
-    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
+    // usa-44: also the hand-typed "Merge unit-<name>: ..." form some leads used (11-19..11-20); the name is the branch.
+    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(c.subject)?.[1] ?? null;
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
@@ -1215,6 +1291,7 @@ function agentV2(st, agentId) {
     respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
+    unitRef: primaryUnitRef(st),
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1404,12 +1481,27 @@ const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === 
 function indexWorkers(agents) {
   const byUnit = new Map();
   const byLane = new Map();
+  const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
     getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
+    if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
   }
-  return { byUnit, byLane };
+  return { byUnit, byLane, byRef };
+}
+
+/** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
+ * when a run that did exists. One profile -> the earliest created; several profiles -> ambiguous (null), as for the worktree path. */
+function pickImplementer(cands) {
+  const impls = cands.filter(isImplementerWorker);
+  const worked = impls.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : impls;
+  if (pool.length === 1) return pool[0];
+  if (pool.length > 1 && new Set(pool.map((a) => `${a.provider}|${a.profile}`)).size === 1) {
+    return pool.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
+  }
+  return null;
 }
 
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
@@ -1418,18 +1510,29 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
     const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
-    if (cwdMatches.length === 1) return cwdMatches[0];
-    if (cwdMatches.length > 1) {
+    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return cwdMatches[0];
+    if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length === 1) return impls[0];
-      if (impls.length > 1) {
-        const profiles = new Set(impls.map((a) => `${a.provider}|${a.profile}`));
-        if (profiles.size === 1) {
-          return impls.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
-        }
-      }
-      return null; // ambiguous cwd match across different implementer profiles
+      if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
     }
+    // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
+    // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
+    // Squad) that is not before the run was created, so a later follow-up run is never credited to an earlier merge (R1 M1).
+    const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !index.mergedNames?.has(unitNameOfCwd(a.cwd)) // a run whose own worktree is a merged unit is owned by the byUnit path
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (refs.length) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = refs.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
+      if (picked) return picked;
+      return null; // evidence names this unit but another merge owns it (or it is ambiguous): never fall back to the lane guess (R1 M2)
+    }
+    if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
+    if (cwdMatches.length > 1) return null;
   }
   if (!unit.lane || mergedAtMs === null) return null;
   const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
@@ -2100,16 +2203,28 @@ function buildFloor(merged, agents, totals) {
 
 const usageLedgerPath = (home) => join(home || vibesquadHome(), "runner", "usage-ledger.jsonl");
 
-/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. */
+/** Ledger identity: unit records by sha, day records by day; null = not keyed (kept as-is, never superseded). */
+const ledgerKey = (r) => (r?.kind === "unit" && r.sha ? `unit\u0000${r.sha}` : r?.kind === "day" && r.day ? `day\u0000${r.day}` : null);
+/** A unit record whose cost is still unknown (a re-fold may supersede it once its implementer log is readable). */
+const ledgerCostMissing = (r) => !(Number.isFinite(r?.costUsd) && r.costUsd > 0);
+
+/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. usa-42: the file is append-only, so a
+ * later line for the same unit sha / day supersedes the earlier one (last wins, kept at the first line's position). */
 export function readUsageLedger(home) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return [];
   let text = "";
   try { text = readFileSync(join(dir, "runner", "usage-ledger.jsonl"), "utf8"); } catch { return []; }
   const out = [];
+  const at = new Map(); // ledgerKey -> index in out
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* bad line */ }
+    let r;
+    try { r = JSON.parse(line); } catch { continue; /* bad line */ }
+    const k = ledgerKey(r);
+    if (k !== null && at.has(k)) { out[at.get(k)] = r; continue; }
+    if (k !== null) at.set(k, out.length);
+    out.push(r);
   }
   return out;
 }
@@ -2117,18 +2232,25 @@ export function readUsageLedger(home) {
 /** Idempotently append snapshot records (kind "unit" keyed by sha, "day" keyed by day) missing from the ledger.
  * Day records are only written once their day has fully completed (day < today UTC), so the archived day is the
  * end-of-day total rather than the first partial snapshot of an in-progress day. Never writes the real home under a
- * test runner (isForbiddenRealHome). Returns the number of new lines appended. */
+ * test runner (isForbiddenRealHome). Returns the number of new lines appended.
+ * usa-42 re-fold: a unit already in the ledger without a cost (written while its implementer's agent log was missing, e.g. the
+ * forge cutover before runner/agents-archive was imported) is superseded by appending the fresh record once that record has a
+ * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent. */
 export function syncUsageLedger(home, snapshot, now = Date.now) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
   const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
+  const costless = new Set(existing.filter((r) => r.kind === "unit" && r.sha && ledgerCostMissing(r)).map((r) => r.sha));
   const lines = [];
   for (const rec of snapshot) {
     if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
-    if (keys.has(key)) continue;
+    if (keys.has(key)) {
+      if (rec.kind === "unit" && costless.has(rec.sha) && !ledgerCostMissing(rec)) { costless.delete(rec.sha); lines.push(JSON.stringify(rec) + "\n"); }
+      continue;
+    }
     keys.add(key);
     lines.push(JSON.stringify(rec) + "\n");
   }
@@ -2726,6 +2848,44 @@ function vsLogFiles(dir) {
   return files;
 }
 
+/** usa-42: the agents-archive listing for a home (sync: getUsage). `folded` = a pass already folded every listed file. */
+function archiveListingSync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = statSync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+/** Async twin of archiveListingSync for the warm path (stat + readdir on the threadpool). */
+async function archiveListingAsync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = await statAsync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+function newArchiveEntry(homeDir, mtimeMs, names) {
+  archiveScans += 1;
+  const entry = { mtimeMs, names, folded: false };
+  archiveIndex.set(homeDir, entry);
+  return { ...entry, entry };
+}
+/** Agent logs to fold: live runner/agents first, then archived ids not present live. -> [{ n, file, archived }] + the listing. */
+function agentLogSources(dir, liveNames, arch) {
+  const out = liveNames.map((n) => ({ n, file: join(dir, n), archived: false }));
+  if (arch.names.length) {
+    const live = new Set(liveNames);
+    for (const n of arch.names) if (!live.has(n)) out.push({ n, file: join(arch.dir, n), archived: true });
+  }
+  return out;
+}
+
 /** Brings usageFiles (agent logs) and logLineFiles (vs logs) up to date without holding the loop; returns the agent files folded. */
 async function warmUsageCaches(home) {
   const homeDir = home || vibesquadHome();
@@ -2734,8 +2894,17 @@ async function warmUsageCaches(home) {
   const dir = join(homeDir, "runner", "agents");
   let names = [];
   try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
-  for (let i = 0; i < names.length; i += USAGE_STAT_BATCH) {
-    const files = names.slice(i, i + USAGE_STAT_BATCH).map((n) => join(dir, n));
+  const arch = await archiveListingAsync(homeDir);
+  const sources = agentLogSources(dir, names, arch);
+  // A folded archive listing needs no stats: its files are immutable and already in usageFiles (a missing one is refolded by usageSteps).
+  let toStat = sources;
+  if (arch.folded) {
+    toStat = [];
+    for (const x of sources) { if (x.archived && usageFiles.has(x.file)) warmed.add(x.file); else toStat.push(x); }
+  }
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
+  for (let i = 0; i < toStat.length; i += USAGE_STAT_BATCH) {
+    const files = toStat.slice(i, i + USAGE_STAT_BATCH).map((x) => x.file);
     const stats = await Promise.all(files.map((f) => statAsync(f).catch(() => null)));
     let sliceStart = performance.now();
     for (let k = 0; k < files.length; k++) {
@@ -2748,6 +2917,7 @@ async function warmUsageCaches(home) {
       if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
     }
   }
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const logFiles = vsLogFiles(homeDir);
   const liveLogs = new Set(logFiles);
   const homePrefix = homeDir + sep;
@@ -2824,13 +2994,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const allAgentSquads = []; // unfiltered { st, squad } for the autonomy bySquad comparison
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  const arch = isForbiddenRealHome(homeDir) ? { names: [], folded: true } : archiveListingSync(homeDir); // usa-42
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
   let step = 0;
-  for (const n of names) {
+  for (const { n, file, archived } of agentLogSources(dir, names, arch)) {
     if (++step % USAGE_STEP_EVERY === 0) yield;
-    const file = join(dir, n);
     seen.add(file);
     let st;
-    try { st = (warmed?.has(file) && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; } // warmed: getUsageAsync just folded it
+    // warmed: getUsageAsync just folded it; archived + folded listing: immutable, reuse the fold without a stat
+    try { st = (warmed?.has(file) && usageFiles.get(file)) || (archived && arch.folded && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; }
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad });
     if (squad && agentSquad !== squad) continue;
@@ -2850,6 +3022,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     }
   }
   for (const f of [...usageFiles.keys()]) if (!seen.has(f)) usageFiles.delete(f); // file removed: forget it
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const rows = [...agg.values()].sort((a, b) => b.day.localeCompare(a.day) || b.costUsd - a.costUsd);
   const by = (k) => {
     const m = new Map();
@@ -2898,6 +3071,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
   const workerIndex = indexWorkers(agents);
+  workerIndex.mergesByName = new Map(); // usa-44: `${squad}|${unit name}` -> merges ascending by time (see attributeImplementer)
+  workerIndex.mergedNames = new Set(); // lowercase names of every merged unit
+  for (const u of mergedRaw) {
+    const n = typeof u.unit === "string" ? u.unit.toLowerCase() : "";
+    const ms = tsMs(u.mergedAt);
+    if (!n || ms === null) continue;
+    workerIndex.mergedNames.add(n);
+    getOrSet(workerIndex.mergesByName, `${u.squad ?? ""}|${n}`, () => []).push({ ms, sha: u.sha });
+  }
+  for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
   const merged = [];
   for (const u of mergedRaw) {
