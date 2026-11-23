@@ -510,12 +510,21 @@ test("leadLongTurnRows: pooled, squad pick, pct, missing", () => {
   const b = (turns, costUsd) => ({ turns, costUsd });
   const l = { threshold: 80, pooled: { productive: b(3, 6), loop: b(1, 3), other: b(1, 1) }, bySquad: [{ teamId: "efi", productive: b(2, 1), loop: b(0, 0), other: b(0, 0) }] };
   const p = leadLongTurnRows(l, null);
-  assert.deepEqual(p.map((r) => [r.key, r.turns, r.pct]), [["productive", 3, 0.6], ["loop", 1, 0.3], ["other", 1, 0.1]]);
+  assert.deepEqual(p.map((r) => [r.key, r.turns, r.pct]), [["productive", 3, 0.6], ["waiting", 0, 0], ["loop", 1, 0.3], ["other", 1, 0.1]]);
   assert.equal(leadLongTurnRows(l, "efi")[0].turns, 2);
   const none = leadLongTurnRows(l, "nosuch"); // squad set, no row -> zeros, never pooled
-  assert.deepEqual(none.map((r) => [r.turns, r.costUsd, r.pct]), [[0, 0, null], [0, 0, null], [0, 0, null]]);
+  assert.deepEqual(none.map((r) => [r.turns, r.costUsd, r.pct]), [[0, 0, null], [0, 0, null], [0, 0, null], [0, 0, null]]);
   assert.equal(leadLongTurnRows({ threshold: 80, pooled: l.pooled }, "efi")[0].turns, 0);
-  assert.equal(leadLongTurnRows(l, "efi")[1].pct, 0);
+  assert.equal(leadLongTurnRows(l, "efi")[2].pct, 0);
   assert.equal(leadLongTurnRows({ threshold: 80, pooled: { productive: b(0, 0), loop: b(0, 0), other: b(0, 0) } }, null)[0].pct, null);
   assert.equal(leadLongTurnRows(undefined, null), null);
+});
+test("leadLongTurnRows: waiting row (4 rows) and older server without waiting renders 0", () => {
+  const b = (turns, costUsd) => ({ turns, costUsd });
+  const l = { threshold: 80, pooled: { productive: b(1, 2), waiting: b(4, 6), loop: b(1, 1), other: b(1, 1) } };
+  const rows = leadLongTurnRows(l, null);
+  assert.deepEqual(rows.map((r) => [r.key, r.turns, r.pct]), [["productive", 1, 0.2], ["waiting", 4, 0.6], ["loop", 1, 0.1], ["other", 1, 0.1]]);
+  const old = leadLongTurnRows({ threshold: 80, pooled: { productive: b(1, 2), loop: b(1, 1), other: b(1, 1) } }, null);
+  assert.equal(old.length, 4);
+  assert.deepEqual([old[1].key, old[1].turns, old[1].costUsd, old[1].pct], ["waiting", 0, 0, 0]);
 });

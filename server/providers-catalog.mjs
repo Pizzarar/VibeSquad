@@ -512,7 +512,7 @@ function foldEvent(st, ev) {
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
     // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
     if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
-      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
+      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, waiting: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
       const k = classifyLeadTurn(turnTools, lt.seen);
       lt[k].turns += 1;
       lt[k].costUsd += delta;
@@ -704,8 +704,11 @@ const SPAWN_BURST_MIN = 3;
 // usa-40: lead turns past this index are the "long tail"; mirrors RESPAWN_OF_LABEL in server/hooks/agent-duties.ts (a .ts module this .mjs can't import).
 export const LEAD_LONG_TURN_MIN = 80;
 const RESPAWN_OF_LABEL = "respawnOf";
-const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:wait|watch|log|spawn)\b/;
-const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:wait(?:_for_agent)?|watch|spawn_worker|report)$/i;
+const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:log|spawn)\b/;
+const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:spawn_worker|report)$/i;
+// usa-43: waiting isn't work. wait/watch calls (shell `vs wait|watch`, or MCP wait/wait_for_agent/watch) no longer count as productive.
+const LEAD_WAIT_CMD_RE = /(?:^|[\s;&|])vs\s+(?:wait|watch)\b/;
+const LEAD_WAIT_TOOL_RE = /(?:^|[_./:-])(?:wait(?:_for_agent)?|watch)$/i;
 /** Key-order-independent JSON for tool-call signatures. */
 function stableJson(v) {
   if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
@@ -720,11 +723,21 @@ function isProductiveTool(t) {
   // usa-40 R1 H1a: ACP tool events carry no input; the title (our `name`) holds the command text, so test it too.
   return LEAD_PRODUCTIVE_CMD_RE.test(cmd) || LEAD_PRODUCTIVE_CMD_RE.test(name);
 }
+/** A wait/watch call that carries no productive command (so `git commit && vs wait` is not a pure wait). */
+function isWaitTool(t) {
+  const name = String(t.name ?? "");
+  if (LEAD_WAIT_TOOL_RE.test(name)) return true;
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  return (LEAD_WAIT_CMD_RE.test(cmd) || LEAD_WAIT_CMD_RE.test(name)) && !isProductiveTool(t);
+}
 /** usa-40: classify one long-tail lead turn from its tool calls. Mutates seen (signature -> count over earlier long-tail turns). */
 export function classifyLeadTurn(tools, seen) {
   // usa-40 R1 H1b: a call with no input (ACP: title only) can't be proven identical to an earlier one, so it never enters the
   // loop signatures (a bare `title|null` would collapse distinct calls into a false loop).
-  const sigs = tools.filter((t) => t.input !== undefined).map(toolSig);
+  // usa-43 waiting rule: a turn is "waiting" iff it has >=1 tool call and EVERY call is a wait/watch. Checked first, so a wait-only
+  // turn is never productive or loop (waits don't feed loop signatures); any other call alongside makes it non-waiting; zero calls is not waiting.
+  if (tools.length > 0 && tools.every(isWaitTool)) return "waiting";
+  const sigs = tools.filter((t) => t.input !== undefined && !isWaitTool(t)).map(toolSig);
   const productive = tools.some(isProductiveTool);
   const repeated = !productive && sigs.some((g) => (seen.get(g) ?? 0) >= 2);
   for (const g of sigs) seen.set(g, (seen.get(g) ?? 0) + 1);
@@ -1772,13 +1785,13 @@ function findStorms(tsList, windowMs, min) {
 /** usa-40: lead long-tail (turn > LEAD_LONG_TURN_MIN) split, pooled and per team. Whole-log, unfiltered by squad/day like the other v2 rollups. */
 function buildLeadLongTurns(allAgentSquads) {
   const zero = () => ({ turns: 0, costUsd: 0 });
-  const mk = () => ({ productive: zero(), loop: zero(), other: zero() });
+  const mk = () => ({ productive: zero(), waiting: zero(), loop: zero(), other: zero() });
   const pooled = mk();
   const by = new Map();
   for (const { st, squad } of allAgentSquads) {
     if (!st.longTail) continue;
     const row = getOrSet(by, squad ?? "unknown", mk);
-    for (const k of ["productive", "loop", "other"]) {
+    for (const k of ["productive", "waiting", "loop", "other"]) {
       for (const t of [pooled[k], row[k]]) { t.turns += st.longTail[k].turns; t.costUsd += st.longTail[k].costUsd; }
     }
   }
