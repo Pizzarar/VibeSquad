@@ -655,6 +655,21 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         />
       </div>
 
+      <div class="field" id="fp-field" style="{code_field_display}">
+        <div class="label-row">
+          <label for="caFp">CA Fingerprint</label>
+          <span style="font-size:11px;color:var(--muted)">Required: server PC &gt; <b>Pair a device</b></span>
+        </div>
+        <input
+          type="text"
+          id="caFp"
+          name="fp"
+          placeholder="Filled from the pairing link, or type the SHA-256 shown there"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
       <div id="form-error" class="alert-box" style="display:none">
         <span class="alert-dot">●</span>
         <span id="form-error-text"></span>
@@ -686,6 +701,8 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
     const presetMesh = document.getElementById('preset-meshnet');
     const serverPicker = document.getElementById('server-picker');
     const codeField = document.getElementById('code-field');
+    const fpInput = document.getElementById('caFp');
+    const fpField = document.getElementById('fp-field');
     const codeLabel = document.getElementById('code-label');
     const codeHint = document.getElementById('code-hint');
     const probeBadge = document.getElementById('probe-badge');
@@ -722,8 +739,11 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
         try {{
           const u = new URL(raw);
           const c = u.searchParams.get('code');
+          const f = u.searchParams.get('fp');
           if (u.host) hostInput.value = u.port ? u.host : (u.hostname + ':4180');
           if (c) codeInput.value = c.trim();
+          // idea-525: keep the link's CA fingerprint so the app can verify the PC's CA before trusting it.
+          if (f) fpInput.value = f.trim();
         }} catch (_) {{}}
       }}
     }}
@@ -736,6 +756,7 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       presetLan.classList.toggle('active', Boolean(lanHost) && val.startsWith(lanHost));
       presetMesh.classList.toggle('active', Boolean(meshHost) && val.startsWith(meshHost));
       codeField.style.display = (!val || isLocal(val)) ? 'none' : 'block';
+      fpField.style.display = codeField.style.display;
 
       codeLabel.textContent = '6-Digit Pairing Code';
       codeHint.innerHTML = 'From server\'s <b>PAIR DEVICE</b> modal';
@@ -819,6 +840,15 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       try {{
         tryExtractPairUrl(hostInput);
         tryExtractPairUrl(codeInput);
+        // idea-525: remote pairing fails closed without the PC's CA fingerprint (the server enforces it too).
+        if (!isLocal(hostInput.value) && !fpInput.value.trim()) {{
+          errText.textContent = 'Paste the full pairing link, or enter the CA fingerprint. On your server PC open VibeSquad > Pair a device: the fingerprint (SHA-256) is shown under the QR code and is part of the pairing link.';
+          errBox.style.display = 'flex';
+          submitBtn.disabled = false;
+          submitBtn.textContent = origText;
+          fpInput.focus();
+          return;
+        }}
         const res = await fetch('/__desktop/pair', {{
           method: 'POST',
           headers: {{
@@ -827,7 +857,8 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
           }},
           body: JSON.stringify({{
             serverHost: hostInput.value.trim(),
-            code: codeInput.value.trim()
+            code: codeInput.value.trim(),
+            fp: fpInput.value.trim()
           }})
         }});
         const data = await res.json().catch(() => ({{}}));
