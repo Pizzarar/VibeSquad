@@ -84,10 +84,10 @@ await sleep(600);`);
   for (const k of ["driftMs", "heapUsed", "cpuUserMs", "cpuSystemMs", "ts", "proc"]) assert.ok(k in stall, k);
 });
 
-function nativeCallRun(blockMs = 1500) {
+function nativeCallRun() {
   return runChild(`
 await sleep(700);
-function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},${blockMs})']); }
+function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
 const b0 = Date.now();
 blockOnChildProcess();
 const blockedMs = Date.now() - b0; // no other sync work right after the block: a capture landing here would not be flagged late
@@ -95,37 +95,20 @@ await sleep(600);
 console.log(JSON.stringify({ blockedMs }));`);
 }
 
-// Host starvation evidence (idea-723): the late-capture race only loses when the watchdog worker is starved of CPU for the whole block.
-// A spawn-heavy suite (or a CPU hog) shows up as 1-min load per core >= 1, or as a 60ms timer overshooting by >150ms right now.
-async function starvation() {
-  const loadPerCore = os.loadavg()[0] / Math.max(1, os.cpus().length);
-  const t0 = Date.now();
-  await new Promise((r) => setTimeout(r, 60));
-  const overshoot = Date.now() - t0 - 60;
-  return { loadPerCore: Math.round(loadPerCore * 100) / 100, overshoot, starved: loadPerCore >= 1 || overshoot > 150 };
-}
-
-test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", async (t) => {
+test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
   // The capture races real machine load, so a single run may legitimately land late (flagged as captureLate, see the next test).
   // The on-time path — frames starting with the blocker — must be proven by at least one of 4 attempts. A late capture in
-  // disguise (the pause lands in the post-block sleep(600) continuation before the heartbeat bumps) is retried; empty or
-  // unrelated frames fail hard (never skip hollow). Each late attempt lengthens the block (x1.5 capped at 3.5s, 8 attempts), since a starved worker
-  // thread needs a longer window to land inside it. All attempts late fails on a quiet host; it is inconclusive (skip, with the measured
-  // evidence) only when the host was demonstrably starved (idea-723).
+  // disguise (the pause lands in the post-block top-level code or sleep(600) continuation before the heartbeat bumps) is retried;
+  // empty or unrelated frames fail hard (never skip hollow), and all-4-late fails: no skip on load, only budgets widen (load-budget.mjs).
+  // The watchdog pipelines Debugger.enable+pause so the pause is queued before the native call returns (idea-723), so on-time is the norm.
   let proved = false, lateCount = 0;
-  const ATTEMPTS = 8;
-  let blockMs = 1500;
-  let lastBlockMs = blockMs, lost = 0;
-  // Cap well under the watchdog's 5s capture timeout (runner/loop-lag.mjs finish timer): a longer block disconnects the session before the
-  // pause can land and yields no capture at all.
-  for (let i = 0; i < ATTEMPTS && !proved; i++, blockMs = Math.min(3500, Math.round(blockMs * 1.5))) {
-    lastBlockMs = blockMs;
-    const { r, lines } = nativeCallRun(blockMs);
+  for (let i = 0; i < 4 && !proved; i++) {
+    const { r, lines } = nativeCallRun();
     assert.equal(r.status, 0, r.stderr);
     // Structural, not absolute: the monitor must have recorded a lag line spanning (most of) the block we actually measured in the child.
     // A broken monitor records none (or a tiny one), however slow or loaded the machine is; a slow machine only makes the block longer.
     const blockedMs = JSON.parse(r.stdout.trim().split("\n").pop()).blockedMs;
-    assert.ok(blockedMs >= blockMs * 0.93, `child block measured ${blockedMs}ms`);
+    assert.ok(blockedMs >= 1400, `child block measured ${blockedMs}ms`);
     const stall = lines.reduce((a, l) => (!a || l.driftMs > a.driftMs ? l : a), null);
     assert.ok(stall && stall.driftMs >= blockedMs * 0.7, `max lag line ${stall?.driftMs}ms vs actual block ${blockedMs}ms: ${JSON.stringify(lines)}`);
     const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
@@ -133,14 +116,6 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     if (stall.captureLate) { assert.equal(stall.frames, undefined); lateCount++; continue; }
     // A capture that produced no frames (or a lag line with no capture at all) is a broken monitor, not a late capture: fail, never
     // skip (idea-591: without this, empty/undefined frames made every attempt look "late" and the test skipped hollow).
-    if (stall.pausedAfterMs === undefined && stall.frames === undefined) {
-      // A lag line with no capture at all: a broken monitor on a quiet host, but a starved watchdog worker (never scheduled before the
-      // block ended / the capture timeout) loses the capture too. Only starvation evidence measured right now excuses it.
-      const ev = await starvation();
-      assert.ok(ev.starved, `lag line with no capture on a quiet host (monitor broken): ${JSON.stringify({ stall, ev })}`);
-      lost++;
-      continue;
-    }
     assert.ok(Array.isArray(stall.frames) && stall.frames.length > 0, JSON.stringify(stall));
     // On-time proof: the blocker's own frame is in the stack.
     if (stall.frames.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess "))) { proved = true; continue; }
@@ -151,16 +126,14 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     const timerFrame = (f) => f.startsWith("sleep ") || f.startsWith("setTimeout ") || f.includes("node:internal/timers");
     const sleepContinuation = (f) =>
       timerFrame(f) || f.includes("node:internal/priority_queue") || f.startsWith("noop util/debuglog") || f.startsWith("(anon) ");
+    // idea-723: the pause can also land right after blockOnChildProcess() unwound but before sleep() ran, i.e. on the child's top-level
+    // code: the whole stack is the lone module-level "(anon) .../child.mjs" frame, no blocker, heartbeat unmoved. Same disguise, retried.
+    if (stall.frames.length === 1 && /^\(anon\) .*child\.mjs:\d+$/.test(stall.frames[0])) { lateCount++; continue; }
     // idea-593: anon frames are tolerated only alongside a real timer frame, so an all-anon wrong capture fails instead of retrying into skip.
     assert.ok(stall.frames.some(timerFrame) && stall.frames.every(sleepContinuation), `non-blocker frames are not the sleep continuation: ${JSON.stringify(stall.frames)}`);
     lateCount++;
   }
-  if (!proved) {
-    const ev = await starvation();
-    const msg = `all ${ATTEMPTS} attempts captured late (${lateCount} late, ${lost} with no capture under starvation, last block ${lastBlockMs}ms); host: ${JSON.stringify(ev)}`;
-    if (ev.starved) return t.skip(`inconclusive, host starved: ${msg}`);
-    assert.fail(`${msg}: the on-time path is required on a quiet host`);
-  }
+  assert.ok(proved, `all 4 attempts captured late (${lateCount} late): the on-time path is required`);
 });
 
 test("a capture that lands after the stall ended is flagged captureLate with no frames (forced deterministically)", () => {

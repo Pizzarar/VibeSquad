@@ -20,7 +20,7 @@ export const WATCHDOG_STALL_MS = 350; // heartbeat silent this long -> capture t
 export const GC_MIN_MS = 20; // gc pauses shorter than this are not kept
 export const GC_STANDALONE_MS = 100; // a single gc pause this long gets its own jsonl line
 const MAX_FRAMES = 12; // a native sync call can sit under ~7 stdio-write frames (execFileSync forwarding child stderr); 8 cut the blocker off (idea-592)
-const GRACE_MS = 150; // let the watchdog's message land before the stall line is written
+const GRACE_MS = 150; // let the watchdog's start/capture messages land before deciding whether a capture is in flight (then fin waits for it)
 const KINDS = { 1: 'scavenge', 2: 'minor-ms', 4: 'mark-sweep-compact', 8: 'incremental', 16: 'weak-cb', 31: 'all' };
 
 // ---- watchdog worker (same file). Why a worker: the main thread cannot sample itself while blocked. The worker watches a
@@ -63,7 +63,7 @@ function runWatchdog() {
   let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null, capturedAt = null;
   const capture = (startedAt, v0) => {
     const session = new Session();
-    let done = false, timer = null;
+    let done = false, timer = null, delivered = false;
     // Idempotent; the only place done is set, so resume + disable + disconnect always run exactly once, whichever path ends first.
     const finish = () => {
       if (done) return;
@@ -73,8 +73,11 @@ function runWatchdog() {
       try { session.post('Debugger.disable'); } catch {}
       try { session.disconnect(); } catch {}
       cap = null;
+      // Tell the main thread this capture will never arrive, so a lag line waiting on it can stop waiting (idea-723).
+      if (!delivered) { try { parentPort.postMessage({ captureAbandoned: true, stallStartedAt: startedAt }); } catch {} }
     };
     cap = session;
+    try { parentPort.postMessage({ captureStarted: true, stallStartedAt: startedAt }); } catch {}
     try { session.connectToMainThread(); } catch { cap = null; return; }
     const urls = new Map(); // callFrame.url is empty for ESM; Debugger.enable replays scriptParsed for every loaded script
     session.on('Debugger.scriptParsed', (m) => { if (m.params.url) urls.set(m.params.scriptId, m.params.url); });
@@ -83,6 +86,7 @@ function runWatchdog() {
       let msg = null;
       try { msg = buildCapture({ params: m.params, urls, startedAt, heartbeatMoved: Atomics.load(hb, 0) !== v0, now: Date.now }); } catch { /* attribution is best-effort */ }
       // The heartbeat was read above, while still paused; resume before posting.
+      delivered = !!msg;
       finish();
       try { if (msg) parentPort.postMessage(msg); } catch { /* best-effort */ }
     });
@@ -94,7 +98,13 @@ function runWatchdog() {
       if (workerData.deferPauseUntilResume && Atomics.load(hb, 0) === v0) { setTimeout(pause, 5); return; }
       session.post('Debugger.pause');
     };
-    try { session.post('Debugger.enable', pause); } catch { finish(); }
+    // Pipeline enable + pause (idea-723): the main thread cannot answer while blocked in a native call, so posting pause only from the
+    // enable callback queued it after the call returned, racing the next JS (tick, the post-block code). Both messages now sit in the
+    // inspector queue before the blocker returns and run back to back at the first safepoint. The test hook still defers.
+    try {
+      if (workerData.deferPauseUntilResume) session.post('Debugger.enable', pause);
+      else { session.post('Debugger.enable'); session.post('Debugger.pause'); }
+    } catch { finish(); }
   };
   setInterval(() => {
     const v = Atomics.load(hb, 0), t = Date.now();
@@ -158,10 +168,14 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
       prune(t);
       const rec = { ts: new Date(t).toISOString(), proc, driftMs: Math.round(drift), heapUsed: heapUsed(), cpuUserMs: Math.round((cpu.user - lastSampleCpu.user) / 1000), cpuSystemMs: Math.round((cpu.system - lastSampleCpu.system) / 1000) };
       const t0 = t - drift - LAG_TICK_MS;
-      const fin = () => {
+      const inStall = (x) => x.stallStartedAt >= t0 - 100 && x.stallStartedAt <= t;
+      const fin = async () => {
+        // The capture for this stall may still be in flight (enable + pause + delivery after tick()): wait for it, bounded by the
+        // watchdog's own 5s capture timeout, instead of writing the line without frames after a fixed grace (idea-723).
+        if (worker && !attribs.some(inStall)) await waitCapture(inStall);
         const g = gcAfter(t0, t + 1);
         if (g) rec.gc = g;
-        const a = attribs.find((x) => x.stallStartedAt >= t0 - 100 && x.stallStartedAt <= t);
+        const a = attribs.find(inStall);
         if (a) {
           rec.pausedAfterMs = a.pausedAfterMs;
           // captureLate: the frames are not the blocker's; analyses must drop them. captureLateReason (added idea-592) says how it was
@@ -173,7 +187,9 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
         try { rec.res = resourceCounts(); } catch { /* optional */ }
         write(rec);
       };
-      if (worker) setTimeout(fin, GRACE_MS).unref?.(); else fin();
+      if (worker) {
+        setTimeout(() => { const p = fin().catch(() => {}).finally(() => pendingFins.delete(p)); pendingFins.add(p); }, GRACE_MS).unref?.();
+      } else fin();
     }
     lastSampleCpu = cpu;
   }
@@ -208,7 +224,23 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
       if (e.duration >= gcStandaloneMs) write({ ts: new Date(end).toISOString(), proc, gcMs: Math.round(e.duration), gcKind: kind, heapUsed: heapUsed() });
     }
   }
-  function ingestCapture(m) { attribs.push(m); while (attribs.length > 20) attribs.shift(); }
+  const pendingFins = new Set(); // lag lines waiting on an in-flight capture; flush() must cover them
+  const inflight = new Set(); // stallStartedAt of captures the worker started and has neither delivered nor abandoned
+  let waiters = [];
+  function ingestCapture(m) {
+    if (m.captureStarted) { inflight.add(m.stallStartedAt); return; }
+    inflight.delete(m.stallStartedAt);
+    if (!m.captureAbandoned) { attribs.push(m); while (attribs.length > 20) attribs.shift(); }
+    const w = waiters; waiters = [];
+    for (const f of w) f();
+  }
+  // Resolve once a capture matching pred is delivered, or no matching capture is in flight (abandoned/never started). Bounded by 5.2s.
+  async function waitCapture(pred) {
+    const deadline = Date.now() + 5200;
+    while (!attribs.some(pred) && [...inflight].some((st) => pred({ stallStartedAt: st })) && Date.now() < deadline) {
+      await new Promise((r) => { const to = setTimeout(r, deadline - Date.now()); to.unref?.(); waiters.push(() => { clearTimeout(to); r(); }); });
+    }
+  }
   function startWatchdog() {
     try {
       const sab = new SharedArrayBuffer(8);
@@ -222,7 +254,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
   let timers = [];
   return {
     tick, cpuTick, stats,
-    flush: () => writing,
+    flush: async () => { while (pendingFins.size) await Promise.all([...pendingFins]); return writing; },
     start() {
       if (timers.length) return this;
       timers = [setInterval(tick, LAG_TICK_MS), setInterval(cpuTick, CPU_WINDOW_MS)];
