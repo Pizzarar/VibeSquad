@@ -47,6 +47,45 @@ resumable agents VS started detached in the same cgroup (R5); `vs restart` depen
 VS first (park agents), then `systemctl --user stop vibesquad`, then check `ps -ef` for leftovers. Do not launch VS from tmux;
 the unit is the only launch path.
 
+`vs restart` relaunches through the unit (follow-up R, idea-649): when the server belongs to `vibesquad.service` (its pid sits
+in the unit's cgroup, or the unit is active or enabled, and the unit's `VIBESQUAD_PORT` is the restart's port) the stop is
+`systemctl --user stop vibesquad` (only when the unit's MainPID is the server; an orphan gets SIGTERM) and the relaunch is
+`systemctl --user start vibesquad`; the unit's `VIBESQUAD_START_RUNNER=1` server boots the runner. This needs
+`KillMode=process` in the unit: with any other KillMode the restart never stops or starts through the unit, and if the server
+is the unit's MainPID it refuses before touching anything (`relaunch.mode: refused`), since stopping it would kill the runner,
+the agents and the restart itself. If `systemctl --user start` fails or the unit's server is not healthy in time, the restart
+stops the unit, frees port 4180 (a `serve.mjs` still on it is stopped; anything else aborts the restart), then launches
+detached with a `WARNING` (`detached-fallback`). `vs restart --dry-run` shows the detection (`detected.systemd`, including
+`killMode`) and the plan line `start server: systemctl --user start vibesquad`. The result file
+`~/.vibesquad/restart-<ts>.json` records `relaunch.mode` (`systemd`, `systemd-unadopted`, `detached`, `detached-fallback`,
+`already-up`, `refused`), `relaunch.after` (ActiveState, MainPID, listener pid) and any `warnings` (systemctl unreachable,
+KillMode, WorkingDirectory differing from the runtime dir, `EnvironmentFiles=`, MainPID not the listener). Another unit name:
+`VIBESQUAD_SYSTEMD_UNIT=<name>`; `off` disables it.
+The unit runs the code in its effective `WorkingDirectory`: on the forge that is `~/.vibesquad/runtime` (set by the
+`vibesquad.service.d/runtime.conf` drop-in), not the checkout, so merged code goes live only after sync-runtime has copied it
+there (`systemctl --user show -p WorkingDirectory vibesquad` prints the effective value).
+
+### Re-adopt vibesquad.service
+
+Symptom: `systemctl --user is-active vibesquad` says `inactive` (MainPID 0) while VS still answers on port 4180, and
+`systemctl --user status vibesquad` lists the server under its CGroup: a server relaunched detached (an older `vs restart`,
+or `relaunch.mode: detached-fallback` in the restart result) runs on the env it inherited, so unit `Environment=` lines and
+drop-ins (`vibesquad.service.d/godot.conf`) do not apply, and `Restart=on-failure` no longer supervises it. A normal
+`vs restart` re-adopts the unit by itself; do the steps below only when that path cannot be used. Hub Overlord, once, in a
+drained window (every lead drained as for any restart: no running turns, no held background work):
+
+1. Pids: `ss -ltnp 'sport = :4180'` (the server), `cat ~/.vibesquad/runner/runner.json` (the runner pid and port).
+2. Stop the runner gracefully (keeps agents resumable):
+   `curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "authorization: Bearer $(cat ~/.vibesquad/runner/token)" http://127.0.0.1:<runner port>/shutdown`
+   must print `202`; wait until `kill -0 <runner pid>` fails.
+3. Stop the detached server: `kill -TERM <server pid>`; wait until `ss -ltn 'sport = :4180'` lists nothing.
+4. `systemctl --user start vibesquad`
+5. Verify: `systemctl --user is-active vibesquad` prints `active`; `systemctl --user show -p MainPID --value vibesquad`
+   equals the pid in `ss -ltnp 'sport = :4180'`; `tr '\0' '\n' < /proc/<MainPID>/environ | grep '^GODOT_4_'` lists
+   `GODOT_4_7` and `GODOT_4_8`; `runner.json` names a new live runner pid and `vs who lead` answers.
+6. Agents the stop cut read `lost`: a `vs send` to each resumes it. If step 4 fails, read `journalctl --user -u vibesquad -b`;
+   never leave the forge without a server (start it by hand only to bridge, then repeat from step 1).
+
 ## Clients: server_url (Meshnet IP)
 
 Owner clients (VS app, phone, Playtest Overlay addon) pair by IP at `https://<forge mesh ip>:<port>` (the `<forge mesh host>` name also works where the client resolves Meshnet names). Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,

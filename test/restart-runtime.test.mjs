@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid, detectSystemd, inUnitCgroup, systemdUnitName, systemctlUser } from "../scripts/restart-runtime.mjs";
 
 // idea-471: the vs-rs- runner scratch dirs are created inline and never removed by the Runner. Collect and remove them
 // after the file runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY).
@@ -251,6 +251,10 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
   w.cleanup = async () => { for (const s of [...w.allSrvs, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
   w.runner = () => runnerState;
   w.startRunner = startRunner;
+  // forge-host R: a fake systemctl starts/stops the same stub server the detached spawn would
+  w.serverPid = () => serverPid;
+  w.bootServer = () => { w.booting = startServer(serverPort).then(async () => { agents.current[1].status = "lost"; if (serverBootsRunner) await startRunner("new-hash"); }); return serverPid; };
+  w.stopServer = () => { w.alive.delete(serverPid); close(serverSrv); };
   return w;
 }
 
@@ -1931,4 +1935,474 @@ test("readLiveServerPid: stale/foreign/garbage pid file is ignored and removed; 
     assert.equal(existsSync(f), true);
     assert.equal(readLiveServerPid(path.join(dir, "missing.pid")), null, "no file is fine");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- forge-host R (idea-649): relaunch through the systemd user unit. A fake systemctl only: the real one is never called. ----
+const CG = "/user.slice/user-1000.slice/user@1000.service/app.slice";
+/**
+ * Fake `systemctl --user` over a world(): show/start/stop on one unit. `inCgroup`: the live server's /proc cgroup names the unit.
+ * `unitPort`: the unit's VIBESQUAD_PORT (default: the world's server port). start: boots the stub server as MainPID (unless startFails
+ * or neverHealthy); stop: stops the MainPID server. Every call is recorded in sd.calls. KillMode defaults to process (the forge unit),
+ * WorkingDirectory to the world's runtime dir (no mismatch warning), EnvironmentFiles to none.
+ */
+function fakeSystemd(w, { unit = "vibesquad", active = false, enabled = true, mainIsServer = false, inCgroup = true, unitPort = null, startFails = false, neverHealthy = false, startRunnerEnv = "1", killMode = "process", workingDirectory = null, environmentFiles = "" } = {}) {
+  const st = { active, mainPid: mainIsServer ? w.serverPid() : 0 };
+  const port = unitPort ?? w.opts().port;
+  const sd = {
+    calls: [],
+    cgroupCalls: [],
+    st,
+    ctl: (args) => {
+      sd.calls.push(args.join(" "));
+      const [verb, name] = args;
+      if (name !== `${unit}.service`) return { status: 5, stdout: "", stderr: `Unit ${name} not found.` };
+      if (verb === "show") {
+        const lines = [`LoadState=loaded`, `ActiveState=${st.active ? "active" : "inactive"}`, `SubState=${st.active ? "running" : "dead"}`, `UnitFileState=${enabled ? "enabled" : "disabled"}`,
+          `MainPID=${st.mainPid}`, `ControlGroup=${CG}/${unit}.service`, `Environment=PATH=/usr/bin VIBESQUAD_PORT=${port} VIBESQUAD_START_RUNNER=${startRunnerEnv} GODOT_4_7=/opt/godot`,
+          `EnvironmentFiles=${environmentFiles}`, `WorkingDirectory=${workingDirectory ?? w.tmp}`, `KillMode=${killMode}`];
+        return { status: 0, stdout: lines.join("\n") + "\n", stderr: "" };
+      }
+      if (verb === "start") {
+        if (startFails) return { status: 1, stdout: "", stderr: "Failed to start vibesquad.service: Unit is masked." };
+        st.active = true;
+        st.mainPid = neverHealthy ? 7777 : w.bootServer();
+        if (neverHealthy) w.alive.add(7777);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (verb === "stop") {
+        if (st.mainPid === w.serverPid() && w.alive.has(st.mainPid)) w.stopServer();
+        if (st.mainPid === 7777) w.alive.delete(7777);
+        st.active = false; st.mainPid = 0;
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: `unexpected verb ${verb}` };
+    },
+    cgroup: (pid) => { sd.cgroupCalls.push(pid); return inCgroup && pid === w.serverPid() ? `0::${CG}/${unit}.service\n` : `0::/user.slice/user-1000.slice/session-3.scope\n`; },
+  };
+  return sd;
+}
+const sysRun = (w, sd, extra = {}, logs = [], over = {}) => w.run(extra, logs, { platform: "linux", systemd: sd, ...over });
+
+test("systemd R: active unit owns the server -> systemctl stop + start (no SIGTERM, no detached spawn); relaunch recorded", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const oldServer = w.serverPid();
+    const logs = [];
+    const r = await sysRun(w, sd, {}, logs);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service", "start vibesquad.service"]);
+    assert.ok(!w.calls.includes(`term ${oldServer}`), "the unit's MainPID is not SIGTERMed (serve.mjs exits 128 -> Restart=on-failure)");
+    assert.deepEqual(w.spawned, [], "no detached server or runner: the unit's server boots the runner");
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.equal(r.relaunch.detection.use, true);
+    assert.match(r.relaunch.detection.reason, /MainPID/);
+    assert.deepEqual(r.relaunch.after, { activeState: "active", mainPid: w.serverPid(), listenerPid: w.serverPid(), mainIsListener: true });
+    const names = r.steps.map((s) => s.step);
+    for (const n of ["server stop via systemd", "server stopped gracefully", "server started via systemd", "server healthy", "systemd unit after start", "verified"]) assert.ok(names.includes(n), `${n} in ${names.join(" | ")}`);
+    assert.equal(readFileSync(path.join(w.configDir, "server.pid"), "utf8"), String(w.serverPid()), "server.pid = the unit MainPID");
+    const saved = JSON.parse(readFileSync(r.resultFile, "utf8"));
+    assert.equal(saved.relaunch.mode, "systemd", "the result file records the relaunch mode");
+    assert.deepEqual(r.resumedAgents.map((a) => a.id), ["rn-busy"]);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: orphaned state (unit inactive, not enabled, server detached in its cgroup) -> SIGTERM the orphan, systemctl start re-adopts", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: false, inCgroup: true });
+    const orphan = w.serverPid();
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.relaunch.detection.evidence, ["server pid in unit cgroup (orphaned: not the MainPID)"], "the cgroup alone decides");
+    assert.ok(w.calls.includes(`term ${orphan}`), "the orphan is not the MainPID: plain SIGTERM");
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["start vibesquad.service"], "no systemctl stop of an inactive unit");
+    assert.deepEqual(w.spawned, []);
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.equal(r.relaunch.after.mainIsListener, true);
+    assert.equal(sd.st.active, true);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: enabled unit with the server down -> systemctl start (the declared owner of the port)", async () => {
+  const w = await world();
+  try {
+    w.stopServer();
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: false });
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.relaunch.detection.evidence, ["unit enabled"]);
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.deepEqual(w.spawned, []);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: not detected (unit inactive + disabled, server outside its cgroup; or another port; or VIBESQUAD_SYSTEMD_UNIT=off) -> detached launch, systemctl only queried", async () => {
+  for (const [label, sdOpts, envExtra, reason] of [
+    ["not the unit's", { active: false, enabled: false, inCgroup: false }, {}, /neither active nor enabled/],
+    ["other port", { active: true, enabled: true, inCgroup: true, unitPort: 1 }, {}, /serves port 1, this restart is for port/],
+  ]) {
+    const w = await world({ envExtra });
+    try {
+      const sd = fakeSystemd(w, sdOpts);
+      const r = await sysRun(w, sd);
+      assert.equal(r.ok, true, `${label}: ${JSON.stringify(r.errors)}`);
+      assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), [], `${label}: no start/stop`);
+      assert.deepEqual(w.spawned, ["server"], `${label}: the detached launch`);
+      assert.equal(r.relaunch.mode, "detached", label);
+      assert.equal(r.relaunch.detection.use, false, label);
+      assert.match(r.relaunch.detection.reason, reason, label);
+    } finally { await w.cleanup(); }
+  }
+  const w = await world({ envExtra: { VIBESQUAD_SYSTEMD_UNIT: "off" } });
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls, [], "disabled: systemctl never called");
+    assert.deepEqual(w.spawned, ["server"]);
+    assert.equal(r.relaunch.mode, "detached");
+    assert.match(r.relaunch.detection.reason, /disabled by VIBESQUAD_SYSTEMD_UNIT=off/);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: VIBESQUAD_SYSTEMD_UNIT names another unit -> that unit is queried, stopped and started", async () => {
+  const w = await world({ envExtra: { VIBESQUAD_SYSTEMD_UNIT: "vs-forge.service" } });
+  try {
+    const sd = fakeSystemd(w, { unit: "vs-forge", active: true, mainIsServer: true });
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.relaunch.unit, "vs-forge");
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vs-forge.service", "start vs-forge.service"]);
+    assert.ok(sd.calls.every((c) => c.includes("vs-forge.service")));
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: systemctl start fails -> loud detached fallback, the server is not left down", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true, startFails: true });
+    const logs = [];
+    const r = await sysRun(w, sd, {}, logs);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(w.spawned, ["server"], "fell back to the detached launch");
+    assert.equal(r.relaunch.mode, "detached-fallback");
+    assert.match(r.relaunch.fallback.what, /systemctl --user start vibesquad\.service failed/);
+    assert.match(r.relaunch.fallback.error, /masked/);
+    assert.ok(r.steps.some((s) => s.step === "SYSTEMD RELAUNCH FAILED, detached fallback"));
+    assert.ok(logs.some((l) => /^WARNING: .*NOT supervised by vibesquad\.service.*Re-adopt vibesquad\.service/.test(l)), logs.join("\n"));
+    assert.equal(r.warnings.length, 1);
+    assert.ok(r.steps.some((s) => s.step === "server healthy"));
+    assert.equal(JSON.parse(readFileSync(r.resultFile, "utf8")).relaunch.mode, "detached-fallback");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: unit started but its server never answers -> unit stopped, detached fallback, restart still succeeds", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: true, neverHealthy: true });
+    const logs = [];
+    const r = await sysRun(w, sd, { serverBootMs: 200 }, logs);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["start vibesquad.service", "stop vibesquad.service"]);
+    assert.deepEqual(w.spawned, ["server"]);
+    assert.equal(r.relaunch.mode, "detached-fallback");
+    assert.match(r.relaunch.fallback.what, /not healthy after|died during start/);
+    assert.equal(r.relaunch.fallback.unitStop, "ok");
+    assert.ok(logs.some((l) => l.startsWith("WARNING: ")));
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: systemctl stop fails -> SIGTERM instead, then systemctl start", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    sd.ctl = (args) => (args[0] === "stop" ? (sd.calls.push(args.join(" ")), { status: 1, stdout: "", stderr: "Access denied" }) : ctl(args));
+    const oldServer = w.serverPid();
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "systemctl stop failed, SIGTERM instead" && /Access denied/.test(s.error)));
+    assert.ok(w.calls.includes(`term ${oldServer}`));
+    assert.equal(r.relaunch.mode, "systemd");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R: win32 is untouched (systemctl never called, detached launch, no relaunch record); no systemd deps = unchanged too", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const r = await sysRun(w, sd, {}, [], { platform: "win32" });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls, []);
+    assert.deepEqual(sd.cgroupCalls, []);
+    assert.deepEqual(w.spawned, ["server"]);
+    assert.equal("relaunch" in r, false);
+    assert.equal("warnings" in r, false);
+  } finally { await w.cleanup(); }
+  const w2 = await world();
+  try {
+    const r = await w2.run({}); // the default deps carry no systemctl: tests and importers never reach the real one
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal("relaunch" in r, false);
+    assert.deepEqual(w2.spawned, ["server"]);
+  } finally { await w2.cleanup(); }
+});
+
+test("systemd R: dry run shows the detection and the systemctl start plan", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: true });
+    const r = await sysRun(w, sd, { dryRun: true });
+    assert.equal(r.ok, true);
+    assert.equal(r.plan.detected.systemd.use, true);
+    assert.equal(r.plan.detected.systemd.workingDirectory, w.tmp, "the unit WorkingDirectory, as systemctl show prints it");
+    assert.equal(r.plan.detected.systemd.killMode, "process");
+    assert.deepEqual(r.plan.detected.systemd.warnings, []);
+    assert.ok(r.plan.steps.some((s) => /^start server: systemctl --user start vibesquad /.test(s)), r.plan.steps.join("\n"));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), [], "a dry run only queries");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R helpers: unit name, cgroup match (v1/v2, Delegate sub-cgroup), start-runner flag, systemctlUser env", () => {
+  assert.deepEqual(systemdUnitName({}), { unit: "vibesquad" });
+  assert.deepEqual(systemdUnitName({ VIBESQUAD_SYSTEMD_UNIT: " vs-x.service " }), { unit: "vs-x" });
+  assert.equal(systemdUnitName({ VIBESQUAD_SYSTEMD_UNIT: "none" }).unit, null);
+  assert.equal(systemdUnitName({ VIBESQUAD_SYSTEMD_UNIT: "a b;rm" }).unit, null);
+  assert.equal(systemdUnitName({ VIBESQUAD_SYSTEMD_UNIT: "--now" }).unit, null);
+  assert.equal(inUnitCgroup(`0::${CG}/vibesquad.service\n`, "vibesquad"), true);
+  assert.equal(inUnitCgroup(`0::${CG}/vibesquad.service/payload\n`, "vibesquad"), true, "Delegate=yes sub-cgroup");
+  assert.equal(inUnitCgroup(`12:pids:/x\n1:name=systemd:${CG}/vibesquad.service\n`, "vibesquad"), true, "cgroup v1");
+  assert.equal(inUnitCgroup(`0::${CG}/vibesquad-dev.service\n`, "vibesquad"), false);
+  assert.equal(inUnitCgroup(`0::/user.slice/session-3.scope\n`, "vibesquad"), false);
+  assert.equal(inUnitCgroup(null, "vibesquad"), false);
+  const show = (envLine, extra = "") => ({ ctl: () => ({ status: 0, stdout: `LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=9\nControlGroup=${CG}/vibesquad.service\nEnvironment=${envLine}\nKillMode=process\n${extra}`, stderr: "" }), cgroup: () => "" });
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: show("A=1") }).use, true, "no VIBESQUAD_PORT in the unit -> 4180");
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: show("VIBESQUAD_START_RUNNER=0") }).serverStartsRunner, false);
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: show('"X=a b" VIBESQUAD_PORT=4181') }).use, false);
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: 1, stdout: "", stderr: "Failed to connect to bus" }), cgroup: () => "" } }).reason, "systemctl --user show vibesquad: Failed to connect to bus");
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: 0, stdout: "LoadState=not-found\n", stderr: "" }), cgroup: () => "" } }).use, false);
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "win32", sd: show("") }), null);
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: null }), null);
+  let seen = null;
+  const out = systemctlUser(["show", "vibesquad.service"], { env: { VS_AGENT_ID: "rn-x", VS_AGENT_TOKEN: "t", HOME: "/h" }, uid: 1000, run: (cmd, args, o) => { seen = { cmd, args, env: o.env }; return { status: 0, stdout: "ok\n", stderr: "" }; } });
+  assert.deepEqual(out, { status: 0, stdout: "ok\n", stderr: "" });
+  assert.equal(seen.cmd, "systemctl");
+  assert.deepEqual(seen.args, ["--user", "show", "vibesquad.service"]);
+  assert.equal(seen.env.XDG_RUNTIME_DIR, "/run/user/1000");
+  assert.equal(seen.env.VS_AGENT_ID, undefined, "never as an agent (X1b)");
+  assert.equal(seen.env.VS_AGENT_TOKEN, undefined);
+  assert.equal(systemctlUser(["x"], { env: {}, run: () => { throw new Error("ENOENT"); } }).stderr, "ENOENT");
+});
+
+// ---- forge-host R1 review round (M1 KillMode, M2 port before fallback, lows). Fake systemctl only, as above. ----
+test("systemd R1 M1: KillMode=control-group and the server is the unit MainPID -> refused before anything is touched", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true, killMode: "control-group" });
+    const server = w.serverPid();
+    const runner = w.runner().pid;
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, false);
+    assert.match(r.errors.join("\n"), /MainPID of vibesquad\.service, which has KillMode=control-group.*Nothing was stopped/);
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), [], "no systemctl stop/start");
+    assert.ok(!w.calls.includes(`term ${server}`), "the MainPID is not SIGTERMed either (that takes the cgroup down too)");
+    assert.deepEqual(w.spawned, []);
+    assert.equal(w.alive.has(server), true);
+    assert.equal(w.alive.has(runner), true, "the runner is not stopped");
+    assert.deepEqual(w.shutdownAuth, [], "no runner /shutdown");
+    assert.deepEqual(w.drainCalls, [], "no drain set");
+    assert.equal(r.relaunch.mode, "refused");
+    assert.equal(r.relaunch.detection.use, false);
+    assert.ok(!r.steps.some((s) => s.step === "marker touched"));
+    // the dry run shows the refusal in the plan
+    const dry = await sysRun(w, sd, { dryRun: true });
+    assert.ok(dry.plan.steps.some((s) => /^REFUSE: server pid \d+ is the MainPID .*KillMode=control-group/.test(s)), dry.plan.steps.join("\n"));
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1 M1: KillMode=control-group with an orphan server (not the MainPID) -> no systemctl stop/start, warned, detached launch", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: true, killMode: "control-group" });
+    const orphan = w.serverPid();
+    const logs = [];
+    const r = await sysRun(w, sd, {}, logs);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), []);
+    assert.ok(w.calls.includes(`term ${orphan}`));
+    assert.deepEqual(w.spawned, ["server"]);
+    assert.equal(r.relaunch.mode, "detached");
+    assert.equal(r.relaunch.detection.use, false);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /KillMode=control-group.*set KillMode=process.*Re-adopt vibesquad\.service/);
+    assert.ok(logs.some((l) => /^WARNING: .*KillMode=control-group/.test(l)));
+  } finally { await w.cleanup(); }
+});
+
+/** A serve.mjs-looking (or other) process 8888 that holds the port from the unit start on and never answers /api/health. */
+function portSquatter(w, sd, { cmd = "node server/serve.mjs" } = {}) {
+  const order = [];
+  const ctl = sd.ctl;
+  sd.ctl = (args) => {
+    if (args[0] === "stop") { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Failed to stop vibesquad.service: Connection timed out" }; }
+    const out = ctl(args);
+    if (args[0] === "start") w.alive.add(8888);
+    return out;
+  };
+  const d = w.deps;
+  const depsOver = {
+    listenerPid: (port) => (w.alive.has(8888) ? 8888 : d.listenerPid(port)),
+    procInfo: (pid) => (pid === 8888 ? (w.alive.has(8888) ? { pid, ppid: 1, cmd } : null) : d.procInfo(pid)),
+    termGracefully: (pid) => { order.push(`term ${pid}`); if (pid === 8888) { w.calls.push("term 8888"); w.alive.delete(8888); } else d.termGracefully(pid); },
+    spawnDetached: (cmd2, args, o) => { order.push(`spawn ${args.some((a) => /serve\.mjs/.test(a)) ? "server" : "runner"}`); return d.spawnDetached(cmd2, args, o); },
+  };
+  return { order, depsOver };
+}
+
+test("systemd R1 M2: unit never healthy and systemctl stop fails while its serve.mjs holds the port -> SIGTERM it, then the detached fallback", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: true, neverHealthy: true });
+    const { order, depsOver } = portSquatter(w, sd);
+    const r = await sysRun(w, sd, { serverBootMs: 200 }, [], depsOver);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["start vibesquad.service", "stop vibesquad.service"]);
+    const t = order.indexOf("term 8888"); const sp = order.indexOf("spawn server");
+    assert.ok(t >= 0 && sp > t, `the port holder is SIGTERMed before the detached spawn: ${order.join(" | ")}`);
+    assert.equal(w.alive.has(8888), false);
+    assert.equal(r.relaunch.mode, "detached-fallback");
+    assert.match(r.relaunch.fallback.unitStop, /^failed \(.*Connection timed out\)$/);
+    assert.ok(r.steps.some((s) => s.step === "stopping the unit server before the fallback" && s.pid === 8888 && s.listening === true));
+    assert.equal(r.warnings.length, 2, r.warnings.join("\n"));
+    assert.match(r.warnings[1], /systemctl --user stop vibesquad\.service failed.*retry its own start/);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1 M2: unit never healthy and a non-serve.mjs process holds the port -> abort, no second server", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: false, enabled: true, inCgroup: true, neverHealthy: true });
+    const { order, depsOver } = portSquatter(w, sd, { cmd: "python3 -m http.server" });
+    const r = await sysRun(w, sd, { serverBootMs: 200 }, [], depsOver);
+    assert.equal(r.ok, false);
+    assert.match(r.errors.join("\n"), /pid 8888 on port \d+ is not serve\.mjs.*no fallback possible/);
+    assert.ok(!order.includes("term 8888"), "never touched");
+    assert.ok(!order.includes("spawn server"), order.join(" | "));
+    assert.notEqual(r.relaunch.mode, "detached-fallback");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1 L: systemctl start ok but the MainPID is not the listener -> relaunch.mode systemd-unadopted + a warning", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    sd.ctl = (args) => { const out = ctl(args); if (args[0] === "start") { sd.st.mainPid = 4242; w.alive.add(4242); } return out; };
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.relaunch.mode, "systemd-unadopted");
+    assert.equal(r.relaunch.after.mainIsListener, false);
+    assert.equal(r.relaunch.after.mainPid, 4242);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /MainPID 4242 \(active\) is not the listener.*not supervised by the unit.*Re-adopt/);
+    assert.equal(JSON.parse(readFileSync(r.resultFile, "utf8")).relaunch.mode, "systemd-unadopted");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1 L: systemctl show fails -> detached launch with a warning; no systemctl binary (ENOENT) -> no warning", async () => {
+  for (const [label, stderr, warned] of [["bus", "Failed to connect to bus: No medium found", true], ["enoent", "spawnSync systemctl ENOENT", false]]) {
+    const w = await world();
+    try {
+      const sd = { calls: [], ctl: (args) => { sd.calls.push(args.join(" ")); return { status: null, stdout: "", stderr }; }, cgroup: () => "" };
+      const logs = [];
+      const r = await sysRun(w, sd, {}, logs);
+      assert.equal(r.ok, true, `${label}: ${JSON.stringify(r.errors)}`);
+      assert.deepEqual(w.spawned, ["server"], label);
+      assert.equal(r.relaunch.mode, "detached", label);
+      assert.ok(sd.calls.every((c) => c.startsWith("show")), label);
+      if (warned) {
+        assert.equal(r.warnings.length, 1, label);
+        assert.match(r.warnings[0], /systemctl --user show vibesquad: Failed to connect to bus.*relaunching detached.*Re-adopt vibesquad\.service/);
+        assert.ok(logs.some((l) => l.startsWith("WARNING: systemctl --user show vibesquad")));
+      } else assert.equal("warnings" in r, false, label);
+    } finally { await w.cleanup(); }
+  }
+});
+
+test("systemd R1 L: unit WorkingDirectory differs from the runtime dir and EnvironmentFiles is set -> warned, still the unit relaunch", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true, workingDirectory: "/srv/vs", environmentFiles: "/etc/vs.env (ignore_errors=no)" });
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.equal(r.warnings.length, 2, r.warnings.join("\n"));
+    assert.match(r.warnings[0], /WorkingDirectory \/srv\/vs differs from the server's runtime dir .*run the code in \/srv\/vs/);
+    assert.match(r.warnings[1], /EnvironmentFiles \(\/etc\/vs\.env \(ignore_errors=no\)\).*port \d+ assumed/);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1: the server is back on its own before the start (Restart= after a failed systemctl stop) -> already-up, no systemctl start, unit checked", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    sd.ctl = (args) => (args[0] === "stop" ? (sd.calls.push(args.join(" ")), { status: 1, stdout: "", stderr: "Access denied" }) : ctl(args));
+    const d = w.deps;
+    const old = w.serverPid();
+    const depsOver = {
+      // serve.mjs exits nonzero on SIGTERM and Restart=on-failure brings the unit's server straight back
+      termGracefully: (pid) => { d.termGracefully(pid); if (pid === old) { sd.st.mainPid = w.bootServer(); sd.st.active = true; } },
+      httpCall: async (url, o) => { if (w.booting) await w.booting; return httpCall(url, o); },
+    };
+    const r = await sysRun(w, sd, { runnerBootMs: 300 }, [], depsOver);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "server already up, not starting another"));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service"], "no systemctl start");
+    assert.equal(r.relaunch.mode, "already-up");
+    assert.deepEqual(r.relaunch.after, { activeState: "active", mainPid: w.serverPid(), listenerPid: w.serverPid(), mainIsListener: true });
+    assert.ok(!w.spawned.includes("server"), "no detached server");
+    assert.equal("warnings" in r, false);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1: systemctl start times out (status null) -> unit stopped (cancels the queued job), detached fallback", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    sd.ctl = (args) => (args[0] === "start" ? (sd.calls.push(args.join(" ")), { status: null, stdout: "", stderr: "killed by SIGTERM" }) : ctl(args));
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service", "start vibesquad.service", "stop vibesquad.service"]);
+    assert.deepEqual(w.spawned, ["server"]);
+    assert.equal(r.relaunch.mode, "detached-fallback");
+    assert.equal(r.relaunch.fallback.status, null);
+    assert.equal(r.relaunch.fallback.error, "killed by SIGTERM");
+    assert.equal(r.relaunch.fallback.unitStop, "ok");
+    assert.equal(r.warnings.length, 1);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd R1 helpers: KillMode gate (unset = control-group), refuse only for the MainPID, Linux only, ENOENT quiet", () => {
+  const show = (extra, mainPid = 9) => ({ ctl: () => ({ status: 0, stdout: `LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=${mainPid}\nControlGroup=${CG}/vibesquad.service\nEnvironment=A=1\n${extra}`, stderr: "" }), cgroup: () => "" });
+  const unset = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: show("KillMode=") });
+  assert.equal(unset.use, false);
+  assert.match(unset.refuse, /KillMode=\(unset: control-group\)/);
+  assert.deepEqual(unset.warnings, []);
+  const mixed = detectSystemd({ port: 4180, serverPid: 5, env: {}, platform: "linux", sd: show("KillMode=mixed") });
+  assert.equal(mixed.use, false);
+  assert.equal(mixed.refuse, undefined, "the server is not the MainPID: no refusal");
+  assert.match(mixed.warnings[0], /KillMode=mixed/);
+  const ok = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: show("KillMode=process\nWorkingDirectory=-~/rt"), launchCwd: path.join(os.homedir(), "rt") });
+  assert.equal(ok.use, true);
+  assert.deepEqual(ok.evidence, ["server is the unit MainPID", "unit active", "unit enabled"]);
+  assert.equal(ok.workingDirectory, path.join(os.homedir(), "rt"), "'-' prefix dropped, '~' expanded");
+  assert.deepEqual(ok.warnings, []);
+  assert.equal(detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "darwin", sd: show("KillMode=process") }), null, "no systemd off Linux");
+  const enoent = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: null, stdout: "", stderr: "spawnSync systemctl ENOENT" }), cgroup: () => "" } });
+  assert.deepEqual(enoent.warnings, []);
+  const bus = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: 1, stdout: "", stderr: "Failed to connect to bus" }), cgroup: () => "" } });
+  assert.match(bus.warnings[0], /Failed to connect to bus.*Re-adopt/);
 });
