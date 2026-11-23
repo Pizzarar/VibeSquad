@@ -13,6 +13,7 @@ import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
+import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
@@ -236,10 +237,10 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent }) {
+    async writeLog({ type, text, refs, agent, plan, pass }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
-      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(name ? { agent: name } : {}) };
+      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -248,7 +249,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       } catch (e) {
         if (!e?.unreachable) throw e;
         const { appendVsLogEntry } = await import("../brainstorm.mjs");
-        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs }).entry;
+        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass }).entry;
       }
     },
     // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
@@ -313,6 +314,28 @@ export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
 }
 
 const agentOf = (res) => res?.agent ?? res;
+
+// idea-454: a Buddy -> lead plan handoff logs `handoff plan=<path>`. Dedupe is server-side (appendVsLogEntry checks the lane log for
+// the same agent + plan inside the window), so CLI/MCP processes, spawn + send and an explicit `vs log handoff --plan` log one entry.
+async function logPlanHandoff(ctx, text, how) {
+  try {
+    const plan = planPathInText(text);
+    if (!plan) return;
+    await ctx.writeLog({ type: "handoff", text: `buddy -> lead plan handoff (${how})`, plan });
+  } catch { /* metrics are best effort: never fail the spawn/send */ }
+}
+
+/** True when `id` is a live lead of the sender's own team + lane (a Buddy's note to a Buddy or worker is not a lead handoff). */
+async function isOwnLaneLead(ctx, id) {
+  try {
+    const rec = await fetchCallerRecord(ctx, id);
+    if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt) return false;
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    const mine = findLaneInRegistry(clean(ctx.identity.lane), teams);
+    const theirs = findLaneInRegistry(clean(rec.labels?.lane || rec.labels?.lead), teams);
+    return Boolean(mine && theirs && mine.lane.id === theirs.lane.id && mine.team.id === theirs.team.id);
+  } catch { return false; }
+}
 
 async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
@@ -467,6 +490,7 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   );
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;
   if (partnerName) {
     try {
@@ -519,6 +543,7 @@ async function sendTool(ctx, args = {}) {
   const sender = callerAgentId(ctx);
   const opts = sender ? { senderId: sender } : (await hasOwnerProof(ctx)) ? { owner: true } : undefined;
   const res = await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
+  if (clean(ctx.identity.role).toLowerCase() === "brainstorm" && planPathInText(text) && (await isOwnLaneLead(ctx, res?.redirectedTo || id))) await logPlanHandoff(ctx, text, "send");
   return res?.redirectedTo ? { id, sent: true, redirectedTo: res.redirectedTo } : { id, sent: true };
 }
 

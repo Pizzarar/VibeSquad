@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { PLAN_PATH_RE } from "./plan-log.mjs";
 import {
   appendVsLogEntry,
   createAgentClient,
@@ -213,7 +214,7 @@ export function highestLaneLeadOrd(agents, laneId, excludeId = "") {
  * (Buddy -> lead) against a later `done plan <PLAN_x> PASS`. Omitted when the lane has no plan file yet.
  */
 export function handoffLogText({ oldId, successorId, oldOrd, nextOrd, trigger, plan = "", idleRepointed = 0, watchesReowned = 0 }) {
-  const planTag = /^docs\/PLAN_[\w.-]+\.md$/i.test(String(plan)) ? ` plan=${plan}` : "";
+  const planTag = PLAN_PATH_RE.test(String(plan)) ? ` plan=${plan}` : "";
   return `lead ${oldId} -> ${successorId} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})${planTag}${
     watchesReowned ? `; ${watchesReowned} watch${watchesReowned === 1 ? "" : "es"} re-owned` : ""
   }${
