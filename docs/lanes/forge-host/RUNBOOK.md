@@ -66,7 +66,7 @@ The VS CA is self-signed, so each client pins it (E6/idea-384 flow; addon design
 
 Godot-lane agents run on the forge but drive the dev pp's loopback-only godot-mcp-runtime bridge over SSH stdio:
 
-`ssh devpc npx godot-mcp-runtime@<pin>`
+`ssh devpc npx godot-mcp-runtime@4.0.1`
 
 Register that command as the stdio MCP server command in the forge agent's MCP config. The same pattern runs Windows-only
 jobs (desktop build/sign, Windows EFI exports by Release Desk): the forge agent executes them on the dev pp over SSH. There is
