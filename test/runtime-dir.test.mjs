@@ -88,7 +88,7 @@ test("hermetic preload + childEnv keep the live runtime out of test children", (
 
 test("forge 11-23: test env drops inherited live/identity vars, keeps test knobs, and moves a TMPDIR out of ~/.vibesquad", () => {
   const env = childEnv({
-    VIBESQUAD_MESHNET_HOST: "live.nord", VIBESQUAD_MESHNET_IP: "100.1.2.3", VIBESQUAD_LAN: "1", VIBESQUAD_PORT: "4180",
+    VIBESQUAD_MESHNET_HOST: "live.example", VIBESQUAD_MESHNET_IP: "100.1.2.3", VIBESQUAD_LAN: "1", VIBESQUAD_PORT: "4180",
     VIBESQUAD_START_RUNNER: "1", VIBESQUAD_TEAMS_FILE: "/live/teams.json", VS_LANE: "bug-chaser", VS_AGENT_TOKEN: "t", PASEO_AGENT_ID: "rn-x",
     VS_TEST_FILE_TIMEOUT_MS: "5000", VS_BENCH: "1", VS_ALLOW_REAL_HOME: "1", PATH: "/usr/bin",
     VS_SMOKE: "1", VS_TEST_STRICT_TIMING: "1", VS_TEST_LOAD_FACTOR: "2", VS_TEST_DUMP: "1", VS_SMOKEY: "x",
@@ -122,7 +122,7 @@ test("forge 11-23: test env drops inherited live/identity vars, keeps test knobs
   assert.deepEqual(inPlace, { TMPDIR: "/tmp" });
   // The preload applies it in-process, so a direct `node --test --import` run is covered too.
   const out = execFileSync(process.execPath, ["--import", "./test/setup/hermetic.mjs", "-e", "console.log(JSON.stringify([process.env.VIBESQUAD_MESHNET_HOST ?? null, process.env.VS_LANE ?? null]))"],
-    { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_MESHNET_HOST: "live.nord", VS_LANE: "x" } }).trim();
+    { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_MESHNET_HOST: "live.example", VS_LANE: "x" } }).trim();
   assert.equal(out, "[null,null]");
 });
 
