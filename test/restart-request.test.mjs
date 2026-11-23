@@ -198,8 +198,8 @@ test("dead leads count as drained; a new lead is asked; held background work blo
   await loop.tick();
   const uiAsk = w.sends().find((c) => c[1] === "rn-ui")[2];
   assert.match(uiAsk, /runner holds background work in your lane right now: rn-w1 \(pid 4242: bash tools\/run_suite\.sh --full\)/);
-  assert.ok(!/holds background work/.test(w.sends().find((c) => c[1] === "rn-bug")[2]));
-  // rn-bug dies; a new lane lead rn-ui2 appears in ui? No: a new lane (bug-chaser successor) appears and is asked.
+  assert.deepEqual(w.sends().map((c) => c[1]), ["rn-ui"], "idea-402: rn-bug's lane holds nothing: auto-drained, not prompted");
+  // rn-bug dies; a successor lead in bug-chaser appears: its lane holds nothing either, so it is auto-drained too.
   const BUG2 = ag("rn-bug2", "bug-chaser", "lead");
   w.agents = [OVE, BUG2, UI, W1];
   w.now = T0 + MIN;
@@ -207,10 +207,9 @@ test("dead leads count as drained; a new lead is asked; held background work blo
   await loop.tick();
   let req = readRestartRequest(home);
   assert.ok(req.gone["rn-bug"], "the dead lead counts as drained");
-  assert.ok(req.asked["rn-bug2"], "the successor is asked");
+  assert.ok(req.asked["rn-bug2"]?.auto && req.drained["rn-bug2"], "the successor is auto-drained");
   assert.match(formatRequestStatus(req, w.now), /ui lead rn-ui \(rn-ui\): drained .*; runner holds rn-w1/);
   w.now = T0 + 2 * MIN;
-  logLine(home, "rn-bug2", `drained restart ${TIP}`, w.now);
   assert.equal((await loop.tick()).state, "draining", "rn-ui drained but the runner still holds rn-w1's suite");
   w.held = { ids: [], work: {} };
   w.now = T0 + 3 * MIN;
@@ -221,7 +220,7 @@ test("dead leads count as drained; a new lead is asked; held background work blo
   await loop.tick();
   req = readRestartRequest(home);
   assert.equal(req.state, "done");
-  assert.ok(!w.sends().slice(3).some((c) => c[1] === "rn-bug"), "no done message to the dead lead");
+  assert.deepEqual(w.sends().slice(1).map((c) => c[1]), ["rn-ui"], "done goes to the prompted lead only: not the dead lead, not the auto-drained successor");
 });
 
 test("a refused launch or a deferred restart aborts the request; it is never fired again", async () => {

@@ -142,11 +142,26 @@ export const isDrainedFeedback = (text) => DRAINED_RE.test(String(text ?? "").tr
  * Fail closed: without a readable held list or agent list nothing is recorded as drained. Returns null (may log) or the
  * refusal reason.
  */
-export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsRegistry(), callerTeam = null, callerLane = null } = {}) {
+export function drainedLogRefusal(callerId, opts = {}) {
+  const b = laneHolders(callerId, opts);
+  if (b.refusal) return b.refusal;
+  if (!b.ids.length) return null;
+  const { ids } = b;
+  return `not drained: the runner still holds background work in your lane: ${ids.map((h) => { const w = workLine(opts.held.work, h); return w ? `${h} (${w})` : h; }).join("; ")}. ` +
+    `Let it finish, or stop it (${ids.map((h) => `vs stop ${h} --background`).join("; ")}; idle agents only), then log the drain again.`;
+}
+
+/**
+ * idea-402: the held agents drainedLogRefusal counts against `callerId`'s lane, as data: { ids } (empty = the lane holds
+ * nothing, a drain would be recorded) or { refusal } when the held list or agent list could not be read (fail closed:
+ * never read as "holds nothing"). The restart request's auto-drain uses this, so a server-recorded drain is exactly the
+ * one a lead's own `vs log restart-feedback 'drained restart'` would be allowed to record.
+ */
+export function laneHolders(callerId, { held, agents, teams = loadTeamsRegistry(), callerTeam = null, callerLane = null } = {}) {
   const id = String(callerId ?? "");
-  if (!held || !Array.isArray(held.ids)) return "not recorded as drained: the runner's held background work could not be read (runner down, booting or too old to report it). Retry once the runner answers; vs restart status shows what it holds.";
-  if (!held.ids.length) return null;
-  if (!Array.isArray(agents)) return "not recorded as drained: the runner holds background work and its agent list could not be read, so it is unknown whose. Retry in a moment.";
+  if (!held || !Array.isArray(held.ids)) return { refusal: "not recorded as drained: the runner's held background work could not be read (runner down, booting or too old to report it). Retry once the runner answers; vs restart status shows what it holds." };
+  if (!held.ids.length) return { ids: [] };
+  if (!Array.isArray(agents)) return { refusal: "not recorded as drained: the runner holds background work and its agent list could not be read, so it is unknown whose. Retry in a moment." };
   const list = agents.map((a) => (a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a));
   const byId = new Map(list.map((a) => [a?.id, a]));
   // A holder's Squad/lane through the registry (aliases resolve); an agent the registry cannot place falls back to its raw
@@ -167,10 +182,25 @@ export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsReg
     if (ownerGone(a)) continue; // idea-475: an archived/exited owner's shell is counted drainable, not held against the lane
     if (h === id || (a && String(a.labels?.["vs.parent"] ?? "") === id) || (mine && laneOf(a) === mine)) blockers.add(h);
   }
-  if (!blockers.size) return null;
-  const ids = [...blockers];
-  return `not drained: the runner still holds background work in your lane: ${ids.map((h) => { const w = workLine(held.work, h); return w ? `${h} (${w})` : h; }).join("; ")}. ` +
-    `Let it finish, or stop it (${ids.map((h) => `vs stop ${h} --background`).join("; ")}; idle agents only), then log the drain again.`;
+  return { ids: [...blockers] };
+}
+
+/**
+ * idea-604: the one reading of what a runner held list ({ ids, work }: /health heldAgents + heldWork) holds, shared by the
+ * restart request (autoDrainVerdicts) and the `vs restart` deferral (scripts/restart-runtime.mjs settle-and-repoll), so the
+ * two never disagree on "held". Per holder (`of`, default every held id): `shells` = real held work (work[id] lists shells),
+ * `unprobed` = listed only until its first after-turn probe (work[id] is an empty list; the probe lands within the park
+ * grace + one snapshot, seconds). Fail safe: a holder with no work entry, or a list with no work map (a runner too old to
+ * report heldWork), counts as shells: unknown is held, never "unprobed". null when the held list itself is unknown.
+ * Returns { shells, unprobed, unprobedOnly } (unprobedOnly: at least one holder and every one unprobed).
+ */
+export function heldShells(held, of = null) {
+  if (!held || !Array.isArray(held.ids)) return null;
+  const work = held.work && typeof held.work === "object" && !Array.isArray(held.work) ? held.work : null;
+  const shells = [];
+  const unprobed = [];
+  for (const id of (Array.isArray(of) ? of : held.ids).map(String)) (work && Array.isArray(work[id]) && !work[id].length ? unprobed : shells).push(id);
+  return { shells, unprobed, unprobedOnly: unprobed.length > 0 && !shells.length };
 }
 
 /** The ask a restarter sends a holder lead (no double quotes or backticks: it pastes into `vs send <id> "..."` in any shell). */

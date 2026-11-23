@@ -15,6 +15,11 @@
 // idea-398: a request with `--needs build` (the Live-Needs token) runs the source repo's sync-runtime (it rebuilds a stale
 // dist, then copies the runtime) right before the `vs restart` launch, once the leads have drained. A sync that does not
 // happen is never silent: the request logs `sync-skipped reason=...` (restart-feedback) and fires on the runtime as last synced.
+// idea-402: auto-drain. A lead whose lane the runner holds no background work for (restart-coord laneHolders: the very check
+// that gates a lead's own 'drained restart' log) is recorded as drained by the loop (asked[id].auto, source auto) and gets no
+// prompt; re-checked every tick, so a prompted lead whose work finishes is drained without a turn. Leads never prompted
+// (asked[id].quiet) get no aborted / restart-done send either: the team log line and vs restart status carry it. Fail safe:
+// no fresh held list or agent list -> no auto-drain, the lead is asked as before.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,7 +30,7 @@ import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { execOffLoop } from "./git-spawn.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
-import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, holderLeads } from "./restart-coord.mjs";
+import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, heldShells, holderLeads, laneHolders } from "./restart-coord.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
 import { asleepTeamIds, isLiveAgent, loadTeamsRegistry, readTeamsConfig, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { toAgent } from "./backend/runner-backend.mjs";
@@ -212,6 +217,45 @@ export function liveLeads(agents, teams = loadTeamsRegistry()) {
   return out;
 }
 
+/**
+ * idea-604: a lead whose only lane holders have no shell listed yet (held until the runner's first after-turn probe, which
+ * lands within the park grace) is not prompted at once: its ask waits this long for that probe, which usually comes back
+ * clean (auto-drain). Still unprobed, or real shells, after it: asked. The lead counts as not drained meanwhile.
+ */
+export const UNPROBED_ASK_GRACE_MS = 60_000;
+
+/**
+ * The runner's /health body as the loop's held list { ids, work }, or null (unknown: nobody auto-drained). idea-604: an
+ * unreported heldWork stays null (not {}), so heldShells reads it as "shells unknown", never as unprobed. Bug36 L2: a
+ * held count the ids do not match is inconsistent and unknown (same rule as restart-runtime healthHeldTruth).
+ */
+export function heldListFromHealth(h) {
+  if (!h || typeof h !== "object" || !Array.isArray(h.heldAgents)) return null;
+  if (h.held !== undefined && h.held !== h.heldAgents.length) return null;
+  return { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" && !Array.isArray(h.heldWork) ? h.heldWork : null };
+}
+
+/**
+ * idea-402: per live lead, may the server record its drain now? { ok: true } | { ok: false, ids, unprobedOnly } where
+ * unprobedOnly = every holder has no shell listed yet (restart-coord heldShells, the same reading `vs restart` defers on;
+ * no work map or no entry for a holder reads as shells). null = no verdicts (held list or agent list unknown): nobody is
+ * auto-drained. `held` is the runner's raw { ids, work } (work null when the runner did not report heldWork).
+ */
+export function autoDrainVerdicts(leads, held, agents, teams = loadTeamsRegistry()) {
+  if (!Array.isArray(leads) || !held || !Array.isArray(held.ids) || !Array.isArray(agents)) return null;
+  // Bug36 M1: a held id with no record in `agents` (spawned since the list, or the archived list failed) is a shell of
+  // unknown lane: laneHolders would read it as nobody's and auto-drain its own lead. Fail closed: no verdicts at all.
+  const known = new Set(agents.map((a) => String((a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a)?.id ?? "")));
+  if (held.ids.some((id) => !known.has(String(id)))) return null;
+  const out = {};
+  for (const l of leads) {
+    const b = laneHolders(l.leadId, { held, agents, teams, callerTeam: l.team, callerLane: l.lane });
+    if (b.refusal) continue; // unknown for this lead: asked
+    out[l.leadId] = b.ids.length ? { ok: false, ids: b.ids, unprobedOnly: heldShells(held, b.ids).unprobedOnly } : { ok: true };
+  }
+  return out;
+}
+
 const RUNNING = new Set(["running", "initializing", "starting", "working", "queued"]);
 /**
  * B11a: `leads` minus the leads of asleep Squads whose lane has nothing running (no running agent, no runner-held work), so
@@ -324,7 +368,8 @@ export function pendingLeads(req) {
   for (const [leadId, a] of Object.entries(req.asked ?? {})) {
     if (req.gone?.[leadId]) continue; // a lead that died or retired counts as drained
     const held = req.held?.byLead?.[leadId] ?? [];
-    if (!req.drained?.[leadId]) out.push({ leadId, ...a, reason: held.length ? `not drained; runner holds ${heldLine(held)}` : "not drained" });
+    const why = a.holdoff ? "not drained, not asked yet (its lane's holders have no shell listed: waiting for their first probe)" : "not drained";
+    if (!req.drained?.[leadId]) out.push({ leadId, ...a, reason: held.length ? `${why}; runner holds ${heldLine(held)}` : why });
     else if (held.length) out.push({ leadId, ...a, reason: `logged '${DRAINED_TEXT}' but the runner still holds ${heldLine(held)}` });
   }
   return out;
@@ -333,10 +378,10 @@ export function pendingLeads(req) {
 /**
  * One step for the open request `req` (mutated in place). Inputs: `leads` (liveLeads(), null = runner unreachable),
  * `drained` (drainedSince() map), `held` (heldByLead(); undefined = not read, null = unknown), `results` (restartResults(),
- * read while firing). Returns the side effects for the driver, which persists `req` BEFORE running any of them:
+ * read while firing), `verdicts` (autoDrainVerdicts(); null = none, every new lead is asked). Returns the side effects for the driver, which persists `req` BEFORE running any of them:
  * { kind: "ask", leadId, text } | { kind: "log", text } | { kind: "fire" } | { kind: "send", leadId, text }.
  */
-export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [], asleep = null } = {}) {
+export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [], asleep = null, verdicts = null } = {}) {
   const actions = [];
   const at = iso(now);
   req.asked ??= {};
@@ -345,27 +390,78 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
   const close = () => notifyClosed(req, at, actions, asleep);
   if (TERMINAL.has(req.state)) return close();
   if (held !== undefined) req.held = held ? { at, ...held } : null;
+  // idea-402: verdicts count only with this tick's held list and lead list (fail safe: stale or missing data auto-drains nobody).
+  const v = leads && held ? (verdicts ?? null) : null;
 
   if (req.state === "requested" || req.state === "draining") {
     if (leads) {
-      for (const l of leads) {
-        if (l.leadId === req.requestedBy || req.asked[l.leadId]) continue;
-        if (req.scope === "team" && req.team && l.team !== req.team) continue;
-        req.asked[l.leadId] = { team: l.team, lane: l.lane, title: l.title ?? null, askedAt: at };
+      const auto = [];
+      const ask = (l, a) => {
+        delete a.quiet;
+        delete a.holdoff;
+        a.promptedAt = at;
         actions.push({ kind: "ask", leadId: l.leadId, text: requestAskText(req, l, req.held?.byLead?.[l.leadId], now) });
+      };
+      const autoDrain = (l, a) => {
+        delete a.holdoff;
+        a.auto = at;
+        req.drained[l.leadId] = at;
+        auto.push(l);
+      };
+      for (const l of leads) {
+        if (l.leadId === req.requestedBy) continue;
+        if (req.scope === "team" && req.team && l.team !== req.team) continue;
+        const verdict = v?.[l.leadId];
+        let a = req.asked[l.leadId];
+        if (!a) {
+          a = req.asked[l.leadId] = { team: l.team, lane: l.lane, title: l.title ?? null, askedAt: at };
+          if (verdict?.ok) { a.quiet = true; autoDrain(l, a); }
+          else if (verdict?.unprobedOnly) { a.quiet = true; a.holdoff = at; }
+          else ask(l, a);
+          continue;
+        }
+        if (req.gone[l.leadId]) continue;
+        if (req.drained[l.leadId]) {
+          // An auto-drained lead that was never prompted and whose lane now shows real shells: the drain is withdrawn and the
+          // lead asked (it would otherwise block silently until the deadline). Unprobed-only holders just block until probed.
+          if (a.auto && a.quiet && verdict && !verdict.ok && !verdict.unprobedOnly) {
+            delete req.drained[l.leadId];
+            delete a.auto;
+            event(req, at, `${leadName({ leadId: l.leadId, ...a })}: auto-drain withdrawn, the runner holds ${verdict.ids.join(", ")}`);
+            ask(l, a);
+          }
+          continue;
+        }
+        if (verdict?.ok) { autoDrain(l, a); continue; } // a prompted lead whose work finished is drained without a turn
+        if (a.holdoff) {
+          if (verdict?.unprobedOnly && now - Date.parse(a.holdoff) < UNPROBED_ASK_GRACE_MS) continue;
+          ask(l, a);
+        }
       }
       const live = new Set(leads.map((l) => l.leadId));
       for (const id of Object.keys(req.asked)) {
         if (!live.has(id) && !req.gone[id]) { req.gone[id] = at; event(req, at, `${leadName({ leadId: id, ...req.asked[id] })} is gone: counts as drained`); }
       }
+      const asks = actions.filter((x) => x.kind === "ask").length;
       if (req.state === "requested") {
         req.state = "draining";
         req.drainingAt = at;
-        event(req, at, `drain asks to ${Object.keys(req.asked).length} live lead(s)`);
-      } else if (actions.length) event(req, at, `drain asks to ${actions.length} new lead(s)`);
+        const holding = Object.values(req.asked).filter((a) => a.holdoff).length;
+        event(req, at, `drain asks to ${asks} live lead(s); ${auto.length} auto-drained (runner holds no work in their lanes, not prompted)${holding ? `; ${holding} ask(s) held until the holders' first probe` : ""}`);
+      } else {
+        if (asks) event(req, at, `drain asks to ${asks} lead(s)`);
+      }
+      if (auto.length) {
+        if (req.state === "draining" && req.drainingAt !== at) event(req, at, `auto-drained ${auto.length} lead(s): ${auto.map((l) => `${l.team}/${l.lane}`).join(", ")}`);
+        actions.push({ kind: "log", text: `restart-request ${req.id} auto-drained ${auto.length} lead(s), the runner holds no work in their lanes (no prompt): ${auto.map((l) => `${l.lane} ${l.leadId}`).join(", ")}` });
+      }
     }
     for (const [id, ts] of drained ?? []) {
-      if (!req.asked[id] || req.drained[id]) continue; // duplicates and non-asked agents change nothing
+      if (!req.asked[id]) continue; // non-asked agents change nothing
+      // A lead that logged its own drain took a turn on it: it gets the close notice to lift its hold, like an asked lead.
+      delete req.asked[id].quiet;
+      delete req.asked[id].holdoff;
+      if (req.drained[id]) continue; // duplicates (or already auto-drained) change nothing else
       req.drained[id] = ts;
       event(req, at, `${leadName({ leadId: id, ...req.asked[id] })} drained`);
     }
@@ -376,7 +472,12 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
       return close();
     }
     const pend = pendingLeads(req);
-    if (!pend.length) {
+    // idea-402: a server-recorded (auto) drain only stands on THIS tick's held list: with it unknown now, the request waits
+    // (the deadline still fires as before). Self-reported drains keep their existing behavior.
+    // Bug36 L1: per lead, not just "some verdicts": an auto drain whose lead has no ok verdict on this tick (unknown, or a
+    // holder laneHolders counts but heldByLead does not, e.g. a vs.parent child) does not let the request fire.
+    const autoStale = Object.entries(req.asked).some(([id, a]) => a.auto && req.drained[id] && !req.gone[id] && !v?.[id]?.ok);
+    if (!pend.length && !autoStale) {
       req.state = "ready";
       req.readyAt = at;
       req.readyReason = "all-drained";
@@ -388,7 +489,7 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
       req.readyAt = at;
       req.readyReason = "deadline";
       req.laggards = pend.map(({ leadId, team, lane, title, reason }) => ({ leadId, team, lane, title, reason }));
-      const who = req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ");
+      const who = req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ") || "none (auto-drains unconfirmed)";
       event(req, at, `deadline passed; not drained: ${who}`);
       actions.push({ kind: "log", text: `restart-request ${req.id} deadline passed; firing vs restart for ${req.tip} anyway (restart-runtime still waits for idle and defers rather than kill); not drained: ${who}` });
     }
@@ -425,19 +526,27 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
   return actions;
 }
 
-/** Once per finished request: log the outcome and tell every asked lead still live to lift its hold. */
+/**
+ * Once per finished request: log the outcome and tell every prompted lead still live to lift its hold. idea-402: a lead
+ * that was never prompted (quiet: auto-drained, or its ask still held) has no hold to lift and is not woken; the team-log
+ * line names how many were left out, and vs restart status shows each.
+ */
 function notifyClosed(req, at, actions, asleep = null) {
   if (req.notifiedAt) return actions;
   req.notifiedAt = at;
   const done = req.state === "done";
   // idea-398 fix round: a restart after a skipped sync ran the old runtime; never let its done line read as a clean one.
   const stale = req.sync && req.sync.ok === false ? `; ${req.sync.note ?? notUpdatedNote({ tip: req.tip, reason: req.sync.reason })}` : "";
-  actions.push({ kind: "log", text: done ? `${DONE_TEXT} ${req.tip} (restart-request ${req.id})${stale}` : `restart-request ${req.id} aborted: ${req.abortReason}${stale}` });
+  const quiet = Object.keys(req.asked ?? {}).filter((id) => req.asked[id]?.quiet && !req.gone?.[id]).length;
+  const q = quiet ? ` [${quiet} auto-drained lead(s) not woken]` : "";
+  // The note goes before the stale tail on a done line (it must not be cut by fitLog), after the reason on an abort line.
+  actions.push({ kind: "log", text: done ? `${DONE_TEXT} ${req.tip} (restart-request ${req.id})${q}${stale}` : `restart-request ${req.id} aborted${q}: ${req.abortReason}${stale}` });
   const text = done ? `${doneText(at)} (restart-request ${req.id}, tip ${req.tip})${stale}`
     : `Restart request ${req.id} (tip ${req.tip}) was aborted: ${req.abortReason}${stale}. No restart is pending from it; lift your background-suite hold.`;
   for (const id of Object.keys(req.asked ?? {})) {
     if (req.gone?.[id]) continue;
     if (asleep?.has?.(String(req.asked[id]?.team ?? "").toLowerCase())) continue; // B11a: an asleep Squad is not woken
+    if (req.asked[id]?.quiet) continue; // idea-402: never prompted, nothing to lift
     actions.push({ kind: "send", leadId: id, text });
   }
   return actions;
@@ -454,7 +563,9 @@ export function formatRequestStatus(req, now = Date.now()) {
   if (asked.length) lines.push(`  leads: ${settled}/${asked.length} drained or gone`);
   for (const [id, a] of asked) {
     const held = req.held?.byLead?.[id] ?? [];
-    const st = req.gone?.[id] ? `gone ${req.gone[id]} (counts as drained)` : req.drained?.[id] ? `drained ${req.drained[id]}` : "NOT drained";
+    const st = req.gone?.[id] ? `gone ${req.gone[id]} (counts as drained)`
+      : req.drained?.[id] ? `drained ${req.drained[id]}${a.auto ? ` (auto: runner holds no work in its lane${a.quiet ? ", not prompted" : ""})` : ""}`
+      : a.holdoff ? `NOT drained (ask held since ${a.holdoff}: its holders have no shell listed yet, waiting for their first probe)` : "NOT drained";
     lines.push(`  - ${leadName({ leadId: id, ...a })}: ${st}${a.error ? `; ask failed: ${a.error}` : ""}${held.length ? `; runner holds ${heldLine(held)}` : ""}`);
   }
   if (req.held?.gone?.length) lines.push(`  held by a gone owner (counted drainable): ${req.held.gone.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
@@ -668,6 +779,7 @@ export function createRestartRequestLoop({
     let drained = null;
     let results = [];
     let asleep = null;
+    let verdicts = null;
     try { asleep = asleepTeams(); } catch { asleep = null; }
     const scanAt = now();
     if (open) {
@@ -684,13 +796,15 @@ export function createRestartRequestLoop({
         }
         held = h ? heldByLead(h, holders, reg) : null;
         leads = dropAsleepLeads(leads, agents, reg, asleep, held);
+        // idea-402: the same lane check a lead's own drained log must pass, per lead (null without a held list: fail safe).
+        try { verdicts = h ? autoDrainVerdicts(leads, h, holders, reg) : null; } catch (e) { verdicts = null; log(`restart-request: auto-drain check failed (${e?.message ?? e}); every lead is asked`); }
       }
       const sinceMs = Date.parse(cur.createdAt);
       drained = drainedSince(home, { sinceMs, stopMs: scanned?.id === cur.id ? scanned.at : sinceMs, tip: cur.tip });
     } else if (cur.state === "firing") results = restartResults(home);
     const { req, actions } = await mutateAsync(home, (doc) => {
       if (!doc.current || doc.current.id !== cur.id) return { req: doc.current, actions: [] };
-      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep }) };
+      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep, verdicts }) };
     });
     if (open) scanned = { id: cur.id, at: scanAt };
     // The drain follows the stepped state (requestHoldsDrain): held while the request is open and until its vs restart
@@ -791,10 +905,7 @@ export async function startRestartRequestLoop({ home, log = (l) => console.warn(
     log,
     listAgents: () => backend.listAgents(),
     listAgentsWithArchived: () => backend.listAgents({ filter: { includeArchived: true } }),
-    heldList: async () => {
-      const h = await backend.rc.request("GET", "/health", undefined, { restartWait: false });
-      return Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
-    },
+    heldList: async () => heldListFromHealth(await backend.rc.request("GET", "/health", undefined, { restartWait: false })),
     drain: {
       set: (req) => backend.rc.request("POST", "/drain/request", requestDrainBody(req), { restartWait: false }),
       clear: (id) => backend.rc.request("DELETE", "/drain/request", { id }, { restartWait: false }),

@@ -21,6 +21,8 @@
 //   result file.
 // Background work (an idle agent whose park is held by a suite/build it left running: /health `held`) is never killed by
 // default. If it outlasts --wait-timeout the restart is deferred (nothing stopped, exit 4) unless --kill-background.
+// idea-604: holders listed only until their first after-turn probe (no shell listed) are settled and repolled first
+// (settleUnprobed, up to UNPROBED_SETTLE_MS), read the restart request's way (restart-coord heldShells); unknown is held.
 // A deferral names each holder's lane lead (the `vs who lead` resolution) with a ready-to-send drain ask, in the result file
 // and the log; `vs restart` then refuses for 30 min until every named lead logged restart-feedback 'drained restart'; the
 // next successful restart logs restart-feedback 'restart-done' and sends it to every asked lead (docs/PLAN_COORDINATED_DRAIN.md).
@@ -611,6 +613,55 @@ async function verifyResumed(det, d, opts, result, step, fail) {
   else step('resumed agents started after retry', { count: retried.length });
 }
 
+/** idea-604: how long `vs restart` settles unprobed-only holders before deferring: park grace (3 s) + one snapshot (20 s cap) + margin. */
+export const UNPROBED_SETTLE_MS = 30_000;
+export const UNPROBED_SETTLE_POLL_MS = 2_000;
+
+/**
+ * idea-604: a runner /health body's held list read the restart request's way (restart-coord heldShells): { clean } when it
+ * holds nothing, else heldShells' { shells, unprobed, unprobedOnly }. null = unknown (no held list in the body, ids that do
+ * not match the held count, no heldWork map, no heldShells): never read as clean or as unprobed.
+ */
+export function healthHeldTruth(h, coord) {
+  if (!h || typeof h !== 'object' || !Array.isArray(h.heldAgents)) return null;
+  const held = h.held ?? h.heldAgents.length;
+  if (held === 0 && h.heldAgents.length === 0) return { clean: true };
+  if (h.heldAgents.length !== held || !h.heldWork || typeof h.heldWork !== 'object' || typeof coord?.heldShells !== 'function') return null;
+  return coord.heldShells({ ids: h.heldAgents, work: h.heldWork });
+}
+
+/**
+ * idea-604: settle-and-repoll at the wait deadline. Only when the last /health (`last`) is unprobed-only per
+ * healthHeldTruth: repoll through `fetchHealth` until the runner holds nothing (clean), a holder shows real shells
+ * (shells), a poll fails or reads as unknown (unknown), or UNPROBED_SETTLE_MS / its poll count runs out (timeout).
+ * Returns null when no settle applied, else { outcome, health, pollError? }: `health` is the last body read as a
+ * consistent held list (the caller applies it); an unknown poll is never applied, so the caller defers on the last
+ * consistent list. Only clean lets the restart go on. A coord load failure skips the settle (it defers as before).
+ */
+export async function settleUnprobed({ d, fetchHealth, step, last }) {
+  let coord = null;
+  try { coord = await d.coord(); } catch { return null; }
+  const first = healthHeldTruth(last, coord);
+  if (!first?.unprobedOnly) return null;
+  step('settling unprobed holders', { unprobed: first.unprobed, settleSec: UNPROBED_SETTLE_MS / 1000, note: 'no shell listed yet: held until the first after-turn probe; repolled before any deferral' });
+  const end = d.now() + UNPROBED_SETTLE_MS;
+  let outcome = 'timeout';
+  let health = null;
+  let pollError = null;
+  for (let i = 0; i < Math.ceil(UNPROBED_SETTLE_MS / UNPROBED_SETTLE_POLL_MS) && d.now() < end; i++) {
+    await d.sleep(UNPROBED_SETTLE_POLL_MS);
+    let h;
+    try { h = await fetchHealth(); } catch (e) { pollError = e?.message ?? String(e); outcome = 'unknown'; break; }
+    const t = healthHeldTruth(h, coord);
+    if (!t) { outcome = 'unknown'; break; }
+    health = h;
+    if (t.clean) { outcome = 'clean'; break; }
+    if (!t.unprobedOnly) { outcome = 'shells'; break; }
+  }
+  step('unprobed holders settled', { outcome, ...(health ? { held: health.held ?? health.heldAgents.length, heldAgents: health.heldAgents } : {}), ...(pollError ? { error: pollError } : {}) });
+  return { outcome, health, ...(pollError ? { pollError } : {}) };
+}
+
 /**
  * D3 done broadcast: after a successful restart, every lead asked to drain by the deferrals since the last successful
  * restart gets restart-feedback 'restart-done' in its lane log and a direct message, so it lifts the hold. Best effort:
@@ -760,17 +811,31 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       let heldAgents = det.runner.health.heldAgents ?? [];
       let held = det.runner.health.held ?? heldAgents.length;
       let heldWork = det.runner.health.heldWork ?? {};
+      // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
+      let lastHealth = det.runner.health;
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
       let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
+      const fetchHealth = async () => (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
+      const applyHealth = (h) => {
+        lastHealth = h;
+        running = h.running ?? running;
+        heldAgents = h.heldAgents ?? [];
+        held = h.held ?? heldAgents.length;
+        heldWork = h.heldWork ?? {};
+      };
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
-        try {
-          const h = (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
-          running = h.running ?? running;
-          heldAgents = h.heldAgents ?? [];
-          held = h.held ?? heldAgents.length;
-          heldWork = h.heldWork ?? {};
-        } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
+        try { applyHealth(await fetchHealth()); } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
+      }
+      if (held > 0 && !opts.killBackground) {
+        // idea-604 (rr-20261123012408-ac64): the deadline's last /health may catch an agent whose turn just ended, listed
+        // held only until its first after-turn probe (no shell listed: heldWork []), which lands seconds later. Deferring on
+        // that snapshot blocked the restart on nothing. Settle and repoll first, reading the held list the way the restart
+        // request does (restart-coord heldShells): only a consistent held list that holds nothing lets the restart go on;
+        // real shells, still unprobed after the settle, an unreadable or inconsistent poll, or no heldWork map: defer.
+        const settle = await settleUnprobed({ d, fetchHealth, step, last: lastHealth });
+        if (settle?.health) applyHealth(settle.health);
+        if (settle?.pollError) result.errors.push(`settle: /health failed (${settle.pollError}); deferring on the last held list`);
       }
       if (held > 0 && !opts.killBackground) {
         // Never kill a suite or build an agent left running (idea-88): defer, stop nothing, and say who holds it.

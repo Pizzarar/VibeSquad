@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid, detectSystemd, inUnitCgroup, systemdUnitName, systemctlUser } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid, detectSystemd, inUnitCgroup, systemdUnitName, systemctlUser, healthHeldTruth } from "../scripts/restart-runtime.mjs";
 
 // idea-471: the vs-rs- runner scratch dirs are created inline and never removed by the Runner. Collect and remove them
 // after the file runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY).
@@ -131,8 +131,16 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       const url = req.url.split("?")[0];
       if (url === "/health") {
         if (oldRunnerHealthDown && hash === "old-hash") return json(503, { error: "wedged" });
-        const h = heldPolls ? (heldPolls.length > 1 ? heldPolls.shift() : heldPolls[0]) : undefined;
-        return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], ...(h ? { held: h.length, heldAgents: h, ...(heldWork ? { heldWork: Object.fromEntries(h.filter((id) => heldWork[id]).map((id) => [id, heldWork[id]])) } : {}) } : {}), pid, hash });
+        // A held entry is an id list (heldWork from the world), or (idea-604) { ids, work } for that poll's own heldWork,
+        // { fail: true } for a /health that errors, { bare: true } for a 200 that carries no held list at all.
+        const e = heldPolls ? (heldPolls.length > 1 ? heldPolls.shift() : heldPolls[0]) : undefined;
+        w.healthPolls = (w.healthPolls ?? 0) + 1;
+        if (e?.fail) { res.destroy(); return; }
+        const runNow = polls.length > 1 ? polls.shift() : polls[0];
+        if (e?.bare) return json(200, { ok: true, running: runNow, pid, hash });
+        const h = Array.isArray(e) ? e : e?.ids;
+        const hw = Array.isArray(e) ? heldWork : e?.work;
+        return json(200, { ok: true, running: runNow, ...(h ? { held: h.length, heldAgents: h, ...(hw ? { heldWork: Object.fromEntries(h.filter((id) => hw[id]).map((id) => [id, hw[id]])) } : {}) } : {}), pid, hash });
       }
       const one = /^\/agents\/([^/]+)$/.exec(url);
       if (one && req.method === "GET" && agentStatus) { // agentStatus(id) -> the agent's status right now (per-id GET)
@@ -1000,6 +1008,86 @@ test("held background work outlasting the wait defers the restart: nothing stopp
     assert.equal(existsSync(path.join(w.outDir, "restart-runtime.lock")), false, "lock released");
     assert.ok(r.resultFile && existsSync(r.resultFile), "result file says why");
   } finally { await w.cleanup(); }
+});
+
+// idea-604 (rr-20261123012408-ac64): the deadline's last /health caught an agent listed held only until its first after-turn
+// probe (heldWork []): the restart deferred on nothing. It settles and repolls first, reading the held list the restart
+// request's way (restart-coord heldShells); only a consistent list that holds nothing lets it go on.
+const unprobed = (ids) => ({ ids, work: Object.fromEntries(ids.map((id) => [id, []])) });
+const SUITE_SHELL = [{ pid: 4242, name: "bash", cmd: "npm test" }];
+const settled = (r) => r.steps.find((s) => s.step === "unprobed holders settled");
+
+test("idea-604 (a): unprobed-only holders that settle empty do not defer the restart", async () => {
+  const w = await world({ running: [0], held: [unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), []] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.deferred, undefined);
+    assert.ok(r.steps.some((s) => s.step === "settling unprobed holders"), JSON.stringify(r.steps.map((s) => s.step)));
+    assert.equal(settled(r).outcome, "clean");
+    assert.ok(r.steps.some((s) => s.step === "runner idle"));
+    assert.equal(w.shutdownAuth.length, 1, "runner stopped once the holders settled clean");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-604 (b): unprobed holders whose probe finds work still defer, naming the shells", async () => {
+  const w = await world({ running: [0], held: [unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), { ids: ["rn-riff"], work: { "rn-riff": SUITE_SHELL } }] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(settled(r).outcome, "shells");
+    assert.deepEqual(r.deferred.heldAgents, ["rn-riff"]);
+    assert.deepEqual(r.deferred.heldWork, { "rn-riff": SUITE_SHELL }, "the deferral names the shell the probe found");
+    assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
+  } finally { await w.cleanup(); }
+  // Still unprobed after the whole settle (the runner never probed it): unknown is held, so it defers.
+  const w2 = await world({ running: [0], held: [unprobed(["rn-riff"])] });
+  try {
+    const r = await w2.run({ waitTimeoutSec: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(settled(r).outcome, "timeout");
+    assert.deepEqual(r.deferred.heldAgents, ["rn-riff"]);
+    assert.equal(w2.shutdownAuth.length, 0);
+  } finally { await w2.cleanup(); }
+  // A mixed list (one real shell, one unprobed) is held work: no settle at all, deferred at once.
+  const w3 = await world({ running: [0], held: [{ ids: ["rn-suite", "rn-riff"], work: { "rn-suite": SUITE_SHELL, "rn-riff": [] } }] });
+  try {
+    const r = await w3.run({ waitTimeoutSec: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(r.steps.some((s) => s.step === "settling unprobed holders"), false);
+    assert.deepEqual(r.deferred.heldAgents, ["rn-suite", "rn-riff"]);
+  } finally { await w3.cleanup(); }
+});
+
+test("idea-604 (c): a stale or missing held list never settles into a restart", async () => {
+  // No heldWork map (a runner too old to report it): shells unknown, never read as unprobed: no settle, deferred.
+  const w = await world({ running: [0], held: [["rn-riff"]] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0 });
+    assert.equal(r.ok, false);
+    assert.equal(r.steps.some((s) => s.step === "settling unprobed holders"), false);
+    assert.deepEqual(r.deferred.heldAgents, ["rn-riff"]);
+  } finally { await w.cleanup(); }
+  // A settle poll that fails, or a 200 with no held list at all (a swapped or older runner): the last consistent held list
+  // stands and the restart defers (an empty body must not read as held 0).
+  for (const bad of [{ fail: true }, { bare: true }]) {
+    const wb = await world({ running: [0], held: [unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), unprobed(["rn-riff"]), bad] });
+    try {
+      const r = await wb.run({ waitTimeoutSec: 0 });
+      assert.equal(r.ok, false, JSON.stringify(bad));
+      assert.equal(settled(r).outcome, "unknown", JSON.stringify(bad));
+      assert.deepEqual(r.deferred.heldAgents, ["rn-riff"], JSON.stringify(bad));
+      assert.equal(wb.shutdownAuth.length, 0, `${JSON.stringify(bad)}: runner never told to stop`);
+    } finally { await wb.cleanup(); }
+  }
+  // The reading itself: a count the ids do not match, no held list, no heldWork map, no coord helper: unknown (null).
+  const coord = await import("../server/restart-coord.mjs");
+  assert.equal(healthHeldTruth({ held: 2, heldAgents: ["rn-riff"], heldWork: { "rn-riff": [] } }, coord), null);
+  assert.equal(healthHeldTruth({ running: 0 }, coord), null);
+  assert.equal(healthHeldTruth({ held: 1, heldAgents: ["rn-riff"] }, coord), null);
+  assert.equal(healthHeldTruth({ held: 1, heldAgents: ["rn-riff"], heldWork: { "rn-riff": [] } }, {}), null);
+  assert.deepEqual(healthHeldTruth({ held: 0, heldAgents: [] }, coord), { clean: true });
+  assert.deepEqual(healthHeldTruth({ held: 1, heldAgents: ["rn-riff"], heldWork: { "rn-riff": [] } }, coord), { shells: [], unprobed: ["rn-riff"], unprobedOnly: true });
 });
 
 test("held background work that finishes during the wait: the restart proceeds normally; --kill-background proceeds and records it", async () => {
