@@ -19,8 +19,7 @@ export const LAG_LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const WATCHDOG_STALL_MS = 350; // heartbeat silent this long -> capture the main thread's stack
 export const GC_MIN_MS = 20; // gc pauses shorter than this are not kept
 export const GC_STANDALONE_MS = 100; // a single gc pause this long gets its own jsonl line
-const MAX_FRAMES = 8;
-export const LATE_SLACK_MS = 25; // a pause landing within this of the moment the blocker returned is indistinguishable from after it (idea-592)
+const MAX_FRAMES = 12; // a native sync call can sit under ~7 stdio-write frames (execFileSync forwarding child stderr); 8 cut the blocker off (idea-592)
 const GRACE_MS = 150; // let the watchdog's message land before the stall line is written
 const KINDS = { 1: 'scavenge', 2: 'minor-ms', 4: 'mark-sweep-compact', 8: 'incremental', 16: 'weak-cb', 31: 'all' };
 
@@ -43,18 +42,20 @@ export function buildCapture({ params, urls = new Map(), startedAt, heartbeatMov
   return { stallStartedAt: startedAt, pausedAt, pausedAfterMs: pausedAt - startedAt, frames, ...(heartbeatMoved ? { late: true } : {}) };
 }
 
+// Frames that belong to Node's timer dispatch itself, not to any callback. V8 pauses at the first JS safepoint after a native sync call
+// returns, so a pause with a blocker on the stack (execFileSync, a user busy loop) is valid even when it lands right at the stall end.
+const TIMER_MACHINERY = /node:internal\/(timers|priority_queue)|^noop util\/debuglog/;
+
 /**
- * Pure (idea-592): was the pause taken while the blocker was still running? The heartbeat flag misses a pause that lands just after the
- * blocker returned but before the next tick() (e.g. in the following setTimeout), so also compare the pause instant with when the loop was
- * ready to run tick(): tickAt minus the time the pause itself held the thread. A pause within LATE_SLACK_MS of that moment cannot be told
- * apart from one after the blocker, so it is unreliable. Returns null (usable) or the reason string.
+ * Pure (idea-592): was this capture taken after the blocker returned? Two proofs, neither timing-based (timing cannot tell a pause at the
+ * first safepoint of a returning native call, which still has the blocker on the stack, from a pause in a later callback):
+ *  - 'heartbeat-moved': tick() ran since the stall began (idea-513), so the loop has turned.
+ *  - 'paused-in-timer-dispatch': heartbeat unmoved, but the top frame is Node's timer machinery, i.e. the pause landed between callbacks
+ *    after the blocker returned and no blocker frame is on top of the stack. Returns null (usable) or the reason.
  */
-export function lateReason(cap, tickAt) {
+export function lateReason(cap) {
   if (cap.late) return 'heartbeat-moved';
-  if (typeof cap.pausedAt === 'number' && typeof cap.resumedAt === 'number') {
-    const readyAt = tickAt - Math.max(0, cap.resumedAt - cap.pausedAt);
-    if (cap.pausedAt >= readyAt - LATE_SLACK_MS) return 'paused-at-stall-end';
-  }
+  if (cap.frames?.length && TIMER_MACHINERY.test(cap.frames[0])) return 'paused-in-timer-dispatch';
   return null;
 }
 function runWatchdog() {
@@ -81,9 +82,9 @@ function runWatchdog() {
       if (done) return;
       let msg = null;
       try { msg = buildCapture({ params: m.params, urls, startedAt, heartbeatMoved: Atomics.load(hb, 0) !== v0, now: Date.now }); } catch { /* attribution is best-effort */ }
-      // Resume BEFORE posting so the hold time (pausedAt -> resumedAt) is measured; the heartbeat was read above, while still paused.
+      // The heartbeat was read above, while still paused; resume before posting.
       finish();
-      try { if (msg) parentPort.postMessage({ ...msg, resumedAt: Date.now() }); } catch { /* best-effort */ }
+      try { if (msg) parentPort.postMessage(msg); } catch { /* best-effort */ }
     });
     timer = setTimeout(finish, 5000);
     timer.unref();
@@ -164,9 +165,9 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
         if (a) {
           rec.pausedAfterMs = a.pausedAfterMs;
           // captureLate: the frames are not the blocker's; analyses must drop them. captureLateReason (added idea-592) says how it was
-          // detected: 'heartbeat-moved' (tick ran since the stall began) or 'paused-at-stall-end' (pause landed within LATE_SLACK_MS of the
-          // blocker returning, heartbeat still unmoved). Absent when the capture is reliable. Old readers just see captureLate as before.
-          const why = lateReason(a, t);
+          // detected: 'heartbeat-moved' (tick ran since the stall began) or 'paused-in-timer-dispatch' (heartbeat still unmoved but the
+          // pause landed in Node's timer dispatch after the blocker returned). Absent when the capture is reliable. Old readers just see captureLate as before.
+          const why = lateReason(a);
           if (why) { rec.captureLate = true; rec.captureLateReason = why; } else rec.frames = a.frames;
         }
         try { rec.res = resourceCounts(); } catch { /* optional */ }

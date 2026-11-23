@@ -95,7 +95,7 @@ await sleep(600);
 console.log(JSON.stringify({ blockedMs }));`);
 }
 
-test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", (t) => {
+test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
   // The capture races real machine load, so a single run may legitimately land late (flagged as captureLate, see the next test).
   // The on-time path — frames starting with the blocker — must be proven by at least one of 4 attempts. A late capture in
   // disguise (the pause lands in the post-block sleep(600) continuation before the heartbeat bumps) is retried; empty or
@@ -129,10 +129,7 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     assert.ok(stall.frames.some(timerFrame) && stall.frames.every(sleepContinuation), `non-blocker frames are not the sleep continuation: ${JSON.stringify(stall.frames)}`);
     lateCount++;
   }
-  // Timing-only: every attempt landing late (flagged, or the sleep-continuation disguise) means the machine was saturated; the
-  // deterministic late-flag path is proven by the next test. On a quiet machine the on-time path is still required.
-  if (!proved && lateCount === 4 && !process.env.VS_TEST_STRICT_TIMING) return t.skip("all 4 attempts captured late (machine under load); set VS_TEST_STRICT_TIMING=1 to require an on-time capture");
-  assert.ok(proved, "all 4 attempts captured late");
+  assert.ok(proved, `all 4 attempts captured late (${lateCount} late): the on-time path is required`);
 });
 
 test("a capture that lands after the stall ended is flagged captureLate with no frames (forced deterministically)", () => {
@@ -251,46 +248,42 @@ const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.s
   assert.ok(on.pct - off.pct < loadFactor(), `delta ${on.pct - off.pct} (limit ${loadFactor()})`);
 });
 
-// idea-592: attribute a capture as late even when the heartbeat has not moved. Fake clock + fake inspector paused event; no worker.
-function stallRig({ pauseOffsetMs, holdMs = 3 }) {
+// idea-592: a capture taken after the blocker returned is flagged late even when the heartbeat has not moved. Fake clock + fake
+// inspector paused event; no worker. Rule is frame-based, not timing-based: a pause at the stall end with the blocker still on the
+// stack (native sync call returning) is valid.
+function stallRig(callFrames) {
   const { m, lines, adv } = rig();
-  const T0 = 1_000_000; // rig clock start; the stall begins at the last tick
-  m.tick(); // last = T0
-  adv(2000); // blocker runs 2s, then tick() fires at T0+2000 (+ hold: the pause delayed it)
-  const pausedAt = T0 + pauseOffsetMs;
-  const fake = { callFrames: [{ functionName: "blocker", url: "file:///x/app/job.mjs", location: { scriptId: "1", lineNumber: 9 } }] };
-  let clock = pausedAt;
-  const msg = buildCapture({ params: fake, startedAt: T0 + 100, heartbeatMoved: false, now: () => clock });
-  m.ingestCapture({ ...msg, resumedAt: pausedAt + holdMs });
-  return { m, lines, msg, pausedAt };
+  const T0 = 1_000_000;
+  m.tick();
+  adv(2000); // blocker runs 2s, then tick() fires
+  const frames = callFrames.map(([functionName, url]) => ({ functionName, url, location: { scriptId: "1", lineNumber: 9 } }));
+  const msg = buildCapture({ params: { callFrames: frames }, startedAt: T0 + 100, heartbeatMoved: false, now: () => T0 + 1999 });
+  m.ingestCapture(msg); // pausedAt 1ms before tick(): the very end of the stall
+  return { m, lines, msg };
 }
 
-test("capture during the stall is not late (frames kept, no captureLate)", async () => {
-  const { m, lines, msg } = stallRig({ pauseOffsetMs: 800 }); // paused 1.2s before the blocker returned
-  assert.equal(msg.pausedAt - msg.stallStartedAt, 700);
+test("capture during the stall (blocker on top of the stack) is not late, even when it lands at the stall end", async () => {
+  const { m, lines, msg } = stallRig([["execFileSync", "node:child_process"], ["blocker", "file:///x/app/job.mjs"], ["listOnTimeout", "node:internal/timers"]]);
+  assert.equal(lateReason(msg), null);
   m.tick();
   await m.flush();
-  assert.equal(lines.length, 1);
   assert.equal(lines[0].captureLate, undefined);
   assert.equal(lines[0].captureLateReason, undefined);
-  assert.match(lines[0].frames[0], /^blocker app\/job\.mjs:10$/);
-  assert.equal(lines[0].pausedAfterMs, 700);
+  assert.match(lines[0].frames[0], /^execFileSync /);
 });
 
-test("capture just after the blocker returned with the heartbeat unmoved is flagged late (captureLateReason)", async () => {
-  // Pause landed 3ms before tick() was ready to run (held 3ms): inspector latency put it right after the blocker, heartbeat still unmoved.
-  const { m, lines, msg } = stallRig({ pauseOffsetMs: 1997 - 3 });
-  assert.equal(msg.late, undefined); // the old heartbeat check does not catch it
+test("capture after the blocker returned (pause in timer dispatch, heartbeat unmoved) is flagged late", async () => {
+  const { m, lines, msg } = stallRig([["insert", "node:internal/priority_queue"], ["processTimers", "node:internal/timers"]]);
+  assert.equal(msg.late, undefined); // the heartbeat check alone does not catch it
   m.tick();
   await m.flush();
   assert.equal(lines[0].captureLate, true);
-  assert.equal(lines[0].captureLateReason, "paused-at-stall-end");
+  assert.equal(lines[0].captureLateReason, "paused-in-timer-dispatch");
   assert.equal(lines[0].frames, undefined);
-  assert.equal(lines[0].driftMs, 1900);
 });
 
-test("lateReason: heartbeat-moved wins, old messages without pausedAt stay usable", () => {
-  assert.equal(lateReason({ late: true }, 5000), "heartbeat-moved");
-  assert.equal(lateReason({ stallStartedAt: 1, pausedAfterMs: 10, frames: [] }, 5000), null);
-  assert.equal(lateReason({ pausedAt: 1000, resumedAt: 1004 }, 5000), null);
+test("lateReason: heartbeat-moved wins, empty frames stay usable", () => {
+  assert.equal(lateReason({ late: true, frames: [] }), "heartbeat-moved");
+  assert.equal(lateReason({ frames: [] }), null);
+  assert.equal(lateReason({}), null);
 });
