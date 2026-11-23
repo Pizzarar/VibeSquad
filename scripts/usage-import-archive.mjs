@@ -15,7 +15,7 @@
 //   whole archive in memory. No `unzip` / `bsdtar` needed (neither is guaranteed on a forge host).
 // - --dry-run writes nothing (it still lists counts and bytes).
 // Home default: $VIBESQUAD_HOME, else ~/.vibesquad.
-import { closeSync, createReadStream, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmSync, utimesSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, utimesSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -49,7 +49,9 @@ export function listZipEntries(fd) {
   const tailLen = Math.min(size, 22 + 0xffff);
   const tail = readAt(fd, size - tailLen, tailLen);
   let e = -1;
-  for (let i = tailLen - 22; i >= 0; i--) if (tail.readUInt32LE(i) === EOCD_SIG) { e = i; break; }
+  // L1: a candidate only counts when its comment length reaches exactly to the end of the file, so a comment that
+  // itself contains the EOCD signature can't be mistaken for the record.
+  for (let i = tailLen - 22; i >= 0; i--) if (tail.readUInt32LE(i) === EOCD_SIG && tail.readUInt16LE(i + 20) === tailLen - i - 22) { e = i; break; }
   if (e < 0) throw new Error("not a zip file (no end-of-central-directory record)");
   let count = tail.readUInt16LE(e + 10);
   let cdSize = tail.readUInt32LE(e + 12);
@@ -85,10 +87,13 @@ export function listZipEntries(fd) {
     for (let x = p + 46 + nameLen, end = x + extraLen; x + 4 <= end;) {
       const id = cd.readUInt16LE(x), len = cd.readUInt16LE(x + 2);
       let q = x + 4;
+      // L2: a corrupt extra field must give a clear error, not a RangeError from a read past the field or the directory.
+      if (x + 4 + len > end) throw new Error(`corrupt zip: extra field of "${name}" overruns its record`);
+      const need8 = () => { if (q + 8 > x + 4 + len) throw new Error(`corrupt zip: truncated zip64 extra field of "${name}"`); };
       if (id === 0x0001) { // zip64 extended info: only the fields whose 32-bit slot is saturated, in this order
-        if (usize === 0xffffffff) { usize = Number(cd.readBigUInt64LE(q)); q += 8; }
-        if (csize === 0xffffffff) { csize = Number(cd.readBigUInt64LE(q)); q += 8; }
-        if (local === 0xffffffff) { local = Number(cd.readBigUInt64LE(q)); }
+        if (usize === 0xffffffff) { need8(); usize = Number(cd.readBigUInt64LE(q)); q += 8; }
+        if (csize === 0xffffffff) { need8(); csize = Number(cd.readBigUInt64LE(q)); q += 8; }
+        if (local === 0xffffffff) { need8(); local = Number(cd.readBigUInt64LE(q)); }
       } else if (id === 0x5455 && len >= 5 && (cd[q] & 1)) mtimeMs = cd.readUInt32LE(q + 1) * 1000; // extended timestamp (UTC)
       x += 4 + len;
     }
@@ -130,13 +135,16 @@ async function extractEntry(zipPath, fd, en, dest) {
   const lfh = readAt(fd, en.local, 30);
   if (lfh.readUInt32LE(0) !== LFH_SIG) throw new Error("bad local header");
   const start = en.local + 30 + lfh.readUInt16LE(26) + lfh.readUInt16LE(28);
-  const part = join(dest, `.${en.id}.jsonl.part`);
+  const part = join(dest, `.${en.id}.jsonl.${process.pid}.part`); // M1: per-process name, never another run's file
   const final = join(dest, `${en.id}.jsonl`);
   const check = crcCheck();
   const stages = en.csize > 0 ? [createReadStream(zipPath, { start, end: start + en.csize - 1 })] : [Readable.from([])];
   if (en.method === 8 && en.csize > 0) stages.push(createInflateRaw());
-  stages.push(check.t, createWriteStream(part, { flags: "wx" }));
+  let created = false; // M1: only a .part this call created is ever unlinked
   try {
+    const pfd = openSync(part, "wx"); // EEXIST (a live same-pid leftover) fails here, before anything is registered as ours
+    created = true;
+    stages.push(check.t, createWriteStream(part, { fd: pfd }));
     await pipeline(stages);
     const { crc, bytes } = check.result();
     if (bytes !== en.usize) throw new Error(`size ${bytes} != ${en.usize}`);
@@ -146,9 +154,28 @@ async function extractEntry(zipPath, fd, en, dest) {
     renameSync(part, final);
     return bytes;
   } catch (err) {
-    rmSync(part, { force: true });
+    if (created) rmSync(part, { force: true });
     throw err;
   }
+}
+
+const PART_RE = /^\..+\.jsonl(?:\.(\d+))?\.part$/;
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+}
+/** M1: remove `.part` files left by a killed run: those whose owning pid is not alive (a pid-less legacy name has no owner). */
+function sweepStaleParts(dir) {
+  let names = [];
+  try { names = readdirSync(dir); } catch { return 0; }
+  let n = 0;
+  for (const name of names) {
+    const m = PART_RE.exec(name);
+    if (!m) continue;
+    const pid = m[1] ? Number(m[1]) : null;
+    if (pid !== null && (pid === process.pid || pidAlive(pid))) continue;
+    try { rmSync(join(dir, name), { force: true }); n += 1; } catch { /* best effort */ }
+  }
+  return n;
 }
 
 /** Import (or with dryRun, count) the agent logs of `zipPath` into `<home>/runner/agents-archive/`. */
@@ -168,6 +195,7 @@ export async function importArchive(zipPath, { home, dryRun = false, log = () =>
       if (existsSync(archiveDir) && insideOrSame(realOrSelf(archiveDir), realLive)) throw new Error(`refusing: ${archiveDir} resolves into ${realLive}`);
       mkdirSync(archiveDir, { recursive: true });
       if (insideOrSame(realOrSelf(archiveDir), realLive)) throw new Error(`refusing: ${archiveDir} resolves into ${realLive}`);
+      sweepStaleParts(archiveDir);
     }
     for (const en of entries) {
       const file = `${en.id}.jsonl`;

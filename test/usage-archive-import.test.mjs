@@ -3,7 +3,7 @@
 // caches its listing, and the ledger re-fold supersedes costless unit rows. Fixtures are temp dirs only.
 import test, { after, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,11 +19,11 @@ const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-usa42-')
 after(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
 
 /** Minimal zip writer (deflate or store) so the test needs no zip binary. entries: [{ name, data, store? }] */
-function writeZip(file, entries) {
+function writeZip(file, entries, { comment = '' } = {}) {
   const locals = [];
   const central = [];
   let offset = 0;
-  for (const { name, data, store } of entries) {
+  for (const { name, data, store, extra = Buffer.alloc(0) } of entries) {
     const raw = Buffer.from(data);
     const body = store ? raw : deflateRawSync(raw);
     const nameBuf = Buffer.from(name);
@@ -36,16 +36,18 @@ function writeZip(file, entries) {
     cdh.writeUInt32LE(0x02014b50, 0); cdh.writeUInt16LE(20, 4); cdh.writeUInt16LE(20, 6); cdh.writeUInt16LE(store ? 0 : 8, 10);
     cdh.writeUInt16LE(0x5a21, 12); cdh.writeUInt16LE(0x5b77, 14);
     cdh.writeUInt32LE(crc, 16); cdh.writeUInt32LE(body.length, 20); cdh.writeUInt32LE(raw.length, 24); cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt16LE(extra.length, 30);
     cdh.writeUInt32LE(offset, 42);
     locals.push(lfh, nameBuf, body);
-    central.push(cdh, nameBuf);
+    central.push(cdh, nameBuf, extra);
     offset += 30 + nameBuf.length + body.length;
   }
   const cd = Buffer.concat(central);
+  const cmt = Buffer.from(comment);
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
-  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16);
-  fs.writeFileSync(file, Buffer.concat([...locals, cd, eocd]));
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16); eocd.writeUInt16LE(cmt.length, 20);
+  fs.writeFileSync(file, Buffer.concat([...locals, cd, eocd, cmt]));
 }
 
 const ev = (o) => JSON.stringify(o) + '\n';
@@ -116,6 +118,49 @@ test('usa-42 import: refuses an agents-archive that resolves into runner/agents'
   writeZip(zip, [{ name: 'runner/agents/rn-x.jsonl', data: 'x\n' }]);
   await assert.rejects(importArchive(zip, { home }), /refusing/);
   assert.deepEqual(fs.readdirSync(live), []);
+});
+
+test('usa-44 M1: a stale .part (dead pid or legacy name) is swept and re-imported; a live pid\'s .part is left alone', async () => {
+  const home = tmp();
+  const archive = path.join(home, 'runner', 'agents-archive');
+  fs.mkdirSync(archive, { recursive: true });
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid; // exited child: its pid is not alive
+  fs.writeFileSync(path.join(archive, `.rn-a.jsonl.${dead}.part`), 'torn');
+  fs.writeFileSync(path.join(archive, '.rn-a.jsonl.part'), 'legacy torn');
+  const livePart = path.join(archive, `.rn-other.jsonl.${process.ppid}.part`); // parent process: alive, not ours
+  fs.writeFileSync(livePart, 'concurrent run');
+  const zip = path.join(tmp(), 'home.zip');
+  writeZip(zip, [{ name: 'runner/agents/rn-a.jsonl', data: 'hello\n' }]);
+  const s = await importArchive(zip, { home });
+  assert.deepEqual([s.imported, s.errors.length], [1, 0]);
+  assert.equal(fs.readFileSync(path.join(archive, 'rn-a.jsonl'), 'utf8'), 'hello\n');
+  assert.deepEqual(fs.readdirSync(archive).sort(), [path.basename(livePart), 'rn-a.jsonl'].sort(), 'stale parts swept, live pid\'s part untouched');
+});
+
+test('usa-44 L2: a corrupt extra field gives a clear error, not a RangeError', async () => {
+  const home = tmp();
+  const overrun = Buffer.alloc(6); overrun.writeUInt16LE(0x5455, 0); overrun.writeUInt16LE(200, 2); // len runs past the record
+  const zip1 = path.join(tmp(), 'a.zip');
+  writeZip(zip1, [{ name: 'runner/agents/rn-a.jsonl', data: 'x\n', extra: overrun }]);
+  await assert.rejects(importArchive(zip1, { home }), /corrupt zip: extra field/);
+  const z64 = Buffer.alloc(8); z64.writeUInt16LE(0x0001, 0); z64.writeUInt16LE(4, 2); // zip64 field too short for an 8-byte read
+  const zip2 = path.join(tmp(), 'b.zip');
+  const entry = { name: 'runner/agents/rn-b.jsonl', data: 'x\n', extra: z64 };
+  writeZip(zip2, [entry]);
+  const buf = fs.readFileSync(zip2);
+  const cd = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  buf.writeUInt32LE(0xffffffff, cd + 24); // usize saturated -> zip64 field required
+  fs.writeFileSync(zip2, buf);
+  await assert.rejects(importArchive(zip2, { home }), /corrupt zip: truncated zip64/);
+});
+
+test('usa-44 L1: an EOCD signature inside the zip comment is not taken for the record', async () => {
+  const home = tmp();
+  const fake = Buffer.alloc(22); fake.writeUInt32LE(0x06054b50, 0); fake.writeUInt16LE(7, 10); // bogus record, wrong comment length
+  const zip = path.join(tmp(), 'c.zip');
+  writeZip(zip, [{ name: 'runner/agents/rn-c.jsonl', data: 'c\n' }], { comment: fake.toString('latin1') + 'tail' });
+  const s = await importArchive(zip, { home });
+  assert.deepEqual([s.found, s.imported, s.errors.length], [1, 1, 0]);
 });
 
 /** A home with one live worker (unit-live), an archived worker for the same id (must lose), and an archived pre-cutover worker. */
