@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { finishSlot, readLast, suitePaths, tryAcquireSlot } from "../scripts/suite-lock.mjs";
 import { readLock } from "../runner/lock.mjs";
-import { isLauncher, killTree, launchChain, startOrphanGuard, treePids } from "../scripts/orphan-guard.mjs";
+import { isLauncher, killTree, launchChain, listProcs, startOrphanGuard, startSlack, treePids } from "../scripts/orphan-guard.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_TESTS = path.join(root, "scripts", "run-tests.mjs");
@@ -134,7 +134,7 @@ test("launchChain climbs through shells and npm to the first non-launcher; a dea
     P(40, 30, 400, "cmd.exe", "cmd.exe /d /s /c node scripts/run-tests.mjs --queue"),
     P(50, 40, 500, "node.exe", "node scripts/run-tests.mjs --queue"),
   ];
-  assert.deepEqual(launchChain(procs, 50).chain.map((p) => p.pid), [40, 30, 20, 10]);
+  assert.deepEqual(launchChain(procs, 50, 8, 0).chain.map((p) => p.pid), [40, 30, 20, 10]);
   assert.equal(isLauncher(procs[0]), false);
   assert.equal(isLauncher(P(1, 0, 0, "", "/usr/bin/node /usr/lib/node_modules/npm/bin/npm-cli.js test")), true);
   assert.equal(isLauncher(P(1, 0, 0, "", "-bash")), true);
@@ -142,17 +142,22 @@ test("launchChain climbs through shells and npm to the first non-launcher; a dea
   // a plain node parent (a test, a wrapper) is the whole chain
   assert.deepEqual(launchChain([P(5, 1, 1, "node.exe", "node wrapper.mjs"), P(6, 5, 2, "node.exe")], 6).chain.map((p) => p.pid), [5]);
   // the direct parent is gone, or its pid now names a process born after us
-  assert.match(launchChain(procs.filter((p) => p.pid !== 40), 50).orphan, /parent pid 40 exited/);
-  assert.match(launchChain(procs.map((p) => (p.pid === 40 ? { ...p, start: 900 } : p)), 50).orphan, /pid reused/);
+  assert.match(launchChain(procs.filter((p) => p.pid !== 40), 50, 8, 0).orphan, /parent pid 40 exited/);
+  assert.match(launchChain(procs.map((p) => (p.pid === 40 ? { ...p, start: 900 } : p)), 50, 8, 0).orphan, /pid reused/);
   // an upper ancestor reused before we started ends the chain there instead
-  assert.deepEqual(launchChain(procs.map((p) => (p.pid === 20 ? { ...p, start: 900 } : p)), 50).chain.map((p) => p.pid), [40, 30]);
+  assert.deepEqual(launchChain(procs.map((p) => (p.pid === 20 ? { ...p, start: 900 } : p)), 50, 8, 0).chain.map((p) => p.pid), [40, 30]);
   // no parent to watch (init / container pid 1): no guard
   assert.equal(launchChain([P(7, 1, 1, "node")], 7).chain, null);
+  // POSIX lstart is per-second and can jitter: a parent that reads 1s younger than its child is not a reused pid there
+  const posix = [P(60, 1, 10000, "", "bash -c x"), P(61, 60, 9000, "", "node scripts/run-tests.mjs")];
+  assert.deepEqual(launchChain(posix, 61, 8, startSlack("linux")).chain.map((p) => p.pid), [60]);
+  assert.match(launchChain(posix, 61, 8, startSlack("win32")).orphan, /pid reused/);
+  assert.equal(startSlack("win32"), 0);
 });
 
 test("treePids follows children born after their parent only; startOrphanGuard fires once on a dead or reused launcher", async () => {
   const procs = [{ pid: 1, ppid: 0, start: 10 }, { pid: 2, ppid: 1, start: 20 }, { pid: 3, ppid: 2, start: 30 }, { pid: 4, ppid: 1, start: 5 }];
-  assert.deepEqual(treePids(procs, 1), [1, 2, 3]);
+  assert.deepEqual(treePids(procs, 1, { slack: 0 }), [1, 2, 3]);
 
   const chain = [{ pid: 100, ppid: 200, start: 1, name: "bash.exe" }, { pid: 200, ppid: 0, start: 0, name: "claude.exe" }, { pid: 300, ppid: 100, start: 2, name: "node.exe" }];
   let dead = new Set();
@@ -175,4 +180,51 @@ test("treePids follows children born after their parent only; startOrphanGuard f
   await until(() => reused.length > 0, "the reuse verify", 5000);
   assert.deepEqual(reused, ["bash pid 100 exited (pid reused)"]);
   g2.stop();
+});
+
+test("M1: POSIX start-time jitter of +-1s is no orphan; a real reuse (>2s) still is; win32 stays exact", async () => {
+  const chain = [{ pid: 100, ppid: 200, start: 50000, cmd: "bash -c x" }, { pid: 200, ppid: 1, start: 40000, cmd: "claude" }, { pid: 300, ppid: 100, start: 60000, cmd: "node r.mjs" }];
+  const shift = (d) => chain.map((p) => (p.pid === 100 ? { ...p, start: p.start + d } : p));
+  let listing = chain;
+  const reasons = [];
+  const g = startOrphanGuard({ onOrphan: (r) => reasons.push(r), pollMs: 1e9, verifyMs: 0, list: async () => listing, alive: () => true, selfPid: 300, platform: "linux", ppid: () => 100 });
+  await g.ready;
+  for (const d of [1000, -1000, 1000]) {
+    listing = shift(d);
+    g.tick();
+    await sleep(30); // let the async verify settle
+  }
+  assert.deepEqual(reasons, [], "1s lstart jitter must not read as a reused pid");
+  listing = shift(5000);
+  g.tick();
+  await until(() => reasons.length > 0, "the reuse verify", 5000);
+  assert.deepEqual(reasons, ["bash pid 100 exited (pid reused)"]);
+
+  const exact = [];
+  listing = chain;
+  const w = startOrphanGuard({ onOrphan: (r) => exact.push(r), pollMs: 1e9, verifyMs: 0, list: async () => listing, alive: () => true, selfPid: 300, platform: "win32" });
+  await w.ready;
+  listing = shift(1);
+  w.tick();
+  await until(() => exact.length > 0, "the win32 exact verify", 5000);
+  assert.deepEqual(exact, ["bash pid 100 exited (pid reused)"]);
+});
+
+test("L2: treePids with the root missing from the listing uses rootStart, else follows nothing (fail safe)", () => {
+  const kids = [{ pid: 2, ppid: 1, start: 20000 }, { pid: 3, ppid: 2, start: 30000 }, { pid: 4, ppid: 1, start: 5000 }, { pid: 5, ppid: 1, start: null }];
+  assert.deepEqual(treePids(kids, 1, { slack: 0 }), [1], "no root start: no child is trusted");
+  assert.deepEqual(treePids(kids, 1, { rootStart: 10000, slack: 0 }), [1, 2, 3], "older (reused-ppid) and unknown-start children are skipped");
+  assert.deepEqual(treePids(kids, 1, { rootStart: 10000, slack: 2000 }), [1, 2, 3]);
+  assert.deepEqual(treePids(kids, 1, { rootStart: 6000, slack: 2000 }), [1, 2, 3, 4], "within slack still counts as a child");
+});
+
+test("L1: stop() aborts an in-flight listing; listProcs honours an abort signal", async () => {
+  let seen = null;
+  const g = startOrphanGuard({ onOrphan: () => {}, pollMs: 1e9, list: (_pids, { signal } = {}) => { seen = signal; return new Promise(() => {}); }, alive: () => true });
+  assert.equal(seen?.aborted, false);
+  g.stop();
+  assert.equal(seen.aborted, true);
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(listProcs([process.pid], { signal: ac.signal }), (e) => e.name === "AbortError");
 });

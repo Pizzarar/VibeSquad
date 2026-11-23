@@ -63,7 +63,7 @@ function orphaned(reason) {
   const say = (m) => { try { console.error(m); } catch {} };
   if (child && watchdog) {
     say(`npm test: the shell that launched this run is gone (${reason}); killing the test process tree and releasing the suite slot.`);
-    const pids = killTree(child.pid);
+    const pids = killTree(child.pid, { rootStart: childSpawnedAt });
     say(`npm test: killed ${pids.length} process(es); exiting 1.`);
     finish(null, null, { orphaned: true, orphanReason: reason });
   } else {
@@ -118,6 +118,7 @@ function testConcurrency(env = process.env, cpus = os.availableParallelism?.() ?
   const n = Math.floor(Number(env.VS_TEST_CONCURRENCY));
   return n >= 1 ? n : Math.max(1, Math.min(8, cpus - 1));
 }
+const childSpawnedAt = Date.now(); // lower bound for the child's start time (orphan killTree fallback)
 child = spawn(
   process.execPath,
   [
