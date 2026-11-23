@@ -117,3 +117,42 @@ test("idea-576: long-budget calls run on their own worker, so a short call's wor
   assert.equal(r.out, "long");
   _resetGitSpawn();
 });
+
+// idea-576: the guard really fires here. A short child that ignores the execFile timeout's SIGTERM never calls back, so its
+// guard (timeoutMs + 5s slack) settles it. That must fail only that call: an in-flight long call (own worker) and an in-flight
+// sibling on the SAME short worker both finish; the short worker is retired (next call gets a fresh one) and terminated once
+// its sibling settles. POSIX only: on win32 the timeout kill is TerminateProcess, so the child can't outlive it and the guard
+// never fires.
+// Load-proof (no wall-clock asserts): the hung child is `sh` that sets SIG_IGN for TERM as its first command and then execs
+// `sleep` (an ignored signal survives exec), so the 1s execFile timeout can't land before the handler the way it could on a
+// node child's startup; the guard is identified by its answer (FAILED's msg), not by timing. The sibling and long calls block
+// on a gate file the test creates only after the post-guard asserts, so they are in flight by construction, not by a gap.
+test("idea-576: a short call's guard timeout fails only that call; in-flight long and sibling calls finish, worker recycled when idle", { skip: process.platform === "win32" && "SIGTERM can't be ignored on win32" }, async (t) => {
+  _resetGitSpawn();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vs-576-"));
+  const gate = path.join(dir, "gate");
+  const pidFile = path.join(dir, "hung.pid");
+  t.after(() => {
+    try { process.kill(Number(fs.readFileSync(pidFile, "utf8")), "SIGKILL"); } catch { /* already gone */ }
+    fs.writeFileSync(gate, ""); // release any still-waiting child
+    _resetGitSpawn();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const waitGate = (word) => ["-c", 'while [ ! -e "$1" ]; do sleep 0.05; done; printf %s "$2"', "sh", gate, word];
+  const hung = execOffLoop("sh", ["-c", `trap '' TERM; echo $$ > "$1"; exec sleep 60`, "sh", pidFile], { timeoutMs: 1_000 }); // guard at 6s
+  const sibling = execOffLoop("sh", waitGate("sibling"), { timeoutMs: 10_000 }); // short lane (<= 10s), same worker as `hung`
+  const long = execOffLoop("sh", waitGate("long"), { timeoutMs: 120_000 }); // long lane, like vs restart
+  assert.equal(gitSpawnStats.workerSpawns, 2, "one short worker + one long worker");
+  const h = await hung;
+  assert.deepEqual([h.ok, h.code, h.msg], [false, null, "off-loop worker failed"], "settled by the guard, not by the child's exit");
+  // Retired: a new short call goes to a fresh worker while the sibling still waits on the old one.
+  const fresh = await execOffLoop("sh", ["-c", "printf fresh"], { timeoutMs: 5_000 });
+  assert.equal(fresh.out, "fresh");
+  assert.equal(gitSpawnStats.workerSpawns, 3, "the guard retired the short worker");
+  assert.equal(gitSpawnStats.recycled, 0, "not terminated while its sibling call is in flight");
+  fs.writeFileSync(gate, "");
+  const [s, l] = await Promise.all([sibling, long]);
+  assert.deepEqual([s.ok, s.out], [true, "sibling"], "sibling on the guarded worker was not failed");
+  assert.deepEqual([l.ok, l.out], [true, "long"], "in-flight long call was not failed");
+  assert.equal(gitSpawnStats.recycled, 1, "retired worker terminated once idle");
+});
