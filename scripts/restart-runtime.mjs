@@ -13,7 +13,9 @@
 // Steps (each logged with a timestamp, all recorded in ~/.vibesquad/restart-<ts>.json):
 //   lock -> detect -> marker (server.restarting, refreshed) -> drain (runner refuses new background work, TTL) ->
 //   wait runner running:0 + held:0 -> stop runner -> stop server ->
-//   start server (it boots the runner; a live runner.lock holder still booting is waited on up to RUNNER_BOOT_MAX_MS; fallback,
+//   start server (POSIX + the server belongs to the systemd user unit, VIBESQUAD_SYSTEMD_UNIT default vibesquad:
+//   `systemctl --user start <unit>`, the unit's VIBESQUAD_START_RUNNER boots the runner; a systemctl failure or an unhealthy
+//   unit falls back to the detached launch, loudly; result relaunch.mode records which ran) (it boots the runner; a live runner.lock holder still booting is waited on up to RUNNER_BOOT_MAX_MS; fallback,
 //   only with no live holder: start the runner directly) -> verify -> resume lost agents -> check each
 //   resumed agent leaves `starting` (retry once, then mark it failed) -> clear drain (if that runner is still up) -> clear marker ->
 //   result file.
@@ -299,6 +301,81 @@ export function spawnDetached(cmd, args, { cwd, env, logFile }) {
   } finally { closeSync(fd); }
 }
 
+// ---- systemd user unit (forge-host follow-up R, idea-649) ------------------------------------------------------------
+// On a forge the server is the systemd user unit vibesquad.service (KillMode=process, Restart=on-failure, env from the unit
+// and its drop-ins). A detached relaunch left the unit inactive (MainPID 0) with the new server orphaned in its cgroup, on
+// the OLD server's env, so drop-ins (godot.conf) never applied and Restart= supervision was lost. When the restart's server
+// belongs to that unit, the stop goes through `systemctl --user stop` (if the unit's MainPID is the server: a plain SIGTERM
+// makes serve.mjs exit 128, which Restart=on-failure would restart) and the relaunch is `systemctl --user start`.
+// Never on win32. The real systemctl is wired only by the CLI entry below (deps.systemd): tests and other importers get none.
+export const SYSTEMD_UNIT_DEFAULT = 'vibesquad';
+/** VIBESQUAD_SYSTEMD_UNIT: { unit } (default vibesquad, a trailing .service dropped), or { unit: null, reason } when off/invalid. */
+export function systemdUnitName(env = process.env) {
+  const raw = String(env.VIBESQUAD_SYSTEMD_UNIT ?? '').trim();
+  if (!raw) return { unit: SYSTEMD_UNIT_DEFAULT };
+  if (/^(off|none|no|0|false)$/i.test(raw)) return { unit: null, reason: `disabled by VIBESQUAD_SYSTEMD_UNIT=${raw}` };
+  if (!/^[A-Za-z0-9:_.@-]+$/.test(raw) || raw.startsWith('-')) return { unit: null, reason: `VIBESQUAD_SYSTEMD_UNIT=${JSON.stringify(raw)} is not a unit name` };
+  return { unit: raw.replace(/\.service$/, '') };
+}
+/** `systemctl --user <args>` -> { status, stdout, stderr }; never throws. Agent identity stripped; XDG_RUNTIME_DIR defaulted (the user bus). */
+export function systemctlUser(args, { env = process.env, run = spawnSync, uid = typeof process.getuid === 'function' ? process.getuid() : null } = {}) {
+  const e = stripAgentEnv(env);
+  if (!e.XDG_RUNTIME_DIR && uid != null) e.XDG_RUNTIME_DIR = `/run/user/${uid}`;
+  try {
+    const r = run('systemctl', ['--user', ...args], { env: e, encoding: 'utf8', timeout: 150000 }); // stop waits out TimeoutStopSec (90s default)
+    return { status: r.status ?? null, stdout: String(r.stdout ?? ''), stderr: String(r.stderr || r.error?.message || (r.signal ? `killed by ${r.signal}` : '')).trim() };
+  } catch (e2) { return { status: null, stdout: '', stderr: String(e2?.message ?? e2) }; }
+}
+/** The real systemd deps (CLI entry only): ctl = systemctl --user, cgroup = /proc/<pid>/cgroup text or null. */
+export const realSystemd = (env = process.env) => ({ ctl: (args) => systemctlUser(args, { env }), cgroup: (pid) => { try { return readFileSync(`/proc/${pid}/cgroup`, 'utf8'); } catch { return null; } } });
+const SHOW_PROPS = ['LoadState', 'ActiveState', 'SubState', 'UnitFileState', 'MainPID', 'ControlGroup', 'Environment', 'WorkingDirectory'];
+/** `systemctl --user show <unit>` -> { ok, props } (props: key -> value), or { ok: false, error }. */
+export function systemdShow(sd, unit) {
+  const r = sd.ctl(['show', `${unit}.service`, ...SHOW_PROPS.flatMap((p) => ['-p', p])]);
+  if (r.status !== 0) return { ok: false, error: `systemctl --user show ${unit}: ${r.stderr || `exit ${r.status}`}`.slice(0, 300) };
+  const props = {};
+  for (const line of r.stdout.split(/\r?\n/)) { const i = line.indexOf('='); if (i > 0) props[line.slice(0, i)] = line.slice(i + 1); }
+  return { ok: true, props };
+}
+const unitEnvVar = (envProp, key) => { const m = new RegExp(`(?:^|\\s)"?${key}=([^\\s"]*)`).exec(envProp ?? ''); return m ? m[1] : null; };
+const ACTIVE_STATES = new Set(['active', 'activating', 'reloading', 'deactivating']);
+const ENABLED_STATES = new Set(['enabled', 'enabled-runtime', 'linked', 'linked-runtime']);
+/** Does a /proc/<pid>/cgroup text place the pid in the unit's cgroup (v2 `0::/...`, v1 `N:name=systemd:/...`)? */
+export function inUnitCgroup(text, unit, controlGroup = '') {
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const p = line.split(':').slice(2).join(':').trim();
+    if (!p) continue;
+    if (controlGroup && (p === controlGroup || p.startsWith(`${controlGroup}/`))) return true;
+    if (p.endsWith(`/${unit}.service`) || p.includes(`/${unit}.service/`)) return true;
+  }
+  return false;
+}
+/**
+ * Should this restart relaunch through the systemd user unit? null on win32 or with no systemd deps (behaviour unchanged).
+ * Else { unit, use, reason, evidence[], ... }. Needs: a loaded unit whose VIBESQUAD_PORT (default 4180) is this restart's port,
+ * plus any one of: the live server pid sits in the unit's cgroup (also the orphaned state: unit inactive, detached server in
+ * its cgroup), the unit is active, or it is enabled (it is the declared owner of this port, e.g. the server is down).
+ */
+export function detectSystemd({ port, serverPid, env = process.env, platform = process.platform, sd = null }) {
+  if (platform === 'win32' || !sd) return null;
+  const { unit, reason } = systemdUnitName(env);
+  if (!unit) return { unit: null, use: false, reason, evidence: [] };
+  const show = systemdShow(sd, unit);
+  if (!show.ok) return { unit, use: false, reason: show.error, evidence: [] };
+  const p = show.props;
+  const unitPort = Number(unitEnvVar(p.Environment, 'VIBESQUAD_PORT')) || 4180;
+  const sr = String(unitEnvVar(p.Environment, 'VIBESQUAD_START_RUNNER') ?? '').toLowerCase();
+  const out = { unit, use: false, loadState: p.LoadState ?? null, activeState: p.ActiveState ?? null, unitFileState: p.UnitFileState ?? null, mainPid: Number(p.MainPID) || 0, controlGroup: p.ControlGroup || null, workingDirectory: p.WorkingDirectory || null, unitPort, serverStartsRunner: !(sr === '0' || sr === 'false'), evidence: [] };
+  if (p.LoadState !== 'loaded') return { ...out, reason: `unit ${unit}.service not loaded (${p.LoadState ?? 'unknown'})` };
+  if (unitPort !== port) return { ...out, reason: `unit ${unit}.service serves port ${unitPort}, this restart is for port ${port}` };
+  if (serverPid && inUnitCgroup(sd.cgroup(serverPid), unit, p.ControlGroup)) out.evidence.push(serverPid === out.mainPid ? 'server is the unit MainPID' : 'server pid in unit cgroup (orphaned: not the MainPID)');
+  if (ACTIVE_STATES.has(p.ActiveState)) out.evidence.push(`unit ${p.ActiveState}`);
+  if (ENABLED_STATES.has(p.UnitFileState)) out.evidence.push(`unit ${p.UnitFileState}`);
+  out.use = out.evidence.length > 0;
+  out.reason = out.use ? out.evidence.join(', ') : `unit ${unit}.service neither active nor enabled and the server is not in its cgroup`;
+  return out;
+}
+
 /** GET (or POST) returning { status, body } over http, or https with a self-signed cert (the server's mux). */
 export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000, body = null } = {}) {
   return new Promise((resolve, reject) => {
@@ -324,7 +401,7 @@ export function runVs(args, env = process.env) {
 const loadCoord = () => import('../server/restart-coord.mjs');
 // runner.lock helpers (bootingHolder/readLock/RUNNER_BOOT_MAX_MS, idea-260), lazy like coord: the static imports stay Node built-ins.
 const loadLock = () => import('../runner/lock.mjs');
-const defaultDeps = { coord: loadCoord, lock: loadLock, runVs: (args, env = process.env) => runVs(args, env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
+const defaultDeps = { coord: loadCoord, lock: loadLock, runVs: (args, env = process.env) => runVs(args, env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful', platform: process.platform, systemd: null };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -452,7 +529,9 @@ async function finishDetect({ opts, d, env, home, port, configDir, runner, spid 
     env: { VIBESQUAD_RUNTIME_DIR: runtimeDir, VIBESQUAD_BUNDLED_NODE: nodeExe, VIBESQUAD_PORT: String(port), VIBESQUAD_START_RUNNER: '1' },
   };
   const runnerLaunch = { node: nodeExe, args: [path.join(runtimeDir, 'runner', 'server.mjs'), '--home', home], cwd: runtimeDir, logFile: path.join(home, 'runner.log') };
-  return { home, port, configDir, runner, server, serverLaunch, runnerLaunch, outDir: opts.outDir ?? vsHome(env) };
+  // forge-host R: is the server the systemd user unit's (null on win32 / without systemd deps: the detached launch, unchanged)
+  const systemd = detectSystemd({ port, serverPid: spid, env, platform: d.platform, sd: d.systemd });
+  return { home, port, configDir, runner, server, serverLaunch, runnerLaunch, systemd, outDir: opts.outDir ?? vsHome(env) };
 }
 
 async function runnerCall(det, d, method, route, timeoutMs = 10000, body = null) {
@@ -561,14 +640,17 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         heldAgents: det.runner.health?.heldAgents ?? [],
         lostAgents: agents.filter((a) => a.status === 'lost').map(brief),
         markerFile: path.join(det.configDir, 'server.restarting'),
+        ...(det.systemd ? { systemd: det.systemd } : {}),
       },
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
         ...(opts.wait ? [`drain: runner POST /drain (ttl ${Math.round(drainTtlMs(opts) / 1000)}s): new background work is refused while waiting; cleared at the end`] : []),
         opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : det.runner.identity === 'unknown' && det.runner.pid ? `runner pid ${det.runner.pid} alive, identity unknown: stop only via token /shutdown (never killed by pid)` : 'runner not running: nothing to stop',
-        det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
-        `start server: ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}, from ${det.serverLaunch.source}, log ${det.serverLaunch.logFile}); it boots the runner`,
+        det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : det.systemd?.use && det.systemd.mainPid === det.server.pid ? `systemctl --user stop ${det.systemd.unit} (KillMode=process: the main pid only), force after ${opts.stopTimeoutSec}s` : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
+        det.systemd?.use
+          ? `start server: systemctl --user start ${det.systemd.unit} (systemd user unit, ${det.systemd.reason}; unit env + drop-ins apply, code from the unit WorkingDirectory ${det.systemd.workingDirectory ?? '(unset)'}${det.systemd.serverStartsRunner ? '; it boots the runner' : '; unit sets VIBESQUAD_START_RUNNER off: runner started directly below'}); if systemctl fails or the server is not healthy in time: detached ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}), logged loudly`
+          : `start server: ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}, from ${det.serverLaunch.source}, log ${det.serverLaunch.logFile}); it boots the runner`,
         `fallback if the runner is not up after 45s: ${det.runnerLaunch.node} ${det.runnerLaunch.args.join(' ')}`,
         'verify: runner /health hash, GET /agents?full=1, server /api/health',
         opts.resume ? `POST /agents/:id/resume for every agent that is status=lost after the restart but was not lost before it (--resume-all-lost: every lost agent); each must leave 'starting' within ${opts.resumeVerifySec}s, else one retry, else it is stopped and logged as failed (reads lost)` : 'skip resume (--no-resume)',
@@ -860,6 +942,20 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // kill child processes, and a tree kill (/T /F) does exactly that; everything else it persists is written as it changes.
     // So no graceful step on Windows (a plain taskkill never works on headless node.exe); POSIX still gets SIGTERM first.
     // The runner went first, so the supervisor inside this server may have respawned one: swept below.
+    // forge-host R: the unit's own MainPID is stopped through systemd (an explicit stop is never auto-restarted; serve.mjs
+    // exits 128 on SIGTERM, which Restart=on-failure would restart). An orphan in its cgroup (not the MainPID) gets SIGTERM.
+    const sysd = det.systemd;
+    const stopServerGracefully = async (pid) => {
+      if (sysd?.use) {
+        const now = systemdShow(d.systemd, sysd.unit);
+        if (now.ok && (Number(now.props.MainPID) || 0) === pid) {
+          const r = d.systemd.ctl(['stop', `${sysd.unit}.service`]);
+          if (r.status === 0) { step('server stop via systemd', { unit: sysd.unit, pid }); return; }
+          step('systemctl stop failed, SIGTERM instead', { unit: sysd.unit, pid, status: r.status, error: r.stderr });
+        }
+      }
+      d.termGracefully(pid);
+    };
     const cur = d.listenerPid(det.port);
     if (!cur) step('server not running', { port: det.port });
     else {
@@ -872,7 +968,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         await d.sleep(500);
         result.serverStop = 'tree-kill';
         step('server tree-killed', { pid: cur, alive: d.pidAlive(cur) });
-      } else if (!(await stopProc('server', cur, () => d.termGracefully(cur)))) throw new Error('server did not stop');
+      } else if (!(await stopProc('server', cur, () => stopServerGracefully(cur)))) throw new Error('server did not stop');
       if (d.pidAlive(cur)) { fail('server stop', `pid ${cur} still alive`); throw new Error('server did not stop'); }
     }
     // Sweep: a runner the old server respawned in the gap holds no work, but it must not outlive the restart (or block ours).
@@ -890,13 +986,40 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     const healthy = async () => { for (const s of ['http', 'https']) { try { if ((await d.httpCall(`${s}://127.0.0.1:${det.port}/api/health`, { timeoutMs: 3000 })).status === 200) return true; } catch { /* next */ } } return false; };
     let spawnedServerPid = null;
     readLiveServerPid(path.join(det.configDir, 'server.pid'), { info: (p) => d.procInfo?.(p) ?? null }); // drop a stale pid file left by an earlier launch (idea-373)
-    if (await healthy()) step('server already up, not starting another', { port: det.port });
-    else {
+    const startDetached = () => {
       const sl = det.serverLaunch;
       const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
       try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* desktop pid file is best effort */ }
       spawnedServerPid = pid;
       step('server started', { pid, cwd: sl.cwd, log: sl.logFile });
+    };
+    // forge-host R: the relaunch mode is recorded in the result file (relaunch.mode: systemd | detached | detached-fallback |
+    // already-up). A systemctl failure falls back to the detached launch, loudly: the server is never left down.
+    if (sysd) result.relaunch = { mode: null, unit: sysd.unit, detection: sysd };
+    const fallBack = (what, detail) => {
+      result.relaunch.mode = 'detached-fallback';
+      result.relaunch.fallback = { what, ...detail };
+      const msg = `WARNING: ${what}; falling back to a detached server launch (NOT supervised by ${sysd.unit}.service: unit env/drop-ins and Restart= do not apply). Re-adopt the unit: docs/lanes/forge-host/RUNBOOK.md 'Re-adopt vibesquad.service'`;
+      result.warnings = [...(result.warnings ?? []), msg];
+      step('SYSTEMD RELAUNCH FAILED, detached fallback', { unit: sysd.unit, what, ...detail });
+      log(msg);
+      startDetached();
+    };
+    if (await healthy()) {
+      step('server already up, not starting another', { port: det.port });
+      if (sysd) result.relaunch.mode = 'already-up';
+    } else if (sysd?.use) {
+      const r = d.systemd.ctl(['start', `${sysd.unit}.service`]);
+      if (r.status === 0) {
+        const now = systemdShow(d.systemd, sysd.unit);
+        const pid = now.ok ? Number(now.props.MainPID) || null : null;
+        result.relaunch.mode = 'systemd';
+        if (pid) { spawnedServerPid = pid; try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* best effort */ } }
+        step('server started via systemd', { unit: sysd.unit, pid, activeState: now.ok ? now.props.ActiveState : null });
+      } else fallBack(`systemctl --user start ${sysd.unit}.service failed`, { status: r.status, error: r.stderr });
+    } else {
+      startDetached();
+      if (sysd) result.relaunch.mode = 'detached';
     }
     // Post-start waits poll with backoff up to --boot-timeout (VS_RESTART_BOOT_TIMEOUT, default 120s): a slow boot (the runner resumes
     // the agents the restart cut; X1b waits 45s by design) is reported as "slow start (N s)", never failed. Fail only if the process
@@ -914,7 +1037,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         await d.sleep(delay); delay = Math.min(Math.round(delay * 1.5), 5000);
       }
     };
-    const serverT0 = d.now();
+    let serverT0 = d.now();
     const serverBootMs = opts.serverBootMs ?? bootMs;
     // The spawned pid may be a launcher that hands off to the real server and exits: its exit alone is not death. Adopt whoever listens
     // on the port as the server pid (and rewrite server.pid). Before any listener was seen keep waiting (the handoff may still be booting)
@@ -931,7 +1054,17 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       }
       return adoptedListener;
     };
-    const sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
+    let sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
+    if (sres !== true && result.relaunch?.mode === 'systemd') {
+      // The unit started but its server never answered (bad ExecStart, crash loop under Restart=): stop the unit (ends the
+      // restart loop and frees the port; KillMode=process: its main pid only), then the detached launch, as on a start failure.
+      const what = sres === 'died' ? `systemd-started server ${spawnedServerPid} died during start` : `systemd-started server not healthy after ${Math.round(serverBootMs / 1000)}s`;
+      const stop = d.systemd.ctl(['stop', `${sysd.unit}.service`]);
+      spawnedServerPid = null; adoptedListener = false;
+      fallBack(what, { unitStop: stop.status === 0 ? 'ok' : `failed (${stop.stderr || stop.status})` });
+      serverT0 = d.now();
+      sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
+    }
     if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
     // A launcher that handed off and went healthy inside serverDead's 3s guard never got adopted: do it on success too (idea-217).
     if (spawnedServerPid != null && !adoptedListener) {
@@ -943,6 +1076,13 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       }
     }
     step('server healthy');
+    if (result.relaunch?.mode === 'systemd' || (result.relaunch?.mode === 'already-up' && sysd.use)) { // the done check: unit active, MainPID == the listener
+      const now = systemdShow(d.systemd, sysd.unit);
+      const lp = d.listenerPid(det.port);
+      result.relaunch.after = now.ok ? { activeState: now.props.ActiveState, mainPid: Number(now.props.MainPID) || 0, listenerPid: lp, mainIsListener: (Number(now.props.MainPID) || 0) === lp } : { error: now.error };
+      step('systemd unit after start', result.relaunch.after);
+      if (now.ok && !result.relaunch.after.mainIsListener) log(`WARNING: ${sysd.unit}.service MainPID ${result.relaunch.after.mainPid} is not the listener on port ${det.port} (pid ${lp}); check systemctl --user status ${sysd.unit}`);
+    }
 
     let seenPid = null; let directPid = null; let directAt = 0;
     const fresh = async () => {
@@ -1072,7 +1212,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try { opts = parseArgs(argv); } catch (e) { console.error(`restart-runtime: ${e.message}`); earlyLog(`restart-runtime: ${e.message}`); process.exit(2); }
   applyLaunchEnv(opts, process.env); // `vs restart` runs us via WMI, which drops its env
   const log = (line) => { console.log(line); if (opts.log) { try { appendFileSync(opts.log, line + '\n'); } catch { /* console only */ } } };
-  const r = await restartRuntime(opts, {}, process.env, log);
+  // forge-host R: only this entry wires the real systemctl (tests and importers never reach it); never on win32.
+  const r = await restartRuntime(opts, IS_WIN ? {} : { systemd: realSystemd(process.env) }, process.env, log);
   if (r.dryRun) console.log(JSON.stringify(r.plan, null, 2));
   process.exit(r.ok ? 0 : r.alreadyRunning ? 3 : r.deferred ? 4 : 1);
 }
