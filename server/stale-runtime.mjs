@@ -121,19 +121,24 @@ export async function computeStaleAsync({ rootDir, git = defaultGitAsync, exists
 
 let inflight = null;
 let generation = 0;
-let cached = { at: 0, value: null, stampCommit: null };
+let cached = { at: 0, value: null, stampCommit: null, master: null };
+
+// idea-595: the cache is also keyed on refs/heads/master (a spawn-free .git read), so a reset/commit on master drops it at once
+// instead of /health showing a reset-away head for up to CACHE_MS.
+const masterOf = (stamp) => (stamp?.repo ? readRefSha(stamp.repo, "refs/heads/master") : null);
+const cacheFresh = (now, curStampCommit, master) => cached.at && now - cached.at < CACHE_MS && curStampCommit === cached.stampCommit && master === cached.master;
 
 /** Cached `computeStale` (60s) that also mirrors the result (plus the master it read) to stale.json for the CLI. */
 export function getStale({ rootDir, env = process.env, now = Date.now(), compute = computeStale } = {}) {
   const stamp = rootDir ? readBuildStamp(rootDir) : null;
   const curStampCommit = stamp?.commit ?? null;
-  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return cached.value;
+  const master = masterOf(stamp); // read before compute: a master that moves mid-compute mismatches next call and recomputes
+  if (cacheFresh(now, curStampCommit, master)) return cached.value;
   const value = compute({ rootDir });
-  cached = { at: now, value, stampCommit: curStampCommit };
+  cached = { at: now, value, stampCommit: curStampCommit, master };
   try {
     const file = staleFilePath(env);
     mkdirSync(join(file, ".."), { recursive: true });
-    const master = stamp?.repo ? readRefSha(stamp.repo, "refs/heads/master") : null;
     writeFileSync(file, JSON.stringify({ stale: value, master, repo: stamp?.repo ?? null }));
   } catch {}
   return value;
@@ -146,18 +151,18 @@ export function getStale({ rootDir, env = process.env, now = Date.now(), compute
 export function refreshStale({ rootDir, env = process.env, now = Date.now(), compute = computeStaleAsync } = {}) {
   const stamp = rootDir ? readBuildStamp(rootDir) : null;
   const curStampCommit = stamp?.commit ?? null;
-  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return Promise.resolve(cached.value);
+  const master = masterOf(stamp);
+  if (cacheFresh(now, curStampCommit, master)) return Promise.resolve(cached.value);
   if (inflight) return inflight;
   const gen = generation;
   const p = (async () => {
     try {
       const value = await compute({ rootDir });
       if (gen !== generation) return value; // resetStaleCache ran mid-flight: don't resurrect the dropped cache or file
-      cached = { at: now, value, stampCommit: curStampCommit };
+      cached = { at: now, value, stampCommit: curStampCommit, master };
       try {
         const file = staleFilePath(env);
         await mkdir(join(file, ".."), { recursive: true });
-        const master = stamp?.repo ? readRefSha(stamp.repo, "refs/heads/master") : null;
         await writeFile(file, JSON.stringify({ stale: value, master, repo: stamp?.repo ?? null }));
       } catch {}
       return value;
@@ -172,12 +177,15 @@ export function refreshStale({ rootDir, env = process.env, now = Date.now(), com
 /** Last cached value only: no git, no stale.json write (the read-only /health path). */
 export function peekStale(rootDir) {
   // A sync rewrote build-stamp.json since the value was cached: it describes the old build, so report nothing rather than a stale toast.
-  if (rootDir && cached.at && (readBuildStamp(rootDir)?.commit ?? null) !== cached.stampCommit) return null;
+  if (rootDir && cached.at) {
+    const stamp = readBuildStamp(rootDir);
+    if ((stamp?.commit ?? null) !== cached.stampCommit || masterOf(stamp) !== cached.master) return null; // idea-595
+  }
   return cached.value;
 }
 
 export function resetStaleCache() {
-  cached = { at: 0, value: null, stampCommit: null };
+  cached = { at: 0, value: null, stampCommit: null, master: null };
   inflight = null;
   generation += 1;
 }

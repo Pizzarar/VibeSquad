@@ -16,9 +16,9 @@ const TASKKILL_CEILING_MS = 30000;
  * Tree-kill many pids (idea-408). win32 batches them into one taskkill per TASKKILL_BATCH pids, so a server-exit sweep of
  * N terminals costs one taskkill startup (bounded by one 30s ceiling), not N. A missing pid only fails its own /PID entry.
  * `onDone` runs once every tree kill was attempted: right away when `sync` or off win32, else when the async taskkill
- * exits, fails to spawn, or passes the ceiling. `platform`/`run` are test seams.
+ * exits, fails to spawn, or passes the ceiling. `platform`/`run`/`ceilingMs` are test seams.
  */
-export function killTrees(pids, { sync = false, onDone, platform = process.platform, run = { spawn, spawnSync } } = {}) {
+export function killTrees(pids, { sync = false, onDone, platform = process.platform, run = { spawn, spawnSync }, ceilingMs = TASKKILL_CEILING_MS } = {}) {
   let doneCalled = false;
   const done = () => { if (doneCalled) return; doneCalled = true; try { onDone?.(); } catch {} };
   const list = [...new Set((pids ?? []).map(Number).filter((p) => Number.isInteger(p) && p >= 2 && p !== process.pid))];
@@ -48,12 +48,12 @@ export function killTrees(pids, { sync = false, onDone, platform = process.platf
         if (fallback === true) for (const p of batch) { try { process.kill(p, "SIGKILL"); } catch {} }
         settle();
       };
-      const timer = setTimeout(() => once(true), TASKKILL_CEILING_MS);
+      const timer = setTimeout(() => once(true), ceilingMs);
       timer.unref?.();
       try {
         const child = run.spawn("taskkill", argsFor(batch), { windowsHide: true, stdio: "ignore" });
         child.on("error", () => once(true));
-        child.on("exit", () => once(false));
+        child.on("exit", (_code, signal) => once(!!signal)); // a signal-killed taskkill did not finish: same as the sync path
         child.unref?.();
       } catch { once(true); }
     }

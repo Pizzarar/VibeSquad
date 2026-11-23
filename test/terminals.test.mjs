@@ -132,9 +132,14 @@ test("idea-408: killTrees batches every pid into one taskkill (sync and async) a
   assert.equal(asyncDone, 1);
 
   // A taskkill that can't spawn still reports done; nothing to kill reports done without spawning.
+  // The failed spawn falls back to process.kill(pid, SIGKILL): stub it so the test never signals a real pid 301 (idea-574).
   let failDone = 0;
-  killTrees([301], { platform: "win32", run: { spawn: () => { throw new Error("ENOENT"); } }, onDone: () => failDone++ });
+  const realKill301 = process.kill;
+  const kill301 = [];
+  process.kill = (p, s) => { kill301.push([p, s]); return true; };
+  try { killTrees([301], { platform: "win32", run: { spawn: () => { throw new Error("ENOENT"); } }, onDone: () => failDone++ }); } finally { process.kill = realKill301; }
   assert.equal(failDone, 1);
+  assert.deepEqual(kill301, [[301, "SIGKILL"]]);
   let emptyDone = 0;
   killTrees([0, null, undefined], { platform: "win32", run: { spawn: () => { throw new Error("no"); }, spawnSync: () => { throw new Error("no"); } }, onDone: () => emptyDone++ });
   assert.equal(emptyDone, 1);
@@ -145,7 +150,7 @@ test("idea-408: killTrees batches every pid into one taskkill (sync and async) a
   assert.deepEqual(big, [402, 402, 102]);
 });
 
-test("idea-570 L1: killTrees never targets this process; the async win32 path SIGKILLs roots when taskkill fails to spawn or errors", () => {
+test("idea-570 L1: killTrees never targets this process; the async win32 path SIGKILLs roots when taskkill fails to spawn or errors", async () => {
   const killed = [];
   const realKill = process.kill;
   process.kill = (p, s) => { killed.push([p, s]); return true; };
@@ -173,6 +178,23 @@ test("idea-570 L1: killTrees never targets this process; the async win32 path SI
     killTrees([701], { platform: "win32", run: { spawn: () => ok } });
     ok.emit("exit", 0);
     assert.deepEqual(killed, [], "a clean taskkill exit needs no fallback");
+
+    // idea-574: a signal-killed taskkill did not finish, so the roots are killed (aligned with the sync path).
+    killed.length = 0;
+    const sig = new EventEmitter(); sig.unref = () => {};
+    killTrees([801], { platform: "win32", run: { spawn: () => sig } });
+    sig.emit("exit", null, "SIGKILL");
+    assert.deepEqual(killed, [[801, "SIGKILL"]]);
+
+    // idea-574: the ceiling timer (injectable) kills roots and reports done when taskkill never exits.
+    killed.length = 0;
+    const hung = new EventEmitter(); hung.unref = () => {};
+    let ceilDone = 0;
+    killTrees([901], { platform: "win32", run: { spawn: () => hung }, ceilingMs: 20, onDone: () => ceilDone++ });
+    assert.equal(ceilDone, 0);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.deepEqual(killed, [[901, "SIGKILL"]]);
+    assert.equal(ceilDone, 1);
   } finally { process.kill = realKill; }
 });
 

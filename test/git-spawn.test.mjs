@@ -105,3 +105,15 @@ test("idea-572: gitExecOffLoop maxBuffer lifts the 1 MiB stdout cap (big git log
   assert.equal(big.ok, true);
   assert.equal(big.out.length, 1_300_001);
 });
+
+test("idea-576: long-budget calls run on their own worker, so a short call's worker is separate (a short guard terminate can't fail them)", async () => {
+  _resetGitSpawn();
+  const slow = execOffLoop(process.execPath, ["-e", "setTimeout(() => process.stdout.write('long'), 300)"], { timeoutMs: 60_000 });
+  const quick = await execOffLoop(process.execPath, ["-e", "process.stdout.write('short')"], { timeoutMs: 5_000 });
+  assert.equal(quick.out, "short");
+  assert.equal(gitSpawnStats.workerSpawns, 2, "one short worker + one long worker");
+  const r = await slow;
+  assert.equal(r.ok, true);
+  assert.equal(r.out, "long");
+  _resetGitSpawn();
+});

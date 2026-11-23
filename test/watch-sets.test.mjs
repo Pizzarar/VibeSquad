@@ -2853,3 +2853,34 @@ test("idea-575: start() prunes a closed set past retention and logs one metric l
     sb.cleanup();
   }
 });
+
+test("idea-596: prune metric goes to the mutating engine's own log (not a shared module logger); a fired set with an unsent ping survives; cancel/reown prune", async () => {
+  const sb = sandbox();
+  try {
+    const file = watchesPath({ home: sb.home });
+    const mk = (ref) => addWatch({ owner: "o", items: [{ kind: "agent", ref }] }, { home: sb.home, now: T0 }).id;
+    const stuck = mk("a-stuck"); const gone = mk("a-gone"); const live = mk("a-live");
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    const by = (id) => doc.sets.find((s) => s.id === id);
+    by(stuck).firedAt = iso(T0 - 3 * 60 * MIN); by(stuck).pings = [{ key: "complete" }]; // >2h fired, ping never attempted
+    by(gone).firedAt = iso(T0 - 3 * 60 * MIN); by(gone).pings = [{ key: "complete", attemptedAt: iso(T0 - 3 * 60 * MIN) }];
+    writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+    // Engine A is created second-last, engine B last: B's log must receive the line, A's must not (the old module-level logger was last-writer-wins).
+    const logsA = []; const logsB = [];
+    engineFor(sb, { clock: { t: T0 + 10 * MIN }, log: (m) => logsA.push(m) });
+    const { engine: b } = engineFor(sb, { clock: { t: T0 + 10 * MIN }, log: (m) => logsB.push(m) });
+    await wait(150);
+    const ids = JSON.parse(readFileSync(file, "utf8")).sets.map((s) => s.id);
+    assert.equal(ids.includes(stuck), true, "unsent ping keeps a >2h fired set");
+    assert.equal(ids.includes(gone), false);
+    assert.equal(logsA.filter((m) => /pruned/.test(m)).length + logsB.filter((m) => /pruned/.test(m)).length, 1, `exactly one metric line: ${logsA} | ${logsB}`);
+    // cancel prunes a closed set too (sync path: no log, still prunes)
+    const doc2 = JSON.parse(readFileSync(file, "utf8"));
+    doc2.sets.find((s) => s.id === stuck).cancelledAt = iso(T0 - 3 * 60 * MIN);
+    writeFileSync(file, JSON.stringify(doc2, null, 2) + "\n");
+    cancelWatch(live, "o", { home: sb.home, now: T0 + 10 * MIN });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).sets.some((s) => s.id === stuck), false, "cancel mutation prunes a closed set");
+  } finally {
+    sb.cleanup();
+  }
+});
