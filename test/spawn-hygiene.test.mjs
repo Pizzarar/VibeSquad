@@ -373,3 +373,9 @@ test("pin spawn logs brief-inlined: lane=X", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("idea-542: worker brief tells workers to run tests in the foreground, once", () => {
+  const prefix = injectedPrefix("worker", "");
+  const composed = [prefix, dedupeNotesAgainst(SHARED_NOTE_PREFIX, prefix)].join("\n\n");
+  assert.equal(composed.split("in the foreground: never start a background shell or Monitor").length - 1, 1);
+});
