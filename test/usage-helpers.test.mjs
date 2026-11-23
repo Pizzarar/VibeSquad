@@ -498,3 +498,22 @@ test("usa-39: buildProfiles folds costPerRun runs-weighted across duplicate keys
   assert.equal(one[0].costPerRun, 2.5);
   assert.equal(buildProfiles({ byProfile: [row(1, undefined), row(3, undefined)] })[0].costPerRun, null);
 });
+
+import { leadLongTurnRows } from "../src/usageHelpers.ts";
+test("stormText: excl-respawns parenthetical only when it differs", () => {
+  const base = { lane: "usage", role: "worker", count: 5, windowMs: 120000, firstAt: "a", lastAt: "b", zeroTurnExits: 0 };
+  assert.equal(stormText({ ...base, countExclRespawns: 2 }), "usage · worker · 5 (2 excl. respawns) spawns in 2m");
+  assert.equal(stormText({ ...base, countExclRespawns: 5 }), "usage · worker · 5 spawns in 2m");
+  assert.equal(stormText(base), "usage · worker · 5 spawns in 2m");
+});
+test("leadLongTurnRows: pooled, squad pick, pct, missing", () => {
+  const b = (turns, costUsd) => ({ turns, costUsd });
+  const l = { threshold: 80, pooled: { productive: b(3, 6), loop: b(1, 3), other: b(1, 1) }, bySquad: [{ teamId: "efi", productive: b(2, 1), loop: b(0, 0), other: b(0, 0) }] };
+  const p = leadLongTurnRows(l, null);
+  assert.deepEqual(p.map((r) => [r.key, r.turns, r.pct]), [["productive", 3, 0.6], ["loop", 1, 0.3], ["other", 1, 0.1]]);
+  assert.equal(leadLongTurnRows(l, "efi")[0].turns, 2);
+  assert.equal(leadLongTurnRows(l, "nosuch")[0].turns, 3); // falls back to pooled
+  assert.equal(leadLongTurnRows(l, "efi")[1].pct, 0);
+  assert.equal(leadLongTurnRows({ threshold: 80, pooled: { productive: b(0, 0), loop: b(0, 0), other: b(0, 0) } }, null)[0].pct, null);
+  assert.equal(leadLongTurnRows(undefined, null), null);
+});

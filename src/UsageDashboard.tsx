@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -339,6 +339,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const stale = (data.squad ?? null) !== activeSquad; // scope switch in flight: keep the old numbers visible but dimmed
   const flagged = data.loops?.flagged ?? [];
   const storms = data.spawnStorms ?? [];
+  const leadLongRows = leadLongTurnRows(data.leadLongTurns, activeSquad);
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
@@ -620,7 +621,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </Collapse>
       )}
 
-      {(data.cohorts || data.floor) && (
+      {(data.cohorts || data.floor || data.leadLongTurns) && (
         <Collapse id="efficiency" testid="usage-efficiency-collapse" summary={efficiencySummary(data.cohorts, data.floor)}>
         <section className="usage-efficiency" data-testid="usage-efficiency-strip">
           {data.cohorts && (
@@ -665,6 +666,16 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 Clean-run floor: <strong>{usdText(data.floor.cleanCostPerUnit)}</strong>/unit · <strong>{tokText(data.floor.cleanTokensPerUnit)}</strong> tokens/unit
                 {data.floor.cleanShare !== null && <> · clean {pctText(data.floor.cleanShare)} of spend</>}
               </div>
+            </div>
+          )}
+          {leadLongRows && (
+            <div className="usage-lead-long-turns" data-testid="usage-lead-long-turns">
+              <div className="usage-cohort-label small">Lead turns &gt; {data.leadLongTurns!.threshold}{activeSquad ? ` · ${squadLabel(activeSquad)}` : ""}</div>
+              {leadLongRows.map((r) => (
+                <div className="small" key={r.key} data-bucket={r.key}>
+                  {r.label}: <strong>{r.turns}</strong> turns · {usdText(r.costUsd)} · {pctText(r.pct)}
+                </div>
+              ))}
             </div>
           )}
         </section>
