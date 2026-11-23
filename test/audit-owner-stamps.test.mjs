@@ -126,7 +126,7 @@ test('fixerBucket counts only implementers and classes each unit by its worst su
 });
 
 // ---- S6 bucket 5: fix offered as a question. Fixtures are trimmed real @ui-bois (and one @site-polish) agent outputs. ----
-import { offersFix, fixOfferBucket } from '../scripts/audit-owner-stamps.mjs';
+import { offersFix, fixOfferBucket, RISKY_STEP } from '../scripts/audit-owner-stamps.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -142,6 +142,9 @@ const FIX_OFFERS = [
   'The time it was set isn\'t recorded, so the queue shows the age from the first flag. I lean toward giving it to the same lead as a tiny M2 once M1 merges. Okay with that?',
   '**The real fix** is getting those changes off master. Until then, every build skips this step, for you and for every lead.\n\nThe Android App lane has a Buddy but no lead running. Want me to ask that Buddy to put the changes on a branch or commit them?',
   'It\'s a small fix: `setNeedsYou` and `clearNeedsYou` in `src/paseo.ts:328-340` should also set and clear the timestamp.\n\nIf you want it done now, say so and I\'ll dispatch it. One Implement - Sonnet worker would do it, then a Review - Gemini pass.',
+  'The sidebar width is a one-line CSS change in the hub shell.\n\nWant me to apply it now?',
+  'The buyer flow copy is finished and the button sizes are right.\n\nWant me to send it to @ui-bois for review?',
+  'I updated the domains list doc so the table matches the live config.\n\nShould I send the doc to the lead?',
 ];
 const NOT_FIX_OFFERS = [
   // owner approval of an already-built thing / real owner decision, not a fix offer
@@ -154,6 +157,10 @@ const NOT_FIX_OFFERS = [
   // risky step confirmations
   'If you\'d rather, I can run the build myself. It only rebuilds and copies into the app, but it does replace the app you\'re running, so say the word first.',
   'The stale worktree is still on disk.\n\nWant me to delete it and force-push the cleaned branch?',
+  // money asks: a domain is bought/registered/renewed by the owner, not a fix the agent can just do
+  'The site copy and the deploy are ready. The only thing left is `example.com`, which is about $12 a year.\n\nThe domain purchase is the last step. Want me to buy the domain and leave the rest to you?',
+  'I checked the registrar and the name is free for about $14 a year.\n\nShould I go ahead and buy the domain, then point the deploy at it?',
+  'The remaining blocker is not code: the domain registration renews on Friday.\n\nWant me to renew the domain now so the site does not go dark?',
   // statements and short text
   'Done. Merged 7a638bf and pushed.',
   'ok?',
@@ -163,6 +170,16 @@ test('offersFix catches real fix-offer messages', () => {
 });
 test('offersFix skips real choices, owner approvals and risky steps', () => {
   NOT_FIX_OFFERS.forEach((t, i) => assert.equal(offersFix(t), false, `near-miss ${i}`));
+});
+test('risky-step money exclusion matches purchase/buy/domain with word boundaries', () => {
+  for (const t of ['the domain purchase', 'buy the domain', 'buying the domain', 'purchased the name', 'domain registration', 'renew the domain']) {
+    assert.equal(RISKY_STEP.test(t), true, t);
+  }
+  for (const t of ['the buyer flow copy', 'the domains list doc', 'our buyers asked', 'rebuy is not a word']) {
+    assert.equal(RISKY_STEP.test(t), false, t);
+  }
+  // An ordinary non-money ask is still counted as a fix offer.
+  assert.equal(offersFix('The sidebar width is a one-line CSS change in the hub shell.\n\nWant me to apply it now?'), true);
 });
 test('fixOfferBucket counts per lane and role', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-')); dirs.push(dir);
