@@ -23,6 +23,8 @@ sudo apt install -y python3-pip python3-venv pipx python3-lupa lua5.4 lua-busted
 Done-check after install: `python3 -c "from lupa import lua54"` and `cd ~/projects/RedFrontier && python3 tools/run-specs.py`.
 If `lua54` import fails (Debian lupa may build against a different Lua): `python3 -m venv ~/.venvs/rf && ~/.venvs/rf/bin/pip install 'lupa>=2'`.
 
+**2026-11-23 status (RedFrontier):** Ubuntu `python3-lupa` 2.4 is built against Lua 5.1 only (no `lupa.lua54`), so the apt package does NOT satisfy RF. pip/venv are still not installed. Interim fix in place: PyPI `lupa-2.8` cp314 manylinux wheel (sha256 `a591b994...`) unpacked by hand into `~/.local/lib/python3.14/site-packages`; RF `tools/run-specs.py` is green. Once pip/venv are installed, replace it with `pip install --user 'lupa>=2.8'` (or the venv above) so it is tracked by a package manager; drop `python3-lupa` from the apt line then.
+
 ## Non-apt gaps
 - **Godot**: DONE 2026-11-23 (idea-638, see below).
 - **Not gaps (stay on dev pp by decision 11-21):** dotnet, JDK/Android SDK, Rust/Tauri, signing, Windows exports, Blender, ComfyUI, RedFrontier `tools/*.ps1` server scripts (run on Windows / over SSH).
