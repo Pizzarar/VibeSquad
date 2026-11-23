@@ -721,7 +721,8 @@ export function formatRequestStatus(req, now = Date.now()) {
   }
   if (req.held?.gone?.length) lines.push(`  held by a gone owner (counted drainable): ${req.held.gone.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held?.unresolved?.length) lines.push(`  held with no lead resolved: ${req.held.unresolved.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
-  if (req.held === null && !TERMINAL.has(req.state)) lines.push("  runner held list: unknown (runner unreachable or older)");
+  // idea-674 review L1: a queued request reads no held list by design (held stays null until the window opens).
+  if (req.held === null && !TERMINAL.has(req.state) && req.state !== "queued") lines.push("  runner held list: unknown (runner unreachable or older)");
   if (req.laggards?.length) lines.push(`  fired at the deadline without: ${req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ")}`);
   if (req.sync) lines.push(req.sync.ok ? `  synced ${req.sync.at}: runtime at ${String(req.sync.commit ?? "?").slice(0, 7)}${req.sync.built ? " (dist rebuilt)" : ""}` : `  sync-skipped reason=${req.sync.reason} (${req.sync.at})${req.sync.note ? `; ${req.sync.note}` : ""}`);
   else if (needsBuild(req.needs) && !TERMINAL.has(req.state)) lines.push("  needs build: sync-runtime (build if stale) runs right before the fire");

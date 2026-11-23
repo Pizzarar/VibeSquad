@@ -686,6 +686,9 @@ test("idea-674 DC1/DC5: non-urgent -> queued for the next window; before it: no 
   const status = formatRequestStatus(readRestartRequest(home), T0);
   assert.match(status, /: queued \(tip abc1234def, needs server-restart, .*window 2026-11-19T13:00:00\.000Z \(in 3h 00m\), drain deadline 20 min after the window opens\)/);
   assert.match(status, /queued: no lead is asked/);
+  assert.doesNotMatch(status, /runner held list/, "review L1: held is null by design while queued: no runner-unknown warning");
+  const req0 = readRestartRequest(home);
+  assert.match(formatRequestStatus({ ...req0, state: "requested" }, T0), /runner held list: unknown/, "an open request with no held list still warns");
   abortRestartRequest(home, { by: "rn-ove", reason: "not needed", now: T0 + 70 * MIN });
   w.now = T0 + 71 * MIN;
   assert.equal((await loop.tick()).state, "aborted");
