@@ -1,6 +1,7 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
+import { stat as fspStat } from 'node:fs/promises';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
@@ -352,6 +353,9 @@ function foldRecord(id, st) {
   return { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.lastSeq, createdAt: st.created.ts, updatedAt: st.lastTs, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
 }
 
+// How often the roster-watch guard stats the agents dir (idea-594). One async stat per tick, unref'd; see _ensureRosterWatchGuard.
+const DEFAULT_ROSTER_WATCH_GUARD_MS = 5000;
+
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
@@ -359,7 +363,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS }) {
     this.store = new LogStore(dir);
     this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
@@ -372,6 +376,12 @@ export class Runner {
     this.rosterWatchFactory = (dir, onChange) => fsWatch(dir, { persistent: false }, onChange);
     this._rosterWatch = null;
     this._rosterWatchFailed = false;
+    // idea-594: a cheap unref'd guard that stats the agents dir every rosterWatchGuardMs and closes the watcher when the
+    // dir is deleted under it (fs.watch on a removed dir spins libuv in kernel mode on Windows and never fires 'error',
+    // idea-571/590) or its identity changed, then reopens it when the dir exists again.
+    this._rosterWatchGuard = null; // the guard interval (started with the watch, cleared on shutdown only)
+    this._rosterWatchGuardMs = rosterWatchGuardMs;
+    this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` of the watched dir, recorded by the guard's first stat
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
@@ -1825,6 +1835,8 @@ export class Runner {
     if (!w) { this._rosterWatchFailed = true; return; }
     w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
     this._rosterWatch = w;
+    this._rosterWatchIdentity = null; // recorded on the guard's first stat of this dir
+    this._ensureRosterWatchGuard();
   }
 
   // Stops the agents-dir watch and forgets every clean mark (the next scan stats; a later scan may watch again).
@@ -1832,8 +1844,45 @@ export class Runner {
     const w = this._rosterWatch;
     this._rosterWatch = null;
     this._rosterWatchFailed = false;
+    this._rosterWatchIdentity = null;
     this._foldClean.clear();
     try { w?.close(); } catch { /* already closed */ }
+  }
+
+  // Starts the guard once, alongside the watch. Unref'd: it never keeps the process alive (tests exit without clearing it),
+  // and shutdown() clears it. The guard does one async stat per tick — no sync fs on the hot scan path.
+  _ensureRosterWatchGuard() {
+    if (this._rosterWatchGuard) return;
+    const ms = Number(this._rosterWatchGuardMs);
+    const interval = Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
+    this._rosterWatchGuard = setInterval(() => { this._rosterWatchGuardTick(); }, interval);
+    this._rosterWatchGuard.unref?.();
+  }
+
+  // idea-594: the watch must never stay open on a directory that was deleted or replaced under it. Each tick stats the
+  // agents dir once (async): gone -> close; identity (ino/birthtime) changed -> close and reopen on the new dir. When the
+  // guard itself closed the watcher because the dir was gone, reopen it once the dir exists again. A watch that failed
+  // permanently (_rosterWatchFailed) is left alone, exactly like _ensureRosterWatch.
+  async _rosterWatchGuardTick() {
+    if (this._shutDown) return;
+    let st = null;
+    try { st = await fspStat(this.store.dir); } catch { /* gone or unreadable: treat as gone */ }
+    const identity = st ? `${st.ino}:${st.birthtimeMs}` : null;
+    if (this._rosterWatch) {
+      if (!st) { this.closeRosterWatch(); return; } // deleted under the watch: drop it before libuv spins
+      if (this._rosterWatchIdentity !== null && this._rosterWatchIdentity !== identity) {
+        this.closeRosterWatch(); // replaced (new ino/birthtime): watch the new dir instead
+        this._ensureRosterWatch();
+        if (this._rosterWatch) this._rosterWatchIdentity = identity;
+        return;
+      }
+      if (this._rosterWatchIdentity === null) this._rosterWatchIdentity = identity; // first observation
+      return;
+    }
+    if (st && !this._rosterWatchFailed) {
+      this._ensureRosterWatch(); // closed for a missing dir: reopen once it exists again
+      if (this._rosterWatch) this._rosterWatchIdentity = identity;
+    }
   }
 
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
@@ -2119,6 +2168,8 @@ export class Runner {
     this._coldAbort = null;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
+    clearInterval(this._rosterWatchGuard);
+    this._rosterWatchGuard = null;
     clearInterval(this._quietSweep);
     if (keepDrainFile) {
       clearTimeout(this._drainTimer);
