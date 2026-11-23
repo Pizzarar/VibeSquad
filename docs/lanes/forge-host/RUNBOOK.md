@@ -50,11 +50,20 @@ the unit is the only launch path.
 `vs restart` relaunches through the unit (follow-up R, idea-649): when the server belongs to `vibesquad.service` (its pid sits
 in the unit's cgroup, or the unit is active or enabled, and the unit's `VIBESQUAD_PORT` is the restart's port) the stop is
 `systemctl --user stop vibesquad` (only when the unit's MainPID is the server; an orphan gets SIGTERM) and the relaunch is
-`systemctl --user start vibesquad`; the unit's `VIBESQUAD_START_RUNNER=1` server boots the runner. `vs restart --dry-run` shows
-the detection (`detected.systemd`) and the plan line `start server: systemctl --user start vibesquad`. The result file
-`~/.vibesquad/restart-<ts>.json` records `relaunch.mode` (`systemd`, `detached`, `detached-fallback`, `already-up`) and
-`relaunch.after` (ActiveState, MainPID, listener pid). Another unit name: `VIBESQUAD_SYSTEMD_UNIT=<name>`; `off` disables it.
-The unit runs the code in its `WorkingDirectory` (the checkout), not `~/.vibesquad/runtime`.
+`systemctl --user start vibesquad`; the unit's `VIBESQUAD_START_RUNNER=1` server boots the runner. This needs
+`KillMode=process` in the unit: with any other KillMode the restart never stops or starts through the unit, and if the server
+is the unit's MainPID it refuses before touching anything (`relaunch.mode: refused`), since stopping it would kill the runner,
+the agents and the restart itself. If `systemctl --user start` fails or the unit's server is not healthy in time, the restart
+stops the unit, frees port 4180 (a `serve.mjs` still on it is stopped; anything else aborts the restart), then launches
+detached with a `WARNING` (`detached-fallback`). `vs restart --dry-run` shows the detection (`detected.systemd`, including
+`killMode`) and the plan line `start server: systemctl --user start vibesquad`. The result file
+`~/.vibesquad/restart-<ts>.json` records `relaunch.mode` (`systemd`, `systemd-unadopted`, `detached`, `detached-fallback`,
+`already-up`, `refused`), `relaunch.after` (ActiveState, MainPID, listener pid) and any `warnings` (systemctl unreachable,
+KillMode, WorkingDirectory differing from the runtime dir, `EnvironmentFiles=`, MainPID not the listener). Another unit name:
+`VIBESQUAD_SYSTEMD_UNIT=<name>`; `off` disables it.
+The unit runs the code in its effective `WorkingDirectory`: on the forge that is `~/.vibesquad/runtime` (set by the
+`vibesquad.service.d/runtime.conf` drop-in), not the checkout, so merged code goes live only after sync-runtime has copied it
+there (`systemctl --user show -p WorkingDirectory vibesquad` prints the effective value).
 
 ### Re-adopt vibesquad.service
 
