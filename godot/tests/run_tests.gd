@@ -1074,6 +1074,31 @@ func _test_override_path_refusals() -> void:
 		check(Token.ca_cert_path(o, getenv, root) == "", "L1 ca path: UNC '%s' refused" % o.c_escape())
 	for o in ["/work/gamex/tok", "/work/other/tok", "/work/tok", "/tmp/elsewhere/tok", "C:/Users/x/tok"]:
 		check(Token.device_token_path(o, getenv, root) == o, "L1 device path: outside the project '%s' still allowed" % o)
+	for o in ["/" + BS + "srv" + BS + "share" + BS + "tok", "/" + BS + "?" + BS + "C:" + BS + "work" + BS + "game" + BS + "tok", BS + "/srv/share/tok", "/" + BS + "?" + BS + "UNC" + BS + "srv" + BS + "share" + BS + "tok"]:
+		check(Token.device_token_path(o, getenv, root) == "" and Token.ca_cert_path(o, getenv, root) == "", "L1 mixed-slash UNC / \\\\?\\ '%s' refused" % o.c_escape())
+	# symlink outside the project pointing into it (and a link to an outside dir stays allowed)
+	if not (OS.get_name() in ["Windows", "Web"]):
+		var ldir := _tmp_dir("symlink")
+		var proj := ldir.path_join("proj")
+		var outside := ldir.path_join("outside")
+		DirAccess.make_dir_recursive_absolute(proj.path_join("secrets"))
+		DirAccess.make_dir_recursive_absolute(outside)
+		var lerr := OS.execute("ln", ["-s", proj, ldir.path_join("link_to_proj")])
+		OS.execute("ln", ["-s", proj.path_join("secrets"), outside.path_join("sneaky")])
+		OS.execute("ln", ["-s", outside, proj.path_join("to_outside")])
+		if lerr == 0:
+			check(Token.device_token_path(ldir.path_join("link_to_proj/tok"), getenv, proj) == "", "L1 symlink: link outside -> project dir is refused")
+			check(Token.ca_cert_path(outside.path_join("sneaky/ca.crt"), getenv, proj) == "", "L1 symlink: link to a project subfolder is refused")
+			check(Token.ca_cert_path(ldir.path_join("link_to_proj"), getenv, proj) == "", "L1 symlink: the link to the root itself is refused")
+			check(Token.device_token_path(proj.path_join("to_outside/tok"), getenv, proj) == "", "L1 symlink: textually inside the project still refused")
+			check(Token.device_token_path(outside.path_join("tok"), getenv, proj) == outside.path_join("tok"), "L1 symlink: a plain outside path is still allowed")
+			# link loop -> fail closed
+			OS.execute("ln", ["-s", ldir.path_join("loop_b"), ldir.path_join("loop_a")])
+			OS.execute("ln", ["-s", ldir.path_join("loop_a"), ldir.path_join("loop_b")])
+			check(Token.device_token_path(ldir.path_join("loop_a/tok"), getenv, proj) == "", "L1 symlink: an unresolvable link loop fails closed")
+		else:
+			check(false, "L1 symlink: could not create a symlink (ln exit %d)" % lerr)
+		OS.execute("rm", ["-rf", ldir])
 	var real_root := ProjectSettings.globalize_path("res://")
 	check(real_root != "" and Token.device_token_path(real_root.path_join("tok"), getenv) == "", "L1 device path: the real globalized res:// root is used by default")
 	check(Token.ca_cert_path(real_root.path_join("addons/ca.crt"), getenv) == "", "L1 ca path: the real res:// root covers subfolders")

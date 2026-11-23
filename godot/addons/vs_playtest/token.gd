@@ -235,20 +235,75 @@ static func is_allowed_device_token_path(p: String) -> bool:
 ## //server/share: a network share is not owner-only storage) nor inside the project root (res:// globalized: the file
 ## would ride along in the repo or an export).
 static func is_allowed_override_path(p: String, project_root: String = "") -> bool:
-	if not is_allowed_device_token_path(p) or p.begins_with("\\\\") or p.begins_with("//"):
+	if not is_allowed_device_token_path(p):
+		return false
+	# Normalise separators FIRST: on Windows `/\srv\share\x` and `/\?\C:\x` become `\\srv\share\x` / `\\?\C:\x`.
+	if p.strip_edges().replace("\\", "/").begins_with("//"):
 		return false
 	var root := project_root if project_root != "" else ProjectSettings.globalize_path("res://")
 	return not is_inside_dir(p, root)
 
 
-## true when `p` is `dir` itself or below it (separator-normalised, dot segments collapsed, case-insensitive: refusing a
-## same-named path on a case-sensitive filesystem is the safe side). "" dir -> false.
+## true when `p` is `dir` itself or below it (separator-normalised, dot segments collapsed, symlinks resolved, case-
+## insensitive: refusing a same-named path on a case-sensitive filesystem is the safe side). "" dir -> false. A path
+## whose symlinks cannot be resolved (loop / too deep) counts as inside (fail closed).
 static func is_inside_dir(p: String, dir: String) -> bool:
 	var d := _norm_path(dir)
 	if d == "":
 		return false
 	var n := _norm_path(p)
-	return n == d or n.begins_with(d + "/")
+	if n == d or n.begins_with(d + "/"):
+		return true
+	var rn := _resolve_links(p)
+	var rd := _resolve_links(dir)
+	if rn == "" or rd == "":
+		return true
+	return rn == rd or rn.begins_with(rd + "/")
+
+
+## Lower-cased, normalised path with every existing symlink component replaced by its target (nearest existing
+## ancestor resolved, the not-yet-existing tail appended). "" when resolution fails (more than 40 hops).
+static func _resolve_links(p: String) -> String:
+	var path := p.strip_edges().replace("\\", "/").simplify_path()
+	for _hop in 40:
+		var prefix := ""
+		var rest := path
+		if path.begins_with("/"):
+			prefix = "/"
+			rest = path.substr(1)
+		elif path.length() >= 2 and path[1] == ":":
+			prefix = path.left(2) + "/"
+			rest = path.substr(3)
+		var cur := prefix.left(prefix.length() - 1) if prefix.length() > 1 else prefix
+		var parts := rest.split("/", false)
+		var changed := false
+		for i in parts.size():
+			var next := cur.path_join(parts[i]) if cur != "" and cur != "/" else (cur + parts[i])
+			if DirAccess.dir_exists_absolute(next) or FileAccess.file_exists(next) or _is_link(next):
+				if _is_link(next):
+					var target := _link_target(next)
+					if not (target.begins_with("/") or (target.length() >= 2 and target[1] == ":")):
+						target = cur.path_join(target) if cur != "" else target
+					var tail := "/".join(parts.slice(i + 1))
+					path = (target.path_join(tail) if tail != "" else target).replace("\\", "/").simplify_path()
+					changed = true
+					break
+				cur = next
+			else:
+				break
+		if not changed:
+			return _norm_path(path)
+	return ""
+
+
+static func _is_link(p: String) -> bool:
+	var d := DirAccess.open(p.get_base_dir())
+	return d != null and d.is_link(p)
+
+
+static func _link_target(p: String) -> String:
+	var d := DirAccess.open(p.get_base_dir())
+	return "" if d == null else d.read_link(p)
 
 
 static func _norm_path(p: String) -> String:
