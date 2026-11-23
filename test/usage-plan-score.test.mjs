@@ -72,3 +72,11 @@ test('fewer than 5 scored plans -> n<5 plans; 5 plans -> a percentage; squad fil
   assert.match(plansSummary(r5), /Plan completion · 80% · 4\/5 done/);
   assert.match(plansSummary(null), /no plan-tagged/);
 });
+
+test('Buddy handoff without a role field resolves via agent id -> role=brainstorm; case-insensitive Plan=', () => {
+  const manual = { ts: NOW - 10 * DAY, lane: 'usage', squad: 'vibesquad', type: 'handoff', agent: 'rn-b1', text: 'manual handoff Plan=docs/PLAN_Y.md', plan: null };
+  assert.equal(buildPlanScores([manual], { now: NOW }).pooled.started, 0); // unknown agent: not a Buddy
+  const r = buildPlanScores([manual], { now: NOW, roleByAgent: new Map([['rn-b1', 'brainstorm'], ['rn-l1', 'lead']]) });
+  assert.equal(r.pooled.started, 1);
+  assert.equal(buildPlanScores([{ ...manual, agent: 'rn-l1' }], { now: NOW, roleByAgent: new Map([['rn-l1', 'lead']]) }).pooled.started, 0);
+});

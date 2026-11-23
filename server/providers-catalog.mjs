@@ -1753,9 +1753,9 @@ function readLaneTeams(home) {
 export const PLAN_SCORE_MIN_N = 5;
 const PLAN_SCORE_FRESH_MS = 3 * 86400_000;
 const PLAN_SCORE_STALE_MS = 7 * 86400_000;
-const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/;
+const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/i;
 const LEAD_TRANSFER_RE = /^lead\s+(rn-[\w-]+)\s*->\s*(rn-[\w-]+)/;
-const isBuddyHandoff = (e) => e.role === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
+const isBuddyHandoff = (e, roleByAgent) => e.role === "brainstorm" || roleByAgent?.get(e.agent) === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
 const planOf = (e) => (typeof e.plan === "string" && e.plan ? e.plan : (PLAN_TEXT_RE.exec(e.text ?? "")?.[1] ?? null));
 const medianOf = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
 
@@ -1775,7 +1775,7 @@ function planRow(plans, now, extra) {
 }
 
 /** Pure. entries: autonomy-style log entries { ts(ms), lane, type, text, squad, agent, role, plan, pass }. */
-export function buildPlanScores(entries, { now = Date.now(), squad = null } = {}) {
+export function buildPlanScores(entries, { now = Date.now(), squad = null, roleByAgent = null } = {}) {
   const groups = new Map();
   for (const e of [...entries].sort((a, b) => a.ts - b.ts)) {
     if (e.type !== "handoff" && e.type !== "done") continue;
@@ -1787,7 +1787,7 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null } = {}
     if (e.type === "handoff") {
       const tr = LEAD_TRANSFER_RE.exec(e.text ?? "");
       if (tr) g.transfers.push({ ts: e.ts, from: tr[1], to: tr[2] });
-      else if (g.startedAt === null && isBuddyHandoff(e)) g.startedAt = e.ts;
+      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) g.startedAt = e.ts;
     } else if (e.pass === true || /\bPASS\b/.test(e.text ?? "")) {
       g.dones.push({ ts: e.ts, agent: e.agent ?? null });
     }
@@ -3124,7 +3124,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     // warmed: getUsageAsync just folded it; archived + folded listing: immutable, reuse the fold without a stat
     try { st = (warmed?.has(file) && usageFiles.get(file)) || (archived && arch.folded && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; }
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
-    allAgentSquads.push({ st, squad: agentSquad });
+    allAgentSquads.push({ st, squad: agentSquad, agentId: n.slice(0, -6) });
     if (squad && agentSquad !== squad) continue;
     agentStates.push({ st, agentId: n.slice(0, -6) });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
@@ -3431,7 +3431,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const limitRows = readLimits(home);
   const result = {
     squad, squads, autonomy,
-    planScores: buildPlanScores(entries, { now: now(), squad }),
+    planScores: buildPlanScores(entries, { now: now(), squad, roleByAgent: new Map(allAgentSquads.map((a) => [a.agentId, a.st.role])) }),
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals: totalsFinal,
