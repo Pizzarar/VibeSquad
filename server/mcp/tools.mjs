@@ -342,7 +342,10 @@ async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
     const agent = agentOf(await b.fetchAgent(id));
     const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline)?.call(b, id, { direction: "tail", limit: 50, projection: "projected" });
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE) };
+    // A queued agent reads "initializing" (STATUS map, runner-backend.mjs) but is not stuck — it is waiting its turn. Surface
+    // the queue position (same convention as `vs who` / the pin UI) so `vs status` / get_agent_status can say "queued(N ahead)"
+    // instead of a bare "initializing" for a slow provider (agy) that sits in the queue for a while.
+    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE), ...(agent?.queued ? { queued: { ahead: agent.queued.ahead } } : {}) };
   });
 }
 
