@@ -762,12 +762,6 @@ fn load_ca_pems() -> Vec<Vec<u8>> {
     pems
 }
 
-/// idea-525 OPEN DECISION (owner/lead): a pairing with no CA fingerprint (host + 6-digit code typed by hand, a preset
-/// button, or a link from a server without a CA yet) still pins whatever `http://{host}/ca.crt` returns (trust on
-/// first use, the pre-525 behavior). Failing closed here would break that manual flow, which the setup page offers
-/// and test/lan-pair-choice.test.mjs exercises. Flip to `false` once the flow always carries a fingerprint.
-const ALLOW_LEGACY_UNPINNED_CA: bool = true;
-
 /// Shortest fingerprint prefix accepted: 8 bytes, the short form the PC's Pair dialog shows. Matches Android
 /// (src-tauri/android/VsTrust.kt `pin`) and the web client (src/remoteSession.ts `normalizeFp`).
 const MIN_CA_FP_HEX: usize = 16;
@@ -838,7 +832,7 @@ fn parse_single_cert_der(pem: &[u8]) -> Result<Vec<u8>, CaPinError> {
 
 /// The CA check desktop pairing shares with Android: the fetched body must be one PEM certificate whose SHA-256 (over
 /// the DER) starts with the paired fingerprint (16-64 hex), compared in constant time. Returns the DER on success.
-/// `None` (no fingerprint) is refused here; the legacy caller decides separately (see ALLOW_LEGACY_UNPINNED_CA).
+/// `None` (no fingerprint) is refused: remote pairing fails closed without one (idea-525, lead decision (a)).
 fn verify_ca_pem(pem: &[u8], expected_fp: Option<&str>) -> Result<Vec<u8>, CaPinError> {
     let want = match expected_fp {
         None => return Err(CaPinError::Missing),
@@ -884,6 +878,45 @@ fn pinned_pair_client(ca_der: &[u8]) -> Result<reqwest::Client, String> {
         .map_err(|e| format!("reqwest build err: {}", e))
 }
 
+const PAIR_FP_MISSING_ERR: &str = "Paste the full pairing link, or enter the CA fingerprint. On your server PC open VibeSquad > Pair a device: the fingerprint (SHA-256) is shown under the QR code and is part of the pairing link.";
+const PAIR_FP_INVALID_ERR: &str = "The CA fingerprint must be 16-64 hex characters. Copy it from your server PC (VibeSquad > Pair a device), or paste the full pairing link.";
+
+/// Remote pairing requires the PC's CA fingerprint (idea-525, fail closed): empty/missing and malformed are both
+/// refused with a user-facing message before any request is made.
+fn require_pair_fp(raw: &str) -> Result<String, &'static str> {
+    if raw.trim().is_empty() {
+        return Err(PAIR_FP_MISSING_ERR);
+    }
+    normalize_ca_fp(raw).ok_or(PAIR_FP_INVALID_ERR)
+}
+
+/// The error a failed remote pairing reports, most specific first: a fingerprint mismatch (possible interception),
+/// then a malformed /ca.crt, then the last connection error. Fallback-host connection errors can't hide the first two.
+fn pair_failure(mismatch_host: Option<&str>, bad_ca: Option<&str>, last_conn_err: &str) -> (StatusCode, String) {
+    if let Some(h) = mismatch_host {
+        return (
+            StatusCode::FORBIDDEN,
+            format!(
+                "Security check failed: {} presented a certificate authority whose SHA-256 fingerprint does not match your pairing link. This is not the PC that made the link, or the connection is being intercepted. Nothing was trusted and the pairing code was not sent to it.",
+                h
+            ),
+        );
+    }
+    if let Some(detail) = bad_ca {
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "Could not verify the server's certificate authority ({}). Nothing was trusted and the pairing code was not sent. Check the address, or update VibeSquad on your server PC.",
+                detail
+            ),
+        );
+    }
+    (
+        StatusCode::BAD_GATEWAY,
+        format!("Could not reach VibeSquad server ({}). Check your server host configuration.", last_conn_err),
+    )
+}
+
 #[derive(Debug)]
 enum CaFetchError {
     Unreachable(String),
@@ -892,19 +925,23 @@ enum CaFetchError {
 }
 
 /// Fetches `http://{host}/ca.crt` from the server's HTTP/HTTPS mux during pairing. The channel is unauthenticated, so
-/// with a pairing fingerprint the body must match it (verify_ca_pem); without one, ALLOW_LEGACY_UNPINNED_CA decides.
-/// Saves only the verified certificate under `config_dir()/trusted-cas/`, reloads the shared TLS clients, and returns
-/// the CA's DER.
+/// the body must match the pairing fingerprint (verify_ca_pem) before anything is written. Saves only the verified
+/// certificate under `config_dir()/trusted-cas/`, reloads the shared TLS clients, and returns the CA's DER. This is the
+/// only writer of `trusted-cas/`, and it requires a fingerprint (no trust on first use).
 async fn fetch_and_pin_remote_ca(
     state: &Arc<SharedAppState>,
     host: &str,
-    expected_fp: Option<&str>,
+    expected_fp: &str,
 ) -> Result<Vec<u8>, CaFetchError> {
     if is_local_host(host) {
         return Err(CaFetchError::Unreachable("local host".into()));
     }
-    if expected_fp.is_none() && !ALLOW_LEGACY_UNPINNED_CA {
+    // Checked before any network I/O so a missing or bad fingerprint can never reach the write below.
+    if expected_fp.trim().is_empty() {
         return Err(CaFetchError::Pin(CaPinError::Missing));
+    }
+    if normalize_ca_fp(expected_fp).is_none() {
+        return Err(CaFetchError::Pin(CaPinError::InvalidFingerprint));
     }
     let url = format!("http://{}/ca.crt", host);
     let resp = match state
@@ -922,11 +959,7 @@ async fn fetch_and_pin_remote_ca(
         Ok(b) if !b.is_empty() && b.len() <= 64 * 1024 => b.to_vec(),
         _ => return Err(CaFetchError::Pin(CaPinError::Malformed)),
     };
-    let der = match expected_fp {
-        Some(_) => verify_ca_pem(&bytes, expected_fp),
-        None => parse_single_cert_der(&bytes), // legacy TOFU, gated above
-    }
-    .map_err(CaFetchError::Pin)?;
+    let der = verify_ca_pem(&bytes, Some(expected_fp)).map_err(CaFetchError::Pin)?;
     let safe_name: String = host
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
@@ -1452,6 +1485,15 @@ async fn handle_desktop_pair(
             .into_response();
     }
 
+    // idea-525 (fail closed): the PC's CA fingerprint authenticates /ca.crt, which is fetched over plain http. Without
+    // a valid one nothing is fetched, nothing is written to trusted-cas/, and the code is never sent.
+    let expected_fp: String = match require_pair_fp(&raw_fp) {
+        Ok(fp) => fp,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": msg }))).into_response();
+        }
+    };
+
     // Build ordered candidate list: configured server_host, then saved/default Home LAN and Meshnet hosts
     let (fallback_host, last_lan, last_mesh) = {
         let cfg = state.config.read().unwrap();
@@ -1478,54 +1520,38 @@ async fn handle_desktop_pair(
     push_unique(&mut try_hosts, DEFAULT_MESHNET_HOST.to_string());
     push_unique(&mut try_hosts, DEFAULT_MESHNET_IP_HOST.to_string());
 
-    // idea-525: the pairing link's CA fingerprint authenticates /ca.crt (fetched over plain http). A malformed one is
-    // refused outright rather than silently treated as absent.
-    let expected_fp: Option<String> = if raw_fp.is_empty() {
-        None
-    } else {
-        match normalize_ca_fp(&raw_fp) {
-            Some(fp) => Some(fp),
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({
-                        "ok": false,
-                        "error": "The CA fingerprint must be 16-64 hex characters. Copy the full pairing link, or the fingerprint shown in Pair a device on your server PC."
-                    })),
-                )
-                    .into_response();
-            }
-        }
-    };
-
     let mut last_conn_err = String::new();
     // First host whose /ca.crt failed the fingerprint check. Later candidates are still tried (the fallback hosts are
     // guesses and may be another PC), but the code is never sent to a host that failed.
     let mut mismatch_host: Option<String> = None;
+    // First CA-verification failure that isn't a mismatch (malformed /ca.crt, save failure). Kept apart from
+    // last_conn_err so a later fallback host's connection error can't overwrite it (M3).
+    let mut bad_ca: Option<String> = None;
     for host in &try_hosts {
-        // Auto-fetch and pin the server's Root CA (`http://{host}/ca.crt`) before the HTTPS pair request.
-        let pinned = fetch_and_pin_remote_ca(&state, host, expected_fp.as_deref()).await;
-        // With a fingerprint, the code goes only to a host whose CA verified, over a client that trusts only that CA.
-        // Without one (legacy, ALLOW_LEGACY_UNPINNED_CA), the shared client and trust store are used as before.
-        let pair_client = match (&expected_fp, pinned) {
-            (None, _) => state.client(),
-            (Some(_), Ok(der)) => match pinned_pair_client(&der) {
+        // Fetch, verify and pin the server's Root CA (`http://{host}/ca.crt`) before the HTTPS pair request. The code
+        // goes only to a host whose CA verified, over a client that trusts only that CA.
+        let pair_client = match fetch_and_pin_remote_ca(&state, host, &expected_fp).await {
+            Ok(der) => match pinned_pair_client(&der) {
                 Ok(c) => c,
                 Err(e) => {
-                    last_conn_err = format!("{}: {}", host, e);
+                    bad_ca.get_or_insert_with(|| format!("{}: {}", host, e));
                     continue;
                 }
             },
-            (Some(_), Err(CaFetchError::Pin(CaPinError::Mismatch))) => {
+            Err(CaFetchError::Pin(CaPinError::Mismatch)) => {
                 mismatch_host.get_or_insert_with(|| host.clone());
                 continue;
             }
-            (Some(_), Err(e)) => {
-                last_conn_err = match e {
-                    CaFetchError::Unreachable(m) => m,
-                    CaFetchError::Pin(_) => format!("{}: /ca.crt is not a single valid certificate", host),
-                    CaFetchError::Save => format!("{}: could not save the verified CA", host),
-                };
+            Err(CaFetchError::Unreachable(m)) => {
+                last_conn_err = m;
+                continue;
+            }
+            Err(CaFetchError::Pin(_)) => {
+                bad_ca.get_or_insert_with(|| format!("{} served a /ca.crt that is not a single valid certificate", host));
+                continue;
+            }
+            Err(CaFetchError::Save) => {
+                bad_ca.get_or_insert_with(|| format!("{}: could not save the verified CA", host));
                 continue;
             }
         };
@@ -1598,28 +1624,8 @@ async fn handle_desktop_pair(
         }
     }
 
-    if let Some(bad) = mismatch_host {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "ok": false,
-                "error": format!(
-                    "Security check failed: {} presented a certificate authority whose SHA-256 fingerprint does not match your pairing link. This is not the PC that made the link, or the connection is being intercepted. Nothing was trusted and the pairing code was not sent to it.",
-                    bad
-                )
-            })),
-        )
-            .into_response();
-    }
-
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(json!({
-            "ok": false,
-            "error": format!("Could not reach VibeSquad server ({}). Check your server host configuration.", last_conn_err)
-        })),
-    )
-        .into_response()
+    let (status, error) = pair_failure(mismatch_host.as_deref(), bad_ca.as_deref(), &last_conn_err);
+    (status, Json(json!({ "ok": false, "error": error }))).into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -3447,7 +3453,7 @@ mod tests {
         assert!(updater::is_version_newer_for_channel("0.1.1-beta.5", "0.1.2-beta.1", "beta").unwrap());
     }
 
-    fn make_test_state() -> Arc<SharedAppState> {
+    pub(crate) fn make_test_state() -> Arc<SharedAppState> {
         let (http_client, ws_tls_connector) = build_http_and_ws_clients().unwrap();
         Arc::new(SharedAppState {
             config: RwLock::new(DesktopConfig::default()),
@@ -4356,6 +4362,48 @@ nG0dzSgf1FU=
     }
 
     #[test]
+    fn remote_pairing_without_a_fingerprint_is_refused_up_front() {
+        // idea-525 lead decision (a): no trust on first use. Empty / whitespace-only is refused with the
+        // where-to-find-it message, before any fetch, trusted-cas write, or code send.
+        for missing in ["", "   ", "\t\n"] {
+            let err = require_pair_fp(missing).unwrap_err();
+            assert_eq!(err, PAIR_FP_MISSING_ERR, "{missing:?}");
+            assert!(err.contains("Pair a device"), "message must say where the fingerprint is");
+        }
+        for bad in ["zz11223344556677", &CA_FP[..15]] {
+            assert_eq!(require_pair_fp(bad), Err(PAIR_FP_INVALID_ERR), "{bad:?}");
+        }
+        assert_eq!(require_pair_fp(&colon_upper(CA_FP)).as_deref(), Ok(CA_FP));
+        assert_eq!(require_pair_fp(&CA_FP[..16]).as_deref(), Ok(&CA_FP[..16]));
+    }
+
+    #[tokio::test]
+    async fn fetch_and_pin_refuses_a_missing_fingerprint_before_any_request() {
+        // Unroutable TEST-NET-1 host: if the guard didn't run first this would be a network error (Unreachable).
+        let state = super::tests::make_test_state();
+        for (fp, want) in [("", CaPinError::Missing), ("  ", CaPinError::Missing), ("nothex", CaPinError::InvalidFingerprint)] {
+            match fetch_and_pin_remote_ca(&state, "192.0.2.1:4180", fp).await {
+                Err(CaFetchError::Pin(got)) => assert_eq!(got, want, "{fp:?}"),
+                other => panic!("{fp:?}: expected Pin({want:?}), got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn pair_failure_reports_mismatch_then_bad_ca_then_connection_error() {
+        let (st, msg) = pair_failure(Some("10.0.0.5:4180"), Some("x"), "later: refused");
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(msg.contains("Security check failed") && msg.contains("10.0.0.5:4180"));
+        // M3: a malformed /ca.crt on the first host is not overwritten by a fallback host's connection error.
+        let (st, msg) = pair_failure(None, Some("10.0.0.5:4180 served a /ca.crt that is not a single valid certificate"), "192.168.1.2:4180: connection refused");
+        assert_eq!(st, StatusCode::BAD_GATEWAY);
+        assert!(msg.contains("not a single valid certificate") && !msg.contains("connection refused"), "{msg}");
+        let (st, msg) = pair_failure(None, None, "10.0.0.5:4180: timed out");
+        assert_eq!(st, StatusCode::BAD_GATEWAY);
+        assert!(msg.contains("Could not reach") && msg.contains("timed out"));
+    }
+
+    #[test]
     fn invalid_fingerprint_is_refused_not_treated_as_missing() {
         let too_long = format!("{}0", CA_FP);
         for bad in [&CA_FP[..15], "zz11223344556677", too_long.as_str(), "   "] {
@@ -4382,8 +4430,7 @@ nG0dzSgf1FU=
             ("two-cert bundle", bundle),
         ] {
             assert_eq!(verify_ca_pem(pem.as_bytes(), Some(CA_FP)), Err(CaPinError::Malformed), "{name}");
-            // The legacy (no-fingerprint) path refuses the same inputs.
-            assert_eq!(parse_single_cert_der(pem.as_bytes()), Err(CaPinError::Malformed), "{name} (legacy)");
+            assert_eq!(parse_single_cert_der(pem.as_bytes()), Err(CaPinError::Malformed), "{name} (parser)");
         }
     }
 

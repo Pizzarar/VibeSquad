@@ -658,13 +658,13 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       <div class="field" id="fp-field" style="{code_field_display}">
         <div class="label-row">
           <label for="caFp">CA Fingerprint</label>
-          <span style="font-size:11px;color:var(--muted)">Filled from the pairing link</span>
+          <span style="font-size:11px;color:var(--muted)">Required: server PC &gt; <b>Pair a device</b></span>
         </div>
         <input
           type="text"
           id="caFp"
           name="fp"
-          placeholder="SHA-256 from Pair a device (optional)"
+          placeholder="Filled from the pairing link, or type the SHA-256 shown there"
           autocomplete="off"
           spellcheck="false"
         />
@@ -840,6 +840,15 @@ pub fn render_pair_page(cfg: &DesktopConfig, error_msg: Option<&str>) -> String 
       try {{
         tryExtractPairUrl(hostInput);
         tryExtractPairUrl(codeInput);
+        // idea-525: remote pairing fails closed without the PC's CA fingerprint (the server enforces it too).
+        if (!isLocal(hostInput.value) && !fpInput.value.trim()) {{
+          errText.textContent = 'Paste the full pairing link, or enter the CA fingerprint. On your server PC open VibeSquad > Pair a device: the fingerprint (SHA-256) is shown under the QR code and is part of the pairing link.';
+          errBox.style.display = 'flex';
+          submitBtn.disabled = false;
+          submitBtn.textContent = origText;
+          fpInput.focus();
+          return;
+        }}
         const res = await fetch('/__desktop/pair', {{
           method: 'POST',
           headers: {{
