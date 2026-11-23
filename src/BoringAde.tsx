@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
@@ -384,7 +385,13 @@ type Props = {
 
 
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
-  const [mode, setMode] = useState<Mode>("project");
+  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : "project"));
+  const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
+  useEffect(() => {
+    const open = () => setMode("usage");
+    window.addEventListener(OPEN_USAGE_EVENT, open);
+    return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
+  }, []);
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
@@ -448,7 +455,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
       revealAgent(land.view, land.sel, activeAgentId);
     }
-    setMode(land.mode);
+    if (coldUsage.current) coldUsage.current = false;
+    else setMode(land.mode);
   }, [activeAgentId, activeLandable]);
   const activeTeamId = view?.team.id ?? "";
   // ONE `now` for the sidebar badges and the Needs-you list (R3 L1): both must cross the 600s stall boundary together.
