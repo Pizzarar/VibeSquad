@@ -119,7 +119,7 @@ import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
 import { alertEnabled, consumeVibeMigratedToast, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
 import { QuotaAlertBanner } from "./QuotaAlertBanner";
-import { OPEN_USAGE_EVENT, requestOpenUsage, usageFocusRequested } from "./usageHelpers";
+import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import {
   applyUiScaleToDom,
   cycleUiScalePreset,
@@ -1623,7 +1623,7 @@ export function App() {
     if (linkedAgent) {
       openAgent(linkedAgent);
     }
-    if (usageFocusRequested(location.search)) setTimeout(requestOpenUsage, 300);
+    if (takeColdUsageFocus() && vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
     if (linkedFocus === "needs-you") {
       setFocus(true);
       setTimeout(() => {

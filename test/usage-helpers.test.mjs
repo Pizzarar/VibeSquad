@@ -571,3 +571,22 @@ test("usa-48: ?focus=usage detection + open-usage event", () => {
   assert.equal(n, 1);
   delete globalThis.window;
 });
+
+import { stripUsageFocus, takeColdUsageFocus, takePendingUsageScroll, resetColdUsageForTest } from "../src/usageHelpers.ts";
+test("usa-48: cold-start focus=usage is consumed once, URL stripped, scroll pending once", () => {
+  assert.equal(stripUsageFocus("?agent=a&focus=usage"), "?agent=a");
+  assert.equal(stripUsageFocus("?focus=usage"), "");
+  const replaced = [];
+  globalThis.location = { search: "?agent=a&focus=usage", pathname: "/", hash: "" };
+  globalThis.history = { state: null, replaceState: (_s, _t, url) => replaced.push(url) };
+  resetColdUsageForTest();
+  assert.equal(takeColdUsageFocus(), true);
+  assert.equal(takeColdUsageFocus(), true); // every caller sees it (BoringApp + App)
+  assert.deepEqual(replaced, ["/?agent=a"]); // stripped once
+  assert.equal(takePendingUsageScroll(), true);
+  assert.equal(takePendingUsageScroll(), false);
+  globalThis.location = { search: "", pathname: "/", hash: "" };
+  resetColdUsageForTest();
+  assert.equal(takeColdUsageFocus(), false);
+  delete globalThis.location; delete globalThis.history; resetColdUsageForTest();
+});

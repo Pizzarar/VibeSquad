@@ -934,3 +934,31 @@ export const usageFocusRequested = (search: string): boolean => new URLSearchPar
 export function requestOpenUsage(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(OPEN_USAGE_EVENT));
 }
+
+/** Search string with focus=usage removed (other params kept). */
+export function stripUsageFocus(search: string): string {
+  const p = new URLSearchParams(search);
+  p.delete("focus");
+  const q = p.toString();
+  return q ? `?${q}` : "";
+}
+let coldUsage: boolean | null = null;
+let scrollPending = false;
+/** Cold start (?focus=usage): true once per page load, for every caller; strips the param from the URL so a reload doesn't re-trigger. */
+export function takeColdUsageFocus(): boolean {
+  if (coldUsage === null) {
+    coldUsage = typeof location !== "undefined" && usageFocusRequested(location.search);
+    if (coldUsage) {
+      scrollPending = true;
+      try { history.replaceState(history.state, "", `${location.pathname}${stripUsageFocus(location.search)}${location.hash}`); } catch { /* no history */ }
+    }
+  }
+  return coldUsage;
+}
+/** The Usage dashboard calls this on mount: true once if a cold-start deep link wants it scrolled into view. */
+export function takePendingUsageScroll(): boolean {
+  const v = scrollPending;
+  scrollPending = false;
+  return v;
+}
+export function resetColdUsageForTest(): void { coldUsage = null; scrollPending = false; }
