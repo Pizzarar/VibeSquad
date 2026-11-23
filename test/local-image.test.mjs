@@ -24,7 +24,7 @@ function rmSafe(root) {
     try { unlinkSync(p); } catch { try { rmdirSync(p); } catch {} }
     try { lstatSync(p); survived = true; } catch (e) { if (e?.code !== "ENOENT") survived = true; }
   }
-  if (survived) return;
+  if (survived) { console.warn(`rmSafe: skipped rmSync of ${root} (a link survived or the walk/lstat was uncertain)`); return; }
   try { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
 }
 test.after(() => { for (const d of tmpDirs) rmSafe(d); });
