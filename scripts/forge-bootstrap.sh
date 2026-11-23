@@ -178,7 +178,9 @@ log "meshnet ip='${MESHNET_IP}' host='${MESHNET_HOST}'"
 # 3. TMPDIR on disk, excluded from systemd-tmpfiles cleanup (R15)
 # NOT under ~/.vibesquad: server/test-guard.mjs treats every path under the real ~/.vibesquad as forbidden for tests, and the
 # unit's TMPDIR is inherited by every agent (and its test runs).
-case "$(realpath -m "$TMP_DIR")/" in
+[ -n "${TMP_DIR//[[:space:]]/}" ] || die "--tmpdir is empty; pass a directory outside ~/.vibesquad (default \$HOME/.cache/vibesquad-tmp)."
+TMP_DIR="$(realpath -m -- "$TMP_DIR")" # absolute, so a relative path cannot reach the unit or tmpfiles
+case "${TMP_DIR}/" in
   "$(realpath -m "${HOME}/.vibesquad")"/*) die "--tmpdir $TMP_DIR is under ~/.vibesquad; pick a dir outside it (default \$HOME/.cache/vibesquad-tmp)." ;;
 esac
 run mkdir -p "$TMP_DIR"
@@ -212,10 +214,15 @@ LAN_LINE="# VIBESQUAD_LAN not set (--no-lan): loopback only"
 if [ "$LAN" = 1 ]; then LAN_LINE="Environment=VIBESQUAD_LAN=1"; fi
 # WorkingDirectory: the synced runtime copy (what restart-runtime/sync-runtime populate), not the possibly dirty checkout.
 # Before the first sync it does not exist: fall back to --repo (the unit's first start then serves the checkout).
-[ -n "$RUNTIME_DIR" ] || RUNTIME_DIR="${VIBESQUAD_RUNTIME_DIR:-${VIBESQUAD_HOME:-${HOME}/.vibesquad}/runtime}"
+# VIBESQUAD_RUNTIME_DIR is trimmed like server/runtime-dir.mjs does; blank counts as unset.
+ENV_RUNTIME_DIR="${VIBESQUAD_RUNTIME_DIR:-}"
+ENV_RUNTIME_DIR="${ENV_RUNTIME_DIR#"${ENV_RUNTIME_DIR%%[![:space:]]*}"}"; ENV_RUNTIME_DIR="${ENV_RUNTIME_DIR%"${ENV_RUNTIME_DIR##*[![:space:]]}"}"
+[ -n "$RUNTIME_DIR" ] || RUNTIME_DIR="${ENV_RUNTIME_DIR:-${VIBESQUAD_HOME:-${HOME}/.vibesquad}/runtime}"
 WORK_DIR="$RUNTIME_DIR"
+RUNTIME_ENV_LINE="Environment=VIBESQUAD_RUNTIME_DIR=${RUNTIME_DIR}"
 if [ ! -f "$RUNTIME_DIR/server/serve.mjs" ]; then
   WORK_DIR="$REPO_DIR"
+  RUNTIME_ENV_LINE="# VIBESQUAD_RUNTIME_DIR not set: serving the checkout until the runtime is first synced (sync must not target the repo)"
   log "WARNING: $RUNTIME_DIR has no server/serve.mjs yet (first bootstrap); WorkingDirectory falls back to $REPO_DIR. After the first 'vs restart' (which syncs the runtime) re-run this script to switch the unit to the runtime copy."
 fi
 UNIT="[Unit]
@@ -234,6 +241,7 @@ Restart=on-failure
 RestartSec=5
 Environment=PATH=${HOME}/.local/bin:${NPM_PREFIX}/bin:${NODE_DIR}:/usr/local/bin:/usr/bin:/bin
 Environment=TMPDIR=${TMP_DIR}
+${RUNTIME_ENV_LINE}
 Environment=VIBESQUAD_PORT=${PORT}
 Environment=VIBESQUAD_START_RUNNER=1
 ${LAN_LINE}
