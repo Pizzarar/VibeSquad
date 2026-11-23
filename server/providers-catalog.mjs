@@ -707,8 +707,16 @@ const RESPAWN_OF_LABEL = "respawnOf";
 const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:log|spawn)\b/;
 const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:spawn_worker|report)$/i;
 // usa-43: waiting isn't work. wait/watch calls (shell `vs wait|watch`, or MCP wait/wait_for_agent/watch) no longer count as productive.
-const LEAD_WAIT_CMD_RE = /(?:^|[\s;&|])vs\s+(?:wait|watch)\b/;
-const LEAD_WAIT_TOOL_RE = /(?:^|[_./:-])(?:wait(?:_for_agent)?|watch)$/i;
+// usa-43 R1 L1/L2: a command segment must BE `vs wait ...` or `vs watch add ...` (not list/cancel, not `echo vs wait`).
+const LEAD_WAIT_SEG_RE = /^vs\s+(?:wait\b|watch\s+add\b)/;
+const LEAD_CD_SEG_RE = /^cd\s/;
+// usa-43 R1 M1: whitespace-free tool names only, so ACP titles like `git push origin feat/wait` never match.
+const LEAD_WAIT_TOOL_RE = /^\S*(?:^|[_./:-])(?:wait(?:_for_agent)?|watch)$/i;
+/** True when every `&&`/`;`/`|`-separated segment is a `cd` or a vs wait/watch-add, with at least one wait. */
+function isWaitCommand(cmd) {
+  const segs = String(cmd).split(/&&|\|\||[;|\n]/).map((x) => x.trim()).filter(Boolean);
+  return segs.some((x) => LEAD_WAIT_SEG_RE.test(x)) && segs.every((x) => LEAD_WAIT_SEG_RE.test(x) || LEAD_CD_SEG_RE.test(x));
+}
 /** Key-order-independent JSON for tool-call signatures. */
 function stableJson(v) {
   if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
@@ -725,10 +733,12 @@ function isProductiveTool(t) {
 }
 /** A wait/watch call that carries no productive command (so `git commit && vs wait` is not a pure wait). */
 function isWaitTool(t) {
+  if (isProductiveTool(t)) return false;
   const name = String(t.name ?? "");
-  if (LEAD_WAIT_TOOL_RE.test(name)) return true;
+  // usa-43 R1 L2: MCP watch list/cancel (any explicit non-add action) is bookkeeping, not waiting.
+  if (LEAD_WAIT_TOOL_RE.test(name)) return !(typeof t.input?.action === "string" && t.input.action !== "add");
   const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
-  return (LEAD_WAIT_CMD_RE.test(cmd) || LEAD_WAIT_CMD_RE.test(name)) && !isProductiveTool(t);
+  return isWaitCommand(cmd) || isWaitCommand(name);
 }
 /** usa-40: classify one long-tail lead turn from its tool calls. Mutates seen (signature -> count over earlier long-tail turns). */
 export function classifyLeadTurn(tools, seen) {

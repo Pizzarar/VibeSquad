@@ -169,3 +169,23 @@ test('R1 M2: zero-exit storm drops respawned agents from countExclRespawns', () 
   assert.equal(s[0].countExclRespawns, 3);
   assert.ok(s[0].countExclRespawns <= s[0].count);
 });
+
+test('usa-43 R1: M1 titles with wait/watch substrings, L1 echo/compound, L2 list/cancel are not waiting', () => {
+  const home = tmp();
+  const r = tail(home, 'rn-w2', 'alpha', (i) => (
+    i === 81 ? [{ name: 'git push origin feat/wait' }]               // M1 productive
+    : i === 82 ? [{ name: 'Read server/watch' }]                     // M1 other
+    : i === 83 ? [{ name: 'git commit -m fix-watch' }]               // M1 productive
+    : i === 84 ? [bash('echo vs wait')]                              // L1 other
+    : i === 85 ? [bash('ls && vs wait rn-x')]                        // L1 other
+    : i === 86 ? [bash('cd /tmp && vs wait rn-x')]                   // cd prefix ok -> waiting
+    : i === 87 ? [bash('vs watch list')]                             // L2 other
+    : i === 88 ? [bash('vs watch cancel w1')]                        // L2 other
+    : i === 89 ? [{ name: 'mcp__vibesquad__watch', input: { action: 'list' } }]   // L2 other
+    : i === 90 ? [{ name: 'mcp__vibesquad__watch', input: { action: 'add', ids: ['a'] } }] // waiting
+    : []), 90);
+  assert.equal(r.productive.turns, 2);
+  assert.equal(r.waiting.turns, 2);
+  assert.equal(r.loop.turns, 0);
+  assert.equal(r.other.turns, 6);
+});
