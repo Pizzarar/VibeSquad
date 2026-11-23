@@ -111,8 +111,26 @@ test('R1 L4: MCP productive tool names; result phase ignored', () => {
   evs.splice(at, 0, { ts: T0 + 83000, type: 'tool', phase: 'result', id: 'r', name: 'git commit', input: { command: 'git commit' } });
   writeAgent(home, 'rn-mcp', evs);
   const r = getUsage({ home, git: noGit }).leadLongTurns.bySquad.find((x) => x.teamId === 'alpha');
-  assert.equal(r.productive.turns, 2);
+  assert.equal(r.productive.turns, 1); // spawn_worker only; the wait is now "waiting" (usa-43)
+  assert.equal(r.waiting.turns, 1);
   assert.equal(r.other.turns, 3);
+});
+
+test('usa-43: waiting bucket (vs wait / MCP wait only), wait+commit productive, repeated waits not loop', () => {
+  const home = tmp();
+  const r = tail(home, 'rn-w', 'alpha', (i) => (
+    i === 81 || i === 82 || i === 83 ? [bash('vs wait rn-x --timeout 60')] // repeated identical -> waiting, not loop
+    : i === 84 ? [{ name: 'mcp__vibesquad__wait_for_agent', input: { id: 'x' } }]
+    : i === 85 ? [bash('vs watch add a b'), { name: 'mcp__vibesquad__watch', input: { ids: ['a'] } }]
+    : i === 86 ? [bash('vs wait rn-x'), bash('git commit -m x')] // wait + commit -> productive
+    : i === 87 ? [bash('git commit -m x && vs wait rn-x')] // one combined command -> productive
+    : i === 88 ? [bash('vs wait rn-x'), bash('ls')] // wait + other call -> not waiting
+    : []), 90);
+  assert.equal(r.waiting.turns, 5);
+  assert.equal(r.productive.turns, 2);
+  assert.equal(r.loop.turns, 0);
+  assert.equal(r.other.turns, 3); // 88 (wait+ls), 89, 90 (no calls)
+  assert.equal(r.waiting.turns + r.productive.turns + r.loop.turns + r.other.turns, 10);
 });
 
 test('R1 M3: a failed turn (error, no turn_done) does not leak tools into the next turn', () => {
@@ -150,4 +168,24 @@ test('R1 M2: zero-exit storm drops respawned agents from countExclRespawns', () 
   assert.equal(s[0].count, 4);
   assert.equal(s[0].countExclRespawns, 3);
   assert.ok(s[0].countExclRespawns <= s[0].count);
+});
+
+test('usa-43 R1: M1 titles with wait/watch substrings, L1 echo/compound, L2 list/cancel are not waiting', () => {
+  const home = tmp();
+  const r = tail(home, 'rn-w2', 'alpha', (i) => (
+    i === 81 ? [{ name: 'git push origin feat/wait' }]               // M1 productive
+    : i === 82 ? [{ name: 'Read server/watch' }]                     // M1 other
+    : i === 83 ? [{ name: 'git commit -m fix-watch' }]               // M1 productive
+    : i === 84 ? [bash('echo vs wait')]                              // L1 other
+    : i === 85 ? [bash('ls && vs wait rn-x')]                        // L1 other
+    : i === 86 ? [bash('cd /tmp && vs wait rn-x')]                   // cd prefix ok -> waiting
+    : i === 87 ? [bash('vs watch list')]                             // L2 other
+    : i === 88 ? [bash('vs watch cancel w1')]                        // L2 other
+    : i === 89 ? [{ name: 'mcp__vibesquad__watch', input: { action: 'list' } }]   // L2 other
+    : i === 90 ? [{ name: 'mcp__vibesquad__watch', input: { action: 'add', ids: ['a'] } }] // waiting
+    : []), 90);
+  assert.equal(r.productive.turns, 2);
+  assert.equal(r.waiting.turns, 2);
+  assert.equal(r.loop.turns, 0);
+  assert.equal(r.other.turns, 6);
 });

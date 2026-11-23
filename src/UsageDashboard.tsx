@@ -621,7 +621,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </Collapse>
       )}
 
-      {(data.cohorts || data.floor || data.leadLongTurns) && (
+      {(data.cohorts || data.floor || leadLongRows) && (
         <Collapse id="efficiency" testid="usage-efficiency-collapse" summary={efficiencySummary(data.cohorts, data.floor)}>
         <section className="usage-efficiency" data-testid="usage-efficiency-strip">
           {data.cohorts && (
