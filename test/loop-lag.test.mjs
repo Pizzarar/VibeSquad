@@ -122,11 +122,11 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     // inspector pause can land just after the block, in the next setTimeout (sleep(600)), before the next tick() bumps the
     // heartbeat, so the flag is missed and the frames are the sleep/timer continuation, not the blocker. Retry only that known
     // continuation; any other non-blocker frames are unexpected and fail hard.
+    const timerFrame = (f) => f.startsWith("sleep ") || f.startsWith("setTimeout ") || f.includes("node:internal/timers");
     const sleepContinuation = (f) =>
-      f.startsWith("sleep ") || f.startsWith("setTimeout ") ||
-      f.includes("node:internal/timers") || f.includes("node:internal/priority_queue") ||
-      f.startsWith("noop util/debuglog") || f.startsWith("(anon) ");
-    assert.ok(stall.frames.every(sleepContinuation), `non-blocker frames are not the sleep continuation: ${JSON.stringify(stall.frames)}`);
+      timerFrame(f) || f.includes("node:internal/priority_queue") || f.startsWith("noop util/debuglog") || f.startsWith("(anon) ");
+    // idea-593: anon frames are tolerated only alongside a real timer frame, so an all-anon wrong capture fails instead of retrying into skip.
+    assert.ok(stall.frames.some(timerFrame) && stall.frames.every(sleepContinuation), `non-blocker frames are not the sleep continuation: ${JSON.stringify(stall.frames)}`);
     lateCount++;
   }
   // Timing-only: every attempt landing late (flagged, or the sleep-continuation disguise) means the machine was saturated; the

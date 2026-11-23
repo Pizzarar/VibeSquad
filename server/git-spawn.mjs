@@ -30,7 +30,11 @@ parentPort.on('message', ({ id, file, cwd, args, env, timeoutMs, maxBuffer }) =>
   }
 });`;
 
-let worker = null;
+// idea-576: calls with a long budget (runVsAsync 60/120s, 15s git log) get their own worker, so a short call's 5s+slack guard
+// terminating ITS worker never fails an in-flight long call (and vice versa).
+const LONG_CALL_MS = 10_000;
+const workers = { short: null, long: null };
+const laneFor = (timeoutMs) => (timeoutMs > LONG_CALL_MS ? "long" : "short");
 let nextId = 1;
 const pending = new Map(); // id -> { w, resolve, guard }
 const GUARD_SLACK_MS = 5_000; // the worker's own execFile timer can't fire if its thread is wedged in a sync CreateProcess
@@ -46,20 +50,20 @@ function settle(id, value) {
   if (!p) return false;
   pending.delete(id);
   clearTimeout(p.guard);
-  if (!pending.size) p.w.unref();
+  if (![...pending.values()].some((q) => q.w === p.w)) p.w.unref(); // idle = no pending call on THIS worker
   p.resolve(value);
   return true;
 }
 
 // Fails only the requests that belong to this worker (a dead worker's late 'exit' must not touch its replacement's).
 function failWorker(w) {
-  if (worker === w) worker = null;
+  for (const k of Object.keys(workers)) if (workers[k] === w) workers[k] = null;
   for (const [id, p] of [...pending]) if (p.w === w) settle(id, FAILED);
 }
 
-function getWorker() {
-  if (worker) return worker;
-  const w = (worker = new Worker(WORKER_SRC, { eval: true }));
+function getWorker(lane = "short") {
+  if (workers[lane]) return workers[lane];
+  const w = (workers[lane] = new Worker(WORKER_SRC, { eval: true }));
   gitSpawnStats.workerSpawns++;
   w.on("message", (m) => settle(m.id, { ok: m.ok, out: m.out, err: m.err, code: m.code, msg: m.msg }));
   w.on("error", () => failWorker(w));
@@ -86,7 +90,7 @@ export function execOffLoop(file, args, { cwd, env, timeoutMs = 5000, maxBuffer 
     const id = nextId++;
     let w;
     try {
-      w = getWorker();
+      w = getWorker(laneFor(timeoutMs));
       const guard = setTimeout(() => {
         // Wedged worker (e.g. stuck in a sync CreateProcess): fail this call, fail the worker's other calls, replace it.
         settle(id, FAILED);
@@ -129,7 +133,9 @@ export function _resetGitSpawn() {
   INFLIGHT.clear();
   gitSpawnStats.workerSpawns = 0;
   gitSpawnStats.dispatches = 0;
-  const w = worker;
-  worker = null;
-  if (w) w.terminate().catch(() => {});
+  for (const k of Object.keys(workers)) {
+    const w = workers[k];
+    workers[k] = null;
+    if (w) w.terminate().catch(() => {});
+  }
 }
