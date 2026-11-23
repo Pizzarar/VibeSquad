@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
 import { runtimeDir } from "../server/runtime-dir.mjs";
-import { childEnv } from "../scripts/test-child-env.mjs";
+import { childEnv, hermeticizeEnv, testTmpdirEnv, tmpdirOf } from "../scripts/test-child-env.mjs";
 import { runSync, syncRuntimeDir } from "../server/sync-runtime.mjs";
 
 // String.raw: a plain "C:\Users" literal would silently lose its backslashes.
@@ -84,6 +84,46 @@ test("hermetic preload + childEnv keep the live runtime out of test children", (
     { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_RUNTIME_DIR: live } }).trim();
   assert.notEqual(out, live);
   assert.ok(path.relative(tmpdir(), out).startsWith("vs-test-runtime-"), out);
+});
+
+test("forge 11-23: test env drops inherited live/identity vars, keeps test knobs, and moves a TMPDIR out of ~/.vibesquad", () => {
+  const env = childEnv({
+    VIBESQUAD_MESHNET_HOST: "live.nord", VIBESQUAD_MESHNET_IP: "100.1.2.3", VIBESQUAD_LAN: "1", VIBESQUAD_PORT: "4180",
+    VIBESQUAD_START_RUNNER: "1", VIBESQUAD_TEAMS_FILE: "/live/teams.json", VS_LANE: "bug-chaser", VS_AGENT_TOKEN: "t", PASEO_AGENT_ID: "rn-x",
+    VS_TEST_FILE_TIMEOUT_MS: "5000", VS_BENCH: "1", VS_ALLOW_REAL_HOME: "1", PATH: "/usr/bin",
+    VS_SMOKE: "1", VS_TEST_STRICT_TIMING: "1", VS_TEST_LOAD_FACTOR: "2", VS_TEST_DUMP: "1", VS_SMOKEY: "x",
+  });
+  // Review M2: VS_SMOKE (live provider smokes) and the VS_TEST_* knobs survive; a look-alike does not.
+  assert.deepEqual([env.VS_SMOKE, env.VS_TEST_STRICT_TIMING, env.VS_TEST_LOAD_FACTOR, env.VS_TEST_DUMP, env.VS_SMOKEY], ["1", "1", "2", "1", undefined]);
+  for (const k of ["VIBESQUAD_MESHNET_HOST", "VIBESQUAD_MESHNET_IP", "VIBESQUAD_LAN", "VIBESQUAD_PORT", "VIBESQUAD_START_RUNNER", "VIBESQUAD_TEAMS_FILE", "VS_LANE", "VS_AGENT_TOKEN", "PASEO_AGENT_ID"])
+    assert.equal(env[k], undefined, k);
+  assert.deepEqual([env.VS_TEST_FILE_TIMEOUT_MS, env.VS_BENCH, env.VS_ALLOW_REAL_HOME, env.PATH], ["5000", "1", "1", "/usr/bin"]);
+  // TMPDIR: moved only when it sits inside the real ~/.vibesquad (a runner shell's ~/.vibesquad/tmp).
+  const home = "/home/someone";
+  assert.deepEqual(testTmpdirEnv({}, { platform: "linux", home, current: "/home/someone/.vibesquad/tmp" }), { TMPDIR: "/tmp" });
+  assert.deepEqual(testTmpdirEnv({}, { platform: "linux", home, current: "/home/someone/.vibesquad" }), { TMPDIR: "/tmp" });
+  assert.deepEqual(testTmpdirEnv({}, { platform: "linux", home, current: "/home/someone/.cache/vibesquad-tmp" }), {});
+  assert.deepEqual(testTmpdirEnv({}, { platform: "linux", home, current: "/home/someone/.vibesquad-other" }), {});
+  const win = testTmpdirEnv({ LOCALAPPDATA: String.raw`C:\Users\someone\AppData\Local` }, { platform: "win32", home: WINHOME, current: path.join(WINHOME, ".vibesquad", "tmp") });
+  assert.deepEqual(win, { TMP: String.raw`C:\Users\someone\AppData\Local\Temp`, TEMP: String.raw`C:\Users\someone\AppData\Local\Temp` });
+  // Review L1: with no `current`, the temp dir comes from the PASSED env (node's var order), not this process's os.tmpdir().
+  const realVs = path.join(os.userInfo().homedir, ".vibesquad", "tmp");
+  if (process.platform !== "win32") {
+    assert.equal(childEnv({ TMPDIR: realVs }).TMPDIR, "/tmp", "a caller env's bad TMPDIR is moved even when ours is fine");
+    assert.equal(childEnv({ TMPDIR: "/var/tmp/ok" }).TMPDIR, "/var/tmp/ok");
+    assert.equal(childEnv({ TMP: realVs }).TMPDIR, "/tmp", "TMP is what node falls back to without TMPDIR");
+  }
+  assert.equal(tmpdirOf({}, "linux"), "/tmp");
+  assert.equal(tmpdirOf({ TMPDIR: "/a", TMP: "/b" }, "linux"), "/a");
+  assert.equal(tmpdirOf({ TMP: String.raw`D:\t`, TEMP: String.raw`E:\t` }, "win32"), String.raw`E:\t`);
+  assert.equal(tmpdirOf({ SystemRoot: String.raw`C:\Win` }, "win32"), String.raw`C:\Win\temp`);
+  const inPlace = { TMPDIR: "x", VS_ROLE: "worker" };
+  assert.equal(hermeticizeEnv(inPlace, { platform: "linux", home, current: "/home/someone/.vibesquad/tmp" }), inPlace);
+  assert.deepEqual(inPlace, { TMPDIR: "/tmp" });
+  // The preload applies it in-process, so a direct `node --test --import` run is covered too.
+  const out = execFileSync(process.execPath, ["--import", "./test/setup/hermetic.mjs", "-e", "console.log(JSON.stringify([process.env.VIBESQUAD_MESHNET_HOST ?? null, process.env.VS_LANE ?? null]))"],
+    { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_MESHNET_HOST: "live.nord", VS_LANE: "x" } }).trim();
+  assert.equal(out, "[null,null]");
 });
 
 test("sync --no-build on a stale dist is refused before anything creates the runtime dir", () => {

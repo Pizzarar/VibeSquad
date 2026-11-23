@@ -1,7 +1,7 @@
 // Watch sets (docs/PLAN_COMPLETION_DIGEST_RELAY.md W1): registry, state machine, one-shot fire, persistence across a restart,
 // stall pings, retired-owner reroute, and the hold-back of watched items from the normal per-event wakes.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,7 @@ function sandbox() {
   const home = join(dir, "home");
   const tmp = join(dir, "tmp");
   mkdirSync(home, { recursive: true });
-  mkdirSync(tmp, { recursive: true });
+  mkdirSync(tmp, { recursive: true, mode: 0o700 }); // the watcher refuses suite files from a group/other-open dir (checkTestLockDir)
   return { dir, home, tmp, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -505,6 +505,40 @@ test("unit-watch-false-stall-2 B (idea-171): a permission event with an empty pe
 // ---------------------------------------------------------------------------
 // Suite + restart items (W3 / restart-runtime contracts, from fixtures)
 // ---------------------------------------------------------------------------
+
+// Tier A review M1 (forge 11-23): the suite files live in a shared /tmp. A dir another user could write (open mode, a symlink)
+// must read as no result, so a forged PASS never satisfies a suite item; once the dir is private again it counts.
+test("suite item: a last-run record in a group/other-open or symlinked lock dir is ignored", { skip: process.platform === "win32" && "POSIX modes" }, async () => {
+  const sb = sandbox();
+  try {
+    const pass = JSON.stringify({ agentId: "rn-runner", pid: 111, startedAt: iso(T0 + 1000), full: true, files: [], finishedAt: iso(T0 + 2000), tests: 5, pass: 5, fail: 0, failingFiles: [] });
+    // A symlinked dir pointing at a dir holding a PASS record.
+    const real = join(sb.dir, "elsewhere");
+    mkdirSync(real, { mode: 0o700 });
+    writeFileSync(join(real, SUITE_RESULT_FILE), pass);
+    const link = join(sb.dir, "linked");
+    symlinkSync(real, link);
+    const a = addWatch({ owner: "lead-1", items: [{ kind: "suite", ref: "rn-runner" }] }, { home: sb.home, now: T0 });
+    const viaLink = engineFor({ ...sb, tmp: link }, { clock: { t: T0 + 3000 } });
+    await viaLink.engine.tick();
+    assert.equal(viaLink.delivered.length, 0, "a symlinked lock dir is not read");
+    viaLink.engine.stop?.();
+    // The sandbox's own dir, opened up to group/other.
+    writeFileSync(join(sb.tmp, SUITE_RESULT_FILE), pass);
+    chmodSync(sb.tmp, 0o775);
+    const { engine, delivered, clock } = engineFor(sb, { clock: { t: T0 + 3000 } });
+    await engine.tick();
+    assert.equal(delivered.length, 0, "an open lock dir is not read");
+    assert.notEqual(engine.get(a.id).items[0].state, "done");
+    chmodSync(sb.tmp, 0o700);
+    clock.t += 1000;
+    await engine.tick();
+    assert.equal(engine.get(a.id).items[0].state, "done", "the same record counts from a private dir");
+    assert.match(delivered[0]?.text ?? "", /suite \(rn-runner\): done — PASS 5\/5 pass/);
+  } finally {
+    sb.cleanup();
+  }
+});
 
 test("suite item: PASS record = done, FAIL record = done-with-FAIL (pinged), dead holder with no result = stall, died record = stall", async () => {
   const sb = sandbox();

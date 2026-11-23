@@ -6,7 +6,7 @@
 // report?}], firedAt?, cancelledAt?, pings:[]}]}`. Every write is a locked read-modify-write (the `vs watch` verb writes from
 // another process) and atomic; the server reloads it on start and on every change.
 // Inputs: runner events (onRunnerEvent, from RunnerBackend.subscribeEvents), team-log `done` / `blocker` entries (onLogEntry,
-// from the plugin's scanLogs), the suite result + lock files in tmpdir, `restart-<ts>.json` records, and the stall clock (tick).
+// from the plugin's scanLogs), the suite result + lock files in testLockDir() (cli/fifo-queue.mjs), `restart-<ts>.json` records, and the stall clock (tick).
 // Output: pings handed to `deliver`; the plugin routes them through its wake path (pendingWake -> flushWake -> send).
 //
 // Ping lifecycle, persisted per ping: fired (`at`, written BEFORE any send, so a set never fires twice, also across a restart) ->
@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { pidAlive } from "../runner/lock.mjs";
+import { checkTestLockDir, testLockDir } from "../cli/fifo-queue.mjs";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
@@ -583,7 +584,7 @@ function escalateIdle(set, ctx, at) {
  */
 export function createWatchEngine({
   home,
-  tmpdir = os.tmpdir(),
+  tmpdir = testLockDir(), // the suite lock dir, not os.tmpdir(): the server and the suite may differ in TMPDIR
   now = () => Date.now(),
   alive = pidAlive,
   getAgent,
@@ -909,7 +910,9 @@ export function createWatchEngine({
       agents,
       reports: valid,
       alive,
-      suite: kinds.has("suite") ? { result: readJson(path.join(td, SUITE_RESULT_FILE)), lock: readJson(path.join(td, SUITE_LOCK_FILE)) } : {},
+      // An unsafe lock dir (symlink, another user's, group/other-writable: checkTestLockDir) reads as no result and no lock,
+      // so a forged last-run record never satisfies a suite item.
+      suite: kinds.has("suite") && !checkTestLockDir(td) ? { result: readJson(path.join(td, SUITE_RESULT_FILE)), lock: readJson(path.join(td, SUITE_LOCK_FILE)) } : {},
       restarts: kinds.has("restart") ? readRestarts() : [],
       restartRequests: kinds.has("restart") ? readRestartRequests() : [],
     };
