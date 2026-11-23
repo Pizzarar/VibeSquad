@@ -44,7 +44,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, OWNER_PLAYTEST_ROLE, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -316,8 +316,9 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
 // X1c: a request that names an agent (x-vs-agent-id) is never the owner, whatever else it carries (auth.mjs ownerProof).
 // E6a: a paired device is trusted only as an owner device or a bug-tester; a bug-tester is then held to TESTER_ROUTE_ALLOWLIST
 // by gated() (never the read-only all-GET view), and a record with any other role is not trusted at all (fail closed).
+// PTO v1.1: an owner-playtest device is trusted only so gated() can hold it to PLAYTEST_ROUTE_ALLOWLIST (playtestGated).
 const isTrusted = (req) => isLocalBrowserSafe(req) || trustedDevice(authenticate(req));
-const trustedDevice = (dev) => isOwnerDevice(dev) || dev?.role === "bug-tester";
+const trustedDevice = (dev) => isOwnerDevice(dev) || dev?.role === "bug-tester" || dev?.role === OWNER_PLAYTEST_ROLE;
 const isOwner = (req) => ownerProof(req);
 /** E6a: the bug-tester device record behind `req` (header token, cookie or relay channel), or null. Owner proof wins. */
 const testerDeviceOf = (req) => {
@@ -325,11 +326,19 @@ const testerDeviceOf = (req) => {
   const dev = authenticate(req);
   return dev?.role === "bug-tester" ? dev : null;
 };
-const localAccess = (req) => (isOwner(req) ? "owner" : testerDeviceOf(req) ? "bug-tester" : "read-only");
+/** PTO v1.1: the owner-playtest device record behind `req` (header token, cookie or relay channel), or null. Owner proof wins. */
+const playtestDeviceOf = (req) => {
+  if (isOwner(req)) return null;
+  const dev = authenticate(req);
+  return dev?.role === OWNER_PLAYTEST_ROLE ? dev : null;
+};
+const localAccess = (req) => (isOwner(req) ? "owner" : testerDeviceOf(req) ? "bug-tester" : playtestDeviceOf(req) ? OWNER_PLAYTEST_ROLE : "read-only");
 /** E6a: { role, allowedTeams, deviceName } for /health and /auth/status (role null for a non-device read-only caller). */
 function deviceFields(req) {
   const tester = testerDeviceOf(req);
   if (tester) return { role: "bug-tester", allowedTeams: testerAllowedTeams(tester), deviceName: String(tester.name ?? "") };
+  const playtest = playtestDeviceOf(req);
+  if (playtest) return { role: OWNER_PLAYTEST_ROLE, allowedTeams: null, deviceName: String(playtest.name ?? "") };
   if (!isOwner(req)) return { role: null, allowedTeams: null, deviceName: null };
   const dev = authenticate(req);
   return { role: "owner", allowedTeams: null, deviceName: dev ? String(dev.name ?? "") : null };
@@ -376,6 +385,18 @@ export const TESTER_ROUTE_ALLOWLIST = Object.freeze([
   Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/inbox/attachment" }),
   Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/inbox/send" }),
 ]);
+// ---- PTO v1.1: what an owner-playtest device (the Godot playtest addon) may reach (deny-by-default) ----
+// docs/lanes/playtest-overlay/PLAN_V1_1_ROLE.md. Never the owner, never the read-only all-GET view, never a static file:
+// only these method + path pairs, on a canonical path, reach a handler. Report/thread then still need a header token
+// (ownerPlaytestPrincipal: no cookie, no relay, no agent headers). Anything else is 403 before routing.
+export const PLAYTEST_ROUTE_ALLOWLIST = Object.freeze([
+  Object.freeze({ methods: Object.freeze(["GET", "HEAD"]), path: "/api/auth/status" }),
+  Object.freeze({ methods: Object.freeze(["GET", "HEAD"]), path: "/__vibesquad/auth/status" }),
+  Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/tester/report" }),
+  Object.freeze({ methods: Object.freeze(["GET", "POST"]), path: "/__vibesquad/tester/thread" }),
+]);
+export const playtestRouteAllowed = (method, path) =>
+  PLAYTEST_ROUTE_ALLOWLIST.some((r) => r.methods.includes(String(method ?? "").toUpperCase()) && r.path === path);
 export const testerRouteAllowed = (method, path) =>
   TESTER_ROUTE_ALLOWLIST.some((r) => r.methods.includes(String(method ?? "").toUpperCase()) && (r.path instanceof RegExp ? r.path.test(path) : r.path === path));
 /** A path a tester route may be matched against: plain ASCII segments, no dot segments, encoding, doubled or back slashes, NUL. */
@@ -392,6 +413,7 @@ const isSuspectPath = (path) => typeof path === "string" && (path.includes("//")
 export const agentWriteAllowed = (path) => AGENT_WRITE_ALLOWLIST.some((r) => (r instanceof RegExp ? r.test(path) : r === path));
 
 const forbidden = (why) => Object.assign(new Error(why), { status: 403 });
+const PLAYTEST_FORBIDDEN = "forbidden: owner-playtest device can only file playtest reports and use the reply thread";
 const sameId = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
 /** The verified agent caller of a request, or null for the owner (handlers treat null as today's owner path). */
 const agentCaller = (req) => { const c = callerOf(req); return c?.kind === "agent" ? c : null; };
@@ -565,6 +587,8 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (!isTrusted(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady });
   // E6a: a bug-tester gets liveness and its own scope only: no port, LAN IPs, loop stats, stale paths or config warnings.
   if (testerDeviceOf(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady, localAccess: "bug-tester", ...deviceFields(req) });
+  // PTO v1.1: an owner-playtest device likewise gets liveness and its own role only.
+  if (playtestDeviceOf(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady, localAccess: OWNER_PLAYTEST_ROLE, ...deviceFields(req) });
   const { port } = netConfig();
   const warnings = getConfigWarnings();
   const send = (stale) => {
@@ -608,6 +632,10 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   // E6a: a bug-tester sees that it is paired and its scope; never the LAN / Meshnet addresses, installer links or relay detail.
   if (testerDeviceOf(req)) {
     return sendJson(res, 200, { ok: true, paired: true, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint, localAccess: "bug-tester", ...deviceFields(req) });
+  }
+  // PTO v1.1: an owner-playtest device sees the same minimal shape (the addon reads `role` to warn on a full owner token).
+  if (playtestDeviceOf(req)) {
+    return sendJson(res, 200, { ok: true, paired: true, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint, localAccess: OWNER_PLAYTEST_ROLE, ...deviceFields(req) });
   }
   let relay = null;
   try {
@@ -2493,6 +2521,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     // which is not an API path and would otherwise fall through to next()). Checked only for such paths, so plain static
     // requests pay nothing.
     if (isSuspectPath(path) && testerDeviceOf(req)) return sendJson(res, 403, { error: "forbidden: bug-tester device cannot access this route" });
+    if (isSuspectPath(path) && playtestDeviceOf(req)) return sendJson(res, 403, { error: PLAYTEST_FORBIDDEN });
     if (isApi && !isTrusted(req)) {
       if (originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4: a cookie write that failed the same-origin proof
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
@@ -2505,11 +2534,22 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         (e) => sendServerError(res, e, "agent caller check"), // idea-249
       );
     }
-    return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : { kind: ownerProof(req) ? "owner" : "unknown" });
+    return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : nonApiCaller(req));
   };
+
+  /**
+   * The caller of a non-API path (static files, the SPA): owner or unknown as before, except that an owner-playtest device keeps
+   * its own kind so gated() refuses it the static tree too (PTO v1.1 deny-by-default). Same single authenticate() pass as ownerProof.
+   */
+  function nonApiCaller(req) {
+    const c = resolveNonAgentCaller(req);
+    if (c.kind === "owner" || c.kind === "playtest") return c;
+    return { kind: "unknown" };
+  }
 
   function gated(req, res, next, path, isApi, caller) {
     if (caller.kind === "tester") return testerGated(req, res, path, caller); // E6a: first, before any owner/read-only rule
+    if (caller.kind === "playtest") return playtestGated(req, res, path, caller); // PTO v1.1: likewise, before any other rule
     const owner = caller.kind === "owner";
     const write = req.method !== "GET" && req.method !== "HEAD";
     if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
@@ -2663,13 +2703,17 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
    *    header-token caller; the game talks plain HTTP to the server's Tailscale address instead (PLAN_V1: relay out of scope).
    */
   function ownerPlaytestPrincipal(req, caller) {
-    if (caller.kind !== "owner" || hasAgentHeaders(req)) return null;
-    if (isLocalOwner(req)) return OWNER_PLAYTEST_LOCAL;
+    if ((caller.kind !== "owner" && caller.kind !== "playtest") || hasAgentHeaders(req)) return null;
+    if (caller.kind === "owner" && isLocalOwner(req)) return OWNER_PLAYTEST_LOCAL;
     if (isRelayRequest(req)) return null;
     const { token, fromHeader } = extractDeviceToken(req);
     if (!token || !fromHeader) return null;
     const dev = authenticate(req); // header path: the same lookup isTrusted / resolveNonAgentCaller already passed
-    return isOwnerDevice(dev) && dev.id ? `device:${dev.id}` : null;
+    if (!dev?.id) return null;
+    // PTO v1.1: an owner-playtest device (header token) files as `device:<id>`, the same principal shape as an owner device,
+    // so its cards stay owner-source `[Owner playtest]` and dedupe per device. The record must match the resolved caller.
+    if (caller.kind === "playtest") return dev.role === OWNER_PLAYTEST_ROLE && dev.id === caller.id ? `device:${dev.id}` : null;
+    return isOwnerDevice(dev) ? `device:${dev.id}` : null;
   }
 
   /**
@@ -2680,7 +2724,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const principal = ownerPlaytestPrincipal(req, caller);
     if (!principal) {
       if (caller.kind !== "agent" && originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4, as gated()
-      return sendJson(res, 403, { ok: false, error: "forbidden: the playtest report/thread routes need a bug-tester device, the local owner token or an owner device token header" });
+      return sendJson(res, 403, { ok: false, error: "forbidden: the playtest report/thread routes need a bug-tester device, the local owner token or an owner / owner-playtest device token header" });
     }
     if (path === "/__vibesquad/tester/report" ? req.method !== "POST" : req.method !== "GET" && req.method !== "POST") {
       return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2690,6 +2734,17 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const backend = opts.backend ?? sharedRunnerBackend();
     const ctx = { rootDir, caller: ownerPlaytestCaller(principal), backend, deliveryClient: opts.backend ?? null };
     return path === "/__vibesquad/tester/report" ? handleTesterReport(req, res, ctx) : handleTesterThread(req, res, ctx);
+  }
+
+  /**
+   * PTO v1.1: the whole route table for an owner-playtest device (deny-by-default: PLAYTEST_ROUTE_ALLOWLIST on a canonical
+   * path, API or not). Report/thread then go through ownerPlaytestGated, which still demands a header token.
+   */
+  function playtestGated(req, res, path, caller) {
+    if (!isCanonicalTesterPath(path) || !playtestRouteAllowed(req.method, path)) return sendJson(res, 403, { error: PLAYTEST_FORBIDDEN });
+    if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
+    if (path === "/__vibesquad/tester/report" || path === "/__vibesquad/tester/thread") return ownerPlaytestGated(req, res, path, caller);
+    return sendJson(res, 403, { error: PLAYTEST_FORBIDDEN }); // unreachable: allowlist above
   }
 
   /** E6a: the whole route table for a bug-tester device (deny-by-default: TESTER_ROUTE_ALLOWLIST on a canonical path). */
