@@ -352,9 +352,17 @@ const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, mode
 // heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
 // /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
 const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
-export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; repoHeadCheck.clear(); };
+// usa-42: pre-cutover agent logs restored by scripts/usage-import-archive.mjs into <home>/runner/agents-archive/ (read-only here,
+// deduped by agent id; live runner/agents wins). The archive is immutable once imported, so its listing is cached per home and
+// keyed by the archive dir's mtime: an import adds entries, which moves the dir mtime. While the dir stat matches, a request
+// skips the readdir and, once one pass has folded every archived file, every per-file stat too: it reuses the usageFiles
+// entries as they are. A moved dir mtime rescans the listing; files already folded with an unchanged size/mtime are not re-read.
+const archiveIndex = new Map(); // homeDir -> { mtimeMs, names, folded }
+let archiveScans = 0; // listings built (readdir of agents-archive)
+let archiveFolds = 0; // per-file stat passes over the archive
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); archiveIndex.clear(); squadReposCache = null; repoHeadCheck.clear(); };
 let usageReadBytes = 0;
-export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes });
+export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes, archive: { scans: archiveScans, folds: archiveFolds, files: [...archiveIndex.values()].reduce((n, a) => n + a.names.length, 0) } });
 
 /** YYYY-MM-DD for a ts, or null when it is not a valid date (never throws). */
 const dayOf = (ts) => {
@@ -2100,16 +2108,28 @@ function buildFloor(merged, agents, totals) {
 
 const usageLedgerPath = (home) => join(home || vibesquadHome(), "runner", "usage-ledger.jsonl");
 
-/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. */
+/** Ledger identity: unit records by sha, day records by day; null = not keyed (kept as-is, never superseded). */
+const ledgerKey = (r) => (r?.kind === "unit" && r.sha ? `unit\u0000${r.sha}` : r?.kind === "day" && r.day ? `day\u0000${r.day}` : null);
+/** A unit record whose cost is still unknown (a re-fold may supersede it once its implementer log is readable). */
+const ledgerCostMissing = (r) => !(Number.isFinite(r?.costUsd) && r.costUsd > 0);
+
+/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. usa-42: the file is append-only, so a
+ * later line for the same unit sha / day supersedes the earlier one (last wins, kept at the first line's position). */
 export function readUsageLedger(home) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return [];
   let text = "";
   try { text = readFileSync(join(dir, "runner", "usage-ledger.jsonl"), "utf8"); } catch { return []; }
   const out = [];
+  const at = new Map(); // ledgerKey -> index in out
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* bad line */ }
+    let r;
+    try { r = JSON.parse(line); } catch { continue; /* bad line */ }
+    const k = ledgerKey(r);
+    if (k !== null && at.has(k)) { out[at.get(k)] = r; continue; }
+    if (k !== null) at.set(k, out.length);
+    out.push(r);
   }
   return out;
 }
@@ -2117,18 +2137,25 @@ export function readUsageLedger(home) {
 /** Idempotently append snapshot records (kind "unit" keyed by sha, "day" keyed by day) missing from the ledger.
  * Day records are only written once their day has fully completed (day < today UTC), so the archived day is the
  * end-of-day total rather than the first partial snapshot of an in-progress day. Never writes the real home under a
- * test runner (isForbiddenRealHome). Returns the number of new lines appended. */
+ * test runner (isForbiddenRealHome). Returns the number of new lines appended.
+ * usa-42 re-fold: a unit already in the ledger without a cost (written while its implementer's agent log was missing, e.g. the
+ * forge cutover before runner/agents-archive was imported) is superseded by appending the fresh record once that record has a
+ * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent. */
 export function syncUsageLedger(home, snapshot, now = Date.now) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
   const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
+  const costless = new Set(existing.filter((r) => r.kind === "unit" && r.sha && ledgerCostMissing(r)).map((r) => r.sha));
   const lines = [];
   for (const rec of snapshot) {
     if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
-    if (keys.has(key)) continue;
+    if (keys.has(key)) {
+      if (rec.kind === "unit" && costless.has(rec.sha) && !ledgerCostMissing(rec)) { costless.delete(rec.sha); lines.push(JSON.stringify(rec) + "\n"); }
+      continue;
+    }
     keys.add(key);
     lines.push(JSON.stringify(rec) + "\n");
   }
@@ -2726,6 +2753,44 @@ function vsLogFiles(dir) {
   return files;
 }
 
+/** usa-42: the agents-archive listing for a home (sync: getUsage). `folded` = a pass already folded every listed file. */
+function archiveListingSync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = statSync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+/** Async twin of archiveListingSync for the warm path (stat + readdir on the threadpool). */
+async function archiveListingAsync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = await statAsync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+function newArchiveEntry(homeDir, mtimeMs, names) {
+  archiveScans += 1;
+  const entry = { mtimeMs, names, folded: false };
+  archiveIndex.set(homeDir, entry);
+  return { ...entry, entry };
+}
+/** Agent logs to fold: live runner/agents first, then archived ids not present live. -> [{ n, file, archived }] + the listing. */
+function agentLogSources(dir, liveNames, arch) {
+  const out = liveNames.map((n) => ({ n, file: join(dir, n), archived: false }));
+  if (arch.names.length) {
+    const live = new Set(liveNames);
+    for (const n of arch.names) if (!live.has(n)) out.push({ n, file: join(arch.dir, n), archived: true });
+  }
+  return out;
+}
+
 /** Brings usageFiles (agent logs) and logLineFiles (vs logs) up to date without holding the loop; returns the agent files folded. */
 async function warmUsageCaches(home) {
   const homeDir = home || vibesquadHome();
@@ -2734,8 +2799,17 @@ async function warmUsageCaches(home) {
   const dir = join(homeDir, "runner", "agents");
   let names = [];
   try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
-  for (let i = 0; i < names.length; i += USAGE_STAT_BATCH) {
-    const files = names.slice(i, i + USAGE_STAT_BATCH).map((n) => join(dir, n));
+  const arch = await archiveListingAsync(homeDir);
+  const sources = agentLogSources(dir, names, arch);
+  // A folded archive listing needs no stats: its files are immutable and already in usageFiles (a missing one is refolded by usageSteps).
+  let toStat = sources;
+  if (arch.folded) {
+    toStat = [];
+    for (const x of sources) { if (x.archived && usageFiles.has(x.file)) warmed.add(x.file); else toStat.push(x); }
+  }
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
+  for (let i = 0; i < toStat.length; i += USAGE_STAT_BATCH) {
+    const files = toStat.slice(i, i + USAGE_STAT_BATCH).map((x) => x.file);
     const stats = await Promise.all(files.map((f) => statAsync(f).catch(() => null)));
     let sliceStart = performance.now();
     for (let k = 0; k < files.length; k++) {
@@ -2748,6 +2822,7 @@ async function warmUsageCaches(home) {
       if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
     }
   }
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const logFiles = vsLogFiles(homeDir);
   const liveLogs = new Set(logFiles);
   const homePrefix = homeDir + sep;
@@ -2824,13 +2899,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const allAgentSquads = []; // unfiltered { st, squad } for the autonomy bySquad comparison
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  const arch = isForbiddenRealHome(homeDir) ? { names: [], folded: true } : archiveListingSync(homeDir); // usa-42
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
   let step = 0;
-  for (const n of names) {
+  for (const { n, file, archived } of agentLogSources(dir, names, arch)) {
     if (++step % USAGE_STEP_EVERY === 0) yield;
-    const file = join(dir, n);
     seen.add(file);
     let st;
-    try { st = (warmed?.has(file) && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; } // warmed: getUsageAsync just folded it
+    // warmed: getUsageAsync just folded it; archived + folded listing: immutable, reuse the fold without a stat
+    try { st = (warmed?.has(file) && usageFiles.get(file)) || (archived && arch.folded && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; }
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad });
     if (squad && agentSquad !== squad) continue;
@@ -2850,6 +2927,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     }
   }
   for (const f of [...usageFiles.keys()]) if (!seen.has(f)) usageFiles.delete(f); // file removed: forget it
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const rows = [...agg.values()].sort((a, b) => b.day.localeCompare(a.day) || b.costUsd - a.costUsd);
   const by = (k) => {
     const m = new Map();
