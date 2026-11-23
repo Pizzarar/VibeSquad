@@ -528,3 +528,22 @@ test("leadLongTurnRows: waiting row (4 rows) and older server without waiting re
   assert.equal(old.length, 4);
   assert.deepEqual([old[1].key, old[1].turns, old[1].costUsd, old[1].pct], ["waiting", 0, 0, 0]);
 });
+
+import { pruneDismissed, quotaAlertKey, quotaAlertText, visibleQuotaAlerts } from "../src/usageHelpers.ts";
+test("quota alerts: selector drops dismissed, expired, malformed", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+  const a = { provider: "claude", window: "weekly", usedPct: 98, resetsAt: "2026-11-26T00:00:00Z" };
+  const expired = { ...a, window: "5h", resetsAt: "2026-11-23T11:00:00Z" };
+  const other = { provider: "antigravity-cli", window: "5h", usedPct: 97, resetsAt: null };
+  assert.equal(visibleQuotaAlerts([a, expired, other, null, { provider: 1 }], [], now).length, 2);
+  assert.deepEqual(visibleQuotaAlerts([a, other], [quotaAlertKey(a)], now), [other]);
+  assert.deepEqual(visibleQuotaAlerts(undefined, [], now), []);
+  // new resetsAt = new window, dismissal does not carry over
+  assert.equal(visibleQuotaAlerts([{ ...a, resetsAt: "2026-12-03T00:00:00Z" }], [quotaAlertKey(a)], now).length, 1);
+});
+test("quota alerts: text + prune", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+  assert.equal(quotaAlertText({ provider: "claude", window: "weekly", usedPct: 98, resetsAt: "2026-11-26T00:00:00Z" }, now), "Claude weekly: 2% left. Resets in 2d 12h. Spend a reset now?");
+  assert.equal(quotaAlertText({ provider: "claude", window: "weekly", usedPct: 99.6, resetsAt: null }, now), "Claude weekly: 0% left. Spend a reset now?");
+  assert.deepEqual(pruneDismissed(["claude|weekly|2026-11-20T00:00:00Z", "claude|weekly|2026-11-26T00:00:00Z"], now), ["claude|weekly|2026-11-26T00:00:00Z"]);
+});

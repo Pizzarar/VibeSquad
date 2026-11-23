@@ -118,6 +118,7 @@ import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
 import { alertEnabled, consumeVibeMigratedToast, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
+import { QuotaAlertBanner } from "./QuotaAlertBanner";
 import {
   applyUiScaleToDom,
   cycleUiScalePreset,
@@ -1601,6 +1602,13 @@ export function App() {
     return () => window.removeEventListener("keydown", onShortcut);
   }, []);
 
+  // usa-48: scroll to the Usage dashboard (Squads screen); fall back to the deep link when it is not mounted.
+  const openUsageDashboard = () => {
+    const el = document.querySelector('[data-testid="squads-dashboard"]');
+    if (el) el.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    else location.assign("/?focus=usage");
+  };
+
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1608,6 +1616,9 @@ export function App() {
     const linkedFocus = params.get("focus");
     if (linkedAgent) {
       openAgent(linkedAgent);
+    }
+    if (linkedFocus === "usage") {
+      setTimeout(() => document.querySelector('[data-testid="squads-dashboard"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 600);
     }
     if (linkedFocus === "needs-you") {
       setFocus(true);
@@ -2013,6 +2024,7 @@ export function App() {
 
   const topBanners = (
     <>
+      <QuotaAlertBanner onOpenUsage={openUsageDashboard} />
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span title={`EXPOSED ON ${exposedIps.join(", ")}: LAN/meshnet access enabled`}>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>

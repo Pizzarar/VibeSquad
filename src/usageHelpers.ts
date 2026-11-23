@@ -872,3 +872,38 @@ export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | n
   const total = keys.reduce((a, [k]) => a + num(src[k]?.costUsd), 0);
   return keys.map(([key, label]) => ({ key, label, turns: num(src[key]?.turns), costUsd: num(src[key]?.costUsd), pct: total > 0 ? num(src[key]?.costUsd) / total : null }));
 }
+
+/** usa-48: quota alert banner. Active alerts come from usage payload `quotaAlerts` (usa-47). */
+export type QuotaAlert = { provider: string; window: string; usedPct: number; resetsAt: string | null; firedAt?: string };
+export const QUOTA_DISMISS_KEY = "vs.quotaAlert.dismissed";
+export const quotaAlertKey = (a: Pick<QuotaAlert, "provider" | "window" | "resetsAt">): string => `${a.provider}|${a.window}|${a.resetsAt ?? ""}`;
+/** Active alerts minus dismissed minus expired (resetsAt passed even if the payload is stale). Malformed rows are dropped. */
+export function visibleQuotaAlerts(alerts: unknown, dismissed: readonly string[], now: number): QuotaAlert[] {
+  if (!Array.isArray(alerts)) return [];
+  const gone = new Set(dismissed);
+  return alerts.filter((a): a is QuotaAlert => {
+    if (!a || typeof a.provider !== "string" || typeof a.window !== "string" || typeof a.usedPct !== "number") return false;
+    if (a.resetsAt != null) {
+      const t = Date.parse(a.resetsAt);
+      if (Number.isFinite(t) && t <= now) return false;
+    }
+    return !gone.has(quotaAlertKey(a));
+  });
+}
+/** Dismissed keys for storage; drops keys whose resetsAt already passed so the list can't grow forever. */
+export function pruneDismissed(keys: readonly string[], now: number): string[] {
+  return keys.filter((k) => {
+    const t = Date.parse(k.split("|")[2] ?? "");
+    return !Number.isFinite(t) || t > now;
+  });
+}
+export function quotaAlertText(a: QuotaAlert, now: number): string {
+  const left = Math.max(0, Math.round(100 - a.usedPct));
+  const label = `${providerLabel(a.provider)} ${a.window}`;
+  const t = a.resetsAt ? Date.parse(a.resetsAt) : NaN;
+  if (!Number.isFinite(t)) return `${label}: ${left}% left. Spend a reset now?`;
+  const mins = Math.max(0, Math.floor((t - now) / 60_000));
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const rel = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return `${label}: ${left}% left. Resets in ${rel}. Spend a reset now?`;
+}

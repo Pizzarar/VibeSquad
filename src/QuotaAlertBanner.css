@@ -1,0 +1,7 @@
+.quota-alerts { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; }
+.quota-alert { display: flex; align-items: center; gap: 12px; padding: 7px 14px; background: #b3122b; color: #fff; font-weight: 700; font-size: 14px; border-bottom: 2px solid #ff5a73; box-shadow: 0 0 14px rgba(255, 42, 80, 0.45); }
+.quota-alert-text { flex: 1; }
+.quota-alert-open { background: #fff; color: #7a0a1c; border: 0; border-radius: 6px; padding: 4px 12px; font-weight: 800; cursor: pointer; }
+.quota-alert-open:hover, .quota-alert-open:focus-visible { background: #ffe1e6; outline: 2px solid #fff; }
+.quota-alert-dismiss { background: none; border: 0; color: inherit; font-size: 16px; font-weight: 900; line-height: 1; cursor: pointer; }
+html[data-vibe="boring"] .quota-alert { box-shadow: none; }
