@@ -2456,6 +2456,10 @@ export function loadUsageReviewPrompt({ promptPath, runtimeRoot, envRoot, warn =
   return DEFAULT_USAGE_REVIEW_PROMPT;
 }
 
+/** Cap on the spawn-storm list inlined into the review prompt: an unbounded list only grows the prompt toward the argv
+ * cap it must never ride (idea-580), and more than this many storms carry no extra signal for the reviewer. */
+const SPAWN_STORM_LIST_CAP = 20;
+
 /** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds, plus
  * usa-9 context — recent @usa/usage-lane notes, friction signals, mcp-alias counts, recent agent errors, the active
  * profile catalog and runner turn caps — so Opus and Gemini see *why* friction happened. `home` + `sinceMs` scope the
@@ -2470,7 +2474,11 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   const loops = u.loops?.flagged ?? [];
   if (loops.length) out.push(`Loops flagged: ${loops.map((l) => `${l.agentId} (${l.lane}/${l.role}) ${l.turns}t`).join("; ")}.`);
   const storms = u.spawnStorms ?? [];
-  if (storms.length) out.push(`Spawn storms: ${storms.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}.`);
+  if (storms.length) {
+    const shown = storms.slice(0, SPAWN_STORM_LIST_CAP);
+    const omitted = storms.length - shown.length;
+    out.push(`Spawn storms: ${shown.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}${omitted > 0 ? ` (+${omitted} more)` : ""}.`);
+  }
   const bp = u.byProfile ?? [];
   out.push("By provider/profile/role (runs | turns | costUsd | successRate (basis) | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
   for (const g of bp.slice(0, 30)) out.push(`- ${g.provider} | ${g.profile} | ${g.role} | ${g.runs} | ${g.turns} | ${round2(g.costUsd)} | ${g.successRate === null || g.successRate === undefined ? "-" : g.successRate} (${g.successBasis ?? "no-signal"}) | ${g.costPerMergedUnit ?? "-"} | ${g.avgReviewRounds} | ${g.fixAfterMergeRate}`);
