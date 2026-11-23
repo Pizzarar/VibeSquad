@@ -335,6 +335,17 @@ test('send / wait / status / cancel / list route by id and lane; status caps las
   assert.deepEqual(l.map((a) => a.id), ['rn-1'], 'lane-scoped');
 });
 
+test('status / get_agent_status surface the queue position for a queued agent (idea-683)', async () => {
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgent: async (id) => ({ agent: { id, status: 'initializing', title: 'T', queued: { ahead: 3 } } }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const s = await callTool(ctx, 'status', { id: 'rn-1' });
+  assert.equal(s.status, 'initializing');
+  assert.deepEqual(s.queued, { ahead: 3 }, 'a queued agent reports its queue position, not a bare initializing');
+  const st = await callTool(ctx, 'get_agent_status', { agentId: 'rn-1' });
+  assert.equal(st.status, 'initializing');
+  assert.deepEqual(st.queued, { ahead: 3 }, 'the Paseo-name alias carries it too');
+});
+
 test('report writes as the caller; types are restricted', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'blocker', text: 'stuck' });
