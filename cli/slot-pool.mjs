@@ -235,7 +235,9 @@ export function tryClaimPoolSlot(paths, { max, reserve, squad = null, holdStaleM
     const holders = poolHolders(paths, { alive, holdStaleMs, judgeBeat });
     const { free, held } = occupancy(holders, max, reserve);
     if (!mayTake(squad, { free, held, reserve })) return null;
-    return tryAcquirePoolSlot(paths, { ...take, max, squad, pid, alive });
+    // staleMs follows the holder judgement above unless the caller pins it (idea-579): a direct caller must not see a holder as
+    // free in poolHolders (beat older than holdStaleMs) yet fail to reclaim it at the 2-minute default, or the reverse.
+    return tryAcquirePoolSlot(paths, { staleMs: judgeBeat ? holdStaleMs : Infinity, ...take, max, squad, pid, alive });
   } finally {
     releaseLock(paths.claim, pid);
   }

@@ -1,6 +1,6 @@
 // Block 3/4: runner auto mode + child env, VS MCP server (stdio round trip + Paseo-name aliases), vs spawn/send/status,
 // and rn- identity through the backend seam. Every filesystem touch is under a temp HOME/VIBESQUAD_HOME.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -19,7 +19,16 @@ import { commandAgentVerb, parseArgs, resolveIdentity, runAgentVerb } from '../c
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MCP_SERVER = path.join(ROOT, 'server', 'mcp', 'server.mjs');
 const CLI = path.join(ROOT, 'cli', 'vs.mjs');
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-'));
+// idea-672: every temp dir this file makes is removed in a file-level after(), pass or fail (node:test runs it on failure too).
+const tmpDirs = [];
+const tmp = () => {
+  const d = mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-'));
+  tmpDirs.push(d);
+  return d;
+};
+after(() => {
+  for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 const tick = () => new Promise((r) => setTimeout(r, 15));
 
 function isolatedEnv(extra = {}) {
