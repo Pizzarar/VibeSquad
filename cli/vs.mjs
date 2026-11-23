@@ -308,6 +308,7 @@ export function parseArgs(argv) {
     "noForce",
     "killBackground",
     "teamOnly",
+    "urgent",
     "background",
     "full",
     "force",
@@ -555,7 +556,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
-  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent> [--full]   status + last assistant message (compact head+tail by default; --full up to 64KB)
@@ -2846,14 +2847,31 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
   if (sub === "abort") {
     if (flags._.length > 1) throw new Error('usage: vs restart abort [--reason "<why>"]');
     const req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() });
-    process.stdout.write(`${req.id} aborted; the server tells the asked leads to lift their hold.\n`);
+    // idea-674: a request aborted while still queued never asked anyone, so nobody is messaged.
+    process.stdout.write(Object.keys(req.asked ?? {}).length ? `${req.id} aborted; the server tells the asked leads to lift their hold.\n` : `${req.id} aborted; no lead had been asked yet, so none is messaged.\n`);
     return 0;
   }
-  if (flags._.length !== 2) throw new Error("usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]");
+  if (flags._.length !== 2) throw new Error('usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]]');
+  // idea-674: --reason is the urgent path's justification; on a non-urgent (queued) request it would be silently meaningless.
+  if (flags.reason !== undefined && !flags.urgent) throw new Error('vs restart request: --reason is only for --urgent (a non-urgent request is queued for the next restart window); add --urgent or drop --reason');
+  if (flags.urgent && flags.reason !== undefined && !String(flags.reason).trim()) throw new Error("vs restart request: --reason needs text (why this restart cannot wait for the window)");
   const where = caller?.owner === false && caller.team ? { team: caller.team, lane: caller.lane } : ownerHubLane(teams);
   const deadlineMin = flags.deadline === undefined ? rr.DEFAULT_DEADLINE_MIN : /^\d+$/.test(String(flags.deadline)) ? Number(flags.deadline) : NaN;
-  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, scope: flags.teamOnly ? "team" : "all", now: now() });
-  process.stdout.write(`${req.id} recorded (tip ${req.tip}, deadline ${req.deadline}). The server sends the drain ask to every live lead${req.scope === "team" ? ` of Squad ${req.team}` : " of every Squad (the restart is machine-wide; --team-only limits it to yours)"} within ~${rr.TICK_MS / 1000}s, ` +
+  if (env.VS_RESTART_WINDOWS && !rr.parseRestartWindows(env.VS_RESTART_WINDOWS)) process.stderr.write(`vs restart request: warning: VS_RESTART_WINDOWS=${JSON.stringify(String(env.VS_RESTART_WINDOWS).slice(0, 80))} is not a comma list of HH:MM UTC times; using the default windows ${rr.DEFAULT_WINDOWS_UTC.join(", ")}Z\n`);
+  let prev = null;
+  try { prev = rr.readRestartRequest(vsHome); } catch { prev = null; } // display only: the create below is the locked truth
+  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, scope: flags.teamOnly ? "team" : "all", urgent: Boolean(flags.urgent), reason: flags.reason ?? "", windows: rr.restartWindows(env), now: now() });
+  const folded = prev?.id === req.id && prev?.state === "queued";
+  const who = req.scope === "team" ? ` of Squad ${req.team}` : " of every Squad (the restart is machine-wide; --team-only limits it to yours)";
+  const tips = Array.isArray(req.tips) && req.tips.length > 1 ? ` Batched tips: ${req.tips.join(", ")}.` : "";
+  if (req.state === "queued") {
+    process.stdout.write(`${req.id} ${folded ? "updated: folded into the queued request" : "queued"} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}) for the restart window ${req.windowAt} (${rr.windowCountdown(req.windowAt, now())}).${tips} ` +
+      `Nothing happens before then: no lead is asked and no background work is held; further non-urgent requests fold into this one. At the window the server sends the drain ask to every live lead${who}, ` +
+      `fires vs restart once all have logged restart-feedback 'drained restart ${req.tip}' (or ${req.deadlineMin} min after the window, naming who did not), and logs restart-done. ` +
+      `Cannot wait (security fix, broken server, blocking all lanes)? vs restart request ${req.tip} --urgent --reason "<why>". No timer to hold: end your turn. Progress: vs restart status\n`);
+    return 0;
+  }
+  process.stdout.write(`${req.id} ${folded ? `URGENT: promoted the queued request (window ${req.windowAt}) to drain NOW` : `URGENT: draining NOW`} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}, deadline ${req.deadline}${req.urgentReason ? `, reason: ${req.urgentReason}` : ""}).${tips} The server sends the drain ask to every live lead${who} within ~${rr.TICK_MS / 1000}s, ` +
     `fires vs restart once all have logged restart-feedback 'drained restart ${req.tip}' (or at the deadline, naming who did not), and logs restart-done. No timer to hold: end your turn. Progress: vs restart status\n`);
   return 0;
 }
@@ -2888,7 +2906,11 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   if (!flags.dryRun) {
     try {
       const open = (await import("../server/restart-request.mjs")).readRestartRequest(vsHome);
-      if (open && ["requested", "draining", "ready"].includes(open.state)) {
+      if (open?.state === "queued") {
+        // idea-674: the queued request still fires its own restart at its window unless aborted.
+        process.stderr.write(`vs restart: warning: restart request ${open.id} (tip ${open.tip}) is queued for the restart window ${open.windowAt}; this manual restart goes ahead now, and the window will still drain and restart again unless you vs restart abort it.
+`);
+      } else if (open && ["requested", "draining", "ready"].includes(open.state)) {
         process.stderr.write(`vs restart: warning: restart request ${open.id} (tip ${open.tip}) is ${open.state}; the server will fire its own restart once the leads drain. This manual restart goes ahead anyway; see vs restart status, or vs restart abort first if you did not mean both.
 `);
       }

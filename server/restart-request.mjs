@@ -20,6 +20,15 @@
 // prompt; re-checked every tick, so a prompted lead whose work finishes is drained without a turn. Leads never prompted
 // (asked[id].quiet) get no aborted / restart-done send either: the team log line and vs restart status carry it. Fail safe:
 // no fresh held list or agent list -> no auto-drain, the lead is asked as before.
+// idea-674 (restart windows): a NON-urgent request is recorded `queued` for the next fixed UTC window (DEFAULT_WINDOWS_UTC,
+// VS_RESTART_WINDOWS) and asks nobody, holds no runner drain and has no running deadline until then:
+//
+//   queued    --(another non-urgent request: tip/needs/scope folded in, tips[] kept)--> queued
+//   queued    --(now >= windowAt: deadline = now + deadlineMin)--> requested (then the drain above, same tick)
+//   queued    --(--urgent request: folded in, deadline = now + deadlineMin)--> requested
+//   queued    --(vs restart abort)--> aborted (no lead was ever asked: no lead message)
+//
+// `--urgent [--reason]` keeps the immediate `requested` path. Any request while one is requested..firing is refused as before.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +45,7 @@ import { asleepTeamIds, isLiveAgent, loadTeamsRegistry, readTeamsConfig, resolve
 import { toAgent } from "./backend/runner-backend.mjs";
 
 export const REQUEST_FILE = "restart-request.json";
-export const STATES = Object.freeze(["requested", "draining", "ready", "firing", "done", "aborted"]);
+export const STATES = Object.freeze(["queued", "requested", "draining", "ready", "firing", "done", "aborted"]);
 export const TERMINAL = new Set(["done", "aborted"]);
 export const DEFAULT_DEADLINE_MIN = 30;
 export const MAX_DEADLINE_MIN = 240;
@@ -47,17 +56,71 @@ export const TICK_MS = 15_000;
  * a server that dies stops refreshing and the drain lapses within it, never blocking background work for the whole deadline.
  */
 export const REQUEST_DRAIN_TTL_MS = 5 * 60_000;
+
+/** idea-674: the fixed daily UTC restart windows a non-urgent request waits for (override: VS_RESTART_WINDOWS="HH:MM,HH:MM"). */
+export const DEFAULT_WINDOWS_UTC = Object.freeze(["13:00", "21:00"]);
+const WINDOW_RE = /^(\d{1,2}):(\d{2})$/;
+const DAY_MS = 86_400_000;
+
+/**
+ * Comma-separated `HH:MM` UTC times -> sorted, de-duplicated ["HH:MM", ...], or null when empty or any entry is not a valid
+ * time (the caller then falls back to DEFAULT_WINDOWS_UTC: a typo never disables or scrambles the windows).
+ */
+export function parseRestartWindows(raw) {
+  const parts = (Array.isArray(raw) ? raw : String(raw ?? "").split(",")).map((x) => String(x ?? "").trim()).filter(Boolean);
+  if (!parts.length || parts.length > 24) return null;
+  const out = new Set();
+  for (const p of parts) {
+    const m = WINDOW_RE.exec(p);
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mi = Number(m[2]);
+    if (h > 23 || mi > 59) return null;
+    out.add(`${String(h).padStart(2, "0")}:${m[2]}`);
+  }
+  return [...out].sort();
+}
+
+/** The windows in force: VS_RESTART_WINDOWS when it parses, else DEFAULT_WINDOWS_UTC. */
+export function restartWindows(env = process.env) {
+  return parseRestartWindows(env?.VS_RESTART_WINDOWS) ?? [...DEFAULT_WINDOWS_UTC];
+}
+
+/** The next window strictly after `now` (ms since epoch, UTC). An invalid `windows` list falls back to DEFAULT_WINDOWS_UTC. */
+export function nextRestartWindow(now = Date.now(), windows = DEFAULT_WINDOWS_UTC) {
+  const list = parseRestartWindows(windows) ?? [...DEFAULT_WINDOWS_UTC];
+  const d = new Date(now);
+  const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  for (const off of [0, 1]) {
+    for (const w of list) {
+      const [h, m] = w.split(":").map(Number);
+      const t = day + off * DAY_MS + h * 3600_000 + m * 60_000;
+      if (t > now) return t;
+    }
+  }
+  /* c8 ignore next */ throw new Error("nextRestartWindow: no window"); // unreachable: tomorrow's first window is > now
+}
+
+/** Live-Needs token lists merged, de-duplicated (first spelling kept); `a` returned unchanged when `b` adds nothing. */
+export function mergeNeeds(a, b) {
+  const toks = (x) => String(x ?? "").split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
+  const have = toks(a);
+  const seen = new Set(have.map((t) => t.toLowerCase()));
+  const add = toks(b).filter((t) => !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
+  return add.length ? [...have, ...add].join(",") : String(a ?? "");
+}
 /** A fired request whose vs restart launch was never recorded (a server crash between firedAt and the launch) holds the drain this long at most. */
 export const FIRING_DRAIN_MAX_MS = 15 * 60_000;
 
 /**
- * idea-476 (1): whether the runner's request drain should be held for `req` now. Open (requested, draining, ready): yes.
+ * idea-476 (1): whether the runner's request drain should be held for `req` now. Queued (idea-674): no. Open (requested, draining, ready): yes.
  * Firing: only until the vs restart launch is recorded (vs restart then holds its own drain, POST /drain, from its first
  * seconds), and never past FIRING_DRAIN_MAX_MS after the fire, so a fire that never launched cannot hold background work
  * for FIRING_TIMEOUT_MS. Done, aborted, no request: no.
  */
 export function requestHoldsDrain(req, now = Date.now()) {
   if (!req || TERMINAL.has(req.state)) return false;
+  if (req.state === "queued") return false; // idea-674: nothing is held (no drain, no asks) before the window opens
   if (req.state !== "firing") return true;
   if (req.launch) return false;
   const fired = Date.parse(req.firedAt ?? "");
@@ -140,10 +203,13 @@ export function readRestartRequest(home) {
 }
 
 /**
- * Record a request (the CLI's `vs restart request`; the caller gate is the CLI's). Refuses while another request is open.
- * `requestedBy` is the Overlord's agent id or "owner"; team/lane are where restart-feedback lines are logged.
+ * Record a request (the CLI's `vs restart request`; the caller gate is the CLI's). `requestedBy` is the Overlord's agent id
+ * or "owner"; team/lane are where restart-feedback lines are logged.
+ * idea-674: non-urgent (the default) -> `queued` for nextRestartWindow(now, windows); a second non-urgent request while one
+ * is queued is folded into it (never refused). `urgent` -> `requested` at once (today's path), promoting an open queued
+ * request with the new tip folded in. While a request is requested/draining/ready/firing any new one is refused, as before.
  */
-export function createRestartRequest(home, { tip, requestedBy, team = "", lane = "", needs = "", deadlineMin = DEFAULT_DEADLINE_MIN, scope = "all", now = Date.now() } = {}) {
+export function createRestartRequest(home, { tip, requestedBy, team = "", lane = "", needs = "", deadlineMin = DEFAULT_DEADLINE_MIN, scope = "all", urgent = false, reason = "", windows = restartWindows(), now = Date.now() } = {}) {
   if (scope !== "all" && scope !== "team") throw new Error("vs restart request: scope must be all or team");
   const t = String(tip ?? "").trim();
   if (!TIP_RE.test(t)) throw new Error(`vs restart request: <tip> must be a commit or branch name (letters, digits, . _ / -), got ${JSON.stringify(String(tip ?? ""))}`);
@@ -151,15 +217,37 @@ export function createRestartRequest(home, { tip, requestedBy, team = "", lane =
   if (!Number.isInteger(min) || min < 1 || min > MAX_DEADLINE_MIN) throw new Error(`vs restart request: --deadline must be whole minutes, 1-${MAX_DEADLINE_MIN}`);
   const need = String(needs ?? "").trim();
   if (need && !/^[\w,.\s-]{1,120}$/.test(need)) throw new Error("vs restart request: --needs takes Live-Needs tokens (e.g. server-restart,runner-restart)");
+  const why = clean(reason, 200);
+  if (why && !urgent) throw new Error("vs restart request: --reason is only for --urgent (a non-urgent request waits for the next restart window)");
+  const by = String(requestedBy || "owner");
   return mutateSync(home, (doc) => {
     const cur = doc.current;
+    const at = iso(now);
+    if (cur && cur.state === "queued") {
+      // idea-674: fold into the open queued request (tip = latest, tips[] kept, needs merged, scope only widens).
+      foldInto(cur, { tip: t, by, team: String(team ?? ""), needs: need, scope, at });
+      if (urgent) {
+        cur.state = "requested";
+        cur.urgent = true;
+        cur.urgentReason = why;
+        cur.promotedAt = at;
+        cur.requestedAt = at;
+        cur.deadlineMin = min;
+        cur.deadline = iso(now + min * 60_000);
+        event(cur, at, `URGENT by ${by}${why ? ` (${why})` : ""}: promoted from queued (window ${cur.windowAt}), draining now (deadline ${min} min)`);
+      } else {
+        cur.deadlineMin = Math.max(Number(cur.deadlineMin) || DEFAULT_DEADLINE_MIN, min);
+        cur.deadline = iso(Date.parse(cur.windowAt) + cur.deadlineMin * 60_000);
+      }
+      return cur;
+    }
     if (cur && !TERMINAL.has(cur.state)) throw new Error(`vs restart request: ${cur.id} (tip ${cur.tip}) is still ${cur.state}; see vs restart status, or vs restart abort first.`);
     if (cur) doc.history = [cur, ...doc.history].slice(0, HISTORY_MAX);
-    const at = iso(now);
-    doc.current = {
+    const base = {
       id: `rr-${at.replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomBytes(2).toString("hex")}`,
       tip: t,
-      requestedBy: String(requestedBy || "owner"),
+      tips: [t],
+      requestedBy: by,
       team: String(team ?? ""),
       lane: String(lane ?? ""),
       needs: need,
@@ -167,16 +255,46 @@ export function createRestartRequest(home, { tip, requestedBy, team = "", lane =
       scope,
       createdAt: at,
       deadlineMin: min,
-      deadline: iso(now + min * 60_000),
-      state: "requested",
-      asked: {},
-      drained: {},
-      gone: {},
-      held: null,
-      events: [{ at, text: `requested by ${requestedBy || "owner"} (deadline ${min} min)` }],
     };
+    if (urgent) {
+      doc.current = {
+        ...base,
+        urgent: true,
+        urgentReason: why,
+        requestedAt: at,
+        deadline: iso(now + min * 60_000),
+        state: "requested",
+        asked: {}, drained: {}, gone: {}, held: null,
+        events: [{ at, text: `URGENT request by ${by}${why ? ` (${why})` : ""} (deadline ${min} min)` }],
+      };
+    } else {
+      const win = nextRestartWindow(now, windows);
+      doc.current = {
+        ...base,
+        urgent: false,
+        windowAt: iso(win),
+        // Projected only: the real deadline is set when the window opens (now + deadlineMin), so leads get the full drain.
+        deadline: iso(win + min * 60_000),
+        state: "queued",
+        asked: {}, drained: {}, gone: {}, held: null,
+        events: [{ at, text: `queued by ${by} for the restart window ${iso(win)} (drain deadline ${min} min after it)` }],
+      };
+    }
     return doc.current;
   });
+}
+
+/** idea-674: fold a request into the open queued `cur` (mutated). */
+function foldInto(cur, { tip, by, team, needs, scope, at }) {
+  const before = cur.tip;
+  cur.tips = Array.isArray(cur.tips) && cur.tips.length ? cur.tips : [cur.tip];
+  if (!cur.tips.includes(tip)) cur.tips.push(tip);
+  cur.tip = tip;
+  const merged = mergeNeeds(cur.needs, needs);
+  const widen = cur.scope === "team" && (scope === "all" || (team && team !== cur.team));
+  if (widen) cur.scope = "all";
+  event(cur, at, `tip ${tip} folded in by ${by}${tip === before ? " (same tip)" : ` (was ${before})`}${merged !== cur.needs ? `, needs now ${merged}` : ""}${widen ? ", scope widened to all Squads" : ""}`);
+  cur.needs = merged;
 }
 
 /** `vs restart abort`: an open request that has not fired yet ends as aborted; the server loop tells the asked leads. */
@@ -389,6 +507,22 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
   req.gone ??= {};
   const close = () => notifyClosed(req, at, actions, asleep);
   if (TERMINAL.has(req.state)) return close();
+  if (req.state === "queued") {
+    // idea-674: nothing happens before the window: no asks, no held list kept, no deadline running.
+    const win = Date.parse(req.windowAt ?? "");
+    if (!Number.isFinite(win)) {
+      abort(req, at, "queued request has no valid windowAt: nothing was asked, nothing fired; request again");
+      return close();
+    }
+    if (now < win) return actions;
+    const min = Number.isInteger(req.deadlineMin) && req.deadlineMin >= 1 ? req.deadlineMin : DEFAULT_DEADLINE_MIN;
+    req.state = "requested";
+    req.requestedAt = at;
+    req.deadline = iso(now + min * 60_000);
+    const tips = Array.isArray(req.tips) && req.tips.length > 1 ? ` (batched tips ${req.tips.join(", ")})` : "";
+    event(req, at, `restart window ${req.windowAt} open: drain starts for tip ${req.tip}${tips}, deadline ${min} min`);
+    actions.push({ kind: "log", text: `restart-request ${req.id} window ${req.windowAt} open: draining for ${req.tip}${tips}, deadline ${req.deadline}` });
+  }
   if (held !== undefined) req.held = held ? { at, ...held } : null;
   // idea-402: verdicts count only with this tick's held list and lead list (fail safe: stale or missing data auto-drains nobody).
   const v = leads && held ? (verdicts ?? null) : null;
@@ -554,10 +688,27 @@ function notifyClosed(req, at, actions, asleep = null) {
 
 // ---- status ---------------------------------------------------------------------------------------------------------
 
+/** "in 3h 05m" | "in 12 min" | "due now (next server tick)" for a window time. */
+export function windowCountdown(at, now = Date.now()) {
+  const ms = Date.parse(at ?? "") - now;
+  if (!Number.isFinite(ms)) return "unknown";
+  if (ms <= 0) return "due now (next server tick)";
+  const m = Math.ceil(ms / 60_000);
+  return m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 export function formatRequestStatus(req, now = Date.now()) {
-  if (!req) return "no restart request (vs restart request <tip> [--deadline <min>])";
+  if (!req) return "no restart request (vs restart request <tip> [--deadline <min>] [--urgent --reason <why>])";
   const mins = (t) => Math.round((Date.parse(t) - now) / 60000);
-  const lines = [`restart request ${req.id}: ${req.state} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}, by ${req.requestedBy}${req.scope === "team" ? `, ${req.team} Squad only` : ", all Squads"}, created ${req.createdAt}, deadline ${req.deadline}${TERMINAL.has(req.state) ? "" : ` (${mins(req.deadline) >= 0 ? `in ${mins(req.deadline)} min` : `${-mins(req.deadline)} min ago`})`})`];
+  const queued = req.state === "queued";
+  const when = queued
+    ? `window ${req.windowAt} (${windowCountdown(req.windowAt, now)}), drain deadline ${req.deadlineMin} min after the window opens`
+    : `deadline ${req.deadline}${TERMINAL.has(req.state) ? "" : ` (${mins(req.deadline) >= 0 ? `in ${mins(req.deadline)} min` : `${-mins(req.deadline)} min ago`})`}`;
+  const lines = [`restart request ${req.id}: ${req.state}${req.urgent ? " URGENT" : ""} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}, by ${req.requestedBy}${req.scope === "team" ? `, ${req.team} Squad only` : ", all Squads"}, created ${req.createdAt}, ${when})`];
+  if (queued) lines.push("  queued: no lead is asked and the runner holds nothing until the window opens (vs restart abort cancels it; --urgent drains now)");
+  if (Array.isArray(req.tips) && req.tips.length > 1) lines.push(`  batched tips: ${req.tips.join(", ")} (restarting to ${req.tip})`);
+  if (req.urgent) lines.push(`  urgent${req.urgentReason ? `: ${req.urgentReason}` : " (no reason given)"}${req.promotedAt ? `; promoted from the ${req.windowAt} window at ${req.promotedAt}` : ""}`);
+  else if (req.windowAt && !queued) lines.push(`  window ${req.windowAt}; drain started ${req.requestedAt ?? "?"}`);
   const asked = Object.entries(req.asked ?? {});
   const settled = asked.filter(([id]) => req.drained?.[id] || req.gone?.[id]).length;
   if (asked.length) lines.push(`  leads: ${settled}/${asked.length} drained or gone`);
@@ -570,7 +721,8 @@ export function formatRequestStatus(req, now = Date.now()) {
   }
   if (req.held?.gone?.length) lines.push(`  held by a gone owner (counted drainable): ${req.held.gone.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held?.unresolved?.length) lines.push(`  held with no lead resolved: ${req.held.unresolved.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
-  if (req.held === null && !TERMINAL.has(req.state)) lines.push("  runner held list: unknown (runner unreachable or older)");
+  // idea-674 review L1: a queued request reads no held list by design (held stays null until the window opens).
+  if (req.held === null && !TERMINAL.has(req.state) && req.state !== "queued") lines.push("  runner held list: unknown (runner unreachable or older)");
   if (req.laggards?.length) lines.push(`  fired at the deadline without: ${req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ")}`);
   if (req.sync) lines.push(req.sync.ok ? `  synced ${req.sync.at}: runtime at ${String(req.sync.commit ?? "?").slice(0, 7)}${req.sync.built ? " (dist rebuilt)" : ""}` : `  sync-skipped reason=${req.sync.reason} (${req.sync.at})${req.sync.note ? `; ${req.sync.note}` : ""}`);
   else if (needsBuild(req.needs) && !TERMINAL.has(req.state)) lines.push("  needs build: sync-runtime (build if stale) runs right before the fire");
@@ -774,6 +926,8 @@ export function createRestartRequestLoop({
     if (!cur || TERMINAL.has(cur.state)) await releaseDrain();
     if (!cur || (TERMINAL.has(cur.state) && cur.notifiedAt)) return { state: cur?.state ?? null, actions: [] };
     const open = !TERMINAL.has(cur.state) && cur.state !== "firing";
+    // idea-674: a queued request before its window reads nothing (no agent list, held list or log scan): it only waits.
+    const due = cur.state !== "queued" || !(now() < Date.parse(cur.windowAt ?? ""));
     let leads = null;
     let held;
     let drained = null;
@@ -782,7 +936,7 @@ export function createRestartRequestLoop({
     let verdicts = null;
     try { asleep = asleepTeams(); } catch { asleep = null; }
     const scanAt = now();
-    if (open) {
+    if (open && due) {
       let agents = null;
       try { agents = await listAgents(); } catch (e) { log(`restart-request: agent list failed: ${e?.message ?? e}`); }
       if (Array.isArray(agents)) {
@@ -799,14 +953,16 @@ export function createRestartRequestLoop({
         // idea-402: the same lane check a lead's own drained log must pass, per lead (null without a held list: fail safe).
         try { verdicts = h ? autoDrainVerdicts(leads, h, holders, reg) : null; } catch (e) { verdicts = null; log(`restart-request: auto-drain check failed (${e?.message ?? e}); every lead is asked`); }
       }
-      const sinceMs = Date.parse(cur.createdAt);
+      // idea-674: drains count from when the drain started (requestedAt; a queued request about to open: this scan), never
+      // from a queued request's creation, when no lead had been asked. Older files carry no requestedAt: createdAt.
+      const sinceMs = cur.state === "queued" ? scanAt : Date.parse(cur.requestedAt ?? cur.createdAt);
       drained = drainedSince(home, { sinceMs, stopMs: scanned?.id === cur.id ? scanned.at : sinceMs, tip: cur.tip });
     } else if (cur.state === "firing") results = restartResults(home);
     const { req, actions } = await mutateAsync(home, (doc) => {
       if (!doc.current || doc.current.id !== cur.id) return { req: doc.current, actions: [] };
       return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep, verdicts }) };
     });
-    if (open) scanned = { id: cur.id, at: scanAt };
+    if (open && due) scanned = { id: cur.id, at: scanAt };
     // The drain follows the stepped state (requestHoldsDrain): held while the request is open and until its vs restart
     // launch is recorded, released once it launched, finished or was aborted.
     if (requestHoldsDrain(req, now())) await holdDrain(req);
