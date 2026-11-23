@@ -20,6 +20,7 @@ export const WATCHDOG_STALL_MS = 350; // heartbeat silent this long -> capture t
 export const GC_MIN_MS = 20; // gc pauses shorter than this are not kept
 export const GC_STANDALONE_MS = 100; // a single gc pause this long gets its own jsonl line
 const MAX_FRAMES = 8;
+export const LATE_SLACK_MS = 25; // a pause landing within this of the moment the blocker returned is indistinguishable from after it (idea-592)
 const GRACE_MS = 150; // let the watchdog's message land before the stall line is written
 const KINDS = { 1: 'scavenge', 2: 'minor-ms', 4: 'mark-sweep-compact', 8: 'incremental', 16: 'weak-cb', 31: 'all' };
 
@@ -32,6 +33,30 @@ const KINDS = { 1: 'scavenge', 2: 'minor-ms', 4: 'mark-sweep-compact', 8: 'incre
 // poll would start another pause. Never captures while an inspector is open (hb[1], published by the main thread because
 // inspector.url() is undefined in a worker): V8 pause state is per-isolate, so our resume would unpause a user's breakpoint.
 function shortUrl(u) { return String(u || '').replace('file:///', '').split(/[\\/]/).slice(-2).join('/'); }
+/**
+ * Pure: build the capture message from a Debugger.paused event. pausedAt is the clock read inside the paused handler (the main thread
+ * is frozen at that instant); heartbeatMoved is whether the main thread's tick ran since the stall began (idea-513, proves late).
+ */
+export function buildCapture({ params, urls = new Map(), startedAt, heartbeatMoved, now = Date.now }) {
+  const frames = (params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
+  const pausedAt = now();
+  return { stallStartedAt: startedAt, pausedAt, pausedAfterMs: pausedAt - startedAt, frames, ...(heartbeatMoved ? { late: true } : {}) };
+}
+
+/**
+ * Pure (idea-592): was the pause taken while the blocker was still running? The heartbeat flag misses a pause that lands just after the
+ * blocker returned but before the next tick() (e.g. in the following setTimeout), so also compare the pause instant with when the loop was
+ * ready to run tick(): tickAt minus the time the pause itself held the thread. A pause within LATE_SLACK_MS of that moment cannot be told
+ * apart from one after the blocker, so it is unreliable. Returns null (usable) or the reason string.
+ */
+export function lateReason(cap, tickAt) {
+  if (cap.late) return 'heartbeat-moved';
+  if (typeof cap.pausedAt === 'number' && typeof cap.resumedAt === 'number') {
+    const readyAt = tickAt - Math.max(0, cap.resumedAt - cap.pausedAt);
+    if (cap.pausedAt >= readyAt - LATE_SLACK_MS) return 'paused-at-stall-end';
+  }
+  return null;
+}
 function runWatchdog() {
   const hb = new Int32Array(workerData.sab);
   let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null, capturedAt = null;
@@ -54,13 +79,11 @@ function runWatchdog() {
     session.on('Debugger.scriptParsed', (m) => { if (m.params.url) urls.set(m.params.scriptId, m.params.url); });
     session.on('Debugger.paused', (m) => {
       if (done) return;
-      try {
-        const frames = (m.params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
-        // Late capture: under CPU contention enable+pause can land after the stall ended, so the frames are the timer/tick that ran next,
-        // not the blocker. The heartbeat moving since the stall began is the proof; flag it instead of reporting misleading frames.
-        const late = Atomics.load(hb, 0) !== v0;
-        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames, ...(late ? { late: true } : {}) });
-      } catch { /* attribution is best-effort */ } finally { finish(); }
+      let msg = null;
+      try { msg = buildCapture({ params: m.params, urls, startedAt, heartbeatMoved: Atomics.load(hb, 0) !== v0, now: Date.now }); } catch { /* attribution is best-effort */ }
+      // Resume BEFORE posting so the hold time (pausedAt -> resumedAt) is measured; the heartbeat was read above, while still paused.
+      finish();
+      try { if (msg) parentPort.postMessage({ ...msg, resumedAt: Date.now() }); } catch { /* best-effort */ }
     });
     timer = setTimeout(finish, 5000);
     timer.unref();
@@ -138,7 +161,14 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
         const g = gcAfter(t0, t + 1);
         if (g) rec.gc = g;
         const a = attribs.find((x) => x.stallStartedAt >= t0 - 100 && x.stallStartedAt <= t);
-        if (a) { rec.pausedAfterMs = a.pausedAfterMs; if (a.late) rec.captureLate = true; else rec.frames = a.frames; }
+        if (a) {
+          rec.pausedAfterMs = a.pausedAfterMs;
+          // captureLate: the frames are not the blocker's; analyses must drop them. captureLateReason (added idea-592) says how it was
+          // detected: 'heartbeat-moved' (tick ran since the stall began) or 'paused-at-stall-end' (pause landed within LATE_SLACK_MS of the
+          // blocker returning, heartbeat still unmoved). Absent when the capture is reliable. Old readers just see captureLate as before.
+          const why = lateReason(a, t);
+          if (why) { rec.captureLate = true; rec.captureLateReason = why; } else rec.frames = a.frames;
+        }
         try { rec.res = resourceCounts(); } catch { /* optional */ }
         write(rec);
       };
@@ -177,13 +207,14 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
       if (e.duration >= gcStandaloneMs) write({ ts: new Date(end).toISOString(), proc, gcMs: Math.round(e.duration), gcKind: kind, heapUsed: heapUsed() });
     }
   }
+  function ingestCapture(m) { attribs.push(m); while (attribs.length > 20) attribs.shift(); }
   function startWatchdog() {
     try {
       const sab = new SharedArrayBuffer(8);
       hb = new Int32Array(sab);
       worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab, deferPauseUntilResume }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
       worker.unref();
-      worker.on('message', (m) => { attribs.push(m); while (attribs.length > 20) attribs.shift(); });
+      worker.on('message', ingestCapture);
       worker.on('error', () => { worker = null; hb = null; });
     } catch { worker = null; hb = null; }
   }
@@ -201,6 +232,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     },
     stop() { for (const x of timers) clearInterval(x); timers = []; obs?.disconnect(); obs = null; worker?.terminate(); worker = null; hb = null; },
     onGc,
+    ingestCapture, // feed a watchdog capture message directly (tests with a fake inspector)
     captures: () => attribs.slice(), // watchdog captures received so far (tests, diagnostics)
     heartbeat: () => (hb ? Atomics.load(hb, 0) : null), // watchdog heartbeat counter (test hook, idea-513)
   };

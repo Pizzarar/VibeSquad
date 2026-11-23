@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { budget, loadFactor } from "./helpers/load-budget.mjs";
 import test from "node:test";
-import { createLoopLagMonitor } from "../runner/loop-lag.mjs";
+import { createLoopLagMonitor, buildCapture, lateReason } from "../runner/loop-lag.mjs";
 
 function rig() {
   let t = 1_000_000;
@@ -249,4 +249,48 @@ const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.s
   console.log(`idle cpu: watchdog off ${off.pct.toFixed(3)}% on ${on.pct.toFixed(3)}% (captures ${on.caps})`);
   assert.equal(on.caps, 0, "watchdog captured during every idle window");
   assert.ok(on.pct - off.pct < loadFactor(), `delta ${on.pct - off.pct} (limit ${loadFactor()})`);
+});
+
+// idea-592: attribute a capture as late even when the heartbeat has not moved. Fake clock + fake inspector paused event; no worker.
+function stallRig({ pauseOffsetMs, holdMs = 3 }) {
+  const { m, lines, adv } = rig();
+  const T0 = 1_000_000; // rig clock start; the stall begins at the last tick
+  m.tick(); // last = T0
+  adv(2000); // blocker runs 2s, then tick() fires at T0+2000 (+ hold: the pause delayed it)
+  const pausedAt = T0 + pauseOffsetMs;
+  const fake = { callFrames: [{ functionName: "blocker", url: "file:///x/app/job.mjs", location: { scriptId: "1", lineNumber: 9 } }] };
+  let clock = pausedAt;
+  const msg = buildCapture({ params: fake, startedAt: T0 + 100, heartbeatMoved: false, now: () => clock });
+  m.ingestCapture({ ...msg, resumedAt: pausedAt + holdMs });
+  return { m, lines, msg, pausedAt };
+}
+
+test("capture during the stall is not late (frames kept, no captureLate)", async () => {
+  const { m, lines, msg } = stallRig({ pauseOffsetMs: 800 }); // paused 1.2s before the blocker returned
+  assert.equal(msg.pausedAt - msg.stallStartedAt, 700);
+  m.tick();
+  await m.flush();
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].captureLate, undefined);
+  assert.equal(lines[0].captureLateReason, undefined);
+  assert.match(lines[0].frames[0], /^blocker app\/job\.mjs:10$/);
+  assert.equal(lines[0].pausedAfterMs, 700);
+});
+
+test("capture just after the blocker returned with the heartbeat unmoved is flagged late (captureLateReason)", async () => {
+  // Pause landed 3ms before tick() was ready to run (held 3ms): inspector latency put it right after the blocker, heartbeat still unmoved.
+  const { m, lines, msg } = stallRig({ pauseOffsetMs: 1997 - 3 });
+  assert.equal(msg.late, undefined); // the old heartbeat check does not catch it
+  m.tick();
+  await m.flush();
+  assert.equal(lines[0].captureLate, true);
+  assert.equal(lines[0].captureLateReason, "paused-at-stall-end");
+  assert.equal(lines[0].frames, undefined);
+  assert.equal(lines[0].driftMs, 1900);
+});
+
+test("lateReason: heartbeat-moved wins, old messages without pausedAt stay usable", () => {
+  assert.equal(lateReason({ late: true }, 5000), "heartbeat-moved");
+  assert.equal(lateReason({ stallStartedAt: 1, pausedAfterMs: 10, frames: [] }, 5000), null);
+  assert.equal(lateReason({ pausedAt: 1000, resumedAt: 1004 }, 5000), null);
 });
