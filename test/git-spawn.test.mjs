@@ -117,3 +117,34 @@ test("idea-576: long-budget calls run on their own worker, so a short call's wor
   assert.equal(r.out, "long");
   _resetGitSpawn();
 });
+
+// idea-576: the guard really fires here. A short child that ignores the execFile timeout's SIGTERM never calls back, so its
+// guard (timeoutMs + 5s slack) settles it. That must fail only that call: an in-flight long call (own worker) and an in-flight
+// sibling on the SAME short worker both finish; the short worker is retired (next call gets a fresh one) and terminated once
+// its sibling settles. POSIX only: on win32 the timeout kill is TerminateProcess, so the child can't outlive it and the guard
+// never fires.
+test("idea-576: a short call's guard timeout fails only that call; in-flight long and sibling calls finish, worker recycled when idle", { skip: process.platform === "win32" && "SIGTERM can't be ignored on win32" }, async () => {
+  _resetGitSpawn();
+  const node = process.execPath;
+  // Ignores SIGTERM, self-exits at 7s so nothing is left behind; guard fires at 200ms + 5s.
+  const hung = execOffLoop(node, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 7000)"], { timeoutMs: 200 });
+  const sibling = execOffLoop(node, ["-e", "setTimeout(() => process.stdout.write('sibling'), 6000)"], { timeoutMs: 9_000 }); // short lane, same worker
+  const long = execOffLoop(node, ["-e", "setTimeout(() => process.stdout.write('long'), 6000)"], { timeoutMs: 120_000 }); // like vs restart
+  assert.equal(gitSpawnStats.workerSpawns, 2, "one short worker + one long worker");
+  const t0 = Date.now();
+  const h = await hung;
+  const at = Date.now() - t0;
+  assert.equal(h.ok, false);
+  assert.equal(h.code, null, "guard answer: non-exit failure");
+  assert.ok(at >= 4_500 && at < 6_000, `settled by the guard (~5.2s), not the child (${at}ms)`);
+  // Retired: a new short call goes to a fresh worker while the sibling still runs on the old one.
+  const fresh = await execOffLoop(node, ["-e", "process.stdout.write('fresh')"], { timeoutMs: 5_000 });
+  assert.equal(fresh.out, "fresh");
+  assert.equal(gitSpawnStats.workerSpawns, 3, "the guard retired the short worker");
+  assert.equal(gitSpawnStats.recycled, 0, "not terminated while its sibling call is in flight");
+  const [s, l] = await Promise.all([sibling, long]);
+  assert.deepEqual([s.ok, s.out], [true, "sibling"], "sibling on the guarded worker was not failed");
+  assert.deepEqual([l.ok, l.out], [true, "long"], "in-flight long call was not failed");
+  assert.equal(gitSpawnStats.recycled, 1, "retired worker terminated once idle");
+  _resetGitSpawn();
+});

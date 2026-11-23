@@ -8,7 +8,8 @@
 // REJECTS on non-zero exit, while this caller needs `execFile` with a cwd, non-rejecting { ok, out, code }, and a
 // non-zero exit (merge-base --is-ancestor = 1) as a NORMAL, resolved answer. The worker-lifecycle machinery is copied
 // from that module: one worker, ref'd only while a request is pending, a per-worker pending map so a dead worker's late
-// 'exit' fails only its own requests, and a main-thread guard timer that settles + terminates a wedged worker.
+// 'exit' fails only its own requests, and a main-thread guard timer that fails its own call and retires the worker
+// (terminated once its other in-flight calls settle, idea-576).
 // idea-572: the same worker also runs non-git children via execOffLoop (providers-catalog merged-units git log, restart-request
 // `vs send`/`vs log` calls: loop-lag 11-22 08:23-09:38Z, 34 + 15 stalls on their CreateProcess).
 import { Worker } from "node:worker_threads";
@@ -37,10 +38,11 @@ const workers = { short: null, long: null };
 const laneFor = (timeoutMs) => (timeoutMs > LONG_CALL_MS ? "long" : "short");
 let nextId = 1;
 const pending = new Map(); // id -> { w, resolve, guard }
+const retired = new Set(); // workers a guard took out of rotation; terminated when their last in-flight call settles
 const GUARD_SLACK_MS = 5_000; // the worker's own execFile timer can't fire if its thread is wedged in a sync CreateProcess
 
 /** Worker spawn counter for tests and diagnostics: how many worker threads this module started. */
-export const gitSpawnStats = { workerSpawns: 0, dispatches: 0 }; // dispatches: git children actually posted to the worker (a deduped call adds none)
+export const gitSpawnStats = { workerSpawns: 0, dispatches: 0, recycled: 0 }; // dispatches: git children actually posted to the worker (a deduped call adds none); recycled: guard-retired workers terminated once idle
 
 /** A failed call's answer: never a wrong guess, always "ask git again / keep / null" in the callers' terms. */
 const FAILED = { ok: false, out: "", err: "", code: null, msg: "off-loop worker failed" };
@@ -50,7 +52,10 @@ function settle(id, value) {
   if (!p) return false;
   pending.delete(id);
   clearTimeout(p.guard);
-  if (![...pending.values()].some((q) => q.w === p.w)) p.w.unref(); // idle = no pending call on THIS worker
+  if (![...pending.values()].some((q) => q.w === p.w)) {
+    p.w.unref(); // idle = no pending call on THIS worker
+    if (retired.delete(p.w)) { gitSpawnStats.recycled++; p.w.terminate().catch(() => {}); } // a guard retired it: recycle now that its last call is done
+  }
   p.resolve(value);
   return true;
 }
@@ -58,7 +63,14 @@ function settle(id, value) {
 // Fails only the requests that belong to this worker (a dead worker's late 'exit' must not touch its replacement's).
 function failWorker(w) {
   for (const k of Object.keys(workers)) if (workers[k] === w) workers[k] = null;
+  retired.delete(w); // dead already: nothing left to terminate
   for (const [id, p] of [...pending]) if (p.w === w) settle(id, FAILED);
+}
+
+// idea-576: stop routing new calls to `w` (the next call on its lane gets a fresh worker); settle() terminates it once idle.
+function retire(w) {
+  for (const k of Object.keys(workers)) if (workers[k] === w) workers[k] = null;
+  retired.add(w);
 }
 
 function getWorker(lane = "short") {
@@ -92,10 +104,13 @@ export function execOffLoop(file, args, { cwd, env, timeoutMs = 5000, maxBuffer 
     try {
       w = getWorker(laneFor(timeoutMs));
       const guard = setTimeout(() => {
-        // Wedged worker (e.g. stuck in a sync CreateProcess): fail this call, fail the worker's other calls, replace it.
+        // idea-576: fail THIS call only and retire the worker (new calls get a fresh one); it is terminated once idle. Its
+        // other in-flight calls keep running: if the worker is truly wedged (stuck in a sync CreateProcess) each of them
+        // fails on its own guard within its own budget; if only this child hung (e.g. it ignored the timeout's SIGTERM),
+        // they finish normally instead of being killed by a neighbour's timeout (a 60s `vs send` guard must not fail an
+        // in-flight 120s `vs restart` on the long worker, nor a 5s git call's guard a sibling git call).
+        retire(w);
         settle(id, FAILED);
-        failWorker(w);
-        w.terminate().catch(() => {});
       }, timeoutMs + GUARD_SLACK_MS);
       guard.unref?.();
       pending.set(id, { w, resolve, guard });
@@ -133,9 +148,12 @@ export function _resetGitSpawn() {
   INFLIGHT.clear();
   gitSpawnStats.workerSpawns = 0;
   gitSpawnStats.dispatches = 0;
+  gitSpawnStats.recycled = 0;
   for (const k of Object.keys(workers)) {
     const w = workers[k];
     workers[k] = null;
     if (w) w.terminate().catch(() => {});
   }
+  for (const w of retired) w.terminate().catch(() => {});
+  retired.clear();
 }
