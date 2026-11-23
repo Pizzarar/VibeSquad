@@ -793,15 +793,6 @@ fn normalize_ca_fp(input: &str) -> Option<String> {
     }
 }
 
-/// Constant-time equality for equal-length inputs (the lengths themselves are public: the fingerprint prefix length).
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
-    std::hint::black_box(diff) == 0
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, bytes)
         .as_ref()
