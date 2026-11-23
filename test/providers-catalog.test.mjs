@@ -1095,6 +1095,37 @@ test('usage review: oneShotReviewRun stdin EPIPE resolves ok:false without crash
   assert.match(res.error, /EPIPE/);
 });
 
+// ---- idea-580: cap the spawn-storm list and keep the review prompt off argv ----
+
+test('idea-580: buildUsageReviewPrompt caps the spawn-storm list at 20 with an "(+N more)" tail', () => {
+  const storms = Array.from({ length: 25 }, (_, i) => ({ lane: `lane${i}`, role: 'worker', count: i + 1 }));
+  const prompt = buildUsageReviewPrompt({ totals: { turns: 1 }, spawnStorms: storms }, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.match(prompt, /Spawn storms: lane0\/worker x1; lane1\/worker x2; lane2\/worker x3/);
+  assert.doesNotMatch(prompt, /lane20\/worker x21/);
+  assert.doesNotMatch(prompt, /lane24\/worker x25/);
+  assert.match(prompt, /\(\+5 more\)\./);
+});
+
+test('idea-580: 20 or fewer spawn storms list in full with no "(+N more)" tail', () => {
+  const storms = Array.from({ length: 20 }, (_, i) => ({ lane: `lane${i}`, role: 'worker', count: i + 1 }));
+  const prompt = buildUsageReviewPrompt({ totals: { turns: 1 }, spawnStorms: storms }, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.match(prompt, /lane19\/worker x20/);
+  assert.doesNotMatch(prompt, /more\)/);
+});
+
+test('idea-580: the review prompt (storm list included) spawns over stdin, never argv', async () => {
+  const rec = {};
+  const storms = Array.from({ length: 100 }, (_, i) => ({ lane: `lane${i}`, role: 'worker', count: i + 1 }));
+  const prompt = buildUsageReviewPrompt({ totals: { turns: 1 }, spawnStorms: storms }, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.doesNotMatch(prompt, /lane99\/worker x100/, 'unbounded storm list is capped, not inlined');
+  // Pad past the 32k argv cap to prove the transport carries it regardless of size.
+  const overLimit = prompt + '\n' + 'z'.repeat(33_000);
+  const res = await oneShotReviewRun('claude', ['-p'])({ prompt: overLimit, spawnImpl: stdinSpawn(rec, (c) => { c.stdout.emit('data', 'ok'); c.emit('exit', 0); }) });
+  assert.equal(res.ok, true);
+  assert.equal(rec.stdin, overLimit);
+  assert.ok(!rec.args.some((a) => a.includes(overLimit)), 'prompt never rides argv');
+});
+
 test('usage review: POST runNow only accepts exactly true', async () => {
   const home = tmp();
   const call = async (method, url, body, opts = {}) => {
