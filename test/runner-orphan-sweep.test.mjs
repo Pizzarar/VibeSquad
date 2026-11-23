@@ -3,7 +3,7 @@
 import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -210,7 +210,11 @@ test('ledger race: adds interleaved with in-flight removal writes are never drop
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
 
-test('ledger: a stale async rename that lands after a sync clear() is re-asserted, deterministic (idea-572)', async () => {
+// idea-681: what is on disk right now (null = no file yet), and the files left in home (no temp may linger).
+const onDisk = (home) => { try { return JSON.parse(readFileSync(path.join(home, CHILDREN_FILE), 'utf8')).map((r) => r.pid); } catch { return null; } };
+const leftovers = (home) => readdirSync(home).filter((f) => f !== CHILDREN_FILE);
+
+test('ledger: clear() during an in-flight rename never lets the stale rename land after it; disk only moves forward (idea-681)', async () => {
   const home = tmp();
   const fsp = await import('node:fs/promises');
   let release;
@@ -218,16 +222,67 @@ test('ledger: a stale async rename that lands after a sync clear() is re-asserte
   let renameCalled;
   const renameStarted = new Promise((r) => { renameCalled = r; });
   let first = true;
-  const afs = { writeFile: fsp.writeFile, rm: fsp.rm, rename: async (a, b) => { if (first) { first = false; renameCalled(); await held; } return fsp.rename(a, b); } };
+  const seen = []; // every on-disk state, in order
+  const afs = { writeFile: fsp.writeFile, rm: fsp.rm, rename: async (a, b) => {
+    if (first) { first = false; renameCalled(); await held; }
+    await fsp.rename(a, b);
+    seen.push(onDisk(home));
+  } };
   const ledger = createChildLedger(home, { afs });
   const { EventEmitter } = await import('node:events');
-  ledger.add(Object.assign(new EventEmitter(), { pid: 940001 }), 'node.exe');
-  await renameStarted; // the [940001] rename is issued (past the generation pre-check) and held
-  ledger.clear(); // sync: [] on disk now
-  assert.deepEqual(readChildren(home), []);
-  release(); // the stale [940001] rename lands over the clear
+  ledger.add(Object.assign(new EventEmitter(), { pid: 940001 }), 'node.exe'); // generation 1
+  await renameStarted; // the [940001] rename is issued and held: it is "in the threadpool"
+  ledger.clear(); // generation 2, while that rename is in flight
+  seen.push(onDisk(home));
+  release(); // the [940001] rename lands now
   await ledger.settled();
-  assert.deepEqual(readChildren(home), [], 'the writer noticed its rename was stale and re-wrote the current state');
+  // Old code: clear() wrote [] sync, the held rename put [940001] back, the writer re-wrote [] -> [[], [940001], []].
+  const genOf = (st) => (st === null ? 0 : st.includes(940001) ? 1 : 2);
+  const gens = seen.map(genOf);
+  assert.deepEqual(gens, [...gens].sort((x, y) => x - y), 'on-disk generations never go backwards: ' + JSON.stringify(seen));
+  assert.deepEqual(seen, [null, [940001], []]);
+  assert.deepEqual(onDisk(home), []);
+  assert.deepEqual(leftovers(home), [], 'no temp file left');
+});
+
+test('ledger: clear() with no write in flight is durable on return (sync shutdown path, idea-681)', async () => {
+  const home = tmp();
+  const ledger = createChildLedger(home);
+  const { EventEmitter } = await import('node:events');
+  ledger.add(Object.assign(new EventEmitter(), { pid: 941001 }), 'node.exe');
+  await ledger.settled();
+  assert.deepEqual(onDisk(home), [941001]);
+  ledger.clear();
+  assert.deepEqual(onDisk(home), [], 'written before clear() returned');
+  await ledger.settled();
+  assert.deepEqual(onDisk(home), []);
+  assert.deepEqual(leftovers(home), []);
+});
+
+test('ledger: a spawn burst during each tmp write never skips the rename; every write lands the previous snapshot (idea-681)', async () => {
+  const home = tmp();
+  const fsp = await import('node:fs/promises');
+  const { EventEmitter } = await import('node:events');
+  const mk = (pid) => Object.assign(new EventEmitter(), { pid });
+  const N = 6;
+  let next = 942000;
+  const diskAtWrite = [];
+  let ledger;
+  // Every writeFile sees one more add land while it is in flight: the generation always moves under the writer.
+  const afs = { rm: fsp.rm, rename: fsp.rename, writeFile: async (p, data) => {
+    diskAtWrite.push(onDisk(home)?.length ?? 0);
+    const io = fsp.writeFile(p, data);
+    await null; // the add arrives while the write is in flight (as a spawn would), not re-entrantly inside the call
+    if (next < 942000 + N) ledger.add(mk(next++), 'node.exe');
+    return io;
+  } };
+  ledger = createChildLedger(home, { afs });
+  ledger.add(mk(next++), 'node.exe');
+  await ledger.settled();
+  // Old code skipped the rename whenever gen moved during writeFile: nothing reached disk until the burst ended (all 0).
+  assert.deepEqual(diskAtWrite.slice(0, N), Array.from({ length: N }, (_, i) => i), 'write i finds the snapshot of write i-1 on disk');
+  assert.deepEqual(onDisk(home).sort(), Array.from({ length: N }, (_, i) => 942000 + i));
+  assert.deepEqual(leftovers(home), []);
 });
 
 test('ledger: a failed async write falls back to the sync writer and loses nothing (idea-572)', async () => {
@@ -243,21 +298,66 @@ test('ledger: a failed async write falls back to the sync writer and loses nothi
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
 
-test('ledger: a sync clear() racing an in-flight async write is never undone by the stale rename (idea-572)', async () => {
+test('ledger: clear() while a failed write is cleaning up is carried by the sync fallback; no temp left (idea-681)', async () => {
   const home = tmp();
-  const ledger = createChildLedger(home);
+  const fsp = await import('node:fs/promises');
+  let rmHit; const rmStarted = new Promise((r) => { rmHit = r; });
+  let rmGo; const rmHeld = new Promise((r) => { rmGo = r; });
+  const afs = {
+    writeFile: fsp.writeFile,
+    rename: async () => { throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); },
+    rm: async (p, o) => { rmHit(); await rmHeld; return fsp.rm(p, o); },
+  };
+  const ledger = createChildLedger(home, { afs });
+  const { EventEmitter } = await import('node:events');
+  ledger.add(Object.assign(new EventEmitter(), { pid: 943001 }), 'node.exe');
+  await rmStarted; // the writer is in its catch, awaiting the temp cleanup
+  ledger.clear(); // a writer is in flight: the clear is queued, not written over it
+  assert.equal(onDisk(home), null);
+  rmGo();
+  await ledger.settled();
+  assert.deepEqual(onDisk(home), [], 'the sync fallback wrote the state after clear()');
+  assert.deepEqual(leftovers(home), []);
+});
+
+test('ledger: clear() while the write is held at each stage (tmp write, rename, idle) keeps disk monotonic and ends at [] (idea-572, idea-681)', async () => {
+  const home = tmp();
+  const fsp = await import('node:fs/promises');
+  const seen = [];
+  let gate = null; // { op, started, release } holds the next call to op until released
+  const hold = (op) => { let started; let release; const g = { op, started: new Promise((r) => { started = r; }) }; g.hit = started; g.go = new Promise((r) => { release = r; }); g.release = release; gate = g; return g; };
+  const pass = async (op) => { const g = gate; if (g?.op === op) { gate = null; g.hit(); await g.go; } };
+  const afs = {
+    rm: fsp.rm,
+    writeFile: async (p, data) => { await pass('writeFile'); return fsp.writeFile(p, data); },
+    rename: async (a, b) => { await pass('rename'); await fsp.rename(a, b); seen.push(onDisk(home)); },
+  };
+  const ledger = createChildLedger(home, { afs });
   const { EventEmitter } = await import('node:events');
   const mk = (pid) => Object.assign(new EventEmitter(), { pid });
-  for (let i = 0; i < 30; i++) {
-    ledger.add(mk(930000 + i), 'node.exe'); // starts an async write
-    if (i % 3) await new Promise((r) => setImmediate(r)); // let some writes reach the rename step
-    ledger.clear(); // sync: the file is [] on return
-    assert.deepEqual(readChildren(home), [], 'clear is durable on return (iter ' + i + ')');
+  const stages = ['writeFile', 'rename', 'idle'];
+  for (let i = 0; i < 12; i++) {
+    const stage = stages[i % 3];
+    const base = 931000 + i; const pid = 930000 + i;
+    ledger.add(mk(base), 'node.exe');
+    await ledger.settled(); // disk: [base] (gen 0 of this round), never [] before the clear
+    seen.length = 0;
+    const g = stage === 'idle' ? null : hold(stage);
+    ledger.add(mk(pid), 'node.exe'); // [base, pid] (gen 1)
+    if (g) await g.started; else await ledger.settled();
+    ledger.clear(); // [] (gen 2)
+    const afterClear = onDisk(home);
+    seen.push(afterClear);
+    g?.release();
     await ledger.settled();
-    assert.deepEqual(readChildren(home), [], 'a stale async rename was re-asserted over (iter ' + i + ')');
+    const gens = seen.map((st) => (st.length === 0 ? 2 : st.includes(pid) ? 1 : 0));
+    assert.deepEqual(gens, [...gens].sort((x, y) => x - y), stage + ': never backwards (iter ' + i + '): ' + JSON.stringify(seen));
+    assert.deepEqual(onDisk(home), [], stage + ': settled at [] (iter ' + i + ')');
+    if (stage === 'idle') assert.deepEqual(afterClear, [], 'idle: clear() durable on return');
   }
   const keep = mk(939999);
   ledger.add(keep, 'node.exe');
   await ledger.settled();
-  assert.deepEqual(readChildren(home).map((r) => r.pid), [939999]);
+  assert.deepEqual(onDisk(home), [939999]);
+  assert.deepEqual(leftovers(home), []);
 });

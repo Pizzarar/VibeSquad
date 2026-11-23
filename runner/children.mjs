@@ -126,11 +126,14 @@ export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, ki
 // write+rename in add() blocked the runner loop ~1-5s under AV (loop-lag 2026-11-22 08:23-09:38Z: writeChildren 36 stalls / 47s,
 // 29 of them renameSync <- add <- spawnNoShell). Crash exposure is unchanged: spawn() has already created the child when add()
 // runs, so a hard kill between spawn and a durable ledger was always possible; the async write starts in the same tick and takes
-// the same wall time, it just no longer holds the loop. Ordering: one write in flight at a time, each rename carries a snapshot
-// taken after the previous one, and the writer only stops once the file holds the newest generation (`written === gen`).
-// clear() keeps the sync writer (a shutdown path must not depend on the loop surviving); if an async rename lands after it,
-// `written` drops below `gen` and the writer re-asserts the current state.
-// afs: the async fs ops (test seam: a held rename makes the clear-vs-rename race deterministic).
+// the same wall time, it just no longer holds the loop.
+// idea-681 (idea-576 part 2): the file only moves forward. Exactly one writer touches it at a time: the async writer, or a sync
+// write that runs only while no async op is in flight (clear() when idle, the writer's own error fallback). A sync write issued
+// while an async rename sat in the threadpool used to be undone when that stale rename landed (clear() then rename: the file
+// went back a generation until the writer re-asserted). Each rename carries a snapshot newer than the file's and is never
+// skipped because the generation moved meanwhile (that starved durability during spawn bursts); the loop just writes again
+// until the file holds the newest generation (`written === gen`).
+// afs: the async fs ops (test seam: a held writeFile/rename makes the interleavings deterministic).
 export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}) {
   const entries = new Map();
   let gen = 0; // bumped on every change
@@ -138,23 +141,23 @@ export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}
   let soon = null; // pending coalesced-removal timer
   let writing = null; // the in-flight async writer, if any
   const file = path.join(home, CHILDREN_FILE);
-  const tmp = `${file}.${process.pid}.async.tmp`; // not the sync writer's tmp: the two can overlap; one async writer at a time
+  const tmp = `${file}.${process.pid}.async.tmp`; // distinct from the sync writer's tmp (sweepOrphans uses that one at boot); one async writer at a time
   const snapshot = () => [...entries.values()];
-  // The sync writer (clear, and the async writer's error fallback). It carries every change made so far, so it also cancels a pending timer.
-  const flush = () => { gen++; if (soon) { clearTimeout(soon); soon = null; } writeChildren(home, snapshot()); written = gen; };
+  // The sync writer. Only called while no async op is in flight (`writing` null, or from the writer's own catch after its
+  // ops settled), so no stale rename can land after it. Carries every change made so far, so it also cancels a pending timer.
+  const flush = () => { if (soon) { clearTimeout(soon); soon = null; } const g = gen; writeChildren(home, snapshot()); written = g; };
   const writeAsync = async () => {
     while (written !== gen) {
       const snap = gen;
       try {
-        await afs.writeFile(tmp, JSON.stringify(snapshot()));
-        if (snap !== gen) continue; // changed meanwhile: re-snapshot instead of renaming a stale one into place
-        await afs.rename(tmp, file);
+        await afs.writeFile(tmp, JSON.stringify(snapshot())); // snapshot taken in this tick: it is generation `snap`
+        await afs.rename(tmp, file); // even if gen moved meanwhile: `snap` > written, so this is progress, never a step back
       } catch {
         try { await afs.rm(tmp, { force: true }); } catch { /* ignore */ }
         flush(); // failed (EPERM/EBUSY under AV): never drop records, fall back to the sync writer
         return;
       }
-      written = snap; // the file holds `snap` now, even if a sync flush wrote a newer state just before this rename landed
+      written = snap; // the sole writer: the file holds `snap` now
     }
   };
   const kick = () => {
@@ -170,7 +173,14 @@ export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}
       kick(); // at once: an add is never delayed by the removal coalescing window
       child.once?.('exit', () => { if (entries.delete(child.pid)) { gen++; if (!soon) arm(); } });
     },
-    clear() { entries.clear(); flush(); },
+    // Sync and durable on return when no async write is in flight; otherwise the in-flight writer carries it (a sync write
+    // now could be overwritten by the stale rename already issued). settled() resolves once it is on disk either way.
+    clear() {
+      entries.clear();
+      gen++;
+      if (writing) { if (soon) { clearTimeout(soon); soon = null; } return; }
+      flush();
+    },
     get size() { return entries.size; },
     // Resolves once the file holds every change made before the call (tests, diagnostics). Never rejects.
     async settled() {
