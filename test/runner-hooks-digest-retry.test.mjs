@@ -211,6 +211,25 @@ test('idea-218: the alternate also fails through its retries -> no third digest,
   assert.deepEqual(r.archived, ids, 'each archived exactly once');
 });
 
+test('idea-524: a digest that fails after the watch already forwarded the worker final logs no duplicate UNVERIFIED [done]', async () => {
+  const workerId = 'rn-w-dup';
+  const f = fakeRunner([...EXHAUST, ...EXHAUST], workerId);
+  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { retryBaseMs: 1200 }, pollMs: 20 });
+  f.setHost(host);
+  try {
+    // The watch ping delivered this exact final to the lead before the digest ran.
+    host.dispose.markFinalForwarded('lead-1', workerId, host.dispose.finalHashOf('PASS: built thing'));
+    await host.emit('agent.turn_ended', { agent: await f.backend.getAgent(workerId), turnId: 't1', outcome: { kind: 'completed' } });
+    // Both digests (primary + idea-218 alternate) are archived after their failed retries; the fallback skipped the write.
+    await until(() => f.digestIds().length && f.digestIds().every((id) => f.archived.includes(id)), 30000, 'digest(s) settled');
+    await sleep(400); // anything late (a UNVERIFIED fallback) lands here
+    const entries = teamLog().filter((e) => e.type === 'done' && (e.refs ?? []).includes(workerId));
+    assert.equal(entries.length, 0, 'no duplicate UNVERIFIED [done] for a verdict the watch already forwarded');
+  } finally {
+    host.dispose();
+  }
+});
+
 test('idea-218 L1: a plan/read-only pick is swapped for an executing worker profile on its provider, or skipped when it has none', async () => {
   const { digestCanExecute, executingDigestProfileOn } = await import('../server/hooks/agent-duties.ts');
   assert.equal(digestCanExecute({ modeId: 'plan' }), false);

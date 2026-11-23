@@ -3322,6 +3322,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // idea-207a/M1: re-check right before writing (the awaits above can outlast a digest that logged its verdict): a real
         // verdict already logged for this turn always wins, so one turn never gets both a verdict and an UNVERIFIED entry.
         if (verdictLogged()) return;
+        // idea-524: the watch already forwarded this worker's final verdict (the lead saw it in the completion ping): do not
+        // append a second [done] for the same agent and turn. The durable verdict may be missing, but it was already delivered,
+        // so a late UNVERIFIED would only wake the lead for work it already handled.
+        if (anyFinalForwarded(worker.id, finalHashOf(last))) return;
         appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
           lane,
@@ -3592,6 +3596,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (oldest === undefined) break;
         forwardedFinals.delete(oldest);
       }
+    }
+
+    /**
+     * idea-524: has ANY recipient already received `worker`'s final `hash` (a watch ping or a prior `[done]` relay delivered it)?
+     * The digest's UNVERIFIED fallback must not append a second `[done]` for a verdict the lead already saw, so it skips when
+     * this is true. Reuses the idea-450 `forwardedFinals` dedupe key (`finalHashOf`), scanning across recipients.
+     */
+    function anyFinalForwarded(worker: string, hash: string, now = Date.now()): boolean {
+      const suffix = `\n${worker}\n${hash}`;
+      for (const [key, at] of forwardedFinals) {
+        if (!key.endsWith(suffix)) continue;
+        if (now - at >= FINALS_FORWARDED_TTL_MS) {
+          forwardedFinals.delete(key);
+          continue;
+        }
+        return true;
+      }
+      return false;
     }
 
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
@@ -4779,6 +4801,8 @@ ${detail}` : text, refs: [d.setId] };
           const last = await lastAssistantText(paseo, workerId);
           const text = unverifiedDigestText("orphaned", last, worker);
           if (!text) continue;
+          // idea-524: the watch already forwarded this worker's final verdict: a late orphaned UNVERIFIED is a duplicate, skip it.
+          if (anyFinalForwarded(workerId, finalHashOf(last))) continue;
           appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text, refs: [workerId] });
         }
       } catch (err) {
@@ -4818,6 +4842,10 @@ ${detail}` : text, refs: [d.setId] };
     };
     (dispose as any).scanLogs = scanLogs;
     (dispose as any).watchSets = watch;
+    // idea-524 test hooks: let a test mark a worker's final as already forwarded (as a delivered watch ping would) before a
+    // digest fallback runs, so the idempotent-UNVERIFIED regression path is exercisable without spinning up the watch engine.
+    (dispose as any).finalHashOf = finalHashOf;
+    (dispose as any).markFinalForwarded = markFinalForwarded;
     (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
     (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
     (dispose as any).sweepStaleDigests = sweepStaleDigests;
