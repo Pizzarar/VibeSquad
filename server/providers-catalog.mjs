@@ -389,6 +389,56 @@ const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
   (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
 );
 
+
+// ---- usa-44: unit evidence for implementers that ran in the MAIN checkout (cwd is not a `unit-*` worktree), so the
+// worktree-basename path in attributeImplementer() can't see them. Folded during the existing event fold (no second pass),
+// only for worker runs whose cwd basename is not a unit worktree. Ranked by precision:
+//   1. labels.unit on the run (explicit spawn label)                                     -> st.unitLabel
+//   2. the work order (first input) assigns it: `vs worktree create <u>` / `branch unit-x`  -> st.unitAssigned (Set)
+//   3. the run's own tool calls enter/create it: `cd .../worktrees/<repo>/<u>`, `vs worktree create <u>`,
+//      `git checkout|switch [-b|-c] unit-x`                                              -> st.unitWorked (Map name -> calls)
+const UNIT_REF_CAP = 12;
+const ASSIGN_CREATE_RE = /vs\s+worktree\s+create\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._-]{2,80})/gi;
+const ASSIGN_BRANCH_RE = /\bbranch\s+[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const WORK_PATH_RE = /[\\/]worktrees[\\/][^\\/\s"'`]+[\\/]([A-Za-z0-9][A-Za-z0-9._-]{2,80})(?=[\\/\s"'`;&|)]|$)/gi;
+const WORK_GIT_RE = /\bgit\s+(?:checkout|switch)\s+(?:-[bcB]\s+)?[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const isMainCheckoutWorker = (st) => st.role === "worker" && !/^unit-/i.test(unitNameOfCwd(st.cwd));
+const stripName = (n) => n.replace(/[.,;:)\]]+$/, "").toLowerCase();
+function foldUnitLabel(st, m) {
+  const u = m?.labels?.unit;
+  if (typeof u === "string" && u.trim()) st.unitLabel = u.trim().toLowerCase();
+}
+function foldAssignedUnits(st, text) {
+  if (typeof text !== "string" || !isMainCheckoutWorker(st)) return;
+  const set = (st.unitAssigned ??= new Set());
+  for (const re of [ASSIGN_CREATE_RE, ASSIGN_BRANCH_RE]) {
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(text)) && set.size < UNIT_REF_CAP;) set.add(stripName(m[1]));
+  }
+}
+function foldWorkedUnits(st, input) {
+  if (!isMainCheckoutWorker(st)) return;
+  const cmd = typeof input?.command === "string" ? input.command : (typeof input?.cmd === "string" ? input.cmd : (typeof input === "string" ? input : ""));
+  if (!cmd || cmd.length > 20_000) return;
+  const map = (st.unitWorked ??= new Map());
+  for (const re of [WORK_PATH_RE, ASSIGN_CREATE_RE, WORK_GIT_RE]) {
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(cmd));) {
+      const n = stripName(m[1]);
+      if (map.has(n) || map.size < UNIT_REF_CAP) map.set(n, (map.get(n) ?? 0) + 1);
+    }
+  }
+}
+/** The single unit a main-checkout run is attributed to (never two): label > the work order's one assigned unit > the unique
+ * most-worked unit (>= 2 calls, strictly ahead). A run that spread over several units stays unattributed (no splitting, no guessing). */
+function primaryUnitRef(st) {
+  if (st.unitLabel) return st.unitLabel;
+  if (st.unitAssigned?.size === 1) return [...st.unitAssigned][0];
+  if (st.unitAssigned?.size > 1) return null;
+  const w = st.unitWorked ? [...st.unitWorked].sort((a, b) => b[1] - a[1]) : [];
+  return w.length && w[0][1] >= 2 && (w.length === 1 || w[0][1] > w[1][1]) ? w[0][0] : null;
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -402,6 +452,7 @@ function foldEvent(st, ev) {
     if (ev.cwd !== undefined) st.cwd = ev.cwd;
     if (st.createdAt === undefined && t !== null) st.createdAt = t;
     foldIdentity(st, ev.meta);
+    foldUnitLabel(st, ev.meta);
     if (ev.meta?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "resume") {
     st.restartedOrResumed = true;
@@ -412,6 +463,7 @@ function foldEvent(st, ev) {
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+    foldUnitLabel(st, ev.patch);
     if (ev.patch?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "status") {
     if (t !== null) {
@@ -446,6 +498,7 @@ function foldEvent(st, ev) {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
     st.lastLine = "";
@@ -473,6 +526,7 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "tool") {
     if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
+    else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -974,7 +1028,8 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const rounds = maxR > 0 ? maxR : fixCount;
-    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
+    // usa-44: also the hand-typed "Merge unit-<name>: ..." form some leads used (11-19..11-20); the name is the branch.
+    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(c.subject)?.[1] ?? null;
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
@@ -1223,6 +1278,7 @@ function agentV2(st, agentId) {
     respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
+    unitRef: primaryUnitRef(st),
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1412,12 +1468,27 @@ const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === 
 function indexWorkers(agents) {
   const byUnit = new Map();
   const byLane = new Map();
+  const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
     getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
+    if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
   }
-  return { byUnit, byLane };
+  return { byUnit, byLane, byRef };
+}
+
+/** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
+ * when a run that did exists. One profile -> the earliest created; several profiles -> ambiguous (null), as for the worktree path. */
+function pickImplementer(cands) {
+  const impls = cands.filter(isImplementerWorker);
+  const worked = impls.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : impls;
+  if (pool.length === 1) return pool[0];
+  if (pool.length > 1 && new Set(pool.map((a) => `${a.provider}|${a.profile}`)).size === 1) {
+    return pool.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
+  }
+  return null;
 }
 
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
@@ -1426,18 +1497,21 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
     const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
-    if (cwdMatches.length === 1) return cwdMatches[0];
-    if (cwdMatches.length > 1) {
+    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return cwdMatches[0];
+    if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length === 1) return impls[0];
-      if (impls.length > 1) {
-        const profiles = new Set(impls.map((a) => `${a.provider}|${a.profile}`));
-        if (profiles.size === 1) {
-          return impls.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
-        }
-      }
-      return null; // ambiguous cwd match across different implementer profiles
+      if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
     }
+    // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
+    // (label / work order / tool calls). A unit name merged more than once credits only its earliest merge, so one run's
+    // cost is never counted on two units.
+    const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a));
+    if (refs.length && (index.firstMergeOfName?.get(want) ?? unit.sha) === unit.sha) {
+      const picked = pickImplementer(refs);
+      if (picked) return picked;
+    }
+    if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
+    if (cwdMatches.length > 1) return null;
   }
   if (!unit.lane || mergedAtMs === null) return null;
   const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
@@ -2976,6 +3050,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
   const workerIndex = indexWorkers(agents);
+  workerIndex.firstMergeOfName = new Map(); // usa-44: unit name -> sha of its earliest merge (see attributeImplementer)
+  for (const u of mergedRaw) {
+    const n = typeof u.unit === "string" ? u.unit.toLowerCase() : "";
+    const ms = tsMs(u.mergedAt);
+    if (!n || ms === null) continue;
+    const cur = workerIndex.firstMergeOfName.get(n);
+    if (!cur || ms < cur.ms) workerIndex.firstMergeOfName.set(n, { ms, sha: u.sha });
+  }
+  for (const [n, v] of workerIndex.firstMergeOfName) workerIndex.firstMergeOfName.set(n, v.sha);
   yield;
   const merged = [];
   for (const u of mergedRaw) {
