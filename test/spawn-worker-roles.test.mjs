@@ -2,12 +2,18 @@
 // "Review", "Work Order", "Pre-check", "Art Painter", "Art Director", lowercase "lead") through the real
 // createContext().resolveProfile, label the spawn with the role, and keep old names + aliases on today's findProfile path.
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { verifiedIdentity } from "./helpers/agent-token.mjs";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
+// Host-independent EXP6 state (review r2 M1): an empty temp home (no verdict, no caps) and an end date far out, so the
+// EXP6 pick neither reads the real ~/.vibesquad nor flips when the default end date passes.
+const EMPTY_HOME = mkdtempSync(join(tmpdir(), "spawn-roles-home-"));
 const TEAMS = [{ id: "mx", name: "Matrix", paths: ["matrix"], lanes: [{ id: "feat", name: "Feat" }, { id: "hub", name: "Hub", hub: true }] }];
 
 function ctxFor(identity = { agentId: "rn-bud1", team: "mx", lane: "feat", role: "brainstorm" }) {
@@ -23,7 +29,7 @@ function ctxFor(identity = { agentId: "rn-bud1", team: "mx", lane: "feat", role:
     fetchAgents: async () => ({ entries: [] }),
   };
   const ctx = createContext({
-    env: {},
+    env: { VIBESQUAD_HOME: EMPTY_HOME, VS_EXP6_END: "2999-01-01T00:00:00Z" },
     ...verifiedIdentity(identity, { backend, teams: TEAMS }),
     cwd: "/w",
     teams: TEAMS,
