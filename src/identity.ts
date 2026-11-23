@@ -249,6 +249,23 @@ function matchDynamicPrefixedLane(
   return null;
 }
 
+/**
+ * `pat` occurs in `norm` as whole path segment(s) (both already lowercased, "/"-separated): "vibesquad" matches ".../vibesquad/x"
+ * but not ".../.cache/vibesquad-tmp/x". An absolute pattern ("/x" or "c:/x") anchors at the start of `norm`. Mirrored in
+ * server/identity.mjs and src/identity.ts; keep them identical (idea-709).
+ */
+export function pathHasSegments(norm: string, pat: string): boolean {
+  const p = pat.replace(/\/+$/, "");
+  if (!p) return false;
+  const absolute = p.startsWith("/") || /^[a-z]:\//.test(p);
+  for (let i = norm.indexOf(p); i !== -1; i = absolute ? -1 : norm.indexOf(p, i + 1)) {
+    const before = i === 0 || (!absolute && norm[i - 1] === "/");
+    const after = i + p.length === norm.length || norm[i + p.length] === "/";
+    if (before && after) return true;
+  }
+  return false;
+}
+
 export function matchPathInRegistry(
   cwd: string | null | undefined,
   teams: RegistryTeam[] = DEFAULT_TEAMS,
@@ -260,7 +277,7 @@ export function matchPathInRegistry(
       const lanePaths = Array.isArray(lane.paths) ? lane.paths : [];
       for (const pat of lanePaths) {
         const p = String(pat ?? "").replace(/\\/g, "/").toLowerCase();
-        if (p && norm.includes(p)) {
+        if (p && pathHasSegments(norm, p)) {
           return { team, lane };
         }
       }
@@ -271,7 +288,7 @@ export function matchPathInRegistry(
     for (const pat of teamPaths) {
       const p = String(pat ?? "").replace(/\\/g, "/").toLowerCase();
       // A Squad-level path only names a lane when the Squad has exactly one; never guess lanes[0].
-      if (p && norm.includes(p)) {
+      if (p && pathHasSegments(norm, p)) {
         if (team.lanes?.length === 1) return { team, lane: team.lanes[0] };
         break;
       }
