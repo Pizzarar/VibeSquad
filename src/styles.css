@@ -3988,6 +3988,12 @@ html, body, #root { overflow-x: hidden; }
 .usage-bar-thin { height: 5px; flex: 1; }
 .usage-bar-fill { height: 100%; background: var(--usage-c, var(--cyan)); box-shadow: var(--bevel); border-radius: 999px; }
 .usage-limit-meta { display: flex; justify-content: space-between; gap: var(--sp-2, 8px); color: var(--muted); }
+/* usa-45: stale limit sample (last check > 2h). Dim with --muted, fully opaque; head/tag stay readable. */
+.usage-limit-stale { border-style: dashed; }
+.usage-limit-stale > :not(.usage-limit-head), .usage-limit-stale .usage-limit-pct, .usage-limit-stale .usage-limit-pct small { color: var(--muted); }
+.usage-limit-sampled { font-size: 11px; color: var(--muted); }
+.usage-stale-tag { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px solid var(--amber); border-radius: 999px; background: var(--pastel-amber); color: var(--text); text-transform: uppercase; }
+.usage-stale-tag + .usage-estimate { margin-left: 4px; }
 .usage-eta { color: var(--muted); }
 .usage-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .usage-eta-warn { color: var(--amber-t); }
@@ -6617,8 +6623,3 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tester-bug-err { color: #c0123f; }
 .inbox-tester-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text); border: 1px solid var(--line); background: rgba(47, 191, 113, 0.18); padding: 1px 6px; border-radius: 999px; }
 .tester-body > * { flex: 1; min-height: 0; }
-
-/* usa-45: stale limit sample (last check > 2h). Dim the numbers, keep the head/tag readable. */
-.usage-limit-stale > :not(.usage-limit-head) { opacity: 0.55; }
-.usage-stale-tag { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px solid var(--amber); border-radius: 999px; background: var(--pastel-amber); color: var(--text); text-transform: uppercase; }
-.usage-stale-tag + .usage-estimate { margin-left: 4px; }
