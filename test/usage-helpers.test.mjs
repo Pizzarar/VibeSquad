@@ -528,3 +528,14 @@ test("leadLongTurnRows: waiting row (4 rows) and older server without waiting re
   assert.equal(old.length, 4);
   assert.deepEqual([old[1].key, old[1].turns, old[1].costUsd, old[1].pct], ["waiting", 0, 0, 0]);
 });
+
+test("usa-45: limitIsStale / limitSampledText key off checkedAt with a 2h threshold", async () => {
+  const { limitIsStale, limitSampledText } = await import("../src/usageHelpers.ts");
+  const now = Date.parse("2026-11-23T12:00:00.000Z");
+  assert.equal(limitIsStale("2026-11-23T10:30:00.000Z", now), false);
+  assert.equal(limitIsStale("2026-11-23T09:59:00.000Z", now), true);
+  assert.equal(limitIsStale(null, now), false);
+  assert.equal(limitSampledText("2026-11-23T09:00:00.000Z", now), "sampled 3h 0m ago");
+  assert.equal(limitSampledText(undefined, now), "");
+  assert.equal(limitSampledText("2026-11-23T12:00:30.000Z", now), "sampled 0m ago");
+});
