@@ -2,7 +2,7 @@
 
 Owner-facing setup for the forge (Linux, same specs as the dev pp, on NordVPN Meshnet). Design source of truth:
 `docs/PLAN_FORGE_CUTOVER.md` (Decided, A8, B1-B4). R-numbers refer to rows of `docs/lanes/forge-host/LINUX_AUDIT.md`.
-Placeholders: `<forge mesh ip>` (the forge's Meshnet IPv4), `<forge>.nord` (its Meshnet hostname), `devpc` (the dev pp's SSH alias), `<port>` (default 4180).
+Placeholders: `<forge mesh ip>` (the forge's Meshnet IPv4), `<forge mesh host>` (its Meshnet hostname, as `nordvpn meshnet peer list` shows it), `devpc` (the dev pp's SSH alias), `<port>` (default 4180).
 
 ## B1. Owner steps
 
@@ -49,8 +49,8 @@ the unit is the only launch path.
 
 ## Clients: server_url (Meshnet IP)
 
-Owner clients (VS app, phone, Playtest Overlay addon) pair by IP at `https://<forge mesh ip>:<port>` (the `<forge>.nord` name also works where the client resolves Meshnet names). Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,
-`VIBESQUAD_MESHNET_IP` (`<forge mesh ip>`) and `VIBESQUAD_MESHNET_HOST` (`<forge>.nord`) so the listener binds the Meshnet address
+Owner clients (VS app, phone, Playtest Overlay addon) pair by IP at `https://<forge mesh ip>:<port>` (the `<forge mesh host>` name also works where the client resolves Meshnet names). Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,
+`VIBESQUAD_MESHNET_IP` (`<forge mesh ip>`) and `VIBESQUAD_MESHNET_HOST` (`<forge mesh host>`) so the listener binds the Meshnet address
 and the Host check accepts the IP and name (R7; the server also falls back to the `nordlynx` interface when the env is empty). Pair a device via `/pair?format=json`
 and check `/pair/status`.
 
