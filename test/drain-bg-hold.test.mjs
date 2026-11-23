@@ -286,7 +286,7 @@ function loopWorld(home, { setFails = false } = {}) {
   });
   return w;
 }
-const openRequest = (home, extra = {}) => rr.createRestartRequest(home, { tip: TIP, requestedBy: "rn-ove", team: "vibesquad", lane: "vibesquad", now: T0, ...extra });
+const openRequest = (home, extra = {}) => rr.createRestartRequest(home, { tip: TIP, requestedBy: "rn-ove", team: "vibesquad", lane: "vibesquad", urgent: true, now: T0, ...extra }); // idea-674: immediate (urgent) path
 function writeResult(home, startMs, rec) {
   const at = new Date(startMs).toISOString();
   writeFileSync(path.join(home, `restart-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: at, finishedAt: at, dryRun: false, errors: [], ...rec }));
@@ -335,6 +335,7 @@ test("(1) requestHoldsDrain: open yes; firing only until launch and never past t
   const now = T0;
   assert.equal(rr.requestHoldsDrain(null, now), false);
   for (const state of ["requested", "draining", "ready"]) assert.equal(rr.requestHoldsDrain({ state }, now), true, state);
+  assert.equal(rr.requestHoldsDrain({ state: "queued", windowAt: new Date(now - 1).toISOString() }, now), false, "idea-674: queued never holds, even past its window");
   for (const state of ["done", "aborted"]) assert.equal(rr.requestHoldsDrain({ state }, now), false, state);
   const fired = { state: "firing", firedAt: new Date(now).toISOString() };
   assert.equal(rr.requestHoldsDrain(fired, now + MIN), true, "fired, launch not recorded yet");
