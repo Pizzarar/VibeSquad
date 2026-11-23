@@ -406,12 +406,15 @@ const isMainCheckoutWorker = (st) => st.role === "worker" && !/^unit-/i.test(uni
 const stripName = (n) => n.replace(/[.,;:)\]]+$/, "").toLowerCase();
 function foldUnitLabel(st, m) {
   const u = m?.labels?.unit;
-  if (typeof u === "string" && u.trim()) st.unitLabel = u.trim().toLowerCase();
+  // gated like the other signals (usa-44 R1 M2): a run that already owns a worktree cwd must not also claim a label unit
+  if (typeof u === "string" && u.trim() && isMainCheckoutWorker(st)) st.unitLabel = u.trim().toLowerCase();
 }
 function foldAssignedUnits(st, text) {
   if (typeof text !== "string" || !isMainCheckoutWorker(st)) return;
-  const set = (st.unitAssigned ??= new Set());
-  for (const re of [ASSIGN_CREATE_RE, ASSIGN_BRANCH_RE]) {
+  // `vs worktree create <u>` is an explicit assignment (strong); `branch unit-x` also matches prose ("branch unit-x is already
+  // merged"), so it is only a mention (weak): usa-44 R1 M3.
+  for (const [re, key] of [[ASSIGN_CREATE_RE, "unitAssigned"], [ASSIGN_BRANCH_RE, "unitMentioned"]]) {
+    const set = (st[key] ??= new Set());
     re.lastIndex = 0;
     for (let m; (m = re.exec(text)) && set.size < UNIT_REF_CAP;) set.add(stripName(m[1]));
   }
@@ -421,22 +424,32 @@ function foldWorkedUnits(st, input) {
   const cmd = typeof input?.command === "string" ? input.command : (typeof input?.cmd === "string" ? input.cmd : (typeof input === "string" ? input : ""));
   if (!cmd || cmd.length > 20_000) return;
   const map = (st.unitWorked ??= new Map());
+  const inCall = new Set(); // L1: one call counts a unit once, however often the command repeats its path
   for (const re of [WORK_PATH_RE, ASSIGN_CREATE_RE, WORK_GIT_RE]) {
     re.lastIndex = 0;
-    for (let m; (m = re.exec(cmd));) {
-      const n = stripName(m[1]);
-      if (map.has(n) || map.size < UNIT_REF_CAP) map.set(n, (map.get(n) ?? 0) + 1);
-    }
+    for (let m; (m = re.exec(cmd));) inCall.add(stripName(m[1]));
+  }
+  for (const n of inCall) {
+    if (map.has(n) || map.size < UNIT_REF_CAP) map.set(n, (map.get(n) ?? 0) + 1);
+    else st.unitWorkedOverflow = true; // L2: a dropped unit means the tallies are no longer a trustworthy ranking
   }
 }
-/** The single unit a main-checkout run is attributed to (never two): label > the work order's one assigned unit > the unique
- * most-worked unit (>= 2 calls, strictly ahead). A run that spread over several units stays unattributed (no splitting, no guessing). */
+/** The single unit a main-checkout run is attributed to (never two): label > the work order's one `worktree create` unit > the
+ * unique most-worked unit (>= 2 calls, strictly ahead, no overflow). A unit only mentioned as `branch unit-x` in the work order
+ * counts when the tool calls don't point elsewhere. A run that spread over several units stays unattributed (no splitting, no guessing). */
 function primaryUnitRef(st) {
   if (st.unitLabel) return st.unitLabel;
   if (st.unitAssigned?.size === 1) return [...st.unitAssigned][0];
   if (st.unitAssigned?.size > 1) return null;
-  const w = st.unitWorked ? [...st.unitWorked].sort((a, b) => b[1] - a[1]) : [];
-  return w.length && w[0][1] >= 2 && (w.length === 1 || w[0][1] > w[1][1]) ? w[0][0] : null;
+  const w = st.unitWorked && !st.unitWorkedOverflow ? [...st.unitWorked].sort((a, b) => b[1] - a[1]) : [];
+  const worked = w.length && w[0][1] >= 2 && (w.length === 1 || w[0][1] > w[1][1]) ? w[0][0] : null;
+  if (st.unitMentioned?.size > 1) return null;
+  if (st.unitMentioned?.size === 1) {
+    const m = [...st.unitMentioned][0];
+    if (st.unitWorkedOverflow) return null;
+    return !worked || worked === m ? m : null; // tool calls disagree with the prose mention -> ambiguous
+  }
+  return worked;
 }
 
 function foldEvent(st, ev) {
@@ -1503,12 +1516,20 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
       if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
     }
     // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
-    // (label / work order / tool calls). A unit name merged more than once credits only its earliest merge, so one run's
-    // cost is never counted on two units.
-    const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a));
-    if (refs.length && (index.firstMergeOfName?.get(want) ?? unit.sha) === unit.sha) {
-      const picked = pickImplementer(refs);
+    // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
+    // Squad) that is not before the run was created, so a later follow-up run is never credited to an earlier merge (R1 M1).
+    const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !index.mergedNames?.has(unitNameOfCwd(a.cwd)) // a run whose own worktree is a merged unit is owned by the byUnit path
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (refs.length) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = refs.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
       if (picked) return picked;
+      return null; // evidence names this unit but another merge owns it (or it is ambiguous): never fall back to the lane guess (R1 M2)
     }
     if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
     if (cwdMatches.length > 1) return null;
@@ -3050,15 +3071,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
   const workerIndex = indexWorkers(agents);
-  workerIndex.firstMergeOfName = new Map(); // usa-44: unit name -> sha of its earliest merge (see attributeImplementer)
+  workerIndex.mergesByName = new Map(); // usa-44: `${squad}|${unit name}` -> merges ascending by time (see attributeImplementer)
+  workerIndex.mergedNames = new Set(); // lowercase names of every merged unit
   for (const u of mergedRaw) {
     const n = typeof u.unit === "string" ? u.unit.toLowerCase() : "";
     const ms = tsMs(u.mergedAt);
     if (!n || ms === null) continue;
-    const cur = workerIndex.firstMergeOfName.get(n);
-    if (!cur || ms < cur.ms) workerIndex.firstMergeOfName.set(n, { ms, sha: u.sha });
+    workerIndex.mergedNames.add(n);
+    getOrSet(workerIndex.mergesByName, `${u.squad ?? ""}|${n}`, () => []).push({ ms, sha: u.sha });
   }
-  for (const [n, v] of workerIndex.firstMergeOfName) workerIndex.firstMergeOfName.set(n, v.sha);
+  for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
   const merged = [];
   for (const u of mergedRaw) {

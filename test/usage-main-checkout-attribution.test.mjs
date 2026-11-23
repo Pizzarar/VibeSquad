@@ -147,3 +147,70 @@ test('usa-44 fold is bounded and cheap: only main-checkout workers record refs, 
   assert.equal(u.m1.implementerAgentId, null);
   assert.equal(typeof usageTestHooks.attributeImplementer, 'function');
 });
+
+// ---- usa-44 R1 (Review-Gemini FAIL 0/3/2 679c09fe)
+test('usa-44 R1 M1: a follow-up run spawned after the first merge is credited to the later merge, not the earlier one', () => {
+  const h = home({
+    'rn-1': mainRun({ ts: T0, cost: 1, labels: { unit: 'unit-foo' } }),
+    'rn-2': mainRun({ ts: T0 + 10_000_000, cost: 2, labels: { unit: 'unit-foo' } }),
+  });
+  const u = unitsOf(usage(h, [merge('m2', 'unit-foo', T0 + 20_000_000), merge('m1', 'unit-foo', T0 + 3_600_000)]));
+  assert.equal(u.m1.implementerAgentId, 'rn-1', 'the run that existed at the first merge');
+  assert.equal(u.m2.implementerAgentId, 'rn-2', 'the follow-up run, created after the first merge');
+});
+
+test('usa-44 R1 M1: a same-named unit in another Squad does not claim the earlier merge', () => {
+  const idx = usageTestHooks.attributeImplementer;
+  const agent = { agentId: 'rn-x', role: 'worker', profile: 'Implement - Sonnet', provider: 'claude', turns: 1, createdAt: T0, cwd: MAIN, lane: 'l', team: null, unitRef: 'unit-dup' };
+  const index = { byUnit: new Map(), byLane: new Map(), byRef: new Map([['unit-dup', [agent]]]), mergesByName: new Map([['a|unit-dup', [{ ms: T0 + 1, sha: 'sa' }]], ['b|unit-dup', [{ ms: T0 + 2, sha: 'sb' }]]]), mergedNames: new Set(['unit-dup']) };
+  assert.equal(idx({ unit: 'unit-dup', sha: 'sb', squad: 'b', mergedAt: new Date(T0 + 2).toISOString(), lane: null }, [agent], index), agent, 'Squad b merge not blocked by Squad a');
+});
+
+test('usa-44 R1 M2: a second merge of the label unit does NOT fall through to the lane guess when the run is the lane\'s only worker', () => {
+  const h = home({ 'rn-a': mainRun({ cost: 9, labels: { unit: 'unit-twice' } }) }); // no decoy: the lane fallback would hit
+  const u = unitsOf(usage(h, [merge('m2', 'unit-twice', T0 + 7_200_000), merge('m1', 'unit-twice', T0 + 3_600_000)]));
+  assert.equal(u.m1.implementerAgentId, 'rn-a');
+  assert.equal(u.m2.implementerAgentId, null);
+});
+
+test('usa-44 R1 M2: a worktree-cwd run carrying a different labels.unit is not also credited to that unit', () => {
+  const wt = ev([
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/wt/VibeSquad/unit-alpha', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'sonnet', unit: 'unit-beta' } } },
+    { ts: T0 + 5000, type: 'turn_done', costUsd: 4, usage: { inputTokens: 1, outputTokens: 1 } },
+  ]);
+  const h = home({ 'rn-wt': wt, 'rn-decoy': mainRun({ ts: T0 + 10_000, cost: 1, labels: { unit: 'unit-decoy' } }) });
+  const u = unitsOf(usage(h, [merge('m1', 'unit-alpha', T0 + 3_600_000), merge('m2', 'unit-beta', T0 + 3_700_000)]));
+  assert.equal(u.m1.implementerAgentId, 'rn-wt');
+  assert.notEqual(u.m2.implementerAgentId, 'rn-wt');
+});
+
+test('usa-44 R1 M3: a passing "branch unit-x" mention does not override what the tool calls worked on', () => {
+  const cd = (n) => `cd /w/worktrees/VibeSquad/${n} && npm test`;
+  const h = home({
+    'rn-a': mainRun({ cost: 5, input: 'Branch `unit-old` is already merged; implement the new thing.', tools: [cd('unit-new'), cd('unit-new'), cd('unit-new')] }),
+    'rn-decoy': mainRun({ ts: T0 + 10_000, cost: 1, labels: { unit: 'unit-decoy' } }),
+  });
+  const u = unitsOf(usage(h, [merge('m1', 'unit-old', T0 + 3_600_000), merge('m2', 'unit-new', T0 + 3_700_000)]));
+  assert.equal(u.m1.implementerAgentId, null, 'prose mention loses to tool-call evidence');
+  assert.equal(u.m2.implementerAgentId, null, 'disagreement is ambiguous, not guessed');
+  // agreement is fine
+  const h2 = home({ 'rn-a': mainRun({ cost: 5, input: 'Work on branch `unit-new`.', tools: [cd('unit-new'), cd('unit-new')] }), 'rn-decoy': mainRun({ ts: T0 + 10_000, cost: 1, labels: { unit: 'unit-decoy' } }) });
+  assert.equal(unitsOf(usage(h2, [merge('m2', 'unit-new', T0 + 3_700_000)])).m2.implementerAgentId, 'rn-a');
+});
+
+test('usa-44 R1 L1: one call repeating a unit path counts once (a single diff is not two calls)', () => {
+  const h = home({
+    'rn-a': mainRun({ cost: 5, tools: ['diff /w/worktrees/VibeSquad/unit-foo/a /w/worktrees/VibeSquad/unit-foo/b'] }),
+    'rn-decoy': mainRun({ ts: T0 + 10_000, cost: 1, labels: { unit: 'unit-decoy' } }),
+  });
+  assert.equal(unitsOf(usage(h, [merge('m1', 'unit-foo', T0 + 3_600_000)])).m1.implementerAgentId, null);
+});
+
+test('usa-44 R1 L2: overflowing the unit cap voids the tool-call ranking instead of picking an early unit', () => {
+  const cd = (n) => `cd /w/worktrees/VibeSquad/${n} && ls`;
+  const tools = [cd('unit-n0'), cd('unit-n0'), ...Array.from({ length: 11 }, (_, i) => cd(`unit-n${i + 1}`)), ...Array.from({ length: 30 }, () => cd('unit-late'))];
+  const h = home({ 'rn-a': mainRun({ cost: 5, tools }), 'rn-decoy': mainRun({ ts: T0 + 10_000, cost: 1, labels: { unit: 'unit-decoy' } }) });
+  const u = unitsOf(usage(h, [merge('m1', 'unit-n0', T0 + 3_600_000), merge('m2', 'unit-late', T0 + 3_700_000)]));
+  assert.equal(u.m1.implementerAgentId, null);
+  assert.equal(u.m2.implementerAgentId, null);
+});
