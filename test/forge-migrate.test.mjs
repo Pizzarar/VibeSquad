@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ALLOWLIST, LARGE_UNTRACKED_BYTES, WIP_NS, backup, buildPathMap, bundleFlagged, main, migrate, parseArgs, rewriteJsonText, rewriteJsonlText,
-  rewriteString, rewriteText, unpushedReport,
+  ALLOWLIST, LARGE_UNTRACKED_BYTES, WIP_NS, backup, buildPathMap, bundleFlagged, devpcInventory, main, migrate, parseArgs, planUntracked,
+  rewriteJsonText, rewriteJsonlText, rewriteString, rewriteText, unpushedReport,
 } from "../scripts/forge-migrate.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/forge-migrate.mjs", import.meta.url));
@@ -205,7 +205,8 @@ describe("migrate", () => {
     assert.equal(main(["--bogus"], out.log, out.err), 2);
     assert.equal(main(["--from", home], out.log, out.err), 2);
     assert.equal(main(["--from", join(home, "nope"), "--to", tmp("x"), "--win-user", "u", "--forge-home", "/h"], out.log, out.err), 1);
-    assert.deepEqual(parseArgs(["--from=a", "--dry-run", "--to", "b"]), { dryRun: true, force: false, json: false, unpushedReport: false, bundle: false, help: false, from: "a", to: "b" });
+    assert.deepEqual(parseArgs(["--from=a", "--dry-run", "--to", "b"]), { dryRun: true, force: false, json: false, unpushedReport: false, bundle: false, devpcInventory: false, help: false, from: "a", to: "b" });
+    assert.deepEqual(parseArgs(["--skip-bundle", "a", "--skip-bundle=b:c", "--keep", "k"]).skipBundle, ["a", "b:c"]);
   });
 
   test("the script never deletes: no delete calls in its source, source hash unchanged after every mode", () => {
@@ -386,7 +387,7 @@ describe("unpushed report", () => {
       { name: "unit-work", ahead: 1, owner: "Demo/work" },
     ]);
     const out = quiet();
-    assert.equal(main(["--unpushed-report", "--sanctuary", fx.sanctuary], out.log, out.err), 0);
+    assert.equal(main(["--unpushed-report", "--sanctuary", fx.sanctuary, "--win-projects", tmp("noproj")], out.log, out.err), 0);
     const last = JSON.parse(out.lines.at(-1));
     assert.deepEqual([last.unpushedBranches, last.stashes, last.dirty, last.detached, last.notGit, last.safeToDelete], [2, 1, 1, 1, 1, false]);
     assert.match(out.lines.join("\n"), /as of the last fetch/);
@@ -453,12 +454,12 @@ describe("bundle", () => {
     assert.equal(dry.entries.length, 3);
     assert.equal(existsSync(dryDir), false);
     const out = quiet();
-    assert.equal(main(["--bundle", "--sanctuary", fx.sanctuary], out.log, out.err), 2);
+    assert.equal(main(["--bundle", "--sanctuary", fx.sanctuary, "--win-projects", tmp("noproj")], out.log, out.err), 2);
 
     const home = makeHome();
     const homeHash = treeHash(home);
     const bak = tmp("bak-bundle");
-    const code = main(["--from", home, "--backup", bak, "--bundle", "--sanctuary", fx.sanctuary], out.log, out.err, { now: NOW });
+    const code = main(["--from", home, "--backup", bak, "--bundle", "--sanctuary", fx.sanctuary, "--win-projects", tmp("noproj")], out.log, out.err, { now: NOW });
     assert.equal(code, 0, out.lines.join("\n"));
     assert.equal(treeHash(home), homeHash);
     const ext = process.platform === "win32" ? "zip" : "tar.gz";
@@ -468,5 +469,118 @@ describe("bundle", () => {
     for (const b of ["Demo__work.bundle", "Demo__det.bundle", "Demo__repo.bundle", "manifest.json"]) assert.ok(names.includes(`vibesquad-bundles-${STAMP}/${b}`), b);
     assert.ok(names.includes("teams.json"));
     assert.match(out.lines.join("\n"), /backup: files=\d+ bundles=4 .*archived=/);
+  });
+});
+
+describe("main checkouts, untracked tar, --skip-bundle, --devpc-inventory", () => {
+  const NOW = new Date("2026-01-02T03:04:05.006Z");
+  const STAMP = "2026-01-02T03-04-05-006Z";
+
+  /**
+   * makeSanctuary + work in the main checkout Demo: branch main-feature (1 unpushed commit) checked out, untracked
+   * notes.txt, ignored docs/brainstorm/x.md, node_modules/pkg/index.js and app.exe (via .git/info/exclude). Plus a
+   * second clone Site under the projects dir (fx.base) with an unpushed branch, and a plain folder Scratch.
+   */
+  function makeMainWork() {
+    const fx = makeSanctuary();
+    g(["checkout", "-q", "-b", "main-feature"], fx.repo);
+    writeFileSync(join(fx.repo, "main.txt"), "main work\n");
+    g(["add", "main.txt"], fx.repo);
+    g(["commit", "-q", "-m", "main unpushed"], fx.repo);
+    writeFileSync(join(fx.repo, ".git", "info", "exclude"), "docs/brainstorm/\nnode_modules/\n*.exe\n");
+    put(fx.repo, "notes.txt", "untracked notes\n");
+    put(fx.repo, "docs/brainstorm/x.md", "ignored brainstorm\n");
+    put(fx.repo, "node_modules/pkg/index.js", "module.exports = 1;\n");
+    put(fx.repo, "app.exe", "MZ");
+    const site = join(fx.base, "Site");
+    execFileSync("git", ["clone", "-q", fx.origin, site], { windowsHide: true });
+    g(["checkout", "-q", "-b", "site-old"], site);
+    g(["commit", "-q", "--allow-empty", "-m", "site old"], site);
+    g(["checkout", "-q", "master"], site);
+    mkdirSync(join(fx.base, "Scratch"));
+    return { ...fx, site };
+  }
+
+  test("untracked plan includes ignored docs, leaves out denylisted dirs and binaries; read-only", () => {
+    const fx = makeMainWork();
+    const hash = treeHash(fx.repo);
+    const u = planUntracked(fx.repo);
+    assert.deepEqual(u.files.sort(), ["docs/brainstorm/x.md", "notes.txt"]);
+    assert.deepEqual(u.skipped.map((k) => `${k.path}:${k.reason}`).sort(), ["app.exe:denylist", "node_modules/:denylist"]);
+    assert.equal(treeHash(fx.repo), hash);
+  });
+
+  test("--bundle covers main checkouts under --win-projects: unpushed branch + WIP bundle, untracked tar, manifest", () => {
+    const fx = makeMainWork();
+    const before = { refs: refsOf(fx.repo), status: g(["status", "--porcelain=v2", "--untracked-files=all", "--ignored"], fx.repo) };
+    const report = unpushedReport({ sanctuary: fx.sanctuary, winProjects: fx.base });
+    assert.deepEqual(report.items.filter((i) => i.main).map((i) => i.path).sort(), ["projects/Demo", "projects/Site"]);
+    assert.equal(report.checkouts, 2);
+    const dir = join(tmp("main-bundles"), "out");
+    const s = bundleFlagged(report, { bundleDir: dir }, { now: NOW });
+    assert.equal(refsOf(fx.repo), before.refs);
+    assert.equal(g(["status", "--porcelain=v2", "--untracked-files=all", "--ignored"], fx.repo), before.status);
+    assert.equal(s.failed, 0, JSON.stringify([s.entries, s.checkouts]));
+    const files = readdirSync(dir).sort();
+    for (const f of ["Demo__main.bundle", "Demo__untracked.tar", "Site__repo.bundle", "manifest.json"]) assert.ok(files.includes(f), `${f} in ${files}`);
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    const demo = manifest.checkouts.find((c) => c.path === "projects/Demo");
+    assert.deepEqual([demo.bundle, demo.untrackedTar, demo.fileCount], ["Demo__main.bundle", "Demo__untracked.tar", 2]);
+    assert.ok(demo.skipped.some((k) => k.path === "node_modules/" && k.reason === "denylist"));
+    const tarBin = process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
+    const names = execFileSync(tarBin, ["-tf", join(dir, "Demo__untracked.tar")], { windowsHide: true }).toString().split(/\r?\n/).filter(Boolean);
+    assert.ok(names.includes("docs/brainstorm/x.md"), names.join(","));
+    assert.ok(!names.some((n) => n.includes("node_modules") || n.endsWith(".exe")), names.join(","));
+    // Restore: the main checkout's unpushed branch and its WIP (untracked non-ignored notes.txt, not the ignored doc).
+    const r = join(tmp("restore-main"), "r");
+    execFileSync("git", ["clone", "-q", fx.origin, r], { windowsHide: true });
+    g(["fetch", "-q", join(dir, "Demo__main.bundle"), "refs/*:refs/restored/*"], r);
+    assert.equal(g(["show", "refs/restored/heads/main-feature:main.txt"], r), "main work\n");
+    const wip = `refs/restored/vs-migrate-wip/Demo/Demo/${STAMP}/wip`;
+    assert.equal(g(["show", `${wip}:notes.txt`], r), "untracked notes\n");
+    assert.throws(() => g(["cat-file", "-e", `${wip}:docs/brainstorm/x.md`], r));
+    g(["fetch", "-q", join(dir, "Site__repo.bundle"), "refs/*:refs/restored-site/*"], r);
+    assert.match(g(["log", "-1", "--format=%s", "refs/restored-site/heads/site-old"], r), /site old/);
+  });
+
+  test("--skip-bundle <repo>:<branch> and <repo> are honoured and listed as skipped-by-owner", () => {
+    const fx = makeMainWork();
+    const report = unpushedReport({ sanctuary: fx.sanctuary, winProjects: fx.base });
+    const a = bundleFlagged(report, { bundleDir: join(tmp("skip"), "b"), dryRun: true, skipBundle: ["site:site-old", "Demo:unit-work"] });
+    assert.ok(!a.entries.some((e) => e.repo === "Site"), "Site bundle planned");
+    assert.ok(!a.entries.some((e) => e.worktree === "Demo/work"), "Demo/work bundle planned");
+    assert.ok(a.entries.some((e) => e.worktree === "projects/Demo"));
+    assert.deepEqual(a.skippedByOwner.map((k) => `${k.repo}:${k.branch}${k.worktree ? `@${k.worktree}` : ""}`).sort(), ["Demo:unit-work", "Demo:unit-work@Demo/work", "Site:site-old"]);
+    const dir = join(tmp("skip-real"), "b");
+    const b = bundleFlagged(report, { bundleDir: dir, skipBundle: ["Demo"] }, { now: NOW });
+    assert.ok(b.entries.every((e) => e.repo !== "Demo"));
+    assert.ok(b.checkouts.every((c) => c.repo !== "Demo"));
+    assert.ok(!readdirSync(dir).some((f) => f.startsWith("Demo__")));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    assert.deepEqual(manifest.skippedByOwner.map((k) => [k.repo, k.branch, k.reason]), [["Demo", null, "skipped-by-owner"]]);
+  });
+
+  test("--devpc-inventory: read-only, proposes keep for --keep and the default keep names, delete otherwise", () => {
+    const fx = makeMainWork();
+    const hash = treeHash(fx.base);
+    const vs = tmp("vsdata");
+    put(vs, "runtime/x.txt", "x");
+    const s = devpcInventory({ winProjects: fx.base, keep: ["site"], vsData: [join(vs, "runtime")] });
+    assert.equal(treeHash(fx.base), hash);
+    const by = Object.fromEntries(s.rows.map((r) => [r.name, r]));
+    assert.equal(by.Site.proposal, "keep");
+    assert.equal(by.Site.reason, "--keep");
+    assert.deepEqual(by.Site.localOnlyBranches, [{ name: "site-old", ahead: 1 }]);
+    assert.equal(by.Demo.proposal, "delete");
+    assert.equal(by.Demo.git, true);
+    assert.equal(by.Demo.untrackedDocs, 1);
+    assert.ok(by.Demo.dirty >= 1);
+    assert.equal(by.Scratch.git, false);
+    assert.equal(by.runtime.kind, "vs-data");
+    assert.equal(by.runtime.bytes, 1);
+    const out = quiet();
+    assert.equal(main(["--devpc-inventory", "--win-projects", fx.base, "--keep", "Demo", "--vs-data", join(vs, "runtime")], out.log, out.err), 0);
+    assert.match(out.lines.join("\n"), /keep\s+.*\bDemo\b/);
+    assert.match(out.lines.at(-1), /^inventory: dirs=\d+ .*keep=1 /);
   });
 });

@@ -9,8 +9,10 @@
 //        [--win-user <u> | --win-home <C:\Users\u>] [--win-localappdata <dir>]
 //        [--forge-home <dir>] [--projects-root <dir>] [--vs-home-root <dir>] [--worktrees-root <dir>]
 //   node scripts/forge-migrate.mjs --from <home> --backup <dir> [--bundle] [--dry-run]  (archive of the FULL home)
-//   node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--json]       (read-only git report)
-//   node scripts/forge-migrate.mjs --bundle --bundle-dir <dir> [--sanctuary <dir>]      (git bundles of unpushed work)
+//   node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--win-projects <dir>] [--json]  (read-only)
+//   node scripts/forge-migrate.mjs --bundle --bundle-dir <dir> [--sanctuary <dir>] [--win-projects <dir>]
+//        [--skip-bundle <repo>[:<branch>]]...                                         (git bundles of unpushed work)
+//   node scripts/forge-migrate.mjs --devpc-inventory [--win-projects <dir>] [--keep <name>]... [--vs-data <dir>]...
 //
 // Migrate (allowlist): copies only ALLOWLIST below; every other top-level entry is printed as "left behind" with its
 // size, so nothing drops silently. The forge keeps its own identity (FORGE_OWNED is never copied). JSON / JSONL / .md /
@@ -45,8 +47,17 @@
 // --bundle: for the same branch set, one thin bundle per worktree (`<repo>__<worktree>.bundle`: branches checked out in
 // or named after it, a detached HEAD, and a WIP commit of its dirty tree that exists only in the bundle), one per repo
 // (`<repo>__repo.bundle`: unpushed branches no worktree owns, and every stash entry), `git bundle verify` on each,
-// and manifest.json. Bundle dir: --bundle-dir, else <backup>/vibesquad-bundles-<ts>; never inside the source home or
-// the sanctuary.
+// and manifest.json. Bundle dir: --bundle-dir, else <backup>/vibesquad-bundles-<ts>; never inside the source home, the
+// sanctuary or a main checkout.
+// Main checkouts (report and bundle): every git dir directly under --win-projects (CLI default <home>/projects) and the
+// main worktree of each sanctuary repo get the same treatment (`<repo>__main.bundle`: their checked-out unpushed branch
+// + WIP), plus `<repo>__untracked.tar`: `git ls-files --others` WITHOUT --exclude-standard (ignored files included:
+// docs/brainstorm etc.), minus denylisted dirs by path segment (node_modules, dist, .godot, .import, build, export(s),
+// .tmp*) and *.pck / *.exe, files over 50 MB skipped; docs/** always goes in unless a file is over 200 MB. Every skip is
+// in manifest.json `checkouts[].skipped`. --skip-bundle <repo> / <repo>:<branch> (owner-delete work) leaves those out
+// and lists them in manifest.json `skippedByOwner`.
+// --devpc-inventory (read-only): each folder under --win-projects and the VS data dirs with size, git, local-only
+// branches, dirty and untracked+ignored doc counts, and a proposed keep / delete / review (keep: DEFAULT_KEEP + --keep).
 import { spawnSync } from "node:child_process";
 import {
   closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync,
@@ -67,13 +78,15 @@ const UNMAPPED_CAP = 50;
 const FORGE_HOME_PLACEHOLDER = "/home/<forge-user>";
 
 // ---------------------------------------------------------------- args
-const VALUE_FLAGS = ["from", "to", "backup", "sanctuary", "bundle-dir", "win-user", "win-home", "win-localappdata", "forge-home", "projects-root", "vs-home-root", "worktrees-root"];
-const BOOL_FLAGS = { "dry-run": "dryRun", force: "force", json: "json", "unpushed-report": "unpushedReport", bundle: "bundle", help: "help" };
+const VALUE_FLAGS = ["from", "to", "backup", "sanctuary", "bundle-dir", "win-user", "win-home", "win-localappdata", "forge-home", "projects-root", "vs-home-root", "worktrees-root", "win-projects"];
+/** Repeatable: each use appends to an array (the key exists only when the flag was given). */
+const LIST_FLAGS = { "skip-bundle": "skipBundle", keep: "keep", "vs-data": "vsData" };
+const BOOL_FLAGS = { "dry-run": "dryRun", force: "force", json: "json", "unpushed-report": "unpushedReport", bundle: "bundle", "devpc-inventory": "devpcInventory", help: "help" };
 
 const camel = (s) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 
 export function parseArgs(argv) {
-  const out = { dryRun: false, force: false, json: false, unpushedReport: false, bundle: false, help: false };
+  const out = { dryRun: false, force: false, json: false, unpushedReport: false, bundle: false, devpcInventory: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h") { out.help = true; continue; }
@@ -82,10 +95,11 @@ export function parseArgs(argv) {
     if (name in BOOL_FLAGS) {
       if (inline !== undefined) throw new Error(`--${name} takes no value`);
       out[BOOL_FLAGS[name]] = true;
-    } else if (VALUE_FLAGS.includes(name)) {
+    } else if (VALUE_FLAGS.includes(name) || name in LIST_FLAGS) {
       const v = inline !== undefined ? inline : argv[++i];
       if (!v || (inline === undefined && v.startsWith("--"))) throw new Error(`--${name} needs a value`);
-      out[camel(name)] = v;
+      if (name in LIST_FLAGS) (out[LIST_FLAGS[name]] ||= []).push(v);
+      else out[camel(name)] = v;
     } else throw new Error(`unknown argument: ${a}`);
   }
   return out;
@@ -585,9 +599,19 @@ export function findWorktrees(root) {
 const normPath = (p) => { const r = realOfNearest(p).replace(/\\/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? r.toLowerCase() : r; };
 const slug = (b) => String(b).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
 
+/** Git checkouts directly under `dir` (a `.git` dir or file); `others` = the folders there that are not. */
+export function findCheckouts(dir) {
+  const checkouts = [];
+  const others = [];
+  let names = [];
+  try { names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch {}
+  for (const n of names) (isWorktree(join(dir, n)) ? checkouts : others).push(join(dir, n));
+  return { checkouts, others };
+}
+
 /** Per worktree: HEAD, detached-HEAD commits on no branch/remote, dirty count, common dir. Read-only. */
-function inspectWorktree(wt, root) {
-  const item = { path: relative(root, wt).split(sep).join("/"), branch: null, sha: null, detachedAhead: 0, dirty: 0, commonDir: null, error: null };
+function inspectWorktree(wt, label) {
+  const item = { path: label, branch: null, sha: null, detachedAhead: 0, dirty: 0, commonDir: null, error: null };
   try {
     item.commonDir = resolve(wt, git(wt, ["rev-parse", "--git-common-dir"]).trim());
     item.sha = git(wt, ["rev-parse", "HEAD"]).trim();
@@ -615,7 +639,7 @@ function inspectRepo(commonDir, items) {
     repo.unpushedCommits = revCount(any, ["--branches", "--not", "--remotes"]);
     if (repo.unpushedCommits) {
       const byPath = new Map(items.map((i) => [normPath(i.abs), i]));
-      const byName = new Map(items.map((i) => [slug(basename(i.abs)), i]));
+      const byName = new Map(items.filter((i) => !i.main).map((i) => [slug(basename(i.abs)), i]));
       for (const line of git(any, ["for-each-ref", "--format=%(refname)%00%(worktreepath)", "refs/heads"]).split("\n")) {
         if (!line) continue;
         const [ref, wtp] = line.split("\0");
@@ -634,25 +658,42 @@ function inspectRepo(commonDir, items) {
   return repo;
 }
 
+/**
+ * Sanctuary worktrees plus main checkouts: every git checkout directly under `opts.winProjects` (if given) and the main
+ * worktree of each sanctuary repo (the folder holding its `.git` common dir). Main checkout items carry `main: true`
+ * and are labelled `projects/<name>` (under --win-projects) or `main/<name>`.
+ */
 export function unpushedReport(opts = {}) {
   const root = resolve(opts.sanctuary || resolveManagedWorktreeRoot());
   if (!existsSync(root)) throw new Error(`sanctuary not found: ${root}`);
   const { worktrees, notGit } = findWorktrees(root);
-  const summary = { mode: "unpushed-report", root, worktrees: 0, repos: 0, unpushedCommits: 0, unpushedBranches: 0, stashes: 0, dirty: 0, detached: 0, notGit, errors: 0, items: [], repoReports: [] };
+  const projectsDir = opts.winProjects && existsSync(opts.winProjects) ? resolve(opts.winProjects) : null;
+  const summary = { mode: "unpushed-report", root, projectsDir, worktrees: 0, checkouts: 0, repos: 0, unpushedCommits: 0, unpushedBranches: 0, stashes: 0, dirty: 0, detached: 0, notGit, errors: 0, items: [], repoReports: [] };
   const groups = new Map();
-  for (const wt of worktrees) {
-    const item = inspectWorktree(wt, root);
-    Object.defineProperty(item, "abs", { value: wt, enumerable: false });
-    summary.worktrees++;
+  const seen = new Set();
+  const add = (abs, label, main) => {
+    const key = normPath(abs);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const item = inspectWorktree(abs, label);
+    if (main) item.main = true;
+    Object.defineProperty(item, "abs", { value: abs, enumerable: false });
+    if (main) summary.checkouts++; else summary.worktrees++;
     if (item.error) summary.errors++;
     if (item.dirty) summary.dirty++;
     if (item.detachedAhead) summary.detached++;
     summary.items.push(item);
     if (item.commonDir) {
-      const key = normPath(item.commonDir);
-      if (!groups.has(key)) groups.set(key, { commonDir: item.commonDir, items: [] });
-      groups.get(key).items.push(item);
+      const ck = normPath(item.commonDir);
+      if (!groups.has(ck)) groups.set(ck, { commonDir: item.commonDir, items: [] });
+      groups.get(ck).items.push(item);
     }
+  };
+  for (const wt of worktrees) add(wt, relative(root, wt).split(sep).join("/"), false);
+  if (projectsDir) for (const c of findCheckouts(projectsDir).checkouts) add(c, `projects/${basename(c)}`, true);
+  for (const g of [...groups.values()]) {
+    const top = dirname(g.commonDir);
+    if (basename(g.commonDir).toLowerCase() === ".git" && existsSync(join(top, ".git"))) add(top, `main/${basename(top)}`, true);
   }
   for (const g of groups.values()) {
     const repo = inspectRepo(g.commonDir, g.items);
@@ -742,23 +783,102 @@ export function bundleFlagged(report, opts, { now = new Date(), scratch = null }
   try { return bundleWithScratch(report, opts, now, own); } finally { removeOwnScratch(own); }
 }
 
+// Untracked + ignored files of a main checkout (`<repo>__untracked.tar`): heavy / generated dirs and binaries are left
+// out by path segment, files over UNTRACKED_FILE_CAP are skipped; `docs/**` always goes in unless over DOCS_FILE_CAP.
+export const UNTRACKED_FILE_CAP = 50 * 1024 * 1024;
+export const DOCS_FILE_CAP = 200 * 1024 * 1024;
+const DENY_DIR = /^(?:node_modules|dist|\.godot|\.import|build|exports?|\.tmp.*)$/i;
+const DENY_FILE = /\.(?:pck|exe)$/i;
+
+/**
+ * Read-only plan of `<checkout>__untracked.tar`: `git ls-files --others -z` WITHOUT --exclude-standard (ignored files
+ * included). Returns { files, bytes, skipped: [{ path, reason, bytes?, files? }] }; a denylisted dir is one skipped entry
+ * (`<dir>/`, reason "denylist", files = how many were under it).
+ */
+export function planUntracked(wt) {
+  const files = [];
+  const skipped = [];
+  const denied = new Map();
+  let bytes = 0;
+  for (const rel of git(wt, ["ls-files", "--others", "-z"]).split("\0").filter(Boolean)) {
+    if (rel.endsWith("/")) { skipped.push({ path: rel, reason: "nested-repo" }); continue; }
+    let st;
+    try { st = lstatSync(join(wt, rel)); } catch (err) { skipped.push({ path: rel, reason: err.code || "unreadable" }); continue; }
+    if (!st.isFile()) { skipped.push({ path: rel, reason: st.isSymbolicLink() ? "link" : "special" }); continue; }
+    if (rel.startsWith("docs/")) {
+      if (st.size > DOCS_FILE_CAP) skipped.push({ path: rel, reason: "docs-over-200MB", bytes: st.size });
+      else { files.push(rel); bytes += st.size; }
+      continue;
+    }
+    const segs = rel.split("/");
+    const d = segs.slice(0, -1).findIndex((x) => DENY_DIR.test(x));
+    if (d >= 0) { const key = `${segs.slice(0, d + 1).join("/")}/`; denied.set(key, (denied.get(key) || 0) + 1); continue; }
+    if (DENY_FILE.test(rel) || /^\.tmp/i.test(segs.at(-1))) { skipped.push({ path: rel, reason: "denylist", bytes: st.size }); continue; }
+    if (st.size > UNTRACKED_FILE_CAP) { skipped.push({ path: rel, reason: "over-50MB", bytes: st.size }); continue; }
+    files.push(rel);
+    bytes += st.size;
+  }
+  for (const [path, n] of denied) skipped.push({ path, reason: "denylist", files: n });
+  return { files, bytes, skipped };
+}
+
+/** Writes the planned untracked files of `wt` to `file` (plain tar, names NUL-separated on stdin); returns listed count. */
+function writeUntrackedTar(wt, file, files, roots) {
+  assertWritable(file, roots);
+  const { bin, bsd } = tarInfo();
+  const args = ["--null", "-c", "-f", file];
+  if (!bsd) args.push("--verbatim-files-from");
+  args.push("-C", wt, "-T", "-");
+  const r = spawnSync(bin, args, { input: files.map((f) => `${f}\0`).join(""), encoding: "utf8", windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) throw new Error(`${bin}: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`${bin} exited ${r.status}: ${String(r.stderr).trim().slice(0, 300)}`);
+  const list = spawnSync(bin, ["-t", "-f", file], { encoding: "utf8", windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+  return list.status === 0 ? list.stdout.split(/\r?\n/).filter((l) => l && !l.endsWith("/")).length : null;
+}
+
+/** --skip-bundle `<repo>` / `<repo>:<branch>` (repo case-insensitive, branch exact). */
+function parseSkips(list = []) {
+  return list.map((s) => { const i = s.indexOf(":"); return i < 0 ? { repo: s.toLowerCase(), branch: null } : { repo: s.slice(0, i).toLowerCase(), branch: s.slice(i + 1) }; });
+}
+
 function bundleWithScratch(report, opts, now, scratch) {
   const dir = resolve(opts.bundleDir);
-  const roots = [realOfNearest(report.root), opts.from ? realOfNearest(opts.from) : null].filter(Boolean);
+  const checkoutItems = report.items.filter((i) => i.main);
+  const roots = [realOfNearest(report.root), opts.from ? realOfNearest(opts.from) : null, ...checkoutItems.map((i) => realOfNearest(i.abs))].filter(Boolean);
   assertWritable(dir, roots);
   if (existsSync(dir) && readdirSync(dir).length) throw new Error(`refusing: the bundle dir is not empty (${dir})`);
   const stamp = stampOf(now);
+  const skips = parseSkips(opts.skipBundle);
+  const skippedByOwner = [];
+  const used = new Set();
+  const fileFor = (base, ext) => { let f = `${base}${ext}`; for (let n = 2; used.has(f.toLowerCase()); n++) f = `${base}-${n}${ext}`; used.add(f.toLowerCase()); return f; };
+  const mainBase = (repo, i) => `${repo.name}__${slug(basename(i.abs)).toLowerCase() === repo.name.toLowerCase() ? "main" : `main-${slug(basename(i.abs))}`}`;
   const plan = [];
+  const checkouts = [];
   for (const repo of report.repoReports) {
-    for (const i of repo.items) {
-      const branches = repo.branches.filter((b) => b.owner === i.path);
-      if (i.error || !(branches.length || i.detachedAhead || i.dirty)) continue;
-      plan.push({ kind: "worktree", repo, item: i, branches, file: `${i.path.split("/").map(slug).join("__")}.bundle` });
+    const repoSkips = skips.filter((k) => k.repo === repo.name.toLowerCase());
+    if (repoSkips.some((k) => k.branch === null)) {
+      skippedByOwner.push({ repo: repo.name, branch: null, reason: "skipped-by-owner", what: "repo: no bundles, no untracked tar" });
+      continue;
     }
-    const loose = repo.branches.filter((b) => b.owner === null);
-    if (loose.length || repo.stashes.length) plan.push({ kind: "repo", repo, item: null, branches: loose, file: `${repo.name}__repo.bundle` });
+    const skipBranch = new Set(repoSkips.map((k) => k.branch));
+    for (const b of repo.branches) if (skipBranch.has(b.name)) skippedByOwner.push({ repo: repo.name, branch: b.name, ahead: b.ahead, reason: "skipped-by-owner" });
+    const kept = repo.branches.filter((b) => !skipBranch.has(b.name));
+    for (const i of repo.items) {
+      if (skipBranch.has(i.branch)) {
+        skippedByOwner.push({ repo: repo.name, worktree: i.path, branch: i.branch, dirty: i.dirty, reason: "skipped-by-owner", what: "worktree with the skipped branch checked out (WIP not bundled)" });
+        continue;
+      }
+      const branches = kept.filter((b) => b.owner === i.path);
+      if (i.main) checkouts.push({ repo, item: i, base: mainBase(repo, i) });
+      if (i.error || !(branches.length || i.detachedAhead || i.dirty)) continue;
+      plan.push({ kind: i.main ? "main" : "worktree", repo, item: i, branches, file: fileFor(i.main ? mainBase(repo, i) : i.path.split("/").map(slug).join("__"), ".bundle") });
+    }
+    const loose = kept.filter((b) => b.owner === null);
+    if (loose.length || repo.stashes.length) plan.push({ kind: "repo", repo, item: null, branches: loose, file: fileFor(`${repo.name}__repo`, ".bundle") });
   }
-  const summary = { mode: opts.dryRun ? "bundle-dry-run" : "bundle", dir, bundles: 0, verified: 0, failed: 0, skippedLarge: 0, entries: [] };
+  const summary = { mode: opts.dryRun ? "bundle-dry-run" : "bundle", dir, bundles: 0, verified: 0, failed: 0, skippedLarge: 0, entries: [], checkouts: [], tars: 0, tarFiles: 0, tarBytes: 0, skippedByOwner };
+  const ensureDir = () => { if (!existsSync(dir)) guardedMkdir(dir, roots); };
   for (const p of plan) {
     const entry = {
       kind: p.kind, repo: p.repo.name, worktree: p.item ? p.item.path : null, branch: p.item ? p.item.branch : null, sha: p.item ? p.item.sha : null,
@@ -768,7 +888,7 @@ function bundleWithScratch(report, opts, now, scratch) {
     };
     summary.entries.push(entry);
     if (opts.dryRun) continue;
-    if (!summary.bundles && !existsSync(dir)) guardedMkdir(dir, roots);
+    ensureDir();
     const cwd = p.item ? p.item.abs : p.repo.items[0].abs;
     try {
       const refs = p.branches.map((b) => `refs/heads/${b.name}`);
@@ -791,10 +911,126 @@ function bundleWithScratch(report, opts, now, scratch) {
     }
     if (entry.verified) summary.verified++; else summary.failed++;
   }
-  if (!opts.dryRun && plan.length) {
-    atomicWrite(join(dir, "manifest.json"), JSON.stringify({ createdAt: now.toISOString(), sanctuary: report.root, bundles: summary.entries }, null, 2) + "\n", roots);
+  // Main checkouts: untracked + ignored files (docs/brainstorm and other ignored notes live only here).
+  for (const c of checkouts) {
+    const bundleEntry = summary.entries.find((e) => e.kind === "main" && e.worktree === c.item.path);
+    const rec = { path: c.item.path, repo: c.repo.name, bundle: bundleEntry ? bundleEntry.bundle : null, untrackedTar: null, fileCount: 0, bytes: 0, skipped: [], error: null };
+    summary.checkouts.push(rec);
+    try {
+      const u = planUntracked(c.item.abs);
+      Object.assign(rec, { fileCount: u.files.length, bytes: u.bytes, skipped: u.skipped });
+      if (!u.files.length) continue;
+      rec.untrackedTar = fileFor(c.base === `${c.repo.name}__main` ? `${c.repo.name}__untracked` : `${c.base}__untracked`, ".tar");
+      summary.tarFiles += u.files.length;
+      summary.tarBytes += u.bytes;
+      if (opts.dryRun) continue;
+      ensureDir();
+      const listed = writeUntrackedTar(c.item.abs, join(dir, rec.untrackedTar), u.files, roots);
+      if (listed !== u.files.length) rec.error = `tar lists ${listed} files, expected ${u.files.length}`;
+      else summary.tars++;
+    } catch (err) {
+      rec.error = String(err.message || err).slice(0, 300);
+    }
+    if (rec.error) summary.failed++;
+  }
+  if (!opts.dryRun && (plan.length || summary.tars || skippedByOwner.length)) {
+    ensureDir();
+    const manifest = { createdAt: now.toISOString(), sanctuary: report.root, projectsDir: report.projectsDir, bundles: summary.entries, checkouts: summary.checkouts, skippedByOwner };
+    atomicWrite(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", roots);
   }
   return summary;
+}
+
+// ---------------------------------------------------------------- dev pp inventory (read-only)
+/** Always proposed "keep": the VibeSquad source. Pass the Godot playtesting repo (and anything else) with --keep <name>. */
+export const DEFAULT_KEEP = ["VibeSquad"];
+
+/** Size + file count that keeps going past unreadable entries (never follows links). */
+function duTolerant(p) {
+  let bytes = 0;
+  let files = 0;
+  let errors = 0;
+  const stack = [p];
+  while (stack.length) {
+    const cur = stack.pop();
+    let st;
+    try { st = lstatSync(cur); } catch { errors++; continue; }
+    if (st.isDirectory()) {
+      try { for (const n of readdirSync(cur)) stack.push(join(cur, n)); } catch { errors++; }
+    } else if (st.isFile()) { bytes += st.size; files++; }
+  }
+  return { bytes, files, errors };
+}
+
+function localOnlyBranches(cwd) {
+  if (!revCount(cwd, ["--branches", "--not", "--remotes"])) return [];
+  const out = [];
+  for (const ref of git(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]).split("\n").filter(Boolean)) {
+    const ahead = revCount(cwd, [`refs/heads/${ref}`, "--not", "--remotes"]);
+    if (ahead) out.push({ name: ref, ahead });
+  }
+  return out;
+}
+
+/**
+ * Every folder directly under --win-projects plus the VS data dirs (default: ~/.vibesquad and each folder under
+ * %LOCALAPPDATA%\VibeSquad; override with --vs-data, repeatable): size, git or not, local-only branches, dirty count,
+ * untracked+ignored doc count (docs/** and *.md), and a proposed keep/delete. Proposals only: nothing is deleted.
+ */
+export function devpcInventory(opts = {}, { env = process.env, home = homedir() } = {}) {
+  const projectsDir = resolve(opts.winProjects || join(home, "projects"));
+  const keep = new Set([...DEFAULT_KEEP, ...(opts.keep || [])].map((k) => k.toLowerCase()));
+  let vsData = opts.vsData;
+  if (!vsData) {
+    const local = join(opts.winLocalappdata || env.LOCALAPPDATA || join(home, "AppData", "Local"), "VibeSquad");
+    vsData = [join(home, ".vibesquad"), ...findCheckouts(local).others, ...findCheckouts(local).checkouts];
+  }
+  const rows = [];
+  const inspect = (abs, kind) => {
+    const name = basename(abs);
+    const row = { name, kind, path: abs, bytes: 0, files: 0, git: isWorktree(abs), branch: null, localOnlyBranches: [], dirty: 0, untrackedDocs: 0, proposal: "delete", reason: "", error: null };
+    const du = duTolerant(abs);
+    Object.assign(row, { bytes: du.bytes, files: du.files });
+    if (du.errors) row.error = `${du.errors} unreadable entries`;
+    if (row.git) {
+      try {
+        row.branch = git(abs, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+        row.localOnlyBranches = localOnlyBranches(abs);
+        row.dirty = git(abs, ["status", "--porcelain", "--untracked-files=normal"]).split("\n").filter(Boolean).length;
+        row.untrackedDocs = git(abs, ["ls-files", "--others", "-z", "--", "docs", ":(glob)**/*.md"]).split("\0").filter(Boolean).length;
+      } catch (err) { row.error = String(err.message || err).slice(0, 200); }
+    }
+    const hasWork = row.localOnlyBranches.length || row.dirty || row.untrackedDocs;
+    if (kind === "project") {
+      if (keep.has(name.toLowerCase())) { row.proposal = "keep"; row.reason = DEFAULT_KEEP.some((k) => k.toLowerCase() === name.toLowerCase()) ? "VibeSquad source" : "--keep"; }
+      else if (!row.git) row.reason = "not a git checkout: look inside first";
+      else row.reason = hasWork ? "delete after --bundle (local-only work, dirty or untracked docs)" : "everything pushed";
+    } else if (name.toLowerCase() === ".vibesquad") { row.proposal = "keep"; row.reason = "C3 rollback source; review at C4"; }
+    else if (keep.has(name.toLowerCase())) { row.proposal = "keep"; row.reason = "--keep"; }
+    else if (name.toLowerCase() === "worktrees") row.reason = "delete after --bundle (sanctuary; see --unpushed-report)";
+    else if (name.toLowerCase() === "runtime") row.reason = "the forge has its own runtime";
+    else { row.proposal = "review"; row.reason = "VS data dir: not known to this script"; }
+    rows.push(row);
+  };
+  for (const d of [...findCheckouts(projectsDir).checkouts, ...findCheckouts(projectsDir).others].sort()) inspect(d, "project");
+  for (const d of vsData) if (existsSync(d)) inspect(resolve(d), "vs-data");
+  const totals = { dirs: rows.length, bytes: rows.reduce((n, r) => n + r.bytes, 0), keep: 0, delete: 0, review: 0, deleteBytes: 0, withLocalWork: 0 };
+  for (const r of rows) {
+    totals[r.proposal]++;
+    if (r.proposal === "delete") totals.deleteBytes += r.bytes;
+    if (r.localOnlyBranches.length || r.dirty || r.untrackedDocs) totals.withLocalWork++;
+  }
+  return { mode: "devpc-inventory", projectsDir, rows, totals };
+}
+
+function printInventory(s, log) {
+  log(`dev pp inventory (read-only, proposals only): ${s.projectsDir} + VS data dirs`);
+  log(`  ${"proposal".padEnd(8)}  ${"size".padStart(9)}  git  ${"local".padStart(5)}  ${"dirty".padStart(5)}  ${"docs".padStart(4)}  ${"kind".padEnd(7)}  name  (reason)`);
+  for (const r of s.rows) {
+    log(`  ${r.proposal.padEnd(8)}  ${fmtBytes(r.bytes).padStart(9)}  ${r.git ? "yes" : " no"}  ${String(r.localOnlyBranches.length).padStart(5)}  ${String(r.dirty).padStart(5)}  ${String(r.untrackedDocs).padStart(4)}  ${r.kind.padEnd(7)}  ${r.name}  (${r.reason})${r.error ? `  ERROR ${r.error}` : ""}`);
+  }
+  const t = s.totals;
+  log(`inventory: dirs=${t.dirs} size=${fmtBytes(t.bytes)} keep=${t.keep} delete=${t.delete} review=${t.review} delete-size=${fmtBytes(t.deleteBytes)} with-local-work=${t.withLocalWork}`);
 }
 
 // ---------------------------------------------------------------- output
@@ -825,7 +1061,7 @@ function printBackup(s, log) {
 }
 
 export function reportTotals(s) {
-  return { root: s.root, worktrees: s.worktrees, repos: s.repos, unpushedCommits: s.unpushedCommits, unpushedBranches: s.unpushedBranches, stashes: s.stashes, dirty: s.dirty, detached: s.detached, notGit: s.notGit.length, errors: s.errors, safeToDelete: s.safeToDelete };
+  return { root: s.root, worktrees: s.worktrees, checkouts: s.checkouts, repos: s.repos, unpushedCommits: s.unpushedCommits, unpushedBranches: s.unpushedBranches, stashes: s.stashes, dirty: s.dirty, detached: s.detached, notGit: s.notGit.length, errors: s.errors, safeToDelete: s.safeToDelete };
 }
 
 function printUnpushed(s, log) {
@@ -835,6 +1071,7 @@ function printUnpushed(s, log) {
     log(`  repo ${r.name}: ${r.unpushedCommits} commit(s) on no remote, ${r.stashes.length} stash(es)${r.remotes ? "" : "  [no remote]"}${r.error ? `  ERROR ${r.error}` : ""}`);
     for (const b of r.branches) log(`    ${String(b.ahead).padStart(5)}  ${b.name}${b.owner ? `  (${b.owner})` : ""}`);
   }
+  if (s.projectsDir || s.checkouts) log(`  main checkouts: ${s.checkouts}${s.projectsDir ? ` (incl. git dirs under ${s.projectsDir})` : ""}`);
   const rows = s.items.filter((i) => i.dirty || i.detachedAhead || i.error);
   if (rows.length) {
     log(`  ${"dirty".padStart(5)}  ${"detch".padStart(5)}  worktree / branch`);
@@ -850,7 +1087,12 @@ function printBundles(s, log) {
     log(`  ${e.verified ? "OK  " : s.mode === "bundle" ? "FAIL" : "plan"}  ${e.bundle}  unpushed=${e.unpushedCount} dirty=${e.dirtyCount}${e.stashes ? ` stashes=${e.stashes}` : ""}${e.error ? `  ERROR ${e.error}` : ""}`);
     for (const f of e.skippedLarge) log(`        skipped untracked > 50 MB: ${f.path} (${fmtBytes(f.bytes)})`);
   }
-  log(`bundles: planned=${s.entries.length} written=${s.bundles} verified=${s.verified} failed=${s.mode === "bundle" ? s.failed : 0} skipped-large=${s.skippedLarge}${s.mode === "bundle-dry-run" ? " (dry run: nothing written)" : ""}`);
+  for (const c of s.checkouts) {
+    log(`  ${c.error ? "FAIL" : c.untrackedTar ? (s.mode === "bundle" ? "OK  " : "plan") : "--  "}  ${c.untrackedTar || "(no untracked files)"}  ${c.path}  files=${c.fileCount} ${fmtBytes(c.bytes)} skipped=${c.skipped.length}${c.error ? `  ERROR ${c.error}` : ""}`);
+    for (const k of c.skipped) if (k.reason !== "denylist" || k.files) log(`        skipped (${k.reason}): ${k.path}${k.files ? ` (${k.files} files)` : ""}${k.bytes ? ` (${fmtBytes(k.bytes)})` : ""}`);
+  }
+  for (const k of s.skippedByOwner) log(`  SKIPPED BY OWNER: ${k.repo}${k.branch ? `:${k.branch}` : ""}${k.worktree ? ` (${k.worktree})` : ""}${k.what ? `  ${k.what}` : ""}`);
+  log(`bundles: planned=${s.entries.length} written=${s.bundles} verified=${s.verified} failed=${s.mode === "bundle" ? s.failed : 0} skipped-large=${s.skippedLarge} untracked-tars=${s.mode === "bundle" ? s.tars : s.checkouts.filter((c) => c.untrackedTar).length} tar-files=${s.tarFiles} tar-size=${fmtBytes(s.tarBytes)} skipped-by-owner=${s.skippedByOwner.length}${s.mode === "bundle-dry-run" ? " (dry run: nothing written)" : ""}`);
 }
 
 const USAGE = `usage:
@@ -858,14 +1100,24 @@ const USAGE = `usage:
        [--win-user <u> | --win-home <dir>] [--win-localappdata <dir>]
        [--forge-home <dir>] [--projects-root <dir>] [--vs-home-root <dir>] [--worktrees-root <dir>]
   node scripts/forge-migrate.mjs --from <home> --backup <dir> [--bundle [--bundle-dir <dir>]] [--dry-run]
-  node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--json]
-  node scripts/forge-migrate.mjs --bundle --bundle-dir <dir> [--sanctuary <dir>] [--dry-run]
-Never deletes owner data. See the header of this file and docs/lanes/forge-host/RUNBOOK.md (C2 migrate).`;
+  node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--win-projects <dir>] [--json]
+  node scripts/forge-migrate.mjs --bundle --bundle-dir <dir> [--sanctuary <dir>] [--win-projects <dir>]
+       [--skip-bundle <repo>[:<branch>]]... [--dry-run]
+  node scripts/forge-migrate.mjs --devpc-inventory [--win-projects <dir>] [--keep <name>]... [--vs-data <dir>]... [--json]
+--win-projects defaults to <home>/projects. Never deletes owner data. See the header of this file and docs/lanes/forge-host/RUNBOOK.md (C2 migrate).`;
 
 export function main(argv = process.argv.slice(2), log = console.log, err = console.error, { now = new Date() } = {}) {
   let args;
   try { args = parseArgs(argv); } catch (e) { err(`${e.message}\n${USAGE}`); return 2; }
   if (args.help) { log(USAGE); return 0; }
+  if (!args.winProjects) args.winProjects = join(homedir(), "projects");
+  if (args.devpcInventory) {
+    try {
+      const s = devpcInventory(args);
+      if (args.json) log(JSON.stringify(s, null, 2)); else printInventory(s, log);
+      return 0;
+    } catch (e) { err(`forge-migrate: ${e.message}`); return 1; }
+  }
   if (args.unpushedReport && !args.bundle) {
     try {
       const s = unpushedReport(args);

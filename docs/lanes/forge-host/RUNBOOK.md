@@ -113,6 +113,21 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
    ```
    Branches land in `refs/restored/heads/*`, the WIP commit in `refs/restored/vs-migrate-wip/<repo>/<unit>/<ts>/wip`
    (its parent is the worktree's HEAD), stashes in `.../_repo/<ts>/stash-<n>`.
+   **Main checkouts** are covered too: every git dir directly under `--win-projects` (default `C:\Users\<u>\projects`)
+   and each sanctuary repo's main worktree. Each gets `<repo>__main.bundle` (its checked-out unpushed branch + WIP of
+   its dirty tree) and `<repo>__untracked.tar` with the untracked files INCLUDING ignored ones (that is where
+   `docs/brainstorm/` and other ignored notes live), minus `node_modules`, `dist`, `.godot`, `.import`, `build`,
+   `export(s)`, `.tmp*`, `*.pck`, `*.exe`, and files over 50 MB; `docs/**` always goes in unless a file is over 200 MB.
+   `manifest.json` `checkouts[]` lists path, bundle, untrackedTar, fileCount, bytes and every skip. Restore a tar with
+   `tar -xf <repo>__untracked.tar -C <checkout>`.
+   **Owner-delete work:** `--skip-bundle <repo>` or `--skip-bundle <repo>:<branch>` (repeatable) leaves that repo or
+   branch (and a worktree with that branch checked out) out; it is listed in `manifest.json` `skippedByOwner`.
+   Run `--bundle --bundle-dir <dir> --dry-run` first to see the plan, tar file counts and sizes.
+2b. **Dev pp inventory** (read-only, before the nuke): `node scripts/forge-migrate.mjs --devpc-inventory [--keep <name>]...
+   [--json]` lists every folder under `C:\Users\<u>\projects` plus the VS data dirs (`~/.vibesquad`, each folder under
+   `%LOCALAPPDATA%\VibeSquad`) with size, git or not, local-only branches, dirty count and untracked+ignored doc count,
+   and proposes keep (VibeSquad source, `--keep` names: pass `--keep <Godot playtest repo>`, `.vibesquad` as the C3
+   rollback), delete, or review. Proposals only: the script deletes nothing; the owner decides.
 3. **Backup** (dev pp): `node scripts/forge-migrate.mjs --from C:\Users\<u>\.vibesquad --backup <dir> [--bundle]`
    writes `vibesquad-home-<timestamp>.zip` (Windows tar.exe; `.tar.gz` on POSIX) of the full home; with `--bundle` the
    bundles are staged in `<dir>/vibesquad-bundles-<timestamp>/` and go into the same archive. Lock files, sockets and
