@@ -801,7 +801,7 @@ async function handleLog(req, res, opts = {}) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team: bodyTeam, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readCleanBody(req);
+      const { team: bodyTeam, type = "you", text, refs, agent = loadUserSettings().userName, lane = "", plan, pass } = await readCleanBody(req);
       // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
       const caller = agentCaller(req);
       const team = bindAgentTeam(caller, bodyTeam, "log"); // idea-176
@@ -819,6 +819,8 @@ async function handleLog(req, res, opts = {}) {
         type: who.type,
         text: await verbatimDigestText(caller, who.type, t, opts.backend),
         refs: who.refs,
+        plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
+        pass: pass === true,
       });
       return sendJson(res, 200, entry);
     }
@@ -1220,6 +1222,8 @@ async function handleVsLog(req, res, opts = {}) {
         type: who.type,
         text: await verbatimDigestText(caller, who.type, text, opts.backend),
         refs: who.refs,
+        plan: body.plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
+        pass: body.pass === true,
       });
       return sendJson(res, 200, { ok: true, entry: resEntry.entry }); // idea-242 L1: no host log path in the answer
     }

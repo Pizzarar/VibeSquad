@@ -184,7 +184,7 @@ export const STANDING_RULES = [
   "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb (vs handoff --judgment-file/--judgment -, vs log, vs inbox, vs task).",
   "Shared-machine actions (vs restart, full-suite slot, runtime sync): ask the holders' leads to drain, wait for each `drained`, act, then log `<action>-done`. No timer retries; `--kill-background` only with the owner's per-run OK. Overlord: `vs restart request <tip>` (manual = fallback).",
   "A plan phase touching Normal-mode UI (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) isn't done while UX Reviewer - Opus has a critical or major finding open for its area, unless the owner overrides; a lane Buddy's own look check doesn't count; findings go to the owning lane as inbox cards.",
-  "When the last block of a plan passes (review PASS + merged), the lead logs `vs log done \"plan <PLAN_x> PASS\"` (PLAN_x = the docs/PLAN_x.md name); @usage scores lead success from it.",
+  "When the last block of a plan passes (review PASS + merged), the lead logs `vs log done \"plan <PLAN_x> PASS\" --plan docs/PLAN_x.md --pass` (PLAN_x = the docs/PLAN_x.md name); the Buddy logs `vs log handoff \"<note>\" --plan docs/PLAN_x.md` when it hands the plan to the lead (a spawn/send naming the path auto-logs it); @usage scores from the plan= field.",
 ];
 
 /**

@@ -29,6 +29,7 @@ import {
   listInboxCards,
   triageInboxCards,
 } from "../server/inbox.mjs";
+import { validatePlanPath } from "../server/plan-log.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsLive, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { agentCallerOf, callTool, createContext, hasOwnerProof, lastAssistantText, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
@@ -289,10 +290,12 @@ export function parseArgs(argv) {
     "repo",
     "sample",
     "checkpoint",
+    "plan",
   ]);
   const booleans = new Set([
     "sinceMe",
     "peek",
+    "pass",
     "digest",
     "digestHook",
     "help",
@@ -520,7 +523,9 @@ function formatEntry(entry) {
   const refs = Array.isArray(entry.refs) && entry.refs.length ? `  [refs: ${entry.refs.join(", ")}]` : "";
   const type = String(entry.type ?? "?").padEnd(9);
   const lane = String(entry.lane ?? "?").padEnd(10);
-  return `${entry.ts ?? "?"}  ${type} ${lane} ${entry.agent ?? "?"}: ${entry.text ?? ""}${refs}`;
+  const body = String(entry.text ?? "");
+  const plan = entry.plan && !body.includes(`plan=${entry.plan}`) ? ` plan=${entry.plan}${entry.pass ? " PASS" : ""}` : ""; // idea-454
+  return `${entry.ts ?? "?"}  ${type} ${lane} ${entry.agent ?? "?"}: ${body}${plan}${refs}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +540,7 @@ Usage:
   vs profiles [--roles] [--role <role>] [--name <name>] [--notes] [--json]  (no filter: roles + tier ladder, then old names as aliases)
   vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
+  vs log handoff|done "<text>" --plan docs/PLAN_<x>.md [--pass]  (plan lifecycle for @usage: stored as plan=<path> on the entry; --pass only on done, when the whole plan passed; text naming a PLAN path auto-fills it)
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
@@ -613,7 +619,11 @@ async function commandLog(flags) {
   // re-attributes it from the verified caller. Direct disk append only for a caller without agent proof when the
   // server is down or there is no local token to present (createContext().writeLog).
   const ctx = createContext({ env: process.env, identity: callerIdentity(identity) });
-  const entry = await ctx.writeLog({ type: who.type, text, refs: who.refs, agent: who.agent });
+  const plan = flags.plan === undefined ? "" : validatePlanPath(flags.plan === true ? "" : flags.plan);
+  if (flags.plan !== undefined && !plan) throw new Error("--plan needs a docs/PLAN_*.md path");
+  if (plan && type !== "handoff" && type !== "done") throw new Error("--plan applies to handoff and done entries only");
+  if (flags.pass && type !== "done") throw new Error("--pass applies to done entries only");
+  const entry = await ctx.writeLog({ type: who.type, text, refs: who.refs, agent: who.agent, ...(plan ? { plan } : {}), ...(flags.pass ? { pass: true } : {}) });
   process.stdout.write(JSON.stringify(entry) + "\n");
   return 0;
 }
