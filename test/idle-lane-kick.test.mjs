@@ -242,3 +242,20 @@ test("openPlanBlocks lists non-PASS blocks only", () => {
   const md = "- K1 idle kick: todo\n- K2 thing PASS abc\n- T3 x (pending)\nprose todo";
   assert.deepEqual(openPlanBlocks(md), ["plan block K1", "plan block T3"]);
 });
+
+test("laneOpenWork (idea-569): plan blocks drop when the plan has a done PASS log entry or says COMPLETE; an unfinished plan still counts", async () => {
+  const mk = (planBody, logLines) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
+    fs.mkdirSync(path.join(home, "docs", "brainstorm"), { recursive: true });
+    fs.writeFileSync(path.join(home, "docs", "brainstorm", "bug.md"), "Plan: docs/PLAN_X.md\n- G3b todo\n");
+    if (planBody != null) fs.writeFileSync(path.join(home, "docs", "PLAN_X.md"), planBody);
+    fs.mkdirSync(path.join(home, "logs"), { recursive: true });
+    fs.writeFileSync(path.join(home, "logs", "vs--bug.jsonl"), logLines.map((l) => JSON.stringify(l)).join("\n"));
+    return home;
+  };
+  const run = (home) => laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: home, baseHome: home });
+  assert.deepEqual(await run(mk("# X\nStatus: in progress\n", [])), ["plan block G3b"]);
+  assert.deepEqual(await run(mk("# X\nStatus: COMPLETE\n", [])), []);
+  assert.deepEqual(await run(mk(null, [{ type: "done", plan: "docs/PLAN_X.md", pass: true }])), []);
+  assert.deepEqual(await run(mk(null, [{ type: "done", plan: "docs/PLAN_X.md" }])), ["plan block G3b"]); // done without PASS is not complete
+});
