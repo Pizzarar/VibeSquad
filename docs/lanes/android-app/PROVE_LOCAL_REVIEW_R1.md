@@ -1,6 +1,6 @@
 # Prove-Local Security Review (R1) · `unit-and-prove-local` (`458961d..476f16a`)
 
-- **Worktree:** `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`
+- **Worktree:** `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`
 - **Commit:** `476f16a` on base `458961d`
 - **Verdict:** **PASS** (0 High / 0 Medium / 1 Low — fixed in R2 `0e3bfa4`)
 - **Cause-vs-Symptom Gate:** **PASS** — Centralizes all in-repo `x-vibesquad-token` transmission into `fetchWithLocalToken()` (`server/local-token.mjs`), requiring a fresh per-request port-bound HMAC proof (`proveLocalServer`) before the header is sent.
