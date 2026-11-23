@@ -26,7 +26,7 @@ function home(cards, logLines = []) {
 
 test("idle-kick: a card named by a needs-you entry is held; others stay open", async () => {
   const h = home([card("idea-77"), card("idea-78"), card("idea-7")], [{ ts: new Date().toISOString(), type: "needs-you", text: "owner decision on idea-77 needed" }]);
-  assert.deepEqual([...(await needsYouCardIds({ teamId: "vs", laneId: "bug", baseHome: h }))], ["idea-77"]);
+  assert.deepEqual([...(await needsYouCardIds({ teamId: "vs", laneId: "bug", baseHome: h })).keys()], ["idea-77"]);
   const items = await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: h, baseHome: h });
   assert.deepEqual(items, ["idea-78 idea-78", "idea-7 idea-7"]);
 });
@@ -63,4 +63,39 @@ test("vs inbox list: held cards are marked and listed under their own header aft
   assert.doesNotMatch(lines[0], /\[held\]/);
   assert.match(lines[1], /^-- held \(1\)/);
   assert.match(lines[2], /^\[idea-1\].*\[held\]$/);
+});
+
+test("needs-you hold releases when a decision/you entry naming the card is the same age or newer", async () => {
+  const t0 = new Date(Date.now() - 3_600_000).toISOString();
+  const h = home([card("idea-1"), card("idea-2"), card("idea-3")], [
+    { ts: t0, type: "needs-you", text: "idea-1 idea-2 idea-3 need the owner" },
+    { ts: t0, type: "you", text: "idea-1: go" }, // same age: released
+    { ts: new Date(Date.now() - 60_000).toISOString(), type: "decision", text: "idea-2 approved" }, // newer: released
+    { ts: new Date().toISOString(), type: "decision", text: "unrelated idea-9" }, // names another card: idea-3 stays held
+  ]);
+  const items = await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: h, baseHome: h });
+  assert.deepEqual(items, ["idea-1 idea-1", "idea-2 idea-2"]);
+});
+
+test("an accepted card, or one updated after the needs-you, is never suppressed; the injected clock is honored", async () => {
+  const t0 = Date.now() - 3_600_000;
+  const log = [{ ts: new Date(t0).toISOString(), type: "needs-you", text: "idea-1 idea-2 idea-3" }];
+  const h = home([
+    card("idea-1", { status: "accepted", updatedAt: new Date(t0 - 1000).toISOString() }),
+    card("idea-2", { updatedAt: new Date(t0 + 1000).toISOString() }),
+    card("idea-3", { updatedAt: new Date(t0 - 1000).toISOString() }),
+  ], log);
+  assert.deepEqual(await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: h, baseHome: h }), ["idea-1 idea-1", "idea-2 idea-2"]);
+  // 8 days later (injected nowMs) the needs-you has aged out, so idea-3 is open again.
+  const later = await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: h, baseHome: h, nowMs: Date.now() + 8 * 24 * 3_600_000 });
+  assert.equal(later.length, 3);
+});
+
+test("archiving a parked card clears the held marker; list never shows an archived card as held", () => {
+  const h = home([card("a", { parkedAt: "2026-11-21T00:00:00.000Z" })]);
+  triageInboxCards({ action: "archive", cardId: "a", baseHome: h });
+  assert.equal(readInboxCards(h)[0].parkedAt, undefined);
+  fs.writeFileSync(path.join(h, "inbox.json"), JSON.stringify({ cards: [card("z", { status: "archived", parkedAt: "2026-11-21T00:00:00.000Z" })] }));
+  const r = spawnSync(process.execPath, [CLI, "inbox", "list", "--status", "all"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_HOME: h } });
+  assert.doesNotMatch(r.stdout, /held/);
 });

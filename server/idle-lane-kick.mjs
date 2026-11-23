@@ -82,20 +82,32 @@ export async function laneHasOpenNeedsYou({ teamId, laneId, baseHome, agents = [
   return need > answer;
 }
 
-/** Card ids (idea-N) named by a needs-you entry (text or refs) in the lane log tail, last 7d. A named card counts as held. */
-export async function needsYouCardIds({ teamId, laneId, baseHome, nowMs = Date.now() }) {
-  const ids = new Set();
-  const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
-  for (const line of text.split(/\r?\n/)) {
+/** Unreleased needs-you holds from a lane-log tail: Map(lowercased idea-N -> newest needs-you ts, ms). A card named by a needs-you
+ * (text or refs, last 7d) is held until a decision/you entry naming it is the same age or newer (mirrors laneHasOpenNeedsYou). */
+export function heldFromLogText(text, nowMs = Date.now()) {
+  const need = new Map(), answer = new Map();
+  for (const line of String(text ?? "").split(/\r?\n/)) {
     if (!line) continue;
     try {
       const e = JSON.parse(line);
-      if (e.type !== "needs-you" || nowMs - (Date.parse(e.ts) || 0) > NEEDS_YOU_MAX_AGE_MS) continue;
+      const isNeed = e.type === "needs-you", isAnswer = e.type === "decision" || e.type === "you";
+      if (!isNeed && !isAnswer) continue;
+      const ts = Date.parse(e.ts) || 0;
+      if (isNeed && nowMs - ts > NEEDS_YOU_MAX_AGE_MS) continue;
       const hay = `${e.text ?? ""} ${[].concat(e.ref ?? [], e.refs ?? []).join(" ")}`;
-      for (const m of hay.matchAll(/\bidea-\d+\b/gi)) ids.add(m[0].toLowerCase());
+      for (const m of hay.matchAll(/\bidea-\d+\b/gi)) {
+        const id = m[0].toLowerCase(), into = isNeed ? need : answer;
+        into.set(id, Math.max(into.get(id) ?? 0, ts));
+      }
     } catch {}
   }
-  return ids;
+  for (const [id, n] of need) if ((answer.get(id) ?? -1) >= n) need.delete(id);
+  return need;
+}
+
+export async function needsYouCardIds({ teamId, laneId, baseHome, nowMs = Date.now(), text }) {
+  const t = text ?? (await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`)));
+  return heldFromLogText(t, nowMs);
 }
 
 /** Owners with an armed (open) watch set, one async read of watches.json. */
@@ -105,12 +117,12 @@ export async function armedWatchOwners(baseHome) {
 }
 
 /** idea-569: true when the plan the brief names is done: lane log has `done` + pass for it, or the plan file's status says COMPLETE. */
-export async function planIsComplete({ teamId, laneId, brief, root, baseHome }) {
+export async function planIsComplete({ teamId, laneId, brief, root, baseHome, logText }) {
   // The ACTIVE plan is the LAST docs/PLAN_*.md the brief names (newer plans are appended); an older done plan must not hide a new open one.
   const named = String(brief ?? "").match(/(?:^|[^\w./-])docs\/PLAN_[\w.-]+?\.md(?![\w-]|\.\w)/gi) ?? [];
   const plan = named.length ? named[named.length - 1].replace(/^[^d]*/i, "") : "";
   if (!plan) return false;
-  const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
+  const text = logText ?? (await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`)));
   for (const line of text.split(/\r?\n/)) {
     if (!line) continue;
     try {
@@ -130,21 +142,27 @@ export async function planIsComplete({ teamId, laneId, brief, root, baseHome }) 
  * Inbox cards are triage items, not lane work, EXCEPT a plain new card (status "parked", no parkedAt marker)
  * and an "accepted" card (Review L1: accepted is actionable), which still count. An explicitly parked card
  * (triage --park stamps parkedAt) and archived/handed-off/rejected cards are skipped (idea-481). */
-export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
+export async function laneOpenWork({ teamId, laneId, rootDir, baseHome, nowMs = Date.now() }) {
   const root = briefRootFor(teamId, laneId, rootDir);
   const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
   const inbox = await readJsonAsync(getInboxPath(baseHome), []);
   const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
-  const heldIds = await needsYouCardIds({ teamId, laneId, baseHome });
+  // One lazy, shared read of the lane log tail (needs-you holds + planIsComplete); skipped when nothing needs it.
+  let logP;
+  const logText = () => (logP ??= tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`)));
+  let held = null;
   const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
   for (const c of cards) {
     // idea-481: an explicitly parked card (triage --park stamps parkedAt) waits for triage; and any non-parked
     // status except "accepted" (archived/handed-off/rejected) is not open lane work. A plain new card (status
     // "parked", no marker) and an accepted card still count.
     if (c.parkedAt) continue; // held: explicit triage --park marker
-    if (heldIds.has(String(c.id ?? "").toLowerCase())) continue; // held: a needs-you entry in the lane log names this card
     if (c.status && c.status !== "parked" && c.status !== "accepted") continue;
     if (!sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
+    // held: an unanswered needs-you in the lane log names this card, unless the card was accepted or updated after it
+    held ??= await needsYouCardIds({ nowMs, text: await logText() });
+    const needTs = held.get(String(c.id ?? "").toLowerCase());
+    if (needTs !== undefined && c.status !== "accepted" && !(Date.parse(c.updatedAt) > needTs)) continue;
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
   }
   try {
@@ -152,7 +170,7 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
     // idea-569: a plan that is finished (done plan=<path> PASS in the lane log, or the plan file says COMPLETE) has no open blocks,
     // so a stale non-PASS block line in the brief must not keep kicking/escalating a lane. A logged owner hold has no structured
     // form yet (decision entries are free text); the done-plan signal is the only one honoured.
-    if (!(await planIsComplete({ teamId, laneId, brief, root, baseHome }))) items.push(...openPlanBlocks(brief));
+    if (!(await planIsComplete({ teamId, laneId, brief, root, baseHome, logText: await logText() }))) items.push(...openPlanBlocks(brief));
   } catch {}
   return items;
 }
@@ -169,7 +187,7 @@ export function createIdleLaneKick({
   teams = () => loadTeamsRegistry(rootDir),
   armedOwners = () => armedWatchOwners(baseHome), // async: ONE read of watches.json per tick
   openNeedsYou = (teamId, laneId, agents) => laneHasOpenNeedsYou({ teamId, laneId, baseHome, agents, nowMs: now() }),
-  openWork = (teamId, laneId) => laneOpenWork({ teamId, laneId, rootDir, baseHome }),
+  openWork = (teamId, laneId) => laneOpenWork({ teamId, laneId, rootDir, baseHome, nowMs: now() }),
   workTtlMs = IDLE_KICK_WORK_TTL_MS,
   log = ({ teamId, laneId, text }) => appendVsLogEntry({ teamId, laneId, agent: "vibesquad-server", type: "metric", text }),
   // B11a: lowercased ids of asleep Squads, read EVERY tick (mtime-cached), never via the 5-min regCache, so a wake lands next tick.

@@ -806,6 +806,7 @@ function triageInboxCardsWith(update, body, rootDir) {
       if (idx < 0) throw new Error(`Card not found: ${cardId}`);
       if (action === "archive" || body.archive === true) {
         cards[idx].status = "archived";
+        delete cards[idx].parkedAt;
         cards[idx].updatedAt = now;
         removeInboxMedia(cardId, baseHome);
         result = { action, card: cards[idx] };

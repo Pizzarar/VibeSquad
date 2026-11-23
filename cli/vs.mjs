@@ -947,7 +947,7 @@ async function commandHandoff(flags) {
 
 function formatInboxCardLine(card) {
   const related = card.relatedCardId ? ` (goes with ${card.relatedCardId})` : "";
-  const held = card.parkedAt ? " [held]" : "";
+  const held = card.parkedAt && card.status === "parked" ? " [held]" : "";
   return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}${held}`;
 }
 
@@ -1008,8 +1008,8 @@ async function commandInbox(flags) {
       return 0;
     }
     // Held cards (triage --park stamps parkedAt) are listed after the queued ones, under their own header.
-    const queued = cards.filter((c) => !c.parkedAt);
-    const held = cards.filter((c) => c.parkedAt);
+    const queued = cards.filter((c) => !(c.parkedAt && c.status === "parked"));
+    const held = cards.filter((c) => c.parkedAt && c.status === "parked");
     for (const c of queued) process.stdout.write(`${formatInboxCardLine(c)}\n`);
     if (held.length) {
       process.stdout.write(`-- held (${held.length}): parked on purpose, never kicked --\n`);
