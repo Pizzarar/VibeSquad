@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ALLOWLIST, LARGE_UNTRACKED_BYTES, WIP_NS, backup, buildPathMap, bundleFlagged, devpcInventory, main, migrate, parseArgs, planUntracked,
+  ALLOWLIST, HEAVY_DIRS, LARGE_UNTRACKED_BYTES, WIP_NS, backup, buildPathMap, bundleFlagged, devpcInventory, main, migrate, parseArgs, planUntracked,
   rewriteJsonText, rewriteJsonlText, rewriteString, rewriteText, unpushedReport,
 } from "../scripts/forge-migrate.mjs";
 
@@ -298,6 +298,20 @@ describe("review R1 fixes", () => {
     assert.deepEqual(s.unmapped, [{ path: "C:\\Users\\someone\\projects\\My", count: 1 }]);
   });
 
+  test("L1 (re-review): 2+ space-separated words before a backslash are refused, a later drive path still converts", () => {
+    for (const s of [`see ${W}\\projects\\My Big Game\\src\\a.mjs`, `see ${W}\\projects\\My  Big Game\\src`, `(${W}\\projects\\A B C D\\x)`]) {
+      const r = rewriteText(s, map);
+      assert.deepEqual([r.text, r.count, r.half], [s, 0, 1], s);
+    }
+    // No new drive prefix is crossed: the words before a second drive path are not a continuation.
+    const two = rewriteText(`${W}\\projects\\Demo\\a.md and some more words ${W}\\projects\\Demo\\b.md`, map);
+    assert.deepEqual([two.text, two.count, two.half], ["/home/forge/projects/Demo/a.md and some more words /home/forge/projects/Demo/b.md", 2, 0]);
+    // The M1-regression shape (`key=<drive path>`) still converts both paths.
+    const kv = rewriteText(`runtime=${W}\\projects\\Demo\\a.md project=${W}\\projects\\Demo\\b.md`, map);
+    assert.deepEqual([kv.count, kv.half], [2, 0]);
+    assert.equal(rewriteString(`${W}\\projects\\My Big Game\\src\\a.mjs`, map).text, "/home/forge/projects/My Big Game/src/a.mjs");
+  });
+
   test("L1: keys that would collide keep their original text and are reported", () => {
     const src = JSON.stringify({
       "C:\\Users\\someone\\projects\\Demo": 1, "C:/Users/someone/projects/Demo": 2,
@@ -510,6 +524,22 @@ describe("main checkouts, untracked tar, --skip-bundle, --devpc-inventory", () =
     assert.equal(treeHash(fx.repo), hash);
   });
 
+  test("M2: src-tauri/target and the other heavy dirs are left out of the untracked plan", () => {
+    const repo = join(tmp("heavy"), "App");
+    execFileSync("git", ["init", "-q", "-b", "master", repo], { windowsHide: true });
+    for (const d of ["src-tauri/target/debug", "dist-desktop", "coverage", "playwright-report", "test-results", "web/Target"]) put(repo, `${d}/x.bin`, "x");
+    put(repo, "src-tauri/src/main.rs", "fn main() {}\n");
+    put(repo, "docs/brainstorm/b.md", "brief\n");
+    put(repo, "scratch/shots/s.png", "png");
+    const hash = treeHash(repo);
+    const u = planUntracked(repo);
+    assert.deepEqual(u.files.sort(), ["docs/brainstorm/b.md", "scratch/shots/s.png", "src-tauri/src/main.rs"]);
+    assert.deepEqual(u.skipped.filter((k) => k.reason === "denylist").map((k) => k.path).sort(),
+      ["coverage/", "dist-desktop/", "playwright-report/", "src-tauri/target/", "test-results/", "web/Target/"]);
+    assert.equal(treeHash(repo), hash);
+    for (const d of ["node_modules", "dist", ".godot", ".import", "build", "target"]) assert.ok(HEAVY_DIRS.includes(d), d);
+  });
+
   test("--bundle covers main checkouts under --win-projects: unpushed branch + WIP bundle, untracked tar, manifest", () => {
     const fx = makeMainWork();
     const before = { refs: refsOf(fx.repo), status: g(["status", "--porcelain=v2", "--untracked-files=all", "--ignored"], fx.repo) };
@@ -558,6 +588,50 @@ describe("main checkouts, untracked tar, --skip-bundle, --devpc-inventory", () =
     assert.ok(!readdirSync(dir).some((f) => f.startsWith("Demo__")));
     const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
     assert.deepEqual(manifest.skippedByOwner.map((k) => [k.repo, k.branch, k.reason]), [["Demo", null, "skipped-by-owner"]]);
+  });
+
+  test("M1 (re-review): skipping the main checkout's branch keeps its untracked tar", () => {
+    const fx = makeMainWork();
+    const report = unpushedReport({ sanctuary: fx.sanctuary, winProjects: fx.base });
+    const dryDir = join(tmp("skip-main"), "b");
+    const a = bundleFlagged(report, { bundleDir: dryDir, dryRun: true, skipBundle: ["Demo:main-feature"] });
+    assert.equal(existsSync(dryDir), false);
+    const demo = a.checkouts.find((c) => c.path === "projects/Demo");
+    assert.ok(demo, JSON.stringify(a.checkouts));
+    assert.equal(demo.untrackedTar, "Demo__untracked.tar");
+    assert.ok(!a.entries.some((e) => e.worktree === "projects/Demo"), "skipped branch's checkout bundled");
+    assert.ok(a.entries.some((e) => e.worktree === "Demo/work"), "unrelated worktree dropped");
+    assert.ok(a.skippedByOwner.some((k) => k.worktree === "projects/Demo" && k.branch === "main-feature"));
+    // Real run: the tar is written with the ignored brief.
+    const dir = join(tmp("skip-main-real"), "b");
+    const b = bundleFlagged(report, { bundleDir: dir, skipBundle: ["Demo:main-feature"] }, { now: NOW });
+    assert.equal(b.failed, 0, JSON.stringify([b.entries, b.checkouts]));
+    const tarBin = process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
+    const names = execFileSync(tarBin, ["-tf", join(dir, "Demo__untracked.tar")], { windowsHide: true }).toString().split(/\r?\n/);
+    assert.ok(names.includes("docs/brainstorm/x.md"), names.join(","));
+  });
+
+  test("M1 (re-review): skipping a worktree's branch moves its other owned unpushed branches to the repo bundle", () => {
+    const fx = makeMainWork();
+    // A branch named after the Demo/work worktree folder: owned by it through the name match, not checked out.
+    g(["update-ref", "refs/heads/work", g(["commit-tree", "master^{tree}", "-p", "master", "-m", "named after wt"], fx.repo).trim()], fx.repo);
+    const report = unpushedReport({ sanctuary: fx.sanctuary, winProjects: fx.base });
+    assert.equal(report.repoReports.find((r) => r.name === "Demo").branches.find((b) => b.name === "work").owner, "Demo/work");
+    const a = bundleFlagged(report, { bundleDir: join(tmp("skip-wt"), "b"), dryRun: true, skipBundle: ["Demo:unit-work"] });
+    assert.ok(!a.entries.some((e) => e.worktree === "Demo/work"));
+    const repoEntry = a.entries.find((e) => e.kind === "repo" && e.repo === "Demo");
+    assert.ok(repoEntry && repoEntry.branches.some((b) => b.name === "work"), JSON.stringify(a.entries));
+    const all = a.entries.flatMap((e) => e.branches.map((b) => b.name));
+    assert.ok(!all.includes("unit-work"), "skipped branch bundled");
+    assert.deepEqual(all.filter((n) => n === "work"), ["work"], "kept branch bundled exactly once");
+    // Real run: the moved branch restores from the repo bundle.
+    const dir = join(tmp("skip-wt-real"), "b");
+    const b = bundleFlagged(report, { bundleDir: dir, skipBundle: ["Demo:unit-work"] }, { now: NOW });
+    assert.equal(b.failed, 0, JSON.stringify([b.entries, b.checkouts]));
+    const r = join(tmp("restore-skip-wt"), "r");
+    execFileSync("git", ["clone", "-q", fx.origin, r], { windowsHide: true });
+    g(["fetch", "-q", join(dir, "Demo__repo.bundle"), "refs/*:refs/restored/*"], r);
+    assert.match(g(["log", "-1", "--format=%s", "refs/restored/heads/work"], r), /named after wt/);
   });
 
   test("--devpc-inventory: read-only, proposes keep for --keep and the default keep names, delete otherwise", () => {

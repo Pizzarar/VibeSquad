@@ -7,8 +7,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { main, parseRemote, shq, syncDocs, verifyBriefs } from "../scripts/forge-docs-sync.mjs";
-import { main as migrateMain } from "../scripts/forge-migrate.mjs";
+import { main, parseRemote, shq, sourceDocs, syncDocs, verifyBriefs } from "../scripts/forge-docs-sync.mjs";
+import { HEAVY_DIRS, isHeavyDir, main as migrateMain } from "../scripts/forge-migrate.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/forge-docs-sync.mjs", import.meta.url));
 const temps = [];
@@ -133,6 +133,26 @@ describe("forge-docs-sync --sync-docs (local dest)", () => {
     assert.equal(s.repos[0].dest, "AlphaGame");
     assert.equal(readFileSync(join(renamed, "AlphaGame", "docs", "brainstorm", "x.md"), "utf8"), "brief x\n");
     assert.throws(() => syncDocs({ fromProjects: src, to: dest, as: ["Alpha=../x"] }), /--as needs/);
+  });
+
+  test("L2: skips the same heavy dirs as forge-migrate's untracked tar (shared HEAVY_DIRS)", () => {
+    const src = tmp("heavy");
+    const d = makeRepo(src, "Beta", {
+      untracked: {
+        "docs/app/src-tauri/target/x.bin": "x", "docs/tool/test-results/r.json": "{}", "docs/tool/Coverage/c.html": "c",
+        "docs/.tmp-1/t.md": "t", "docs/notes/build.md": "a file named build.md stays\n", "docs/PLAN_B.md": "plan b\n",
+      },
+    });
+    const r = sourceDocs(d);
+    assert.deepEqual(r.files.map((f) => f.rel).sort(), ["docs/PLAN_B.md", "docs/notes/build.md"]);
+    assert.deepEqual(r.skipped.map((k) => k.reason).sort(), [".tmp-1", "Coverage", "target", "test-results"]);
+    for (const k of r.skipped) assert.ok(isHeavyDir(k.reason), k.reason);
+    assert.ok(HEAVY_DIRS.includes("target") && HEAVY_DIRS.includes("node_modules"));
+    const dst = tmp("heavy-dst");
+    makeRepo(dst, "Beta");
+    const out = [];
+    assert.equal(main(["--sync-docs", "--from-projects", src, "--to", dst, "--dry-run"], (l) => out.push(l), (l) => out.push(l)), 0, out.join("\n"));
+    assert.match(out.join("\n"), /skipped by folder: .*target 1/);
   });
 
   test("forge-migrate.mjs dispatches --sync-docs", () => {

@@ -11,8 +11,8 @@
 // --sync-docs. Source: every folder directly under --from-projects whose `.git` is a directory (a main checkout, not a
 // linked worktree), or only the --repo names. The dest clone has the same folder name unless `--as <src>=<dest>` maps it
 // (Linux is case-sensitive: a dev pp folder `game` that teams.json calls `Game` must be cloned and synced as `Game`). Per repo `git ls-files --others -z -- docs` (untracked, ignored included).
-// Skipped and reported: path segments node_modules/.godot/.import/dist/build, files over 200 MB, anything that is not a
-// regular file. The source is only read (git runs with --no-optional-locks).
+// Skipped and reported: heavy dir segments (HEAVY_DIRS in forge-migrate.mjs, shared with its untracked tar: node_modules,
+// dist, .godot, build, target, ... and .tmp*), files over 200 MB, anything that is not a regular file. The source is only read (git runs with --no-optional-locks).
 // Dest: never writes a path the dest clone tracks in git; a dest file that exists and differs is kept and reported as a
 // conflict; an identical one counts as "same". A dest repo folder that is not a git checkout is reported (not cloned)
 // and nothing is written there.
@@ -40,10 +40,9 @@ import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fmtBytes, realOfNearest } from "./forge-migrate.mjs";
+import { fmtBytes, isHeavyDir, realOfNearest } from "./forge-migrate.mjs";
 
 export const MAX_FILE_BYTES = 200 * 1024 * 1024;
-export const SKIP_SEGMENTS = ["node_modules", ".godot", ".import", "dist", "build"];
 const SHA_BATCH_CHARS = 16_000; // stays well under the Windows 32k command line for ssh.exe
 const LIST_CAP = 50;
 
@@ -186,7 +185,7 @@ export function sourceDocs(repoDir) {
   const out = git(repoDir, ["ls-files", "--others", "-z", "--", "docs"]);
   for (const rel of out.split("\0").filter(Boolean).sort()) {
     if (rel.endsWith("/")) { skipped.push({ rel, reason: "nested git repo" }); continue; }
-    const seg = rel.split("/").find((s) => SKIP_SEGMENTS.includes(s));
+    const seg = rel.split("/").slice(0, -1).find(isHeavyDir);
     if (seg) { skipped.push({ rel, reason: seg }); continue; }
     if (/[\n\r\\]/.test(rel)) { skipped.push({ rel, reason: "unsafe file name" }); continue; }
     const abs = join(repoDir, ...rel.split("/"));
@@ -433,9 +432,11 @@ function printSync(s, log) {
     log(`  ${r.repo}${r.dest ? ` -> ${r.dest}` : ""}: ${r.files} files, ${fmtBytes(r.bytes)}; ${verb} ${r.copied}, same ${r.same}, conflicts ${r.conflicts.length}, skipped ${r.skipped.length}${r.destState !== "cloned" ? `  [dest ${r.destState}]` : ""}`);
     for (const c of r.conflicts.slice(0, LIST_CAP)) log(`    CONFLICT ${c.rel}: ${c.reason}`);
     if (r.conflicts.length > LIST_CAP) log(`    ... ${r.conflicts.length - LIST_CAP} more conflicts`);
-    const bigOrOdd = r.skipped.filter((k) => !SKIP_SEGMENTS.includes(k.reason));
+    const bigOrOdd = r.skipped.filter((k) => !isHeavyDir(k.reason));
     for (const k of bigOrOdd.slice(0, LIST_CAP)) log(`    SKIPPED ${k.rel}: ${k.reason}`);
-    const bySeg = SKIP_SEGMENTS.map((seg) => [seg, r.skipped.filter((k) => k.reason === seg).length]).filter(([, n]) => n);
+    const segCount = new Map();
+    for (const k of r.skipped) if (isHeavyDir(k.reason)) segCount.set(k.reason, (segCount.get(k.reason) || 0) + 1);
+    const bySeg = [...segCount];
     if (bySeg.length) log(`    skipped by folder: ${bySeg.map(([seg, n]) => `${seg} ${n}`).join(", ")}`);
     for (const e of r.errors) log(`    ERROR ${e}`);
   }

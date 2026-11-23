@@ -52,10 +52,12 @@
 // Main checkouts (report and bundle): every git dir directly under --win-projects (CLI default <home>/projects) and the
 // main worktree of each sanctuary repo get the same treatment (`<repo>__main.bundle`: their checked-out unpushed branch
 // + WIP), plus `<repo>__untracked.tar`: `git ls-files --others` WITHOUT --exclude-standard (ignored files included:
-// docs/brainstorm etc.), minus denylisted dirs by path segment (node_modules, dist, .godot, .import, build, export(s),
-// .tmp*) and *.pck / *.exe, files over 50 MB skipped; docs/** always goes in unless a file is over 200 MB. Every skip is
-// in manifest.json `checkouts[].skipped`. --skip-bundle <repo> / <repo>:<branch> (owner-delete work) leaves those out
-// and lists them in manifest.json `skippedByOwner`.
+// docs/brainstorm etc.), minus heavy dirs by path segment (HEAVY_DIRS: node_modules, dist, dist-desktop, .godot,
+// .import, build, export(s), target, coverage, playwright-report, test-results, .tmp*) and *.pck / *.exe, files over
+// 50 MB skipped; docs/** always goes in unless a file is over 200 MB. Every skip is in manifest.json
+// `checkouts[].skipped`. --skip-bundle <repo> / <repo>:<branch> (owner-delete work) leaves exactly those out (a skipped
+// branch's checkout still gets its untracked tar; other branches it owned go to the repo bundle) and lists them in
+// manifest.json `skippedByOwner`.
 // --devpc-inventory (read-only): each folder under --win-projects and the VS data dirs with size, git, local-only
 // branches, dirty and untracked+ignored doc counts, and a proposed keep / delete / review (keep: DEFAULT_KEEP + --keep).
 import { spawnSync } from "node:child_process";
@@ -121,7 +123,10 @@ const AFTER_ROOT = `(?=[\\\\/${STOP}]|$)`;
 // After a match: the same token goes on with a backslash (`My Game\x`, `Demo(1)\x`) -> a half conversion, refuse it.
 // A token that starts a new drive path before its backslash (`log.md project=C:\...`, `a.md (C:\...`) is a second
 // path, not a continuation: no refusal (the real log shape behind the M1 regression, 1799 hits).
-const HALF = /^(?:[(),;:[\]{}]|[ \t])(?:(?![A-Za-z]:[\\/])[^\s"'`<>|])*\\/;
+// Any number of space-separated words may come before that backslash (`My Big Game\x`, review L1), none of them
+// starting a new drive path. Tested on at most 260 chars after the match.
+const HALF_WORD = "(?:(?![A-Za-z]:[\\\\/])[^\\s\"'`<>|])";
+const HALF = new RegExp(`^(?:[(),;:[\\]{}]|[ \\t])${HALF_WORD}*(?:[ \\t]+${HALF_WORD}+)*\\\\`);
 
 /**
  * Builds the ordered path map. `opts` are parsed args. Returns { rules, source, whole, roots }: `source` matches a
@@ -788,7 +793,14 @@ export function bundleFlagged(report, opts, { now = new Date(), scratch = null }
 // out by path segment, files over UNTRACKED_FILE_CAP are skipped; `docs/**` always goes in unless over DOCS_FILE_CAP.
 export const UNTRACKED_FILE_CAP = 50 * 1024 * 1024;
 export const DOCS_FILE_CAP = 200 * 1024 * 1024;
-const DENY_DIR = /^(?:node_modules|dist|\.godot|\.import|build|exports?|\.tmp.*)$/i;
+/**
+ * Heavy / generated dir names (one path segment, case-insensitive), plus any `.tmp*` segment. Shared with
+ * scripts/forge-docs-sync.mjs so both skip the same dirs. `target` is Rust/Cargo output (src-tauri/target).
+ */
+export const HEAVY_DIRS = ["node_modules", "dist", "dist-desktop", ".godot", ".import", "build", "export", "exports", "target", "coverage", "playwright-report", "test-results"];
+export const HEAVY_DIR_RE = new RegExp(`^(?:${HEAVY_DIRS.map(escapeRe).join("|")}|\\.tmp.*)$`, "i");
+export const isHeavyDir = (seg) => HEAVY_DIR_RE.test(seg);
+const DENY_DIR = HEAVY_DIR_RE;
 const DENY_FILE = /\.(?:pck|exe)$/i;
 
 /**
@@ -865,17 +877,23 @@ function bundleWithScratch(report, opts, now, scratch) {
     const skipBranch = new Set(repoSkips.map((k) => k.branch));
     for (const b of repo.branches) if (skipBranch.has(b.name)) skippedByOwner.push({ repo: repo.name, branch: b.name, ahead: b.ahead, reason: "skipped-by-owner" });
     const kept = repo.branches.filter((b) => !skipBranch.has(b.name));
+    // Skipping drops exactly the named branch (and the WIP of the tree it is checked out in): a main checkout keeps
+    // its untracked tar, and kept branches owned by a skipped tree move to the repo bundle.
+    const orphaned = [];
     for (const i of repo.items) {
+      // Before the skip check: the untracked tar (docs/**) does not depend on which branch is checked out.
+      if (i.main) checkouts.push({ repo, item: i, base: mainBase(repo, i) });
+      const branches = kept.filter((b) => b.owner === i.path);
       if (skipBranch.has(i.branch)) {
         skippedByOwner.push({ repo: repo.name, worktree: i.path, branch: i.branch, dirty: i.dirty, reason: "skipped-by-owner", what: "worktree with the skipped branch checked out (WIP not bundled)" });
+        orphaned.push(...branches);
         continue;
       }
-      const branches = kept.filter((b) => b.owner === i.path);
-      if (i.main) checkouts.push({ repo, item: i, base: mainBase(repo, i) });
-      if (i.error || !(branches.length || i.detachedAhead || i.dirty)) continue;
+      if (i.error) { orphaned.push(...branches); continue; }
+      if (!(branches.length || i.detachedAhead || i.dirty)) continue;
       plan.push({ kind: i.main ? "main" : "worktree", repo, item: i, branches, file: fileFor(i.main ? mainBase(repo, i) : i.path.split("/").map(slug).join("__"), ".bundle") });
     }
-    const loose = kept.filter((b) => b.owner === null);
+    const loose = [...kept.filter((b) => b.owner === null), ...orphaned];
     if (loose.length || repo.stashes.length) plan.push({ kind: "repo", repo, item: null, branches: loose, file: fileFor(`${repo.name}__repo`, ".bundle") });
   }
   const summary = { mode: opts.dryRun ? "bundle-dry-run" : "bundle", dir, bundles: 0, verified: 0, failed: 0, skippedLarge: 0, entries: [], checkouts: [], tars: 0, tarFiles: 0, tarBytes: 0, skippedByOwner };

@@ -116,12 +116,16 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
    **Main checkouts** are covered too: every git dir directly under `--win-projects` (default `C:\Users\<u>\projects`)
    and each sanctuary repo's main worktree. Each gets `<repo>__main.bundle` (its checked-out unpushed branch + WIP of
    its dirty tree) and `<repo>__untracked.tar` with the untracked files INCLUDING ignored ones (that is where
-   `docs/brainstorm/` and other ignored notes live), minus `node_modules`, `dist`, `.godot`, `.import`, `build`,
-   `export(s)`, `.tmp*`, `*.pck`, `*.exe`, and files over 50 MB; `docs/**` always goes in unless a file is over 200 MB.
+   `docs/brainstorm/` and other ignored notes live), minus the heavy dirs (`HEAVY_DIRS` in the script: `node_modules`,
+   `dist`, `dist-desktop`, `.godot`, `.import`, `build`, `export(s)`, `target` (Rust, e.g. `src-tauri/target`),
+   `coverage`, `playwright-report`, `test-results`, `.tmp*`), `*.pck`, `*.exe`, and files over 50 MB; `docs/**` always
+   goes in unless a file is over 200 MB.
    `manifest.json` `checkouts[]` lists path, bundle, untrackedTar, fileCount, bytes and every skip. Restore a tar with
    `tar -xf <repo>__untracked.tar -C <checkout>`.
    **Owner-delete work:** `--skip-bundle <repo>` or `--skip-bundle <repo>:<branch>` (repeatable) leaves that repo or
-   branch (and a worktree with that branch checked out) out; it is listed in `manifest.json` `skippedByOwner`.
+   branch (and the WIP of a worktree with that branch checked out) out; it is listed in `manifest.json`
+   `skippedByOwner`. Nothing else is dropped: a main checkout with the skipped branch checked out still gets its
+   `<repo>__untracked.tar`, and other unpushed branches that worktree owned go into `<repo>__repo.bundle`.
    Run `--bundle --bundle-dir <dir> --dry-run` first to see the plan, tar file counts and sizes.
 2b. **Dev pp inventory** (read-only, before the nuke): `node scripts/forge-migrate.mjs --devpc-inventory [--keep <name>]...
    [--json]` lists every folder under `C:\Users\<u>\projects` plus the VS data dirs (`~/.vibesquad`, each folder under
@@ -132,6 +136,18 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
    writes `vibesquad-home-<timestamp>.zip` (Windows tar.exe; `.tar.gz` on POSIX) of the full home; with `--bundle` the
    bundles are staged in `<dir>/vibesquad-bundles-<timestamp>/` and go into the same archive. Lock files, sockets and
    links are skipped and listed. Add `--dry-run` to see the file count, skips and planned bundles first.
+3a. **Transfer the backup to the forge** (step 3 writes it on the dev pp; C4 reviews it on the forge). Copy the whole
+   backup dir, then check every file's sha256 on both sides. **Keep the dev pp copy: never delete it** (C4 decides
+   about the forge copy only).
+   ```
+   ssh <user>@<forge mesh host> "mkdir -p ~/forge-backup"
+   scp -r <dir>/* <user>@<forge mesh host>:~/forge-backup/
+   # or: rsync -a --checksum <dir>/ <user>@<forge mesh host>:~/forge-backup/
+   # dev pp (Git Bash) and forge must print the same lines:
+   (cd <dir> && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+   ssh <user>@<forge mesh host> "cd ~/forge-backup && find . -type f -print0 | sort -z | xargs -0 sha256sum"
+   ```
+   Any difference: copy that file again and recheck before step 4. `<backup dir>` in C4 below is `~/forge-backup`.
 4. **Dry run**, then the copy. Allowlist only: `teams.json`, `teams/`, `inbox.json`, `lessons.jsonl`, `profiles.json`,
    `settings.json`, `stakes-ladder.json`, `schedules.json`, `capped-providers.json`, `brief-history/`, `reports/`.
    Everything else is printed as "left behind" with its size (runner/, logs, stamps, `*.bak*`, ...); the forge's own
@@ -166,7 +182,8 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
      node scripts/forge-docs-sync.mjs --sync-docs --from-projects C:\Users\<u>\projects --to <user>@<forge mesh host>:~/projects
      ```
      Per main checkout (`.git` is a folder) it takes `git ls-files --others -z -- docs` (untracked, ignored included),
-     skips `node_modules`, `.godot`, `.import`, `dist`, `build` and files over 200 MB (listed), copies every eligible
+     skips the same heavy dirs as the untracked tar (`HEAVY_DIRS`: `node_modules`, `.godot`, `dist`, `build`,
+     `target`, ...) and files over 200 MB (listed), copies every eligible
      file into a local staging dir (printed; never deleted), then per repo over ssh: `git ls-files -s` (tracked paths),
      `sha256sum` of what already exists, one `tar -x -k` stream of the new files and a `sha256sum` check against the
      local hashes. A path the forge clone tracks is never written; an existing file that differs is kept and listed as
@@ -183,7 +200,7 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
 
 ## C4 backup review schedule (right after C2)
 
-The dev pp backup zip and bundles live on the forge (C4) until the owner says delete. Right after C2, on the forge,
+The dev pp backup zip and bundles live on the forge (copied in C2 step 3a; the dev pp copy is kept) until the owner says delete. Right after C2, on the forge,
 create a **one-shot** VS schedule that reminds the owner about them in about 14 days. The agent it starts only reads
 and reports; it never deletes. Loopback calls use the owner's local token (`x-vibesquad-token`, `~/.vibesquad/local-token`);
 `POST /__vibesquad/schedules` goes to `server/schedules.mjs` `create()`. Do **not** add `runOnCreate`: it fires the
@@ -207,7 +224,7 @@ EOF
 
 Check it (one entry, `maxRuns: 1`, `runCount: 0`, `nextRunAt` about 14 days out):
 `curl -fsS "http://127.0.0.1:<port>/__vibesquad/schedules" -H "x-vibesquad-token: $(cat ~/.vibesquad/local-token)"`.
-`<backup dir>` is where C4 put the zip and bundles on the forge; `<port>` defaults to 4180.
+`<backup dir>` is where C2 step 3a put the zip and bundles on the forge (`~/forge-backup`); `<port>` defaults to 4180.
 
 ## Rollback notes (C3)
 
