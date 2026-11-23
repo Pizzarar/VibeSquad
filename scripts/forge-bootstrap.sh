@@ -19,7 +19,7 @@ usage() {
 Usage: scripts/forge-bootstrap.sh [options]
   --repo DIR           VibeSquad checkout the unit runs from (default: \$HOME/projects/VibeSquad)
   --port N             server port (default 4180)
-  --meshnet-ip IP      NordVPN Meshnet IPv4 (default: detected via 'nordvpn meshnet peer list', else the nordlynx interface)
+  --meshnet-ip IP      NordVPN Meshnet IPv4 (default: the nordlynx interface, else this device's IP from 'nordvpn meshnet peer list')
   --meshnet-host NAME  Meshnet hostname as shown by the peer list (default: detected via 'nordvpn meshnet peer list')
   --no-lan             do not set VIBESQUAD_LAN=1 (loopback only)
   --tmpdir DIR         TMPDIR for the unit, on the real disk (default: \$HOME/.vibesquad/tmp)
@@ -136,8 +136,8 @@ fi
 this_device_field() {
   nordvpn meshnet peer list 2>/dev/null | awk -v keys="$1" '
     BEGIN {keys = tolower(keys)}
-    /^[[:space:]]*This device/ {indev=1; next}
-    indev && (/^[[:space:]]*$/ || /^[[:space:]]*[A-Za-z][A-Za-z ]*:[[:space:]]*$/) {exit}
+    tolower($0) ~ /^[[:space:]]*this device:[[:space:]]*$/ {indev=1; next}
+    indev && (/^[[:space:]]*$/ || tolower($0) ~ /^[[:space:]]*(local|external)[[:space:]]+peers?:/) {exit}
     indev {
       line = $0; sub(/^[[:space:]]+/, "", line)
       i = index(line, ":"); if (i == 0) next
