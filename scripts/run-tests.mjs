@@ -8,6 +8,9 @@
 // refused, and a queued full run leaves the queue; targeted runs (file args) still go. Owner override, logged:
 //   npm test -- --ignore-drain   (or VIBESQUAD_IGNORE_DRAIN=1), the owner's shell only
 // Other args are forwarded as test files (default: test/*.test.mjs).
+// idea-577: if the shell that launched this run dies (TaskStop kills the shell only), the run is orphaned but its pid stays live,
+// so nothing would ever take the slot over. scripts/orphan-guard.mjs notices; a queued run leaves the queue, a holder kills its
+// test process tree and writes a last record with orphaned:true, then exits 1. Off with VS_TEST_ORPHAN_GUARD=0.
 import { spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -17,6 +20,7 @@ import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "..
 import { childEnv } from "./test-child-env.mjs";
 import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
+import { killTree, startOrphanGuard } from "./orphan-guard.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const paths = suitePaths();
@@ -48,6 +52,25 @@ if (refusal) {
 }
 
 let slot = null;
+let child = null;
+let watchdog = null;
+// idea-577: started before the queue wait so an orphaned waiter leaves the line too. Cheap: one listing at start, kill(0) on a
+// few pids every few seconds, a filtered listing every 30s.
+const orphanGuard = process.env.VS_TEST_ORPHAN_GUARD === "0" ? null : startOrphanGuard({ onOrphan: orphaned });
+function orphaned(reason) {
+  // The launcher's pipes may be gone with it: a write error must not throw before the slot is released.
+  for (const s of [process.stdout, process.stderr]) s.on("error", () => {});
+  const say = (m) => { try { console.error(m); } catch {} };
+  if (child && watchdog) {
+    say(`npm test: the shell that launched this run is gone (${reason}); killing the test process tree and releasing the suite slot.`);
+    const pids = killTree(child.pid);
+    say(`npm test: killed ${pids.length} process(es); exiting 1.`);
+    finish(null, null, { orphaned: true, orphanReason: reason });
+  } else {
+    say(`npm test: the shell that launched this run is gone (${reason}); leaving the suite queue and exiting 1.`);
+  }
+  process.exit(1); // a queued waiter leaves the queue in its exit handler (slot is still null)
+}
 if (queue) {
   let leave = () => {};
   const quit = () => { leave(); process.exit(130); };
@@ -95,7 +118,7 @@ function testConcurrency(env = process.env, cpus = os.availableParallelism?.() ?
   const n = Math.floor(Number(env.VS_TEST_CONCURRENCY));
   return n >= 1 ? n : Math.max(1, Math.min(8, cpus - 1));
 }
-const child = spawn(
+child = spawn(
   process.execPath,
   [
     "--test",
@@ -112,12 +135,13 @@ const child = spawn(
 
 // idea-309: one wedged file must not hold the slot forever. A file with a test running and no test event for
 // VS_TEST_FILE_TIMEOUT_MS (default 15 min) is named on stderr, its process tree (incl. a headless browser) is killed, and node --test fails it.
-const watchdog = startWatchdog({ progressFile, rootPid: child.pid, idleMs: fileIdleMs, pollMs: Math.min(5000, Math.max(250, fileIdleMs / 4)), root });
+watchdog = startWatchdog({ progressFile, rootPid: child.pid, idleMs: fileIdleMs, pollMs: Math.min(5000, Math.max(250, fileIdleMs / 4)), root });
 
 let finished = false;
-function finish(exitCode, signal) {
+function finish(exitCode, signal, extra = {}) {
   if (finished) return;
   finished = true;
+  orphanGuard?.stop();
   let summary = {};
   try { summary = JSON.parse(readFileSync(summaryFile, "utf8")); } catch {} // killed before the summary: counts stay null
   watchdog.stop();
@@ -129,7 +153,7 @@ function finish(exitCode, signal) {
   const failedRun = exitCode !== 0 || !!signal;
   const incomplete = failedRun && !(summary.fail > 0);
   const fail = incomplete ? Math.max(Number(summary.fail) || 0, 1) : summary.fail;
-  finishSlot(paths, slot, { ...summary, fail, failingFiles, exitCode: exitCode ?? null, signal: signal ?? null, ...(incomplete ? { incomplete: true } : {}) });
+  finishSlot(paths, slot, { ...summary, fail, failingFiles, exitCode: exitCode ?? null, signal: signal ?? null, ...(incomplete ? { incomplete: true } : {}), ...extra });
 }
 child.on("exit", (code, sig) => { finish(code, sig); process.exit(code ?? (sig ? 1 : 0)); });
 for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { child.kill(s); });
