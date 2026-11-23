@@ -716,6 +716,7 @@ export const USAGE_EXPORT_MD_URL = "/__vibesquad/providers/usage-export?format=m
 /** Squad filter persistence + URLs (usa-25). */
 export const USAGE_SQUAD_KEY = "vs.usage.squad";
 export const USAGE_URL = "/__vibesquad/providers/usage";
+export const QUOTA_ALERTS_URL = "/__vibesquad/providers/quota-alerts";
 export const squadQuery = (squad: string | null | undefined): string => (squad ? `squad=${encodeURIComponent(squad)}` : "");
 export const usageUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_URL}?${squadQuery(squad)}` : USAGE_URL);
 export const usageExportMdUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_EXPORT_MD_URL}&${squadQuery(squad)}` : USAGE_EXPORT_MD_URL);

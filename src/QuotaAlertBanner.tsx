@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { pruneDismissed, quotaAlertKey, quotaAlertText, QUOTA_DISMISS_KEY, USAGE_URL, visibleQuotaAlerts, type QuotaAlert } from "./usageHelpers";
+import { pruneDismissed, quotaAlertKey, quotaAlertText, QUOTA_DISMISS_KEY, QUOTA_ALERTS_URL, visibleQuotaAlerts, type QuotaAlert } from "./usageHelpers";
 import "./QuotaAlertBanner.css";
 
 const POLL_MS = 60_000;
@@ -17,7 +17,7 @@ export function QuotaAlertBanner({ onOpenUsage, testAlerts }: { onOpenUsage: () 
     let live = true;
     const load = async () => {
       try {
-        const res = await fetch(USAGE_URL);
+        const res = await fetch(QUOTA_ALERTS_URL);
         if (!res.ok) return;
         const j = await res.json();
         if (live && Array.isArray(j?.quotaAlerts)) setAlerts(j.quotaAlerts);
