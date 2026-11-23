@@ -3306,7 +3306,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
         `Use FAIL if the worker reported errors, failing tests, or did not finish. If the worker is currently running or queued, or its report states neither PASS nor FAIL, log nothing. Then stop.`,
-        `Reviewer verdicts: if the report has a line \`PASS|FAIL H/M/L <hash>\` (e.g. "FAIL 1/0/1 3528a4c"), start your text with that line copied exactly, never a paraphrase or the opposite word. The server copies the worker's own line to the front of your entry and marks any PASS/FAIL disagreement. A reviewer with no such line is logged as "NO-VERDICT: ...", never PASS.`,
+        `Reviewer verdicts: if the report has a line \`PASS|FAIL H/M/L <hash>\` (e.g. "FAIL 1/0/1 3528a4c"), start your text with that line copied exactly, never a paraphrase or the opposite word. The <hash> slot may instead be a docs target for a docs-only review: \`docs:<repo-relative path>\` (e.g. "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md") or a bare repo-relative path ending in \`.md\` (e.g. "PASS 0/0/0 EXP3.md"). The server copies the worker's own line to the front of your entry and marks any PASS/FAIL disagreement. A reviewer with no such line is logged as "NO-VERDICT: ...", never PASS.`,
       ].join("\n");
 
       const startedAt = Date.now();
