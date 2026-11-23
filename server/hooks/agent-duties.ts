@@ -3319,6 +3319,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const last = await lastAssistantText(paseo, worker.id);
         const text = unverifiedDigestText(why, last, { title: worker.title, labels });
         if (!text) return;
+        // idea-524: the lane's live lead already received this exact final (its watch ping or a [done] relay): a late UNVERIFIED
+        // would be a second [done] for work it already saw. Only that lead's own delivery counts (idea-450 H1).
+        if (await laneLeadHasFinal(paseo, teamIdOf(team, currentTeams()), lane, workerId, last)) return;
         // idea-207a/M1: re-check right before writing (the awaits above can outlast a digest that logged its verdict): a real
         // verdict already logged for this turn always wins, so one turn never gets both a verdict and an UNVERIFIED entry.
         if (verdictLogged()) return;
@@ -3592,6 +3595,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (oldest === undefined) break;
         forwardedFinals.delete(oldest);
       }
+    }
+
+    /**
+     * idea-524: has the lane's live lead already received `worker`'s final `last` (a watch ping or a `[done]` relay marked it in
+     * `forwardedFinals`)? The digest's UNVERIFIED fallback skips its durable `[done]` only then. Recipient-scoped on purpose
+     * (idea-450 H1): an Overlord's or another observer's delivery never suppresses the lane lead's entry. No live lead, a failed
+     * lookup, an empty final, or a different final (a later turn: new hash) all return false, so the entry is still written.
+     */
+    async function laneLeadHasFinal(paseo: Paseo, teamId: string, lane: string, worker: string, last: string, now = Date.now()): Promise<boolean> {
+      if (!teamId || !String(last ?? "").trim()) return false;
+      const lead = await findLead(paseo, teamId, lane).catch(() => null);
+      return !!lead?.id && isFinalForwarded(String(lead.id), worker, finalHashOf(last), now);
     }
 
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
@@ -4779,6 +4794,8 @@ ${detail}` : text, refs: [d.setId] };
           const last = await lastAssistantText(paseo, workerId);
           const text = unverifiedDigestText("orphaned", last, worker);
           if (!text) continue;
+          // idea-524: the lane's live lead already received this exact final: a late orphaned UNVERIFIED is a duplicate, skip it.
+          if (await laneLeadHasFinal(paseo, teamIdOf(where.team, currentTeams()), where.lane, workerId, last, now)) continue;
           appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text, refs: [workerId] });
         }
       } catch (err) {
