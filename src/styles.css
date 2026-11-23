@@ -6336,7 +6336,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping. */
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
 }
+.phone-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.phone-tab .phone-badge { flex-shrink: 0; }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
 .phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--pink-fill); color: var(--on-pink-fill); font-size: 12px; font-weight: 800; text-align: center; }
 
