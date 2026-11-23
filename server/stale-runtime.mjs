@@ -1,8 +1,8 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export const STAMP_FILE = "build-stamp.json";
 const GIT_TIMEOUT_MS = 2000;
@@ -40,23 +40,47 @@ export function readBuildStamp(rootDir) {
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 
 /**
- * HEAD's sha read straight from the .git files, no spawn (mirrors providers-catalog readHeadShaFs, but starts from the
- * git common dir `stamp.repo` already names). Loose ref first, then packed-refs, as git resolves it. Null when it can't
- * read it (reftable, symref chain, missing ref): the caller keeps the cached value rather than guessing a sha.
+ * Resolve `{gitDir, commonDir}` for a checkout root or a git dir, following a linked worktree's `gitdir:` file and
+ * `commondir` (mirrors providers-catalog readHeadShaFs). `root` may be the checkout root (with a `.git` file/dir) or the
+ * git dir itself (`stamp.repo` = `git rev-parse --git-common-dir`). Null when a `.git` file can't be parsed.
  */
-function readHeadSha(gitDir) {
+function gitDirs(root) {
+  let gitDir = root;
   try {
-    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
-    if (SHA_RE.test(head)) return head.toLowerCase();
-    const ref = /^ref:\s*(refs\/\S+)$/.exec(head)?.[1];
-    if (!ref || ref.split("/").some((p) => p === ".." || p === "." || p === "")) return null;
+    const dotGit = join(root, ".git");
+    const st = statSync(dotGit);
+    if (st.isFile()) {
+      const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+      if (!m) return null;
+      gitDir = resolve(root, m[1].trim());
+    } else if (st.isDirectory()) {
+      gitDir = dotGit;
+    }
+  } catch {
+    // No `.git` entry: `root` is already a git dir.
+  }
+  let commonDir = gitDir;
+  try { commonDir = resolve(gitDir, readFileSync(join(gitDir, "commondir"), "utf8").trim()); } catch { /* not a linked worktree */ }
+  return { gitDir, commonDir };
+}
+
+/**
+ * Full sha of a named ref (e.g. `refs/heads/master`) read straight from the .git files, no spawn. Loose ref first, then
+ * packed-refs, as git resolves it. Null when it can't be read (reftable, a symref chain, a missing ref): the caller never
+ * guesses a sha.
+ */
+export function readRefSha(root, ref) {
+  try {
+    if (ref.split("/").some((p) => p === ".." || p === "." || p === "")) return null;
+    const dirs = gitDirs(root);
+    if (!dirs) return null;
     let loose = null;
-    try { loose = readFileSync(join(gitDir, ref), "utf8").trim(); } catch { /* not a loose ref */ }
+    try { loose = readFileSync(join(dirs.commonDir, ref), "utf8").trim(); } catch { /* not a loose ref */ }
     if (loose !== null) return SHA_RE.test(loose) ? loose.toLowerCase() : null; // a symref or junk: let git decide
     let packed = "";
-    try { packed = readFileSync(join(gitDir, "packed-refs"), "utf8"); } catch { return null; }
+    try { packed = readFileSync(join(dirs.commonDir, "packed-refs"), "utf8"); } catch { return null; }
     for (const line of packed.split("\n")) {
-      const [sha, name] = line.trim().split(" ");
+      const [sha, name] = line.trim().split(/\s+/);
       if (name === ref && SHA_RE.test(sha)) return sha.toLowerCase();
     }
     return null;
@@ -65,12 +89,12 @@ function readHeadSha(gitDir) {
   }
 }
 
-/** `{built, head, behind}` when the stamped build trails the checkout's HEAD, else null. Any git/stamp failure means not stale. */
+/** `{built, head, behind}` when the stamped build trails the repo's master, else null. Any git/stamp failure means not stale. */
 export function computeStale({ rootDir, git = defaultGit, exists = existsSync } = {}) {
   try {
     const stamp = readBuildStamp(rootDir);
     if (!stamp?.repo || !exists(stamp.repo)) return null;
-    const head = git(stamp.repo, ["rev-parse", "HEAD"]);
+    const head = git(stamp.repo, ["rev-parse", "master"]);
     if (!head || head === stamp.commit) return null;
     const behind = Number.parseInt(git(stamp.repo, ["rev-list", "--count", `${stamp.commit}..${head}`]), 10);
     if (!Number.isFinite(behind) || behind <= 0) return null;
@@ -85,7 +109,7 @@ export async function computeStaleAsync({ rootDir, git = defaultGitAsync, exists
   try {
     const stamp = readBuildStamp(rootDir);
     if (!stamp?.repo || !exists(stamp.repo)) return null;
-    const head = await git(stamp.repo, ["rev-parse", "HEAD"]);
+    const head = await git(stamp.repo, ["rev-parse", "master"]);
     if (!head || head === stamp.commit) return null;
     const behind = Number.parseInt(await git(stamp.repo, ["rev-list", "--count", `${stamp.commit}..${head}`]), 10);
     if (!Number.isFinite(behind) || behind <= 0) return null;
@@ -97,20 +121,20 @@ export async function computeStaleAsync({ rootDir, git = defaultGitAsync, exists
 
 let inflight = null;
 let generation = 0;
-let cached = { at: 0, value: null, stampCommit: null, head: null };
+let cached = { at: 0, value: null, stampCommit: null };
 
-/** Cached `computeStale` (60s) that also mirrors the result to stale.json for the CLI. */
+/** Cached `computeStale` (60s) that also mirrors the result (plus the master it read) to stale.json for the CLI. */
 export function getStale({ rootDir, env = process.env, now = Date.now(), compute = computeStale } = {}) {
   const stamp = rootDir ? readBuildStamp(rootDir) : null;
   const curStampCommit = stamp?.commit ?? null;
-  const curHead = stamp?.repo ? readHeadSha(stamp.repo) : null;
-  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit && curHead === cached.head) return cached.value;
+  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return cached.value;
   const value = compute({ rootDir });
-  cached = { at: now, value, stampCommit: curStampCommit, head: curHead };
+  cached = { at: now, value, stampCommit: curStampCommit };
   try {
     const file = staleFilePath(env);
     mkdirSync(join(file, ".."), { recursive: true });
-    writeFileSync(file, JSON.stringify({ stale: value }));
+    const master = stamp?.repo ? readRefSha(stamp.repo, "refs/heads/master") : null;
+    writeFileSync(file, JSON.stringify({ stale: value, master, repo: stamp?.repo ?? null }));
   } catch {}
   return value;
 }
@@ -122,19 +146,19 @@ export function getStale({ rootDir, env = process.env, now = Date.now(), compute
 export function refreshStale({ rootDir, env = process.env, now = Date.now(), compute = computeStaleAsync } = {}) {
   const stamp = rootDir ? readBuildStamp(rootDir) : null;
   const curStampCommit = stamp?.commit ?? null;
-  const curHead = stamp?.repo ? readHeadSha(stamp.repo) : null;
-  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit && curHead === cached.head) return Promise.resolve(cached.value);
+  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return Promise.resolve(cached.value);
   if (inflight) return inflight;
   const gen = generation;
   const p = (async () => {
     try {
       const value = await compute({ rootDir });
       if (gen !== generation) return value; // resetStaleCache ran mid-flight: don't resurrect the dropped cache or file
-      cached = { at: now, value, stampCommit: curStampCommit, head: curHead };
+      cached = { at: now, value, stampCommit: curStampCommit };
       try {
         const file = staleFilePath(env);
         await mkdir(join(file, ".."), { recursive: true });
-        await writeFile(file, JSON.stringify({ stale: value }));
+        const master = stamp?.repo ? readRefSha(stamp.repo, "refs/heads/master") : null;
+        await writeFile(file, JSON.stringify({ stale: value, master, repo: stamp?.repo ?? null }));
       } catch {}
       return value;
     } finally {
@@ -147,28 +171,32 @@ export function refreshStale({ rootDir, env = process.env, now = Date.now(), com
 
 /** Last cached value only: no git, no stale.json write (the read-only /health path). */
 export function peekStale(rootDir) {
-  if (rootDir && cached.at) {
-    const stamp = readBuildStamp(rootDir);
-    // A sync rewrote build-stamp.json, or HEAD moved (e.g. a reset) since the value was cached: it describes the old
-    // build/checkout, so report nothing rather than a stale toast.
-    if ((stamp?.commit ?? null) !== cached.stampCommit) return null;
-    if ((stamp?.repo ? readHeadSha(stamp.repo) : null) !== cached.head) return null;
-  }
+  // A sync rewrote build-stamp.json since the value was cached: it describes the old build, so report nothing rather than a stale toast.
+  if (rootDir && cached.at && (readBuildStamp(rootDir)?.commit ?? null) !== cached.stampCommit) return null;
   return cached.value;
 }
 
 export function resetStaleCache() {
-  cached = { at: 0, value: null, stampCommit: null, head: null };
+  cached = { at: 0, value: null, stampCommit: null };
   inflight = null;
   generation += 1;
 }
 
-/** One-line CLI warning from the published stale.json; null when fresh, missing, or unreadable. */
+/**
+ * One-line CLI warning from the published stale.json; null when fresh, missing, unreadable, or when refs/heads/master has
+ * moved since stale.json was written (e.g. `git reset --keep HEAD~1` dropped the named head). The master re-check is a
+ * spawn-free .git read, so `vs` never shells out on this path.
+ */
 export function staleWarning(env = process.env) {
   try {
-    const s = JSON.parse(readFileSync(staleFilePath(env), "utf8"))?.stale;
-    if (!s || !(s.behind > 0)) return null;
-    return `vs: running an older build: ${s.behind} commit${s.behind === 1 ? "" : "s"} behind (${s.built} vs ${s.head}). Rebuild.`;
+    const s = JSON.parse(readFileSync(staleFilePath(env), "utf8"));
+    const stale = s?.stale;
+    if (!stale || !(stale.behind > 0)) return null;
+    if (typeof s.repo === "string" && typeof s.master === "string") {
+      const cur = readRefSha(s.repo, "refs/heads/master");
+      if (cur && cur !== s.master) return null; // master moved since this was computed: don't name a dropped commit
+    }
+    return `vs: running an older build: ${stale.behind} commit${stale.behind === 1 ? "" : "s"} behind (${stale.built} vs ${stale.head}). Rebuild.`;
   } catch {
     return null;
   }
