@@ -72,13 +72,18 @@ export function createDiskAlarm({
   volumeKey = (p) => defaultVolumeKey(p, platform),
   now = () => Date.now(),
   log = (type, text) => appendVsLogEntry({ teamId: OVERLORD_TEAM, laneId: OVERLORD_LANE, agent: "vibesquad-server", type, text }),
+  // Checked after every await so a stopped alarm never issues another stat/log: an in-flight tick must not
+  // keep counting after stop() (test/disk-alarm.test.mjs:116 flaked on exactly that race).
+  shouldRun = () => true,
 } = {}) {
   const state = new Map(); // drive -> { loggedAt, loggedPct, alarmed }
   async function tick() {
     const results = [];
     const seen = new Set();
     for (const p of targets ?? defaultTargets(rootDir, { platform })) {
+      if (!shouldRun()) return results;
       const drive = platform === "win32" ? driveOf(p) : await volumeKey(p);
+      if (!shouldRun()) return results;
       if (seen.has(drive)) continue; // two paths on one drive: one reading
       seen.add(drive);
       let s;
@@ -88,6 +93,7 @@ export function createDiskAlarm({
         console.warn(`[vibesquad] disk-alarm: stat ${drive} failed: ${e?.message ?? e}`);
         continue;
       }
+      if (!shouldRun()) return results;
       if (!(s.total > 0)) continue;
       const pct = Math.round((s.free / s.total) * 100);
       const freeGb = (s.free / GB).toFixed(1);
@@ -97,12 +103,14 @@ export function createDiskAlarm({
       let logged = false, raised = false;
       if (t0 - st.loggedAt >= DISK_LOG_EVERY_MS || Math.abs(pct - st.loggedPct) > DISK_LOG_DELTA_PTS) {
         await log("metric", `disk-free drive=${drive} free=${freeGb} pct=${pct}`);
+        if (!shouldRun()) return results;
         st.loggedAt = t0;
         st.loggedPct = pct;
         logged = true;
       }
       if (!st.alarmed && pct < DISK_LOW_PCT) {
         await log("needs-you", `Disk low on ${drive}: ${freeGb} GB free (${pct}%). Free space or move worktrees/artifacts before it hits zero.`);
+        if (!shouldRun()) return results;
         st.alarmed = true; // only after the write succeeded: a failed log retries next tick
         raised = true;
       } else if (st.alarmed && pct > DISK_REARM_PCT) st.alarmed = false;
@@ -116,15 +124,22 @@ export function createDiskAlarm({
 /** Server wiring: one tick per 10 min (plus one at start). Returns { stop, tick }. */
 export function startDiskAlarm({ tickMs = DISK_ALARM_TICK_MS, env = process.env, ...rest } = {}) {
   if (env.VS_DISK_ALARM === "0") return { stop() {}, tick: async () => [], disabled: true };
-  const alarm = createDiskAlarm(rest);
+  let stopped = false;
+  const alarm = createDiskAlarm({ ...rest, shouldRun: () => !stopped });
   let running = false;
   const run = () => {
-    if (running) return;
+    if (stopped || running) return;
     running = true;
     alarm.tick().catch((e) => console.warn(`[vibesquad] disk-alarm: ${e?.message ?? e}`)).finally(() => { running = false; });
   };
   const t = setInterval(run, tickMs);
   t.unref?.();
   run();
-  return { stop: () => clearInterval(t), tick: alarm.tick };
+  return {
+    stop: () => {
+      stopped = true; // an in-flight tick checks this after each await and stops before its next stat
+      clearInterval(t);
+    },
+    tick: alarm.tick,
+  };
 }
