@@ -44,7 +44,10 @@ import "./brainstorm.mjs";
 import "./inbox.mjs";
 import { installVsShim } from "../cli/vs.mjs";
 import { requestLocalLoginUrl } from "./local-token.mjs";
-import { startPushWatcher } from "./push.mjs";
+import { startPushWatcher, broadcastWebPush, pushKindEnabled } from "./push.mjs";
+import { startQuotaAlertWatcher } from "./quota-alert.mjs";
+import { readLimits } from "./providers-catalog.mjs";
+import { runVsAsync } from "./restart-request.mjs";
 import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
 import { startTempScratchTtl } from "./disk-dedupe.mjs";
@@ -571,6 +574,9 @@ if (isMain) {
       startRunnerLifecycle().catch((err) => console.warn("runner lifecycle hooks not started:", err?.message ?? err));
     }
     startPushWatcher(rootDir);
+    if (process.env.VS_QUOTA_ALERT !== "0" && !underTestRunner()) {
+      try { const qa = startQuotaAlertWatcher({ readLimits, push: broadcastWebPush, pushEnabled: pushKindEnabled, runVs: runVsAsync, log: (m) => console.warn(m) }); server.once("close", () => qa.stop()); } catch (err) { console.warn("quota alert not started:", err?.message ?? err); }
+    }
     // Context budget duties for runner agents (lead nudge / successor handoff, Buddy warn / retire).
     if (process.env.VS_TOKEN_WATCH !== "0") {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
