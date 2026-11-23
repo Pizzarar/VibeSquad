@@ -2748,3 +2748,29 @@ test(
     }
   }),
 );
+
+test(
+  "idea-366 M1: after a restart (no turn signal) a fired watch covers a [done] at +1 min but a [done] at +5 min wakes",
+  withPluginEnv(async (sb) => {
+    const { h, clock, id } = await firedWatchHarness(sb);
+    h.stop();
+    // Simulated restart: a fresh engine/plugin over the same watches.json and log, with an empty in-memory agents map.
+    const h2 = await pluginHarness(sb, new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]), { watchSets: { now: () => clock.t } });
+    try {
+      const fired = timeOfFired(sb, id);
+      clock.t = fired + MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 digest +1m", refs: ["w-1"] }]);
+      h2.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h2, "lead-1").length, 0, "+1 min covered: " + JSON.stringify(h2.sent));
+      clock.t = fired + 5 * MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 def: w1 new turn +5m", refs: ["w-1"] }]);
+      h2.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h2, "lead-1").length, 1, "+5 min wakes: " + JSON.stringify(h2.sent));
+    } finally {
+      h2.stop();
+    }
+  }),
+);
+const timeOfFired = (sb, id) => Date.parse(JSON.parse(readFileSync(join(sb.home, "watches.json"), "utf8")).sets.find((s) => s.id === id).firedAt);

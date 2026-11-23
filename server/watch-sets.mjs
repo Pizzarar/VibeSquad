@@ -49,9 +49,11 @@ const VERDICT_RE = new RegExp(`^\\s*(?:UNVERIFIED\\b.*?:\\s*)?${VERDICT_PREFIX_S
  * idea-351/idea-366: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race).
  * Coverage is tied to the reported work, not just time (fireCovers): only an item that ended `done` in the fired set, and only while
  * its agent has not started a new turn since the fire. So a fix round or a stalled item's real report is never swallowed; the
- * window is only the backstop for a missed runner event (no turnStartedAt), which is why it stays at 10 min for slow digests.
+ * 10 min applies only when the agent's turn start is known; with no turn signal (restart) coverage falls back to COVER_UNKNOWN_TURN_MS.
  */
 export const COVER_AFTER_FIRE_MS = 600_000;
+/** idea-366: the cover window when the agent's turn start is unknown (agents map is in-memory: empty after a server restart). idea-351's value. */
+export const COVER_UNKNOWN_TURN_MS = 120_000;
 /** Same set as agent-duties' FAIL_RE (`\b(?:FAIL(?:ED)?|NO-VERDICT)\b`): a NO-VERDICT reviewer report is not a covered PASS. */
 const FAIL_RE = /\b(?:FAIL(?:ED)?|NO-VERDICT)\b/;
 const MANAGER_ROLES = new Set(["lead", "brainstorm", "buddy", "overlord"]);
@@ -708,7 +710,11 @@ export function createWatchEngine({
   function fireCovers(set, item) {
     if (item.state !== "done") return false; // a stalled/failed item's real report has not been delivered yet
     const started = agents.get(item.ref)?.turnStartedAt;
-    return !(Number.isFinite(started) && started > timeOf(set.firedAt));
+    const age = now() - timeOf(set.firedAt);
+    // Turn signal known: no new turn since the fire proves the entry is the delivered report (outer window applies).
+    if (Number.isFinite(started)) return started <= timeOf(set.firedAt) && age <= COVER_AFTER_FIRE_MS;
+    // Unknown (e.g. after a restart): a new post-restart turn is invisible, so cover only the short digest-race window.
+    return age <= COVER_UNKNOWN_TURN_MS;
   }
 
   /**
