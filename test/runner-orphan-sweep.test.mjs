@@ -81,6 +81,24 @@ test('sweep kills a real orphan, spares a start-time decoy, then clears the ledg
   assert.deepEqual(readChildren(home), []);
 });
 
+test('linux start time comes from /proc (same on every read), ps only when /proc cannot answer', () => {
+  // Field 22 (starttime) = 12345 ticks; comm with a space and a paren must not shift the fields.
+  const stat = `4242 (my (odd) cmd) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 12345 1000 50 18446744073709551615`;
+  const files = { '/proc/4242/stat': stat, '/proc/stat': 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n' };
+  const read = (f) => { if (f in files) return files[f]; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+  const noPs = () => { throw new Error('ps must not run'); };
+  const want = { name: 'my (odd) cmd', createdMs: 1700000000 * 1000 + 123450 };
+  assert.deepEqual(inspectProcess(4242, { platform: 'linux', read, run: noPs }), want);
+  assert.deepEqual(inspectProcess(4242, { platform: 'linux', read, run: noPs }), want, 'deterministic across calls');
+  assert.deepEqual(inspectProcesses([4242], { platform: 'linux', read, run: noPs }).get(4242), want);
+  // Gone (or no /proc): ps decides, as before.
+  const ps = [];
+  const run = (cmd, args) => { ps.push(args[1]); return { stdout: '' }; };
+  assert.equal(inspectProcess(777, { platform: 'linux', read, run }), null);
+  assert.deepEqual(ps, ['777']);
+  assert.deepEqual(inspectProcess(4242, { platform: 'linux', read: (f) => (f === '/proc/stat' ? 'no btime' : stat), run: () => ({ stdout: '  5 node\n' }) })?.name, 'node', 'unparsable /proc falls back to ps');
+});
+
 test('batched lookup with a lookup failure returns an empty map (kill nothing)', () => {
   const m = inspectProcesses([123, 456], { platform: 'win32', run: () => { throw new Error('no powershell'); } });
   assert.equal(m.size, 0);

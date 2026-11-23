@@ -14,10 +14,32 @@ export const START_TOLERANCE_MS = 5000; // spawn() is called just before the OS 
 
 const imageOf = (file) => path.basename(String(file)).toLowerCase();
 
+// Linux: /proc/<pid>/stat starttime is in USER_HZ ticks since boot; 100 on every mainstream arch (a wrong value only skews
+// createdMs, so matchesRecord fails and nothing is killed).
+const USER_HZ = 100;
+
+// Linux start time from the kernel: boot time (/proc/stat btime) + the pid's start ticks. Unlike ps etimes (whole seconds
+// counted back from "now"), it reads the same on every call, so per-pid and batched lookups agree to the ms (B2 G8).
+// Throws when /proc cannot answer; the caller falls back to ps.
+function procInfo(pid, read) {
+  const stat = String(read(`/proc/${pid}/stat`, 'utf8'));
+  const open = stat.indexOf('(');
+  const close = stat.lastIndexOf(')'); // comm may itself contain spaces and parens
+  const fields = stat.slice(close + 2).split(' '); // fields[0] is field 3 (state), so field 22 (starttime) is fields[19]
+  const ticks = Number(fields[19]);
+  const btime = Number(/^btime\s+(\d+)\s*$/m.exec(String(read('/proc/stat', 'utf8')))?.[1]);
+  const name = open >= 0 && close > open ? stat.slice(open + 1, close) : '';
+  if (!name || !Number.isFinite(ticks) || !(btime > 0)) throw new Error('unparsable /proc stat');
+  return { name: name.toLowerCase(), createdMs: btime * 1000 + Math.round((ticks * 1000) / USER_HZ) };
+}
+
 // { name, createdMs } for a live pid, or null if gone OR unknown. Callers treat null as "do not kill".
-export function inspectProcess(pid, { platform = process.platform, run = spawnSync } = {}) {
+export function inspectProcess(pid, { platform = process.platform, run = spawnSync, read = readFileSync } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
+    if (platform === 'linux') {
+      try { return procInfo(pid, read); } catch { /* gone, or no /proc: ps decides */ }
+    }
     if (platform === 'win32') {
       const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p) { $p.Name + '|' + [DateTimeOffset]::new($p.CreationDate).ToUnixTimeMilliseconds() }`;
       const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
@@ -34,12 +56,12 @@ export function inspectProcess(pid, { platform = process.platform, run = spawnSy
 
 // Batched inspectProcess: one PowerShell call for every pid on Windows (~0.7 s each otherwise, before listen).
 // Returns Map<pid, info>; a pid missing from the map means gone or unknown, i.e. "do not kill".
-export function inspectProcesses(pids, { platform = process.platform, run = spawnSync } = {}) {
+export function inspectProcesses(pids, { platform = process.platform, run = spawnSync, read = readFileSync } = {}) {
   const ok = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
   const out = new Map();
   if (!ok.length) return out;
   if (platform !== 'win32') {
-    for (const pid of ok) { const info = inspectProcess(pid, { platform, run }); if (info) out.set(pid, info); }
+    for (const pid of ok) { const info = inspectProcess(pid, { platform, run, read }); if (info) out.set(pid, info); }
     return out;
   }
   try {

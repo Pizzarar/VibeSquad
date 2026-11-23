@@ -180,12 +180,15 @@ test("idea-408: PTY kill and killAll run the tree kill first, then close each PT
   const dir = tmp();
   const kids = [];
   const closed = [];
+  // POSIX: SIGKILL is only sent synchronously; the root dies (and our loop reaps it) later, so at close time it can still
+  // read alive (state R with the kill pending, or an unreaped zombie Z). There the order is proven by the SIGKILL already sent.
+  const sigkilled = new Set();
   // A fake node-pty whose "shell" is a real process with a grandchild, so the tree kill is real.
   const fakePty = {
     spawn() {
       const c = spawn(process.execPath, ["-e", SHELL_JS], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
       kids.push(c);
-      const p = { pid: c.pid, onData: (fn) => c.stdout.on("data", (d) => fn(d.toString("utf8"))), onExit: (fn) => c.on("exit", (code) => fn({ exitCode: code })), write: (d) => c.stdin.write(d.replace(/\r/g, "\n")), resize() {}, kill: () => closed.push({ pid: c.pid, rootAlive: alive(c.pid) }) };
+      const p = { pid: c.pid, onData: (fn) => c.stdout.on("data", (d) => fn(d.toString("utf8"))), onExit: (fn) => c.on("exit", (code) => fn({ exitCode: code })), write: (d) => c.stdin.write(d.replace(/\r/g, "\n")), resize() {}, kill: () => closed.push({ pid: c.pid, rootAlive: alive(c.pid), killSent: sigkilled.has(c.pid) }) };
       return p;
     },
   };
@@ -201,9 +204,18 @@ test("idea-408: PTY kill and killAll run the tree kill first, then close each PT
     if (process.platform === "win32") assert.equal(closed.length, 0, "taskkill runs async on the DELETE path; the PTY closes after it");
     assert.ok(await until(() => closed.length === 1));
     assert.ok(await until(() => !alive(a.pid) && !alive(gc)), "the grandchild went with the tree");
-    m.killAll({ sync: true });
+    if (process.platform === "win32") m.killAll({ sync: true });
+    else {
+      const realKill = process.kill;
+      process.kill = (p, s) => { if (s === "SIGKILL") sigkilled.add(Math.abs(p)); return realKill.call(process, p, s); };
+      try { m.killAll({ sync: true }); } finally { process.kill = realKill; }
+    }
     assert.deepEqual(closed.slice(1).map((x) => x.pid).sort(), [b.pid, c.pid].sort());
-    assert.ok(closed.slice(1).every((x) => !x.rootAlive), "sync killAll closes each PTY only after the batched tree kill");
+    if (process.platform === "win32") assert.ok(closed.slice(1).every((x) => !x.rootAlive), "sync killAll closes each PTY only after the batched tree kill");
+    else {
+      assert.ok(closed.slice(1).every((x) => x.killSent), "sync killAll closes each PTY only after the batched tree kill (SIGKILL sent)");
+      assert.ok(await until(() => !alive(b.pid) && !alive(c.pid)), "the SIGKILLed roots die");
+    }
     assert.deepEqual(m.list(), []);
   } finally { for (const k of kids) { try { k.kill(); } catch {} } m.killAll(); rmq(dir); }
 });

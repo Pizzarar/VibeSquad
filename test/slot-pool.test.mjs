@@ -188,7 +188,9 @@ test("a dead holder's slot is reclaimed at once; a holder killed mid-run frees i
   const waiter = runner(dir, "waiter", { hold: 50, squad: "efi" });
   t.after(() => waiter.kill());
   await until(() => waiter.out.includes("waiting for godot slot"), "waiter blocked");
-  holder.kill(); // the vs process dies; its (forever) child keeps running, the slot must not
+  // The vs process dies; its (forever) child keeps running, the slot must not. SIGKILL: off Windows a SIGTERM is caught, passed
+  // on to the child and the slot released cleanly (no dead holder to reclaim); on Windows both are TerminateProcess.
+  holder.kill("SIGKILL");
   assert.equal(await waiter.exited, 0, waiter.out);
   assert.match(waiter.out, new RegExp(`reclaimed godot slot [0-2] from dead holder pid ${holder.pid}(?!\\d)`));
   fills.forEach(releasePoolSlot);
