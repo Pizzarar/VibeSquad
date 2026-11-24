@@ -4,12 +4,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { rootZoom } from "./pinMenuPlace";
-import { parseContextRef, resolveMsgRef, type RefEntry } from "./contextRefs";
-import { openAndScrollToInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
+import { parseContextRef, resolveMsgRef, type ContextRef, type IdeaRef, type RefEntry } from "./contextRefs";
+import { focusInboxCard, isInboxLoadedOnce, openAndScrollToInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 
 const HOVER_OPEN_MS = 250;
 const HOVER_CLOSE_MS = 160;
 const CLAMP_MARGIN = 4;
+const FLASH_MS = 1800;
 
 /** Coarse primary pointer (touch): tap toggles instead of hover/focus. */
 const coarsePointer = (): boolean =>
@@ -17,30 +18,41 @@ const coarsePointer = (): boolean =>
   typeof window.matchMedia === "function" &&
   window.matchMedia("(pointer: coarse)").matches;
 
+const boringMode = (): boolean =>
+  typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring";
+
+const phoneShell = (): boolean => typeof window !== "undefined" && window.innerWidth <= 600;
+
+const reducedMotion = (): boolean =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 type RefLinkProps = {
   /** The raw backtick token text, e.g. "msg:-1" (rendered verbatim as the code link). */
   token: string;
   agentId?: string;
   entries?: RefEntry[];
   citing?: RefEntry;
+  /** Whether the timeline has older history to load (R13-3: "No earlier message" vs "Jump to load older"). */
+  hasMore?: boolean;
 };
 
-export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
-  const ref = parseContextRef(token);
+export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkProps) {
+  const ref = useMemo(() => parseContextRef(token), [token]);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const trigger = useRef<HTMLElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hovered = useRef(false);
-  const [focused, setFocused] = useState(false);
+  const suppressFocusOpen = useRef(false);
+  const pendingFocusAction = useRef(false);
+  const pendingJump = useRef(false);
   const coarse = useMemo(coarsePointer, []);
-  const inboxCards = useInboxCards();
-
-  // A lone idea ref opened before anything fetched the inbox: pull the cards once.
-  useEffect(() => {
-    if (ref?.kind === "idea" && inboxCards.length === 0) void refreshInboxCards();
-  }, [ref, inboxCards.length]);
+  const phone = useMemo(phoneShell, []);
+  const boring = useMemo(boringMode, []);
 
   const cancelTimer = useCallback(() => {
     if (hoverTimer.current != null) {
@@ -52,6 +64,7 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
   const close = useCallback(() => {
     cancelTimer();
     hovered.current = false;
+    pendingFocusAction.current = false;
     setOpen(false);
     setPos(null);
   }, [cancelTimer]);
@@ -61,19 +74,8 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
     setOpen(true);
   }, [cancelTimer]);
 
-  const resolved = useMemo(() => {
-    if (!ref) return null;
-    if (ref.kind === "msg") {
-      const r = resolveMsgRef(entries ?? [], citing ?? ({} as RefEntry), ref.n, agentId);
-      return r.status === "ok"
-        ? { kind: "msg" as const, text: String(r.entry.item?.text ?? ""), entry: r.entry }
-        : { kind: "msg-missing" as const };
-    }
-    const card = inboxCards.find((c) => c.id === ref.id) ?? null;
-    return card ? { kind: "idea" as const, card } : { kind: "idea-missing" as const };
-  }, [ref, entries, citing, agentId, inboxCards]);
-
-  // Place the popover anchored under the token, clamped into the viewport (flip above when short).
+  // Place the popover anchored under the token, clamped into the viewport (flip above when short);
+  // re-place on window resize (L2).
   useLayoutEffect(() => {
     if (!open || !trigger.current || !pop.current) return;
     const place = () => {
@@ -93,39 +95,76 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
       setPos((cur) => (cur && cur.top === top && cur.left === left ? cur : { top, left }));
     };
     place();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(place);
-    ro.observe(pop.current);
-    return () => ro.disconnect();
+    window.addEventListener("resize", place);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    ro?.observe(pop.current);
+    return () => {
+      window.removeEventListener("resize", place);
+      ro?.disconnect();
+    };
   }, [open]);
 
-  // Esc / outside click close.
+  // Esc / outside pointerdown close; any ancestor scroll closes (R13-5, PinMenu behaviour).
   useEffect(() => {
     if (!open) return;
-    const away = (e: MouseEvent) => {
+    const away = (e: PointerEvent) => {
       const t = e.target as Node;
       if (trigger.current && !trigger.current.contains(t) && pop.current && !pop.current.contains(t)) close();
     };
     const esc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        if (trigger.current !== document.activeElement) suppressFocusOpen.current = true;
         close();
+        trigger.current?.focus();
       }
     };
-    window.addEventListener("mousedown", away);
+    const scrollClose = () => close();
+    window.addEventListener("pointerdown", away);
     window.addEventListener("keydown", esc);
+    window.addEventListener("scroll", scrollClose, true);
     return () => {
-      window.removeEventListener("mousedown", away);
+      window.removeEventListener("pointerdown", away);
       window.removeEventListener("keydown", esc);
+      window.removeEventListener("scroll", scrollClose, true);
     };
   }, [open, close]);
 
-  useEffect(() => cancelTimer, [cancelTimer]);
+  // Enter/Space from a closed trigger opens then moves focus into the popover (M2 / R13-4).
+  useEffect(() => {
+    if (open && pendingFocusAction.current) {
+      pendingFocusAction.current = false;
+      pop.current?.querySelector<HTMLElement>("button")?.focus();
+    }
+  }, [open]);
+
+  // R13-3: after "Jump to load older" loads a page, re-resolve and land on the now-loaded message.
+  useEffect(() => {
+    if (!pendingJump.current || !ref || ref.kind !== "msg") return;
+    const r = resolveMsgRef(entries ?? [], citing ?? ({} as RefEntry), ref.n, agentId);
+    if (r.status === "ok") {
+      pendingJump.current = false;
+      jumpToEntry(r.entry);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, citing, agentId, ref]);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current != null) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   const scheduleClose = () => {
     cancelTimer();
     hoverTimer.current = setTimeout(() => {
-      if (!hovered.current && !focused) {
+      const active = document.activeElement;
+      const within =
+        active &&
+        active !== document.body &&
+        ((trigger.current && trigger.current.contains(active)) || (pop.current && pop.current.contains(active)));
+      if (!hovered.current && !within) {
         setOpen(false);
         setPos(null);
       }
@@ -142,7 +181,7 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
     if (coarse) return;
     hovered.current = false;
     cancelTimer();
-    if (!focused) scheduleClose();
+    scheduleClose();
   };
   const onPopEnter = () => {
     if (coarse) return;
@@ -156,47 +195,69 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
   };
   const onTriggerFocus = () => {
     if (coarse) return;
-    setFocused(true);
+    if (suppressFocusOpen.current) {
+      suppressFocusOpen.current = false;
+      return;
+    }
     openNow();
   };
   const onTriggerBlur = (e: React.FocusEvent) => {
     if (coarse) return;
     const next = e.relatedTarget as Node | null;
     if (next && pop.current && pop.current.contains(next)) return; // focus moved into the popover
-    setFocused(false);
+    close();
+  };
+  const onPopBlur = (e: React.FocusEvent) => {
+    if (coarse) return;
+    const next = e.relatedTarget as Node | null;
+    if (
+      next &&
+      ((pop.current && pop.current.contains(next)) || (trigger.current && trigger.current.contains(next)))
+    ) {
+      return; // focus stays within the trigger/popover pair
+    }
     close();
   };
 
-  const jumpToMessage = () => {
+  const timelineEl = (): HTMLElement | null =>
+    (trigger.current?.closest(".timeline") as HTMLElement | null) ?? null;
+
+  const jumpToEntry = (entry: RefEntry) => {
+    const timeline = timelineEl();
     close();
-    if (!resolved || resolved.kind !== "msg") return;
-    const seq = resolved.entry.seqStart;
-    if (seq == null) return;
-    const marker = document.querySelector<HTMLElement>(`[data-tl-seq="${seq}"]`);
+    const seq = entry.seqStart ?? entries?.indexOf(entry);
+    if (seq == null || seq < 0) return;
+    const marker = timeline?.querySelector<HTMLElement>(`[data-tl-seq="${seq}"]`);
     const el = marker?.nextElementSibling as HTMLElement | null;
-    if (el) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-      el.classList.add("tl-flash");
-      setTimeout(() => el.classList.remove("tl-flash"), 1800);
-    }
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    el.classList.add("tl-flash");
+    if (flashTimer.current != null) clearTimeout(flashTimer.current); // R13-7: never stack stale flash clears
+    flashTimer.current = setTimeout(() => el.classList.remove("tl-flash"), FLASH_MS);
   };
 
   const loadOlder = () => {
+    const timeline = timelineEl();
     close();
-    document.querySelector<HTMLElement>('[data-testid="tl-load-older-btn"]')?.click();
+    pendingJump.current = true;
+    timeline?.querySelector<HTMLElement>('[data-testid="tl-load-older-btn"]')?.click();
   };
 
-  const openInbox = () => {
+  const openInbox = (cardId: string) => {
     close();
-    openAndScrollToInbox();
+    if (boring) focusInboxCard(cardId);
+    else openAndScrollToInbox();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      e.stopPropagation();
-      if (open) close();
-      else openNow();
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (open) {
+      pop.current?.querySelector<HTMLElement>("button")?.focus();
+    } else {
+      pendingFocusAction.current = true;
+      openNow();
     }
   };
 
@@ -217,6 +278,7 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
         role="button"
         tabIndex={0}
         aria-haspopup="dialog"
+        aria-expanded={open}
         onMouseEnter={onTriggerEnter}
         onMouseLeave={onTriggerLeave}
         onFocus={onTriggerFocus}
@@ -227,7 +289,7 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
         {token}
       </code>
       {open &&
-        resolved &&
+        ref &&
         createPortal(
           <div
             ref={pop}
@@ -237,40 +299,102 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
             style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: "hidden" }}
             onMouseEnter={onPopEnter}
             onMouseLeave={onPopLeave}
+            onBlur={onPopBlur}
           >
-            <div className="ref-popover-body">
-              {resolved.kind === "msg" ? (
-                <div className="ref-popover-text">{resolved.text}</div>
-              ) : resolved.kind === "idea" ? (
-                <>
-                  <div className="ref-popover-title">{resolved.card.title}</div>
-                  <div className="ref-popover-text">{resolved.card.text}</div>
-                </>
-              ) : resolved.kind === "msg-missing" ? (
-                <div className="ref-popover-note">
-                  Not loaded —{" "}
-                  <button type="button" className="ref-popover-jump" onClick={loadOlder}>
-                    Jump to load older
-                  </button>
-                </div>
-              ) : (
-                <div className="ref-popover-note">Card not found</div>
-              )}
-            </div>
-            {(resolved.kind === "msg" || resolved.kind === "idea") && (
-              <div className="ref-popover-foot">
-                <button
-                  type="button"
-                  className="btn ghost small"
-                  onClick={resolved.kind === "msg" ? jumpToMessage : openInbox}
-                >
-                  {resolved.kind === "msg" ? "Jump to message" : "Open in Inbox"}
-                </button>
-              </div>
-            )}
+            <PopoverBody
+              ref={ref}
+              agentId={agentId}
+              entries={entries}
+              citing={citing}
+              hasMore={hasMore}
+              phone={phone}
+              onJump={jumpToEntry}
+              onLoadOlder={loadOlder}
+              onOpenInbox={openInbox}
+            />
           </div>,
           document.body,
         )}
+    </>
+  );
+}
+
+type PopoverBodyProps = {
+  ref: ContextRef;
+  agentId?: string;
+  entries?: RefEntry[];
+  citing?: RefEntry;
+  hasMore?: boolean;
+  phone: boolean;
+  onJump: (entry: RefEntry) => void;
+  onLoadOlder: () => void;
+  onOpenInbox: (cardId: string) => void;
+};
+
+/** Resolves the ref (msg inline, idea via the inbox store) — only ever mounted while the popover is open (M3/H1). */
+function PopoverBody({ ref, agentId, entries, citing, hasMore, phone, onJump, onLoadOlder, onOpenInbox }: PopoverBodyProps) {
+  if (ref.kind === "msg") {
+    const r = resolveMsgRef(entries ?? [], citing ?? ({} as RefEntry), ref.n, agentId);
+    if (r.status === "ok") {
+      return (
+        <>
+          <div className="ref-popover-body">
+            <div className="ref-popover-text">{String(r.entry.item?.text ?? "")}</div>
+          </div>
+          <div className="ref-popover-foot">
+            <button type="button" className="btn ghost small" onClick={() => onJump(r.entry)}>
+              Jump to message
+            </button>
+          </div>
+        </>
+      );
+    }
+    return (
+      <div className="ref-popover-body">
+        {hasMore ? (
+          <div className="ref-popover-note">
+            Not loaded —{" "}
+            <button type="button" className="ref-popover-jump" onClick={onLoadOlder}>
+              Jump to load older
+            </button>
+          </div>
+        ) : (
+          <div className="ref-popover-note">No earlier message</div>
+        )}
+      </div>
+    );
+  }
+  return <IdeaBody ref={ref} phone={phone} onOpenInbox={onOpenInbox} />;
+}
+
+/** Idea ref body: subscribes to the inbox store only while open; fetches once (deduped) if never loaded. */
+function IdeaBody({ ref, phone, onOpenInbox }: { ref: IdeaRef; phone: boolean; onOpenInbox: (cardId: string) => void }) {
+  const inboxCards = useInboxCards();
+  useEffect(() => {
+    if (inboxCards.length === 0 && !isInboxLoadedOnce()) void refreshInboxCards();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const card = inboxCards.find((c) => c.id === ref.id) ?? null;
+  if (!card) {
+    return (
+      <div className="ref-popover-body">
+        <div className="ref-popover-note">Card not found</div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="ref-popover-body">
+        <div className="ref-popover-title">{card.title}</div>
+        <div className="ref-popover-text">{card.text}</div>
+      </div>
+      {!phone && (
+        <div className="ref-popover-foot">
+          <button type="button" className="btn ghost small" onClick={() => onOpenInbox(card.id)}>
+            Open in Inbox
+          </button>
+        </div>
+      )}
     </>
   );
 }

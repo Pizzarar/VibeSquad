@@ -16,6 +16,7 @@ test("parseContextRef: msg:-N (1..20) and idea-N only; rejects out-of-range and 
     "idea-0", "idea", "idea-", "idea-x", "idea-1x",
     "", " ", " msg:-1", "msg:-1 ", "see msg:-1", "msg:-1 more", "Msg:-1", "IDEA-3",
     "msg:+1", "`msg:-1`", "idea-1 ",
+    "msg:-01", "msg:-007", "idea-01", "idea-007", "msg:-0 ", "idea-00",
   ]) {
     assert.equal(parseContextRef(bad), null, JSON.stringify(bad));
   }
@@ -73,4 +74,30 @@ test("demo fixture carries ref tokens and the demo inbox seeds idea-729 so the p
   assert.match(d, /`idea-999`/);
   const inbox = src("IdeaInbox.tsx");
   assert.match(inbox, /id: "idea-729"/);
+});
+
+test("H1: no fetch for closed links — inbox subscribes only in the open idea body; refresh is deduped", () => {
+  const r = src("RefPopover.tsx");
+  // useInboxCards/refreshInboxCards must live in IdeaBody (mounted only while open && idea), not in RefLink.
+  assert.match(r, /function IdeaBody/);
+  assert.match(r, /const inboxCards = useInboxCards\(\);/);
+  assert.match(r, /isInboxLoadedOnce\(\)/);
+  const inbox = src("IdeaInbox.tsx");
+  assert.match(inbox, /let inboxLoadedOnce = false/);
+  assert.match(inbox, /let inboxFetch: Promise<InboxCard\[\]> | null = null/);
+  assert.match(inbox, /if \(inboxFetch\) return inboxFetch/);
+});
+
+test("R13-3/R13-6/R13-2 wiring: hasMore wording, Normal skin tokens, dotted underline at rest", () => {
+  const r = src("RefPopover.tsx");
+  assert.match(r, /No earlier message/);
+  assert.match(r, /Jump to load older/);
+  assert.match(r, /hasMore\?/);
+  const css = src("styles.css");
+  assert.match(css, /html\[data-vibe="boring"\] \.ref-popover/);
+  assert.match(css, /--surface-2/);
+  assert.match(css, /text-decoration: underline dotted/);
+  assert.match(css, /\.tl-ref-link:focus-visible/);
+  const t = src("Timeline.tsx");
+  assert.match(t, /hasMore=\{hasMore\}/);
 });

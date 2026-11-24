@@ -9,25 +9,23 @@ export type ContextRef = MsgRef | IdeaRef;
 /** `msg:-N` is the Nth earlier reply; the plan bounds N to 1..20 so a token stays typeable and stable. */
 export const MSG_REF_MAX = 20;
 
-const MSG_REF_RE = /^msg:-(\d+)$/;
-const IDEA_REF_RE = /^idea-(\d+)$/;
+// `[1-9]\d*` rejects a leading zero (`msg:-01`, `idea-007`) and zero itself; no extra text matches.
+const MSG_REF_RE = /^msg:-([1-9]\d*)$/;
+const IDEA_REF_RE = /^idea-([1-9]\d*)$/;
 
 /**
  * Parse a backticked inline-code token as a context ref. Returns null unless the WHOLE token is
- * exactly `msg:-N` (N 1..20) or `idea-N` (N >= 1): `msg:-0`, `msg:-21`, and any extra text reject,
- * so bare/prose mentions (`see msg:-2`, `idea-1 next`) stay plain code.
+ * exactly `msg:-N` (N 1..20) or `idea-N` (N >= 1, no leading zeros): `msg:-0`, `msg:-21`, `msg:-01`,
+ * and any extra text reject, so bare/prose mentions (`see msg:-2`, `idea-1 next`) stay plain code.
  */
 export function parseContextRef(code: string): ContextRef | null {
   const msg = MSG_REF_RE.exec(code);
   if (msg) {
     const n = Number(msg[1]);
-    return n >= 1 && n <= MSG_REF_MAX ? { kind: "msg", n } : null;
+    return n <= MSG_REF_MAX ? { kind: "msg", n } : null;
   }
   const idea = IDEA_REF_RE.exec(code);
-  if (idea) {
-    const n = Number(idea[1]);
-    return n >= 1 ? { kind: "idea", id: `idea-${idea[1]}` } : null;
-  }
+  if (idea) return { kind: "idea", id: `idea-${idea[1]}` };
   return null;
 }
 

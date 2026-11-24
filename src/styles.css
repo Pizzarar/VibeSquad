@@ -4126,7 +4126,18 @@ html, body, #root { overflow-x: hidden; }
 
 /* Context refs (`` `msg:-N` `` / `` `idea-N` ``): cyan + clickable like a file link. */
 .tl-ref-link.tl-icode { color: var(--cyan-t); cursor: pointer; }
-.tl-ref-link:hover { text-decoration: underline; }
+/* R13-2: a quiet non-colour cue at rest so light-theme links read as links; solid on hover/focus. */
+.tl-ref-link {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 2px;
+}
+.tl-ref-link:hover,
+.tl-ref-link:focus-visible {
+  text-decoration: underline solid;
+  text-decoration-color: currentColor;
+}
+.tl-ref-link:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 
 /* ── Context-ref popover (portal to body, viewport-clamped; compact by default) ── */
 .ref-popover {
@@ -4142,6 +4153,13 @@ html, body, #root { overflow-x: hidden; }
   padding: var(--sp-2);
   font-size: 12px;
 }
+/* R13-6: Normal (Boring) skin uses the flat semantic tokens, not the Psycho neon ones. */
+html[data-vibe="boring"] .ref-popover {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px #0006;
+}
+html[data-vibe="boring"] .ref-popover-title { color: var(--text-1); }
 .ref-popover-body { min-width: 0; }
 .ref-popover-title {
   color: var(--cyan-t);
@@ -4171,6 +4189,7 @@ html, body, #root { overflow-x: hidden; }
   text-decoration: underline;
 }
 .ref-popover-jump:hover { color: var(--cyan-t); }
+.ref-popover-jump:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .ref-popover-foot { display: flex; justify-content: flex-end; margin-top: var(--sp-2); }
 .files-md { padding: 8px 10px; overflow: auto; }
 .files-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }

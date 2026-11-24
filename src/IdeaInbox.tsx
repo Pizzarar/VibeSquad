@@ -155,6 +155,35 @@ export function flashInboxNotice(msg: string) {
   }, 5000);
 }
 
+// A ref popover "Open in Inbox" (Normal mode) asks to open + highlight one card; the store carries the id
+// to BoringAde (which flips to the overview's Idea Inbox tab) and to the IdeaInbox list (which flashes it).
+let focusedCardId: string | null = null;
+const focusListeners = new Set<() => void>();
+function emitFocus() {
+  focusListeners.forEach((l) => l());
+}
+export function focusInboxCard(id: string) {
+  focusedCardId = id;
+  emitFocus();
+}
+export function clearFocusedInboxCard() {
+  focusedCardId = null;
+  emitFocus();
+}
+export function subscribeFocusInboxCard(l: () => void): () => void {
+  focusListeners.add(l);
+  return () => void focusListeners.delete(l);
+}
+export const getFocusedInboxCardSnapshot = (): string | null => focusedCardId;
+export function useFocusedInboxCard(): string | null {
+  return useSyncExternalStore(subscribeFocusInboxCard, getFocusedInboxCardSnapshot);
+}
+
+// Fetch dedup: concurrent callers share one in-flight promise; `loadedOnce` lets a ref popover fetch once.
+let inboxLoadedOnce = false;
+let inboxFetch: Promise<InboxCard[]> | null = null;
+export const isInboxLoadedOnce = () => inboxLoadedOnce;
+
 export async function refreshInboxCards(): Promise<InboxCard[]> {
   if (DEMO) {
     try {
@@ -164,19 +193,29 @@ export async function refreshInboxCards(): Promise<InboxCard[]> {
         localStorage.setItem(DEMO_INBOX_KEY, raw);
       }
       cardsState = raw ? JSON.parse(raw) : [];
+      inboxLoadedOnce = true;
       emitInbox();
     } catch {}
     return cardsState;
   }
-  try {
-    const res = await fetch("/__vibesquad/inbox");
-    const body = await res.json().catch(() => ({}));
-    if (res.ok && Array.isArray(body.cards)) {
-      cardsState = body.cards;
-      emitInbox();
+  if (inboxFetch) return inboxFetch; // one in-flight fetch shared by every caller
+  inboxFetch = (async () => {
+    try {
+      const res = await fetch("/__vibesquad/inbox");
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(body.cards)) {
+        cardsState = body.cards;
+        inboxLoadedOnce = true;
+        emitInbox();
+      }
+    } catch {
+      /* keep the last known cards; loadedOnce stays false so the next open retries */
+    } finally {
+      inboxFetch = null;
     }
-  } catch {}
-  return cardsState;
+    return cardsState;
+  })();
+  return inboxFetch;
 }
 
 export async function parkIdeasInInbox(opts: {
@@ -299,6 +338,21 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  // R13-1: a ref popover's "Open in Inbox" (Normal mode) asks to reveal + flash one card.
+  const focusedCard = useFocusedInboxCard();
+  useEffect(() => {
+    if (!focusedCard) return;
+    setInboxOpen(true);
+    setHighlightId(focusedCard);
+    const id = focusedCard;
+    const t = setTimeout(() => setHighlightId(null), 2000);
+    requestAnimationFrame(() => {
+      document.getElementById(`inbox-card-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    clearFocusedInboxCard();
+    return () => clearTimeout(t);
+  }, [focusedCard]);
 
   const openAuditChat = (pin: Pin) => {
     setError("");

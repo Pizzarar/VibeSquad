@@ -254,7 +254,7 @@ function openFileTarget(t: { path: string; line: number | null; isDir: boolean }
   openRightDockTab("Files", { filePath: t.isDir ? `${t.path}/` : t.path, line: t.line ?? undefined });
 }
 
-function renderInline(text: string, agentId?: string, entries?: Entry[], citing?: Entry): React.ReactNode[] {
+function renderInline(text: string, agentId?: string, entries?: Entry[], citing?: Entry, hasMore?: boolean): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   // Process: bold, inline code, links, file:line, images, plain text
   const patterns = [
@@ -319,7 +319,7 @@ function renderInline(text: string, agentId?: string, entries?: Entry[], citing?
             data-testid="tl-commit-link" title="Open this commit in Changes" onClick={() => openCommit(commitCwd, sha)}
             onKeyDown={(e) => { if (e.key === "Enter") openCommit(commitCwd, sha); }}>{m[7]}</code>
         ) : ref ? (
-          <RefLink key={keyIdx++} token={m[7]} agentId={agentId} entries={entries} citing={citing} />
+          <RefLink key={keyIdx++} token={m[7]} agentId={agentId} entries={entries} citing={citing} hasMore={hasMore} />
         ) : (
           <code key={keyIdx++} className="tl-icode">{m[7]}</code>
         ),
@@ -407,7 +407,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
-export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId, entries, citing }: { text: string; agentId?: string; doc?: boolean; messageLegacyId?: string; entries?: Entry[]; citing?: Entry }) {
+export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId, entries, citing, hasMore }: { text: string; agentId?: string; doc?: boolean; messageLegacyId?: string; entries?: Entry[]; citing?: Entry; hasMore?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const liveLooksDoneId = useLooksDoneId(agentId ?? null);
   const newestOffer = useSendTo(agentId ?? null); // only for its pre-D1 ids
@@ -421,7 +421,7 @@ export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId, 
     let ki = 0;
     for (const m of t.matchAll(new RegExp(MD_IMAGE.source, "g"))) {
       if (m.index! > last) {
-        parts.push(...renderInline(t.slice(last, m.index), agentId, entries, citing).map((n, i) =>
+        parts.push(...renderInline(t.slice(last, m.index), agentId, entries, citing, hasMore).map((n, i) =>
           typeof n === "string" ? n : <span key={`${ki}-${i}`}>{n}</span>
         ));
       }
@@ -438,7 +438,7 @@ export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId, 
       last = m.index! + m[0].length;
     }
     if (last < t.length) {
-      parts.push(...renderInline(t.slice(last), agentId, entries, citing));
+      parts.push(...renderInline(t.slice(last), agentId, entries, citing, hasMore));
     }
     return parts;
   };
@@ -754,6 +754,7 @@ export function TimelineItem({
   e,
   agentId,
   entries,
+  hasMore,
   onParkText,
   onRewound,
   selected = false,
@@ -764,6 +765,7 @@ export function TimelineItem({
   e: Entry;
   agentId: string;
   entries?: Entry[];
+  hasMore?: boolean;
   onParkText?: (text: string) => void;
   onRewound?: (e: Entry) => void;
   selected?: boolean;
@@ -835,7 +837,7 @@ export function TimelineItem({
     case "assistant_message":
       return (
         <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
-          {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} messageLegacyId={sendToLegacyId(agentId, e)} entries={entries} citing={e} /> : it.text}
+          {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} messageLegacyId={sendToLegacyId(agentId, e)} entries={entries} citing={e} hasMore={hasMore} /> : it.text}
           <Stamp iso={e.timestamp} />
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />
@@ -1226,6 +1228,7 @@ function ToolRunRow({
   run,
   agentId,
   entries,
+  hasMore,
   onParkText,
   onRewound,
   latestReasoningEntry,
@@ -1240,6 +1243,7 @@ function ToolRunRow({
   run: Extract<ToolRunGroup<Entry>, { kind: "run" }>;
   agentId: string;
   entries?: Entry[];
+  hasMore?: boolean;
   onParkText?: (text: string) => void;
   onRewound?: (e: Entry) => void;
   latestReasoningEntry?: Entry;
@@ -1305,6 +1309,7 @@ function ToolRunRow({
                   e={entry}
                   agentId={agentId}
                   entries={entries}
+                  hasMore={hasMore}
                   onParkText={onParkText}
                   onRewound={onRewound}
                   latestReasoning={entry === latestReasoningEntry}
@@ -1652,6 +1657,7 @@ export function Timeline({
             run={e}
             agentId={agentId}
             entries={base}
+            hasMore={hasMore}
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             latestReasoningEntry={entries[latestReasoningIndex(entries)]}
@@ -1674,6 +1680,7 @@ export function Timeline({
             e={e.entry}
             agentId={agentId}
             entries={base}
+            hasMore={hasMore}
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
             latestReasoning={e.entry === entries[latestReasoningIndex(entries)]}
