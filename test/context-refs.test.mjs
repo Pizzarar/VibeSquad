@@ -64,3 +64,13 @@ test("Timeline wires context refs through the inline-code branch as tl-ref-link,
   assert.match(r, /role="button"/);
   assert.match(src("styles.css"), /\.tl-ref-link\.tl-icode/);
 });
+
+test("demo fixture carries ref tokens and the demo inbox seeds idea-729 so the popover is exercised", () => {
+  const d = src("demo.tsx");
+  assert.match(d, /`msg:-1`/);
+  assert.match(d, /`msg:-20`/);
+  assert.match(d, /`idea-729`/);
+  assert.match(d, /`idea-999`/);
+  const inbox = src("IdeaInbox.tsx");
+  assert.match(inbox, /id: "idea-729"/);
+});

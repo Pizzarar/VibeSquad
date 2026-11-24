@@ -216,6 +216,7 @@ export function RefLink({ token, agentId, entries, citing }: RefLinkProps) {
         data-testid="tl-ref-link"
         role="button"
         tabIndex={0}
+        aria-haspopup="dialog"
         onMouseEnter={onTriggerEnter}
         onMouseLeave={onTriggerLeave}
         onFocus={onTriggerFocus}

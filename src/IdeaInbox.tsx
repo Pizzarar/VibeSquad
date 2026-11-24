@@ -58,6 +58,21 @@ export function laneColor(laneId: string): string {
 const DEMO_INBOX_KEY = "vibesquad.demo.inbox";
 const INBOX_OPEN_KEY = "vibesquad.inbox.open";
 
+// Seeded the first time the demo inbox is read so `` `idea-N` `` refs (PLAN_CONTEXT_REFS R1) can resolve in ?demo.
+const DEMO_INBOX_SEED: InboxCard[] = [
+  {
+    id: "idea-729",
+    text: "Context refs in chat: when an agent reply says \"my last message\" or points at an earlier turn or card, render it as a link (msg:-N / idea-N); hover/tap shows a compact popover with that message or card.",
+    title: "Context refs in chat",
+    teamId: "vibesquad",
+    laneId: "ui-bois",
+    scope: "UI",
+    status: "parked",
+    createdAt: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+    updatedAt: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+  },
+];
+
 let cardsState: InboxCard[] = [];
 let inboxOpenState: boolean = (() => {
   try {
@@ -143,7 +158,11 @@ export function flashInboxNotice(msg: string) {
 export async function refreshInboxCards(): Promise<InboxCard[]> {
   if (DEMO) {
     try {
-      const raw = localStorage.getItem(DEMO_INBOX_KEY);
+      let raw = localStorage.getItem(DEMO_INBOX_KEY);
+      if (!raw) {
+        raw = JSON.stringify(DEMO_INBOX_SEED);
+        localStorage.setItem(DEMO_INBOX_KEY, raw);
+      }
       cardsState = raw ? JSON.parse(raw) : [];
       emitInbox();
     } catch {}
