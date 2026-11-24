@@ -16,6 +16,7 @@ const P = {
   recipes: "data/recipes.json", questlines: "data/questlines.json", relations: "data/trader_relations.json",
   scav: "systems/ScavengingSystem.gd", raidStory: "scenes/raids/corridor/raid_story.gd", csv: "docs/review/text_review.csv",
   voice: "docs/narrative/VOICE_BIBLE.md", vibes: "docs/PLAN_MAP_VIBES.md", breadth: "docs/CONTENT_BREADTH_SPEC.md",
+  audit: "docs/narrative/QUEST_AUDIT.md",
 };
 
 /** Adapter-side term lists for prose bans that do not extract cleanly. Keyed by voice-card id (marker name). */
@@ -235,8 +236,8 @@ async function load(reader, sha) {
   const src = (p, line) => ({ path: p, line: line ?? null });
   const rd = (f) => readJson(reader, f, warnings);
   const [tr, sq, en, lo, ro, it, sk, co, re, ql, rel] = await Promise.all([P.traders, P.squad, P.enemies, P.locations, P.rooms, P.items, P.skills, P.contracts, P.recipes, P.questlines, P.relations].map(rd));
-  const [scavText, raidStoryText, csvText, voiceText, vibesText, breadthText] = await Promise.all([P.scav, P.raidStory, P.csv, P.voice, P.vibes, P.breadth].map((f) => reader.readFile(f)));
-  for (const [f, t] of [[P.scav, scavText], [P.raidStory, raidStoryText], [P.csv, csvText], [P.voice, voiceText], [P.vibes, vibesText], [P.breadth, breadthText]]) if (t == null) warnings.push(`missing ${f} at ${sha.slice(0, 8)}`);
+  const [scavText, raidStoryText, csvText, voiceText, vibesText, breadthText, auditText] = await Promise.all([P.scav, P.raidStory, P.csv, P.voice, P.vibes, P.breadth, P.audit].map((f) => reader.readFile(f)));
+  for (const [f, t] of [[P.scav, scavText], [P.raidStory, raidStoryText], [P.csv, csvText], [P.voice, voiceText], [P.vibes, vibesText], [P.breadth, breadthText], [P.audit, auditText]]) if (t == null) warnings.push(`missing ${f} at ${sha.slice(0, 8)}`);
 
   const ents = [];
   const E = (o) => { ents.push(entity(o)); };
@@ -462,6 +463,10 @@ async function load(reader, sha) {
     if (reg0.has("enemy", l.parentId)) L("parent", "enemy", l.parentId);
     if (reg0.has("location", l.where)) L("seen_at", "location", l.where);
     E({ id: `look:${l.enemyId}`, kind: "lore", display: `${l.display} (look)`, source: src(P.breadth, l.line), links: L.links, data: { text: l.look, lore_kind: "enemy_look", where: l.where, parent: l.parentId } });
+  }
+  // doc bodies (SB3 #3 doc<->data drift reads quotes and file:line cites from these); additive, free-form lore
+  for (const [docId, file, body] of [["VOICE_BIBLE", P.voice, voiceText], ["QUEST_AUDIT", P.audit, auditText], ["PLAN_MAP_VIBES", P.vibes, vibesText]]) {
+    if (body != null) E({ id: `doc:${docId}`, kind: "lore", display: `${docId} (doc)`, source: src(file, 1), data: { text: body, lore_kind: "doc", path: file } });
   }
   return { entities: ents, warnings };
 }

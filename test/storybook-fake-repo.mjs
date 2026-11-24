@@ -143,6 +143,19 @@ Global bans, plus: no contractions, no "please", no addressing the player as any
 `,
 };
 
+// SB3 additive fixture: QUEST_AUDIT.md (score rows + prose cites into questlines.json, computed so they stay in step with the JSON)
+const lineIn = (file, needle) => FILES[file].slice(0, FILES[file].indexOf(needle)).split("\n").length;
+const QL = "data/questlines.json";
+FILES["docs/narrative/QUEST_AUDIT.md"] = `# Quest audit
+
+**3 steps across 2 chains**
+
+- **popper_2** — kill · scav @harbor_district ×10 · R1 1 pass · **9/12** · \`:${lineIn(QL, '"id": "popper_2"')}\`
+- **doc_1** — reach · room workshop lv1 · R1 1 pass · **9/12** · \`:${lineIn(QL, '"id": "doc_1"')}\`
+
+Popper's ask reads "Clear the harbor." (data/questlines.json:${lineIn(QL, '"story": "Clear the harbor."')}).
+`;
+
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
 export const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, ...ENV } }).trim();
 
