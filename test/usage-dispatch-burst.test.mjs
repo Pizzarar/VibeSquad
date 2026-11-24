@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { clearUsageCache, getUsage } from '../server/providers-catalog.mjs';
+import { clearUsageCache, getUsage, readUsageLedger } from '../server/providers-catalog.mjs';
 
 const tmpDirs = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-usa50-')); tmpDirs.push(d); return d; };
@@ -95,4 +95,61 @@ test('dispatchBurstAll counts a reviewer spawned in the window; dispatchBurstSiz
   }), ['unit-a']);
   assert.equal(m['unit-a'].dispatchBurstSize, 1);
   assert.equal(m['unit-a'].dispatchBurstAll, 2);
+});
+
+test('window edges: exactly +-120000ms counted, 120001ms not, equal timestamps counted', () => {
+  const m = usage(home({
+    'rn-a': run({ ts: T0, unit: 'unit-a' }),
+    'rn-hi': run({ ts: T0 + 120_000 }),
+    'rn-lo': run({ ts: T0 - 120_000 }),
+    'rn-eq': run({ ts: T0 }),
+    'rn-far1': run({ ts: T0 + 120_001 }),
+    'rn-far2': run({ ts: T0 - 120_001 }),
+  }), ['unit-a']);
+  assert.equal(m['unit-a'].dispatchBurstSize, 4); // self + hi + lo + equal
+  assert.equal(m['unit-a'].dispatchBurstAll, 4);
+});
+
+test('an implementer that is itself a respawn still counts itself (solo = 1)', () => {
+  const m = usage(home({ 'rn-a': run({ unit: 'unit-a', labels: { respawnOf: 'rn-x' } }) }), ['unit-a']);
+  assert.equal(m['unit-a'].implementerAgentId, 'rn-a');
+  assert.equal(m['unit-a'].dispatchBurstSize, 1);
+  assert.equal(m['unit-a'].dispatchBurstAll, 1);
+});
+
+test('lead and brainstorm agents in the same team/lane/window are excluded from dispatchBurstAll', () => {
+  const coord = (ts, role) => ev([{ ts, type: 'created', provider: 'claude', model: 'm', cwd: MAIN, meta: { lane: 'usage', team: 'vibesquad', role } }, { ts: ts + 1000, type: 'turn_done', costUsd: 1 }]);
+  const m = usage(home({
+    'rn-a': run({ ts: T0, unit: 'unit-a' }),
+    'rn-lead': coord(T0 + 10_000, 'lead'),
+    'rn-buddy': coord(T0 + 20_000, 'brainstorm'),
+  }), ['unit-a']);
+  assert.equal(m['unit-a'].dispatchBurstSize, 1);
+  assert.equal(m['unit-a'].dispatchBurstAll, 1);
+});
+
+test('ledger keeps the burst fields and folds them back; an old ledger row without them folds as null', () => {
+  const h = home({
+    'rn-a': run({ ts: T0, unit: 'unit-a' }),
+    'rn-b': run({ ts: T0 + 40_000, unit: 'unit-b' }),
+    'rn-rev': run({ ts: T0 + 50_000, profile: 'Review - Gemini' }),
+  });
+  const first = usage(h, ['unit-a', 'unit-b']);
+  assert.equal(first['unit-a'].dispatchBurstSize, 2);
+  const rec = readUsageLedger(h).find((r) => r.kind === 'unit' && r.unit === 'unit-a');
+  assert.ok(rec, 'unit record written');
+  assert.equal(rec.dispatchBurstSize, 2);
+  assert.equal(rec.dispatchBurstAll, 3);
+  fs.appendFileSync(path.join(h, 'runner', 'usage-ledger.jsonl'), JSON.stringify({ kind: 'unit', unit: 'old-unit', sha: 'deadbeef', ts: new Date(T0).toISOString(), lane: 'usage', reviewRounds: 1 }) + '\n');
+  // fold-back: raw git now shows only a different merge, so the ledger units fold in
+  clearUsageCache();
+  const merges = [['m9', 'unit-z', T0 + 7_200_000]];
+  const u = getUsage({ home: h, git: gitFor(merges), laneCodes: { usa: 'usage' }, usageReview: { suppressSchedule: true } });
+  const by = Object.fromEntries(u.merged.units.map((x) => [x.sha, x]));
+  assert.equal(by.m1.fromLedger, true);
+  assert.equal(by.m1.dispatchBurstSize, 2);
+  assert.equal(by.m1.dispatchBurstAll, 3);
+  assert.equal(by.deadbeef.fromLedger, true);
+  assert.equal(by.deadbeef.dispatchBurstSize, null);
+  assert.equal(by.deadbeef.dispatchBurstAll, null);
 });
