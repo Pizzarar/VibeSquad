@@ -61,7 +61,7 @@ const missing = new Map<string, boolean>();
 export function probeStorybook(projectId: string): boolean {
   if (!missing.has(projectId)) {
     missing.set(projectId, false);
-    void fetch(api(projectId), { method: "HEAD" }).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
+    void fetch(api(projectId)).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
   }
   return missing.get(projectId) === true;
 }
