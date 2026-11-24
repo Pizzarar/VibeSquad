@@ -228,7 +228,15 @@ describe("coordinated drain standing rule (PLAN_COORDINATED_DRAIN D0)", () => {
   });
 });
 
-it("sanctuaryRuleDir derives from the managed root: %LOCALAPPDATA% on win32, ~ elsewhere (R11)", async () => {
+it("sanctuaryRuleDir derives from the managed root: ~ on POSIX (R11)", async () => {
+  const { sanctuaryRuleDir } = await import("../server/lessons.mjs");
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/u/.vibesquad/worktrees" }), "~/.vibesquad/worktrees");
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/srv/wt" }), "/srv/wt");
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/user2/wt" }), "/home/user2/wt");
+});
+
+// win32 path semantics (drive letters, case-insensitive prefix) only exist on a win32 host (path.resolve is host-specific).
+it("sanctuaryRuleDir keeps the %LOCALAPPDATA% token on win32 (R11)", { skip: process.platform !== "win32" && "win32 path semantics need a win32 host" }, async () => {
   const { sanctuaryRuleDir } = await import("../server/lessons.mjs");
   assert.equal(
     sanctuaryRuleDir({ platform: "win32", env: { LOCALAPPDATA: String.raw`C:\X\Local` }, root: String.raw`C:\X\Local\VibeSquad\worktrees` }),

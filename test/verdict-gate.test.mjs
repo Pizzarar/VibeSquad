@@ -32,7 +32,7 @@ const { RunnerClient } = await import("../server/backend/runner-client.mjs");
 const { RunnerBackend } = await import("../server/backend/runner-backend.mjs");
 const { createVibesquadMiddleware, verbatimDigestText } = await import("../server/vibesquad-api.mjs");
 const { STANDING_RULES, renderLessonsDigest } = await import("../server/lessons.mjs");
-const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, GATE_EXIT, parseVerdictLine } = await import("../server/verdict.mjs");
+const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, isDocsTarget, GATE_EXIT, parseVerdictLine } = await import("../server/verdict.mjs");
 const { commandVerdict } = await import("../cli/vs.mjs");
 const { unverifiedDigestText } = await import("../server/hooks/agent-duties.ts").catch(() => ({})); // .ts loads under tsx only
 
@@ -193,6 +193,9 @@ test("/vs-log: a digest's done entry is rewritten in code from the worker's own 
   assert.equal((await digestLog(digestFor(vague), "PASS: reviewer happy")).text, "NO-VERDICT: reviewer happy");
   const impl = await worker("PASS, 12/12 tests, commit abc1234", { profile: "Implement - Sonnet" });
   assert.equal((await digestLog(digestFor(impl), "PASS: unit done 12/12")).text, "PASS: unit done 12/12");
+  // idea-382: a docs-target verdict line is kept (stamped), not rewritten to NO-VERDICT.
+  const docs = await worker("PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md", { profile: "Review - Gemini" });
+  assert.equal((await digestLog(digestFor(docs), "PASS: docs reviewed")).text, "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md reviewer=Review - Gemini — docs reviewed");
   // A long reviewer message: the verdict line at the top is not lost to the 2000-char tail cap.
   const long = await worker(`FAIL 2/0/0 deadbee\n${"x".repeat(5000)}`, { profile: "Review - Gemini" });
   assert.ok((await digestLog(digestFor(long), "PASS: fine")).text.startsWith("FAIL 2/0/0 deadbee"));
@@ -273,6 +276,83 @@ test("parseVerdictLine: canonical numeric, letter form, VERDICT: prefix, bold; n
   assert.equal(parseVerdictLine("PASS 0/1/2"), null);
   assert.equal(parseVerdictLine("FAIL"), null);
   assert.equal(parseVerdictLine("the build FAILed for a reason"), null);
+});
+
+test("parseVerdictLine accepts a repo-relative docs target (idea-382) and hex shas keep working", () => {
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "docs:docs/lanes/perfection/EXP3.md" });
+  assert.deepEqual(parseVerdictLine("FAIL 1/0/0 EXP3.md"), { verdict: "FAIL", high: 1, medium: 0, low: 0, severity: null, hash: "EXP3.md" });
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 docs/lanes/x/SPEC.md"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "docs/lanes/x/SPEC.md" });
+  assert.deepEqual(parseVerdictLine("VERDICT: **PASS 0/0/0 EXP3.md**"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "EXP3.md" });
+  // idea-382 L4: a .md file whose stem is 7-40 hex chars is a docs target, not a sha.
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 deadbeef.md"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "deadbeef.md" });
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 abcdef1.md"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "abcdef1.md" });
+  // hex shas still parse as before.
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 abc1234"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "abc1234" });
+});
+
+test("parseVerdictLine rejects non-repo-relative docs tokens (idea-382 M3)", () => {
+  // URLs / schemes
+  assert.equal(parseVerdictLine("PASS 0/0/0 https://example.com/notes.md"), null);
+  assert.equal(parseVerdictLine("PASS 0/0/0 docs:https://example.com/notes.md"), null);
+  // absolute / drive / traversal paths
+  assert.equal(parseVerdictLine("PASS 0/0/0 /etc/passwd.md"), null);
+  assert.equal(parseVerdictLine("PASS 0/0/0 ../outside.md"), null);
+  assert.equal(parseVerdictLine("PASS 0/0/0 C:/path/notes.md"), null);
+  // partial-extension match (no boundary after .md)
+  assert.equal(parseVerdictLine("PASS 0/0/0 foo.mdx"), null);
+  assert.equal(parseVerdictLine("PASS 0/0/0 foo.md.bak"), null);
+  // a truncated docs: token (path with a space) is not a docs target
+  assert.equal(parseVerdictLine("PASS 0/0/0 docs:my file.md"), null);
+  // in-prose PASS with no H/M/L + docs shape
+  assert.equal(parseVerdictLine("PASS 0/0/0 see notes.md"), null);
+});
+
+test("parseVerdictLine leaves trailing __ / ** bold markers out of a docs target (idea-382 M3)", () => {
+  assert.deepEqual(parseVerdictLine("__PASS 0/0/0 docs:docs/lanes/x/EXP3.md__"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "docs:docs/lanes/x/EXP3.md" });
+  assert.deepEqual(parseVerdictLine("**PASS 0/0/0 EXP3.md**"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "EXP3.md" });
+});
+
+test("isDocsTarget is consistent with DOCS_SRC (idea-382 M3/L4)", () => {
+  assert.equal(isDocsTarget("docs:docs/lanes/perfection/EXP3.md"), true);
+  assert.equal(isDocsTarget("EXP3.md"), true);
+  assert.equal(isDocsTarget("docs/lanes/x/SPEC.md"), true);
+  assert.equal(isDocsTarget("deadbeef.md"), true);
+  assert.equal(isDocsTarget("3528a4c"), false);
+  assert.equal(isDocsTarget("ecba3231f00dfeedbeefcafe0123456789abcdef"), false);
+  assert.equal(isDocsTarget("https://example.com/notes.md"), false);
+  assert.equal(isDocsTarget("foo.mdx"), false);
+  assert.equal(isDocsTarget("/etc/passwd.md"), false);
+  assert.equal(isDocsTarget("../outside.md"), false);
+  assert.equal(isDocsTarget("C:/path/notes.md"), false);
+});
+
+test("extractVerdictLine and digestVerdictText: a docs-target line is kept byte-for-byte, not NO-VERDICT (idea-382)", () => {
+  assert.equal(extractVerdictLine("PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md\nnotes"), "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md");
+  assert.equal(extractVerdictLine("Review done.\nFAIL 1/0/0 EXP3.md"), "FAIL 1/0/0 EXP3.md");
+  const d = digestVerdictText({ workerText: "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md\nall good", digestText: "PASS: docs clean", reviewer: true });
+  assert.equal(d.text, "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md — docs clean");
+  assert.equal(d.noVerdict, false);
+  const inverted = digestVerdictText({ workerText: "PASS 0/0/0 EXP3.md", digestText: "FAIL: no", reviewer: true });
+  assert.equal(inverted.mismatch, true);
+  assert.ok(inverted.text.startsWith("PASS 0/0/0 EXP3.md — VERDICT-MISMATCH: digest said FAIL"), inverted.text);
+});
+
+test("evaluateVerdictGate: a docs target only passes when nothing is gated; with a tip/branch it is a stale hash (idea-382 H1)", () => {
+  const rev = { id: "rn-r", title: "Review - Gemini", labels: { profile: "Review - Gemini" } };
+  // no tip, no branch -> a docs-only review passes
+  const docs = evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md", tip: "", branch: "" });
+  assert.equal(docs.code, GATE_EXIT.pass);
+  assert.match(docs.reason, /docs target/);
+  // a tip is supplied -> a docs target cannot gate a code branch
+  const gated = evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 notes.md", tip: "ecba3231f00d1234567890abcdef1234567890ab", branch: "unit-code" });
+  assert.equal(gated.code, GATE_EXIT.staleHash);
+  assert.match(gated.reason, /docs target can't gate a code branch/);
+  // a branch alone (unresolved tip) is still gating -> stale
+  const bareBranch = evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 EXP3.md", tip: "", branch: "unit-x" });
+  assert.equal(bareBranch.code, GATE_EXIT.staleHash);
+  // a FAIL docs target still fails closed
+  const fail = evaluateVerdictGate({ agent: rev, lastMessage: "FAIL 1/0/0 docs:docs/lanes/x/SPEC.md", tip: "ecba3231f00d" });
+  assert.equal(fail.code, GATE_EXIT.fail);
 });
 
 test("digestVerdictText: new forms are copied byte-for-byte and the word is still recognized", () => {

@@ -376,6 +376,23 @@ export function resolveWorktreeRootPath(startDir) {
   return null;
 }
 
+/**
+ * `pat` occurs in `norm` as whole path segment(s) (both already lowercased, "/"-separated): "vibesquad" matches ".../vibesquad/x"
+ * but not ".../.cache/vibesquad-tmp/x". An absolute pattern ("/x" or "c:/x") anchors at the start of `norm`. Mirrored in
+ * server/identity.mjs and src/identity.ts; keep them identical (idea-709).
+ */
+export function pathHasSegments(norm, pat) {
+  const p = pat.replace(/\/+$/, "");
+  if (!p) return false;
+  const absolute = p.startsWith("/") || /^[a-z]:\//.test(p);
+  for (let i = norm.indexOf(p); i !== -1; i = absolute ? -1 : norm.indexOf(p, i + 1)) {
+    const before = i === 0 || (!absolute && norm[i - 1] === "/");
+    const after = i + p.length === norm.length || norm[i + p.length] === "/";
+    if (before && after) return true;
+  }
+  return false;
+}
+
 function matchSinglePathString(targetPath, teams) {
   const norm = String(targetPath ?? "").replace(/\\/g, "/").toLowerCase();
   if (!norm) return null;
@@ -384,7 +401,7 @@ function matchSinglePathString(targetPath, teams) {
       const lanePaths = Array.isArray(lane.paths) ? lane.paths : [];
       for (const pat of lanePaths) {
         const p = String(pat ?? "").replace(/\\/g, "/").toLowerCase();
-        if (p && norm.includes(p)) {
+        if (p && pathHasSegments(norm, p)) {
           return { team, lane };
         }
       }
@@ -395,7 +412,7 @@ function matchSinglePathString(targetPath, teams) {
     for (const pat of teamPaths) {
       const p = String(pat ?? "").replace(/\\/g, "/").toLowerCase();
       // A Squad-level path only names a lane when the Squad has exactly one; never guess lanes[0].
-      if (p && norm.includes(p)) {
+      if (p && pathHasSegments(norm, p)) {
         if (team.lanes?.length === 1) return { team, lane: team.lanes[0] };
         break;
       }

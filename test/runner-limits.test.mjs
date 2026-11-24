@@ -10,6 +10,7 @@ import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, 
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { Runner } from '../runner/runner.mjs';
 import { until } from './helpers/load-budget.mjs';
+import './helpers/keep-alive.mjs';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/limits/${n}`, import.meta.url), 'utf8');
 const tmpDirs = [];
@@ -143,7 +144,9 @@ test('runAgyUsage: spawns `agy -p /usage` without a shell and resolves stdout', 
 
 test('runAgyUsage: timeout kills the child tree and rejects; spawn error rejects', async () => {
   const hung = fakeAgy();
-  await assert.rejects(runAgyUsage({ spawnImpl: hung.spawnImpl, timeoutMs: 20 }), /timed out/);
+  // runAgyUsage unrefs its timeout timer; hold the loop open so a lone pending timer cannot end the test process (Linux has no other handle).
+  const keepAlive = setInterval(() => {}, 1000);
+  try { await assert.rejects(runAgyUsage({ spawnImpl: hung.spawnImpl, timeoutMs: 20 }), /timed out/); } finally { clearInterval(keepAlive); }
   assert.equal(hung.calls[0].child.killed, 1);
   const bad = fakeAgy({ onSpawn: (c) => setImmediate(() => c.emit('error', new Error('ENOENT'))) });
   await assert.rejects(runAgyUsage({ spawnImpl: bad.spawnImpl }), /ENOENT/);
@@ -220,4 +223,48 @@ test('idea-349: Runner._agyBusy: unknown post-turn work, held work and running t
   r.live.set('a', agy({ heldSince: 5 })); assert.equal(r._agyBusy(), true);
   r.live.set('a', agy({ inflight: 1 })); assert.equal(r._agyBusy(), true);
   r.live.set('a', agy({})); assert.equal(r._agyBusy(), false, 'probed clean');
+});
+
+test('usa-45: unchanged value between two polls still advances the sidecar checkedAt; jsonl does not grow', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const rec = { provider: 'antigravity-cli', window: '5h', usedPct: 40, resetsAt: '2026-11-23T20:00:00.000Z' };
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z'), t1 = t0 + 3 * 3600_000;
+  assert.ok(s.record(rec, t0));
+  assert.equal(s.record(rec, t1), null, 'deduped');
+  assert.equal(readFileSync(f, 'utf8').trim().split('\n').length, 1, 'jsonl did not grow');
+  const [row] = readLimits(home);
+  assert.equal(row.at, new Date(t0).toISOString());
+  assert.equal(row.checkedAt, new Date(t1).toISOString());
+});
+
+test('usa-45: readLimits falls back to the latest `at` when there is no sidecar', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0);
+  rmSync(path.join(home, 'runner', 'limits-checked.json'));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString());
+});
+
+test('usa-45: readLimits survives a bogus numeric sidecar value and never reports checkedAt older than at', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const { writeFileSync } = await import('node:fs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0);
+  const sc = path.join(home, 'runner', 'limits-checked.json');
+  writeFileSync(sc, JSON.stringify({ 'claude|weekly': 1e20 }));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString(), 'out-of-range number falls back to at');
+  writeFileSync(sc, JSON.stringify({ 'claude|weekly': new Date(t0 - 3600_000).toISOString() }));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString(), 'older sidecar clamped to at');
+  writeFileSync(sc, '[]');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0 + 1000);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(sc, 'utf8'))), ['claude|weekly'], 'array sidecar replaced by an object');
 });

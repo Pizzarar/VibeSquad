@@ -3988,6 +3988,12 @@ html, body, #root { overflow-x: hidden; }
 .usage-bar-thin { height: 5px; flex: 1; }
 .usage-bar-fill { height: 100%; background: var(--usage-c, var(--cyan)); box-shadow: var(--bevel); border-radius: 999px; }
 .usage-limit-meta { display: flex; justify-content: space-between; gap: var(--sp-2, 8px); color: var(--muted); }
+/* usa-45: stale limit sample (last check > 2h). Dim with --muted, fully opaque; head/tag stay readable. */
+.usage-limit-stale { border-style: dashed; }
+.usage-limit-stale > :not(.usage-limit-head), .usage-limit-stale .usage-limit-pct, .usage-limit-stale .usage-limit-pct small { color: var(--muted); }
+.usage-limit-sampled { font-size: 11px; color: var(--muted); }
+.usage-stale-tag { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px solid var(--amber); border-radius: 999px; background: var(--pastel-amber); color: var(--text); text-transform: uppercase; }
+.usage-stale-tag + .usage-estimate { margin-left: 4px; }
 .usage-eta { color: var(--muted); }
 .usage-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .usage-eta-warn { color: var(--amber-t); }
@@ -6060,6 +6066,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-delta-good { color: var(--mint-t); font-weight: 700; }
 .usage-delta-bad { color: var(--pink-t); font-weight: 700; }
 .usage-floor { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-lead-long-turns { display: flex; flex-direction: column; gap: 2px; margin-top: var(--sp-2, 8px); }
 .usage-floor-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-alt); }
 .usage-floor-seg { height: 100%; min-width: 2px; }
 .usage-floor-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px) var(--sp-4, 16px); color: var(--muted); }
@@ -6336,7 +6343,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping. */
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
 }
+.phone-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.phone-tab .phone-badge { flex-shrink: 0; }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
 .phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--pink-fill); color: var(--on-pink-fill); font-size: 12px; font-weight: 800; text-align: center; }
 
@@ -6467,6 +6481,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .usage-squad-label { margin-right: var(--sp-1, 4px); }
 
 /* usa-27: Ready-Time & Compaction gauge. Reuses cohort tile / table styles. */
+.usage-plans { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
 .usage-ready { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-ready-pill { align-self: flex-start; color: var(--cyan-t); border: 1px solid var(--cyan-t); border-radius: 999px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-variant-numeric: tabular-nums; }
 .usage-ready-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }

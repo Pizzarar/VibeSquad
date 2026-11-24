@@ -229,15 +229,17 @@ test("server: refuses main checkouts and relative paths, protects master, report
     return "";
   };
   const exists = (p) => !p.includes("missing");
+  // Absolute fixtures: drive-letter paths on win32 (unchanged), rooted paths elsewhere ("D:\x" is relative on POSIX).
+  const abs = (n) => (process.platform === "win32" ? "D:\\" + n : "/d/" + n);
   const r = removeTeamWorktrees(
     [
       { path: "rel/path" },
-      { path: "D:\\main" },
-      { path: "D:\\missing" },
-      { path: "D:\\wt-ok" },
-      { path: "D:\\onmaster" },
-      { path: "D:\\wt-u", branch: "unmerged" },
-      { path: "D:\\dirty" },
+      { path: abs("main") },
+      { path: abs("missing") },
+      { path: abs("wt-ok") },
+      { path: abs("onmaster") },
+      { path: abs("wt-u"), branch: "unmerged" },
+      { path: abs("dirty") },
     ],
     { git, exists },
   );

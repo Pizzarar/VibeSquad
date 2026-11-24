@@ -4,7 +4,7 @@ group: providers
 level: 1
 method: npm
 winget_id: n/a
-verified: 2026-11-01 (install and free-model list read from https://opencode.ai/docs/ and https://opencode.ai/docs/zen/; not run on this PC; npm package opencode-ai 1.19.5 was seen 2026-10-30)
+verified: 2026-11-01 (install and free-model list read from https://opencode.ai/docs/ and https://opencode.ai/docs/zen/; not run on this PC; npm package opencode-ai 1.19.5 was seen 2026-10-30; package name re-read 2026-11-22 from https://opencode.ai/docs/: now @opencode/cli)
 licence: own
 size: small
 ---
@@ -18,17 +18,15 @@ use to start. It can also use many paid providers if you have an account with on
 ## Install (Windows)
 Needs `node` (core module).
 ```powershell
-npm.cmd install -g opencode-ai
+npm.cmd install -g @opencode/cli
 ```
-Official page (fetched 2026-11-01): https://opencode.ai/docs/ . It also lists `choco install opencode` and
-`scoop install opencode`, and recommends WSL on Windows for better performance (UNVERIFIED: how well it runs
-outside WSL on the Windows PCs this kit targets).
+Official page (re-read 2026-11-22): https://opencode.ai/docs/ . The npm package is now `@opencode/cli` (older notes here said `opencode-ai`; the page does not say why). The page says "Windows package managers are not supported" and lists standalone Windows zips. Linux/macOS: `curl -fsSL https://opencode.ai/v2/install | bash`.
 
 Then run the PATH refresh (see `START_HERE.md`). If Verify still fails, restart your chat in VibeSquad
 (or open a **new** terminal window if you are doing this by hand).
 
 ## macOS line
-`macOS: npm install -g opencode-ai` (UNVERIFIED: not tested on a Mac).
+`macOS: npm install -g @opencode/cli` (UNVERIFIED: not tested on a Mac).
 
 ## Verify
 Run the PATH refresh first (see `START_HERE.md`, "PATH refresh").

@@ -9,7 +9,12 @@ import path from 'node:path';
 import { budget } from "./helpers/load-budget.mjs";
 
 const tmpDirs = [];
-test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const runners = [];
+const track = (r) => { runners.push(r); return r; };
+test.after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571/590)
+  for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-rh-')); tmpDirs.push(d); return d; };
 const VS_HOME = tmp();
 const ROOT = tmp();
@@ -67,7 +72,7 @@ async function boot({ agy = false } = {}) {
   const starts = [];
   const adapters = { claude: fakeAdapter(starts) };
   if (agy) adapters['antigravity-cli'] = fakeAdapter(starts);
-  const runner = new Runner({ dir: tmp(), adapters });
+  const runner = track(new Runner({ dir: tmp(), adapters }));
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const home = tmp();
@@ -279,7 +284,7 @@ test('runner events: turn_started / turn_ended (completed, failed) are derived f
 test('ACP-style failure before the first "running" still ends the turn as failed (status error, not closed)', async () => {
   const starts = [];
   const bad = { start({ emit }) { starts.push(1); return { send() { emit('error', { message: 'init failed' }); }, cancel() {}, kill() {} }; } };
-  const runner = new Runner({ dir: tmp(), adapters: { claude: bad } });
+  const runner = track(new Runner({ dir: tmp(), adapters: { claude: bad } }));
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const home = tmp();
@@ -303,11 +308,21 @@ test('ACP-style failure before the first "running" still ends the turn as failed
 
 test('profile ids and names both resolve explicitly; spawn_worker labels carry the name', async () => {
   const { matchStoredProfile, loadStoredProfiles } = await import('../server/hooks/agent-duties.ts');
+  // Hermetic: seed a fixture profile in a temp store (never the live/default one, nor ~/.paseo/config.json).
+  const prev = { pp: process.env.VIBESQUAD_PROFILES_PATH, pc: process.env.PASEO_CONFIG_PATH };
+  const store = path.join(tmp(), 'profiles.json');
+  writeFileSync(store, JSON.stringify([{ id: 'fixture-profile-1', name: 'Fixture Worker', provider: 'claude', model: 'fixture-model', role: 'worker' }]));
+  process.env.VIBESQUAD_PROFILES_PATH = store;
+  process.env.PASEO_CONFIG_PATH = path.join(path.dirname(store), 'no-such-config.json');
+  try {
   const p = loadStoredProfiles().find((x) => x.id);
-  assert.ok(p, 'a stored/default profile with an id exists');
+  assert.equal(p?.id, 'fixture-profile-1', 'the seeded fixture profile is what loads');
   assert.equal(matchStoredProfile(p.name)?.explicit, true);
   assert.equal(matchStoredProfile(p.id)?.explicit, true);
   assert.equal(matchStoredProfile(p.id)?.profile.name, p.name);
+  } finally {
+    for (const [k, v] of [['VIBESQUAD_PROFILES_PATH', prev.pp], ['PASEO_CONFIG_PATH', prev.pc]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });
 
 test('digest: an idle digest that logged nothing triggers the direct-write fallback; rn- prompt uses vs status', async () => {
@@ -351,7 +366,7 @@ test('vs shim runtime closure carries the agent-duties hook module (.ts) and the
 test('cold start: agent spawned before the event stream connects still gets exactly one created and one turn_started; a restart replays nothing', async () => {
   const starts = [];
   const home = tmp();
-  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fakeAdapter(starts) } }); // the layout the real runner uses
+  const runner = track(new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fakeAdapter(starts) } })); // the layout the real runner uses
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   writeDiscovery(home, { port: server.address().port, token: 't' });
@@ -435,7 +450,7 @@ async function bootCtl({ delayStream = 0 } = {}) {
     },
   };
   const home = tmp();
-  const runner = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: adapter } });
+  const runner = track(new Runner({ dir: path.join(home, 'agents'), adapters: { claude: adapter } }));
   ctl.runner = runner;
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

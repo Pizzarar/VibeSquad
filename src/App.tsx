@@ -118,6 +118,8 @@ import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
 import { alertEnabled, consumeVibeMigratedToast, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
+import { QuotaAlertBanner } from "./QuotaAlertBanner";
+import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import {
   applyUiScaleToDom,
   cycleUiScalePreset,
@@ -1601,6 +1603,18 @@ export function App() {
     return () => window.removeEventListener("keydown", onShortcut);
   }, []);
 
+  // usa-48: "open Usage" (banner button + ?focus=usage cold start). Normal: BoringApp switches to its usage mode itself;
+  // Psycho: land on Squads Home (from any view) and scroll to the dashboard. No reload.
+  useEffect(() => {
+    const onOpenUsage = () => {
+      if (getPref("app.vibe") === "boring") return;
+      enterSquadsHome();
+      setTimeout(() => document.querySelector('[data-testid="squads-dashboard"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 400);
+    };
+    window.addEventListener(OPEN_USAGE_EVENT, onOpenUsage);
+    return () => window.removeEventListener(OPEN_USAGE_EVENT, onOpenUsage);
+  }, []);
+
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1609,6 +1623,7 @@ export function App() {
     if (linkedAgent) {
       openAgent(linkedAgent);
     }
+    if (takeColdUsageFocus() && vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
     if (linkedFocus === "needs-you") {
       setFocus(true);
       setTimeout(() => {
@@ -1993,6 +2008,7 @@ export function App() {
   if (phoneShell) {
     return (
       <>
+      <QuotaAlertBanner canOpenUsage={false} />
       <PhoneCockpit
         views={sidebarViews}
         view={view}
@@ -2013,6 +2029,7 @@ export function App() {
 
   const topBanners = (
     <>
+      <QuotaAlertBanner />
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span title={`EXPOSED ON ${exposedIps.join(", ")}: LAN/meshnet access enabled`}>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>

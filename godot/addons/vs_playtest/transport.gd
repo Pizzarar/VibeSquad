@@ -11,6 +11,9 @@ const Token := preload("res://addons/vs_playtest/token.gd")
 const PAIR_PATH := "/pair"
 const PAIR_STATUS_PATH := "/pair/status"
 const PAIR_CLIENT_NAME := "Godot playtest"
+const AUTH_STATUS_PATH := "/__vibesquad/auth/status" # server/auth.mjs: {role, allowedTeams, deviceName}
+const ROLE_OWNER := "owner" # full-owner device (re-pair with a Playtest code)
+const ROLE_PLAYTEST := "owner-playtest" # least-privilege: report/thread only
 const CA_MAX_BYTES := 65536 # the /ca.crt bootstrap answer is a few KB
 
 var server_url: String = ""
@@ -46,15 +49,24 @@ func resolved_ca_cert_path() -> String:
 	return Token.ca_cert_path(ca_cert_path)
 
 
+## The pinned CA read ONCE: {tls: TLSOptions|null, fingerprint: {full, short}|{}}. Both come from the same bytes, so the
+## fingerprint the owner sees is always the cert the TLS pin uses (no second read for a file swap to slip between).
+func pinned_state() -> Dictionary:
+	var der := Token.read_ca_der(resolved_ca_cert_path())
+	if der.is_empty():
+		return {"tls": null, "fingerprint": {}}
+	var tls := Token.pinned_tls(der)
+	return {"tls": tls, "fingerprint": {} if tls == null else Token.ca_fingerprint(der)}
+
+
 ## TLS options trusting only the pinned VS CA, or null when there is no (valid) pin.
 func pinned_tls() -> TLSOptions:
-	return Token.pinned_tls(Token.read_ca_der(resolved_ca_cert_path()))
+	return pinned_state()["tls"]
 
 
 ## Fingerprint of the pinned CA ({full, short}), or {} when there is no pin.
 func pinned_fingerprint() -> Dictionary:
-	var der := Token.read_ca_der(resolved_ca_cert_path())
-	return {} if der.is_empty() else Token.ca_fingerprint(der)
+	return pinned_state()["fingerprint"]
 
 
 ## Why the device token may not go to server_url, or "" when it may (and in local mode).
@@ -66,9 +78,13 @@ func device_refusal() -> String:
 
 ## Why device calls can't run yet because of a setting (refused path / no CA pin), or "".
 func pin_refusal() -> String:
+	return _pin_refusal(pinned_tls())
+
+
+func _pin_refusal(tls: TLSOptions) -> String:
 	if resolved_ca_cert_path() == "":
-		return "vs_playtest/ca_cert_path must be an absolute file path outside the project (not res:// or user://)"
-	if pinned_tls() == null:
+		return "vs_playtest/ca_cert_path must be an absolute file path outside the project (not res:// or user://, not a network share)"
+	if tls == null:
 		return "no pinned VibeSquad CA (%s), so the device token is not sent: Pair with VS fetches the CA and asks you to confirm its fingerprint" % resolved_ca_cert_path()
 	return ""
 
@@ -88,11 +104,11 @@ func request(method: String, path: String, body: Variant = null) -> Dictionary:
 			return _fail(-1, refusal)
 		var dpath := resolved_device_token_path()
 		if dpath == "":
-			return _fail(-1, "vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://)")
-		var pin_why := pin_refusal()
+			return _fail(-1, "vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://, not inside the project, not a network share)")
+		tls = pinned_tls() # one read of the CA file, used for the check and the call
+		var pin_why := _pin_refusal(tls)
 		if pin_why != "":
 			return _fail(-1, pin_why)
-		tls = pinned_tls()
 		var dtoken := Token.read_device_token(dpath)
 		if dtoken == "":
 			return _fail(-1, "not paired with VibeSquad: use Pair with VS in the dock (device token file: %s)" % dpath)
@@ -104,6 +120,17 @@ func request(method: String, path: String, body: Variant = null) -> Dictionary:
 	if not bool(res["ok"]) and int(res["status"]) == 401 and auth_mode() == Token.MODE_DEVICE:
 		res["error"] = "VibeSquad no longer accepts this device (revoked?): Unpair, then Pair with VS again"
 	return res
+
+
+## The role the server gives this device token ("owner", "owner-playtest", ...), or "" when unknown (not paired, network
+## error, odd answer): the caller shows nothing then. Never raises, never returns the token.
+func fetch_role() -> String:
+	if auth_mode() != Token.MODE_DEVICE or not is_paired():
+		return ""
+	var res: Dictionary = await request("GET", AUTH_STATUS_PATH, null)
+	if not bool(res.get("ok", false)):
+		return ""
+	return str(res["data"].get("role", ""))
 
 
 ## Step 1 of pairing (PLAN_V1 "Remote is https only"): GET http://<host>:<port>/ca.crt, the one plain-http remote
@@ -137,7 +164,7 @@ func cancel_ca() -> void:
 ## Step 2: the owner confirmed `confirmed_fp` (the full fingerprint fetch_ca() showed). Then the E6a JSON pair redeem
 ## (server/auth.mjs handlePairRedeem) runs over https pinned to that CA: GET /pair?code=…&format=json -> {ok, state:
 ## paired|pending, token, role}; a pending device polls GET /pair/status with the token header until approved / denied /
-## gone. Only an owner-role token is kept. On success the CA is saved, then the token; the result never carries it.
+## gone. Only an owner / owner-playtest token is kept. On success the CA is saved, then the token; the result never carries it.
 ## -> {ok, state, error}
 func pair(code: String, confirmed_fp: String = "") -> Dictionary:
 	var why := _pair_precheck()
@@ -165,8 +192,8 @@ func pair(code: String, confirmed_fp: String = "") -> Dictionary:
 	var state := str(data.get("state", ""))
 	if not Token.is_valid_device_token(token) or not (state in ["paired", "pending"]):
 		return _pair_fail("error", "pairing failed: unexpected answer from the server")
-	if str(data.get("role", "owner")) != "owner":
-		return _pair_fail("wrong-role", "that code pairs a %s device; mint an owner pairing code in VibeSquad (Pair Device / vs pair)" % str(data.get("role")))
+	if not (str(data.get("role", ROLE_OWNER)) in [ROLE_OWNER, ROLE_PLAYTEST]):
+		return _pair_fail("wrong-role", "that code pairs a %s device; mint a Playtest code in VibeSquad (Pair Device dialog)" % str(data.get("role")))
 	if state == "pending":
 		var final := "timeout"
 		var waited := 0.0
@@ -180,8 +207,8 @@ func pair(code: String, confirmed_fp: String = "") -> Dictionary:
 			var s := str(sres["data"].get("state", "gone"))
 			if s == "pending":
 				continue
-			if s == "approved" and str(sres["data"].get("role", "owner")) != "owner":
-				return _pair_fail("wrong-role", "the approved device is not an owner device; mint an owner pairing code")
+			if s == "approved" and not (str(sres["data"].get("role", ROLE_OWNER)) in [ROLE_OWNER, ROLE_PLAYTEST]):
+				return _pair_fail("wrong-role", "the approved device is not a Playtest device; mint a Playtest code")
 			final = s
 			break
 		if final != "approved":
@@ -215,9 +242,9 @@ func _pair_precheck() -> String:
 	if refusal != "":
 		return refusal.replace("the device token", "a pairing code")
 	if resolved_device_token_path() == "":
-		return "vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://)"
+		return "vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://, not inside the project, not a network share)"
 	if resolved_ca_cert_path() == "":
-		return "vs_playtest/ca_cert_path must be an absolute file path outside the project (not res:// or user://)"
+		return "vs_playtest/ca_cert_path must be an absolute file path outside the project (not res:// or user://, not inside the project, not a network share)"
 	return ""
 
 

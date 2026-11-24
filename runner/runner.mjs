@@ -385,7 +385,7 @@ export class Runner {
     this._rosterWatchGuardMs = rosterWatchGuardMs;
     this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
     this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` (bigint) of the watched dir, captured when the watch opens
-    this._rosterWatchReopen = false; // the guard closed the watch because the dir was missing: reopen it once it returns
+    this._rosterWatchReopen = false; // a reopen is pending: the guard closed the watch (missing/replaced dir) and reopens once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
@@ -1838,7 +1838,11 @@ export class Runner {
         if (!file) { this._foldClean.clear(); return; } // overflow / unknown file: trust nothing
         if (file.endsWith('.jsonl')) this._foldClean.delete(file.slice(0, -6));
       });
-    } catch { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
+    } catch (err) {
+      // The dir vanished between the stat above and the watch open (ENOENT): a missing dir, not a permanent failure (L2).
+      if (err?.code === 'ENOENT') return;
+      this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return;
+    }
     if (!w) { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
     w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
     this._rosterWatch = w;
@@ -1871,7 +1875,7 @@ export class Runner {
   // never act on a dir that was removed meanwhile (M1). Unref'd: it never keeps the process alive (tests exit without
   // clearing it), and closeRosterWatch/shutdown clear it. No sync fs on the hot scan path.
   _ensureRosterWatchGuard() {
-    if (this._rosterWatchGuard || this._shutDown || !(this._rosterWatch || this._rosterWatchReopen)) return;
+    if (this._rosterWatchGuard || this._shutDown || this._rosterWatchFailed || !(this._rosterWatch || this._rosterWatchReopen)) return;
     const ms = Number(this._rosterWatchGuardMs);
     const interval = Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
     this._rosterWatchGuard = setTimeout(() => { this._rosterWatchGuardTick(); }, interval);
@@ -1905,11 +1909,11 @@ export class Runner {
         this._rosterWatchReopen = true;
       } else if (this._rosterWatchIdentity !== identity) {
         this._closeRosterWatchHandle(); // replaced (new ino/birthtime) under the watch: watch the new dir
+        this._rosterWatchReopen = true; // keep the guard armed if the reopen races the dir away (L1)
         this._ensureRosterWatch();
       }
     } else if (this._rosterWatchReopen && st) {
-      this._rosterWatchReopen = false;
-      this._ensureRosterWatch(); // the dir is back: reopen on it
+      this._ensureRosterWatch(); // the dir is back: reopen on it; the reopen flag clears only on success (L1)
     }
     this._ensureRosterWatchGuard(); // reschedule only while the watch (or a pending reopen) is still live
   }

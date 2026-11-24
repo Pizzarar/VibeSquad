@@ -231,7 +231,7 @@ export const EVERYONE_LAYER = [
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
-  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats.",
+  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats. Workers run their own tests and builds in the foreground: never start a background shell or Monitor and end your turn \"waiting\" on it.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
   "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
   "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs hwo`→vs who, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
@@ -240,6 +240,7 @@ export const EVERYONE_LAYER = [
   "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)",
   "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.",
   "- R14 (Already covered): Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow covers it, say already-covered-by-X instead of rebuilding it.",
+  "- R15 (Owner time zone): In any text the owner reads (chat replies, needs-you, decision blocks, lane briefs), write clock times in US Eastern with the zone, e.g. \"8:00 AM ET\" (convert from UTC; mind EST/EDT). Machine fields (ISO timestamps, logs, JSON, CLI flags, restart windows config) stay UTC.",
   "- Attribution (Community Accolades): Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
 ].join("\n");
 
@@ -285,7 +286,7 @@ export const HUB_LEAD_RULES = [
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
   "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Floor: a healthy lead under 100k tokens is refused (steer first, ladder 1-2); an errored, wedged or permission-stuck lead is not. `--force` needs a non-empty `--steer` and is logged as a decision. Never raw-archive a lead.",
   "- Multi-item waits (several leads, a suite run, a restart): run `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping). Use no `vs wait` loops and no heartbeats for multi-item waits; the ladder's `vs wait <lead> --timeout 90` stays for a single steer.",
-  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`. Restart via the server-side request, not a hand-held drain: `vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]` (the server asks every live lead of every Squad to drain, fires `vs restart` once, logs restart-done; end your turn, no timer to hold), follow it with `vs restart status`, call it off with `vs restart abort`. A plain `vs restart` while a request is open prints a warning. Fallback only if the request path is unavailable: send the drain asks yourself, wait for each `drained`, then run `vs restart`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
+  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`. Restart via the server-side request, not a hand-held drain: `vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]` (the server asks every live lead of every Squad to drain, fires `vs restart` once, logs restart-done; end your turn, no timer to hold), follow it with `vs restart status`, call it off with `vs restart abort`. Restart windows: a non-urgent request is queued for the next fixed UTC window (13:00Z / 21:00Z) and later non-urgent requests fold into it, so routine merges batch into 2 restarts a day and never cut a running suite; request as soon as a merge needs it and let the window fire. Add `--urgent --reason \"<why>\"` only for a security fix, a broken server, or a blocker for all lanes: it drains now and pulls the queued tips in with it. A plain `vs restart` while a request is open or queued prints a warning. Fallback only if the request path is unavailable: send the drain asks yourself, wait for each `drained`, then run `vs restart`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
   "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
   "- Escalations to the owner (phone cockpit): when you need a decision, end your message with a fenced block ```vs:decision with lines `summary: <1-2 lines: what stopped>`, `do: <your recommended action>`, one `alt: <other option>` per alternative, and optionally `vs:riff @<lane>` to send the owner to that lane's Buddy. It renders as one-tap buttons; keep each line short and put nothing else in the fence.",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
@@ -3306,7 +3307,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
         `Use FAIL if the worker reported errors, failing tests, or did not finish. If the worker is currently running or queued, or its report states neither PASS nor FAIL, log nothing. Then stop.`,
-        `Reviewer verdicts: if the report has a line \`PASS|FAIL H/M/L <hash>\` (e.g. "FAIL 1/0/1 3528a4c"), start your text with that line copied exactly, never a paraphrase or the opposite word. The server copies the worker's own line to the front of your entry and marks any PASS/FAIL disagreement. A reviewer with no such line is logged as "NO-VERDICT: ...", never PASS.`,
+        `Reviewer verdicts: if the report has a line \`PASS|FAIL H/M/L <hash>\` (e.g. "FAIL 1/0/1 3528a4c"), start your text with that line copied exactly, never a paraphrase or the opposite word. The <hash> slot may instead be a docs target for a docs-only review: \`docs:<repo-relative path>\` (e.g. "PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md") or a bare repo-relative path ending in \`.md\` (e.g. "PASS 0/0/0 EXP3.md"). The server copies the worker's own line to the front of your entry and marks any PASS/FAIL disagreement. A reviewer with no such line is logged as "NO-VERDICT: ...", never PASS.`,
       ].join("\n");
 
       const startedAt = Date.now();
@@ -3319,6 +3320,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const last = await lastAssistantText(paseo, worker.id);
         const text = unverifiedDigestText(why, last, { title: worker.title, labels });
         if (!text) return;
+        // idea-524: the lane's live lead already received this exact final (its watch ping or a [done] relay): a late UNVERIFIED
+        // would be a second [done] for work it already saw. Only that lead's own delivery counts (idea-450 H1).
+        if (await laneLeadHasFinal(paseo, teamIdOf(team, currentTeams()), lane, workerId, last)) return;
         // idea-207a/M1: re-check right before writing (the awaits above can outlast a digest that logged its verdict): a real
         // verdict already logged for this turn always wins, so one turn never gets both a verdict and an UNVERIFIED entry.
         if (verdictLogged()) return;
@@ -3592,6 +3596,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (oldest === undefined) break;
         forwardedFinals.delete(oldest);
       }
+    }
+
+    /**
+     * idea-524: has the lane's live lead already received `worker`'s final `last` (a watch ping or a `[done]` relay marked it in
+     * `forwardedFinals`)? The digest's UNVERIFIED fallback skips its durable `[done]` only then. Recipient-scoped on purpose
+     * (idea-450 H1): an Overlord's or another observer's delivery never suppresses the lane lead's entry. No live lead, a failed
+     * lookup, an empty final, or a different final (a later turn: new hash) all return false, so the entry is still written.
+     */
+    async function laneLeadHasFinal(paseo: Paseo, teamId: string, lane: string, worker: string, last: string, now = Date.now()): Promise<boolean> {
+      if (!teamId || !String(last ?? "").trim()) return false;
+      const lead = await findLead(paseo, teamId, lane).catch(() => null);
+      return !!lead?.id && isFinalForwarded(String(lead.id), worker, finalHashOf(last), now);
     }
 
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
@@ -4779,6 +4795,8 @@ ${detail}` : text, refs: [d.setId] };
           const last = await lastAssistantText(paseo, workerId);
           const text = unverifiedDigestText("orphaned", last, worker);
           if (!text) continue;
+          // idea-524: the lane's live lead already received this exact final: a late orphaned UNVERIFIED is a duplicate, skip it.
+          if (await laneLeadHasFinal(paseo, teamIdOf(where.team, currentTeams()), where.lane, workerId, last, now)) continue;
           appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text, refs: [workerId] });
         }
       } catch (err) {

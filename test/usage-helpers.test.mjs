@@ -498,3 +498,95 @@ test("usa-39: buildProfiles folds costPerRun runs-weighted across duplicate keys
   assert.equal(one[0].costPerRun, 2.5);
   assert.equal(buildProfiles({ byProfile: [row(1, undefined), row(3, undefined)] })[0].costPerRun, null);
 });
+
+import { leadLongTurnRows } from "../src/usageHelpers.ts";
+test("stormText: excl-respawns parenthetical only when it differs", () => {
+  const base = { lane: "usage", role: "worker", count: 5, windowMs: 120000, firstAt: "a", lastAt: "b", zeroTurnExits: 0 };
+  assert.equal(stormText({ ...base, countExclRespawns: 2 }), "usage · worker · 5 (2 excl. respawns) spawns in 2m");
+  assert.equal(stormText({ ...base, countExclRespawns: 5 }), "usage · worker · 5 spawns in 2m");
+  assert.equal(stormText(base), "usage · worker · 5 spawns in 2m");
+});
+test("leadLongTurnRows: pooled, squad pick, pct, missing", () => {
+  const b = (turns, costUsd) => ({ turns, costUsd });
+  const l = { threshold: 80, pooled: { productive: b(3, 6), loop: b(1, 3), other: b(1, 1) }, bySquad: [{ teamId: "efi", productive: b(2, 1), loop: b(0, 0), other: b(0, 0) }] };
+  const p = leadLongTurnRows(l, null);
+  assert.deepEqual(p.map((r) => [r.key, r.turns, r.pct]), [["productive", 3, 0.6], ["waiting", 0, 0], ["loop", 1, 0.3], ["other", 1, 0.1]]);
+  assert.equal(leadLongTurnRows(l, "efi")[0].turns, 2);
+  const none = leadLongTurnRows(l, "nosuch"); // squad set, no row -> zeros, never pooled
+  assert.deepEqual(none.map((r) => [r.turns, r.costUsd, r.pct]), [[0, 0, null], [0, 0, null], [0, 0, null], [0, 0, null]]);
+  assert.equal(leadLongTurnRows({ threshold: 80, pooled: l.pooled }, "efi")[0].turns, 0);
+  assert.equal(leadLongTurnRows(l, "efi")[2].pct, 0);
+  assert.equal(leadLongTurnRows({ threshold: 80, pooled: { productive: b(0, 0), loop: b(0, 0), other: b(0, 0) } }, null)[0].pct, null);
+  assert.equal(leadLongTurnRows(undefined, null), null);
+});
+test("leadLongTurnRows: waiting row (4 rows) and older server without waiting renders 0", () => {
+  const b = (turns, costUsd) => ({ turns, costUsd });
+  const l = { threshold: 80, pooled: { productive: b(1, 2), waiting: b(4, 6), loop: b(1, 1), other: b(1, 1) } };
+  const rows = leadLongTurnRows(l, null);
+  assert.deepEqual(rows.map((r) => [r.key, r.turns, r.pct]), [["productive", 1, 0.2], ["waiting", 4, 0.6], ["loop", 1, 0.1], ["other", 1, 0.1]]);
+  const old = leadLongTurnRows({ threshold: 80, pooled: { productive: b(1, 2), loop: b(1, 1), other: b(1, 1) } }, null);
+  assert.equal(old.length, 4);
+  assert.deepEqual([old[1].key, old[1].turns, old[1].costUsd, old[1].pct], ["waiting", 0, 0, 0]);
+});
+
+import { pruneDismissed, quotaAlertKey, quotaAlertText, visibleQuotaAlerts } from "../src/usageHelpers.ts";
+test("quota alerts: selector drops dismissed, expired, malformed", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+  const a = { provider: "claude", window: "weekly", usedPct: 98, resetsAt: "2026-11-26T00:00:00Z" };
+  const expired = { ...a, window: "5h", resetsAt: "2026-11-23T11:00:00Z" };
+  const other = { provider: "antigravity-cli", window: "5h", usedPct: 97, resetsAt: null };
+  assert.equal(visibleQuotaAlerts([a, expired, other, null, { provider: 1 }], [], now).length, 2);
+  assert.deepEqual(visibleQuotaAlerts([a, other], [quotaAlertKey(a)], now), [other]);
+  assert.deepEqual(visibleQuotaAlerts(undefined, [], now), []);
+  // new resetsAt = new window, dismissal does not carry over
+  assert.equal(visibleQuotaAlerts([{ ...a, resetsAt: "2026-12-03T00:00:00Z" }], [quotaAlertKey(a)], now).length, 1);
+});
+test("quota alerts: text + prune", () => {
+  const now = Date.parse("2026-11-23T12:00:00Z");
+  assert.equal(quotaAlertText({ provider: "claude", window: "weekly", usedPct: 98, resetsAt: "2026-11-26T00:00:00Z" }, now), "Claude weekly: 2% left. Resets in 2d 12h. Spend a reset now?");
+  assert.equal(quotaAlertText({ provider: "claude", window: "weekly", usedPct: 99.6, resetsAt: null }, now), "Claude weekly: 0% left. Spend a reset now?");
+  assert.deepEqual(pruneDismissed(["claude|weekly|2026-11-20T00:00:00Z", "claude|weekly|2026-11-26T00:00:00Z"], now), ["claude|weekly|2026-11-26T00:00:00Z"]);
+});
+test("usa-45: limitIsStale / limitSampledText key off checkedAt with a 2h threshold", async () => {
+  const { limitIsStale, limitSampledText } = await import("../src/usageHelpers.ts");
+  const now = Date.parse("2026-11-23T12:00:00.000Z");
+  assert.equal(limitIsStale("2026-11-23T10:30:00.000Z", now), false);
+  assert.equal(limitIsStale("2026-11-23T09:59:00.000Z", now), true);
+  assert.equal(limitIsStale(null, now), false);
+  assert.equal(limitSampledText("2026-11-23T09:00:00.000Z", now), "sampled 3h 0m ago");
+  assert.equal(limitSampledText(undefined, now), "");
+  assert.equal(limitSampledText("2026-11-23T12:00:30.000Z", now), "sampled 0m ago");
+});
+
+import { usageFocusRequested, requestOpenUsage, OPEN_USAGE_EVENT } from "../src/usageHelpers.ts";
+test("usa-48: ?focus=usage detection + open-usage event", () => {
+  assert.equal(usageFocusRequested("?focus=usage"), true);
+  assert.equal(usageFocusRequested("?agent=x&focus=usage"), true);
+  assert.equal(usageFocusRequested("?focus=needs-you"), false);
+  assert.equal(usageFocusRequested(""), false);
+  let n = 0;
+  globalThis.window = new EventTarget();
+  globalThis.window.addEventListener(OPEN_USAGE_EVENT, () => n++);
+  requestOpenUsage();
+  assert.equal(n, 1);
+  delete globalThis.window;
+});
+
+import { stripUsageFocus, takeColdUsageFocus, takePendingUsageScroll, resetColdUsageForTest } from "../src/usageHelpers.ts";
+test("usa-48: cold-start focus=usage is consumed once, URL stripped, scroll pending once", () => {
+  assert.equal(stripUsageFocus("?agent=a&focus=usage"), "?agent=a");
+  assert.equal(stripUsageFocus("?focus=usage"), "");
+  const replaced = [];
+  globalThis.location = { search: "?agent=a&focus=usage", pathname: "/", hash: "" };
+  globalThis.history = { state: null, replaceState: (_s, _t, url) => replaced.push(url) };
+  resetColdUsageForTest();
+  assert.equal(takeColdUsageFocus(), true);
+  assert.equal(takeColdUsageFocus(), true); // every caller sees it (BoringApp + App)
+  assert.deepEqual(replaced, ["/?agent=a"]); // stripped once
+  assert.equal(takePendingUsageScroll(), true);
+  assert.equal(takePendingUsageScroll(), false);
+  globalThis.location = { search: "", pathname: "/", hash: "" };
+  resetColdUsageForTest();
+  assert.equal(takeColdUsageFocus(), false);
+  delete globalThis.location; delete globalThis.history; resetColdUsageForTest();
+});

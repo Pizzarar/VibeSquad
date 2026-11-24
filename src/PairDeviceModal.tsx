@@ -6,15 +6,16 @@ import type { DeviceRole } from "./phonePairLogic";
 // E6c: same rules as defaultTesterTeams / formatDeviceRoleBadge / pairStartInit in phonePairLogic.ts (which PhonePairSheet imports).
 // Kept inline because test/pair-modal-apk.test.mjs transpiles this file alone and only stubs ./TeamActions and ./ui.
 const OWNER_ROLE_LABEL = "Owner (full access)";
+const PLAYTEST_ROLE_LABEL = "Playtest (Godot addon)";
 const TESTER_ROLE_LABEL = "Alpha Tester (Log Bug + Bug Desk chat only)";
 const defaultTesterTeams = (teams: Array<{ id: string }>): string[] =>
   teams.some((t) => t.id === "efi") ? ["efi"] : teams.length ? [teams[0].id] : [];
 const formatDeviceRoleBadge = (d: { role?: string; allowedTeams?: string[] | null }): string | null =>
-  d.role === "bug-tester" ? (d.allowedTeams?.length ? `TESTER · ${d.allowedTeams.join(", ")}` : "TESTER") : null;
+  d.role === "owner-playtest" ? "PLAYTEST" : d.role === "bug-tester" ? (d.allowedTeams?.length ? `TESTER · ${d.allowedTeams.join(", ")}` : "TESTER") : null;
 const pairStartInit = (role: DeviceRole, allowedTeams: string[]): RequestInit => ({
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify(role === "bug-tester" ? { role, allowedTeams } : { role: "owner" }),
+  body: JSON.stringify(role === "bug-tester" ? { role, allowedTeams } : role === "owner-playtest" ? { role, allowedTeams: null } : { role: "owner" }),
 });
 
 type Fingerprint = { full: string | null; short: string | null };
@@ -320,7 +321,7 @@ export function PairDeviceModal({
     setRole(next);
     setPair(null); // never leave the other role's code on screen
     setErr("");
-    if (next === "owner") void startPairing("owner");
+    if (next === "owner" || next === "owner-playtest") void startPairing(next);
   };
 
   const toggleSquad = (id: string) => {
@@ -333,6 +334,7 @@ export function PairDeviceModal({
   const mintCurrent = () => void startPairing(role, testerTeams);
   const isOwnerRole = role === "owner";
   const isTesterRole = role === "bug-tester";
+  const isPlaytestRole = role === "owner-playtest";
   const testerBlocked = role === "bug-tester" && testerTeams.length === 0;
 
   // E4b (X1 L5): a remote paired browser mints approval-required codes; the redeemed device waits for Approve here.
@@ -509,6 +511,9 @@ export function PairDeviceModal({
           <div className="seg" style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
             <button type="button" className={isOwnerRole ? "on" : ""} data-testid="pair-role-owner" onClick={() => changeRole("owner")}>
               {OWNER_ROLE_LABEL}
+            </button>
+            <button type="button" className={isPlaytestRole ? "on" : ""} data-testid="pair-role-playtest" onClick={() => changeRole("owner-playtest")}>
+              {PLAYTEST_ROLE_LABEL}
             </button>
             <button type="button" className={isTesterRole ? "on" : ""} data-testid="pair-role-tester" onClick={() => changeRole("bug-tester")}>
               {TESTER_ROLE_LABEL}

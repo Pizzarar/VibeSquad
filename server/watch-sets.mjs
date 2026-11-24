@@ -6,7 +6,7 @@
 // report?}], firedAt?, cancelledAt?, pings:[]}]}`. Every write is a locked read-modify-write (the `vs watch` verb writes from
 // another process) and atomic; the server reloads it on start and on every change.
 // Inputs: runner events (onRunnerEvent, from RunnerBackend.subscribeEvents), team-log `done` / `blocker` entries (onLogEntry,
-// from the plugin's scanLogs), the suite result + lock files in tmpdir, `restart-<ts>.json` records, and the stall clock (tick).
+// from the plugin's scanLogs), the suite result + lock files in testLockDir() (cli/fifo-queue.mjs), `restart-<ts>.json` records, and the stall clock (tick).
 // Output: pings handed to `deliver`; the plugin routes them through its wake path (pendingWake -> flushWake -> send).
 //
 // Ping lifecycle, persisted per ping: fired (`at`, written BEFORE any send, so a set never fires twice, also across a restart) ->
@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { pidAlive } from "../runner/lock.mjs";
+import { checkTestLockDir, testLockDir } from "../cli/fifo-queue.mjs";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
@@ -96,28 +97,30 @@ function readDoc(file) {
 }
 
 /** The locked body shared by mutateDoc / mutateDocAsync: read, fn, and an atomic write only when fn changed the doc. */
-const docMutation = (file, fn, now = Date.now()) => (lock) => {
+const docMutation = (file, fn, now = Date.now(), log = null) => (lock) => {
   const doc = readDoc(file);
   const before = JSON.stringify(doc);
   const out = fn(doc);
-  prune(doc, now); // idea-575: opportunistic, inside the lock we already hold
+  const pruned = prune(doc, now); // idea-575: opportunistic, inside the lock we already hold
   if (JSON.stringify(doc) !== before) {
     lock.assertOwned(); // a reaped (stale) holder must not commit over a newer writer's file (idea-114 L4)
     writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n");
+    // idea-596: the metric line is per-call (no module-level logger shared across engines) and only after the write succeeded.
+    if (pruned) { try { log?.(`watch registry pruned ${pruned} closed set(s), ${doc.sets.length} kept`); } catch {} }
   }
   return out;
 };
 
 /** Locked read-modify-write, sync (blocks while waiting): CLI / tests. Returns fn's value. */
-function mutateDoc(file, fn, now) {
+function mutateDoc(file, fn, now, log) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  return withFileLockSync(file, docMutation(file, fn, now));
+  return withFileLockSync(file, docMutation(file, fn, now, log));
 }
 
 /** mutateDoc for the server process: waits for the lock without blocking the event loop (idea-227). Resolves to fn's value. */
-function mutateDocAsync(file, fn, now) {
+function mutateDocAsync(file, fn, now, log) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  return withFileLock(file, docMutation(file, fn, now));
+  return withFileLock(file, docMutation(file, fn, now, log));
 }
 
 /** Open sets are never prunable (no firedAt / cancelledAt); a fired set with an unattempted ping is kept until delivered. */
@@ -126,16 +129,12 @@ const keepSet = (s, now) => {
   if (!Number.isFinite(closedAt) || now - closedAt < PRUNE_AFTER_MS) return true;
   return (s.pings ?? []).some((p) => !p.attemptedAt) && !s.cancelledAt;
 };
-let pruneLog = () => {};
 
-/** Drop closed sets past retention; logs one metric line per prune. Returns the pruned count. */
+/** Drop closed sets past retention. Returns the pruned count (docMutation logs it once the write lands). */
 function prune(doc, now) {
   const kept = doc.sets.filter((s) => keepSet(s, now));
   const n = doc.sets.length - kept.length;
-  if (n) {
-    doc.sets = kept;
-    pruneLog(`watch registry pruned ${n} closed set(s), ${kept.length} kept`);
-  }
+  if (n) doc.sets = kept;
   return n;
 }
 
@@ -173,21 +172,21 @@ function newWatchSet({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN, e
   return { id: `w-${randomBytes(4).toString("hex")}`, owner: who, team: String(team ?? "").trim(), lane: String(lane ?? "").trim(), createdAt: at, stallMin: sm, ...(em !== undefined ? { escalateMin: em } : {}), items: norm, pings: [] };
 }
 
-const pushSet = (set, now) => (doc) => {
+const pushSet = (set) => (doc) => {
   doc.sets.push(set);
 };
 
 /** Register a watch set (sync; CLI / tests). `opts.home` / `opts.now` are for tests. Returns `{id}`. */
 export function addWatch(spec, { home, now = Date.now() } = {}) {
   const set = newWatchSet(spec, now);
-  mutateDoc(watchesPath({ home }), pushSet(set, now), now);
+  mutateDoc(watchesPath({ home }), pushSet(set), now);
   return { id: set.id };
 }
 
 /** addWatch for the server process (MCP `watch`): never blocks the event loop on the lock. Resolves to `{id}`. */
 export async function addWatchAsync(spec, { home, now = Date.now() } = {}) {
   const set = newWatchSet(spec, now);
-  await mutateDocAsync(watchesPath({ home }), pushSet(set, now), now);
+  await mutateDocAsync(watchesPath({ home }), pushSet(set), now);
   return { id: set.id };
 }
 
@@ -583,7 +582,7 @@ function escalateIdle(set, ctx, at) {
  */
 export function createWatchEngine({
   home,
-  tmpdir = os.tmpdir(),
+  tmpdir = testLockDir(), // the suite lock dir, not os.tmpdir(): the server and the suite may differ in TMPDIR
   now = () => Date.now(),
   alive = pidAlive,
   getAgent,
@@ -605,8 +604,7 @@ export function createWatchEngine({
     }
   };
   const startedAt = now();
-  pruneLog = log;
-  const mutate = (fn) => mutateDocAsync(file, fn, now());
+  const mutate = (fn) => mutateDocAsync(file, fn, now(), log);
   let cache = emptyDoc();
   let cacheStamp = "";
   const agents = new Map(); // id -> { status, statusSince, lost, resumable, archived, attention, lastEventAt, turnStartedAt, labels }
@@ -909,7 +907,9 @@ export function createWatchEngine({
       agents,
       reports: valid,
       alive,
-      suite: kinds.has("suite") ? { result: readJson(path.join(td, SUITE_RESULT_FILE)), lock: readJson(path.join(td, SUITE_LOCK_FILE)) } : {},
+      // An unsafe lock dir (symlink, another user's, group/other-writable: checkTestLockDir) reads as no result and no lock,
+      // so a forged last-run record never satisfies a suite item.
+      suite: kinds.has("suite") && !checkTestLockDir(td) ? { result: readJson(path.join(td, SUITE_RESULT_FILE)), lock: readJson(path.join(td, SUITE_LOCK_FILE)) } : {},
       restarts: kinds.has("restart") ? readRestarts() : [],
       restartRequests: kinds.has("restart") ? readRestartRequests() : [],
     };

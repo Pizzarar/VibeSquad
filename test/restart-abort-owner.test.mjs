@@ -136,7 +136,7 @@ test("R2 M1: the restart-request loop reads archived records only when a held id
   const home = mkdtempSync(path.join(os.tmpdir(), "vs-rr-arch-"));
   try {
     const now = Date.parse("2026-11-21T12:00:00Z");
-    createRestartRequest(home, { tip: "abc1234", requestedBy: "owner", needs: "server-restart", now });
+    createRestartRequest(home, { tip: "abc1234", requestedBy: "owner", needs: "server-restart", urgent: true, now });
     const arch = worker("rn-arch", { archivedAt: "2026-11-21T00:00:00Z" });
     let archivedReads = 0;
     let held = { ids: ["rn-live"], work: {} };

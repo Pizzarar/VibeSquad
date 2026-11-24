@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { lineTurn, mayTake, parseReserveSpec, poolHolders, poolMax, poolPaths, poolReserve, releasePoolSlot, resolveWinCommand, runInSlot, tryAcquirePoolSlot, validatePool, waitForPoolSlot } from "../cli/slot-pool.mjs";
+import { lineTurn, mayTake, parseReserveSpec, poolHolders, poolMax, poolPaths, poolReserve, releasePoolSlot, resolveWinCommand, runInSlot, tryAcquirePoolSlot, tryClaimPoolSlot, validatePool, waitForPoolSlot } from "../cli/slot-pool.mjs";
 import { readQueue } from "../cli/fifo-queue.mjs";
 import { parseSlotArgs, slotCallerSquad } from "../cli/vs.mjs";
 
@@ -188,7 +188,9 @@ test("a dead holder's slot is reclaimed at once; a holder killed mid-run frees i
   const waiter = runner(dir, "waiter", { hold: 50, squad: "efi" });
   t.after(() => waiter.kill());
   await until(() => waiter.out.includes("waiting for godot slot"), "waiter blocked");
-  holder.kill(); // the vs process dies; its (forever) child keeps running, the slot must not
+  // The vs process dies; its (forever) child keeps running, the slot must not. SIGKILL: off Windows a SIGTERM is caught, passed
+  // on to the child and the slot released cleanly (no dead holder to reclaim); on Windows both are TerminateProcess.
+  holder.kill("SIGKILL");
   assert.equal(await waiter.exited, 0, waiter.out);
   assert.match(waiter.out, new RegExp(`reclaimed godot slot [0-2] from dead holder pid ${holder.pid}(?!\\d)`));
   fills.forEach(releasePoolSlot);
@@ -392,4 +394,39 @@ test("idea-578: vs slot run (the real CLI): no or unknown agent id is shared-onl
   assert.match(bad.stderr, /VS_SLOT_RESERVE_GODOT: bad reservation "efi=2"/);
   releasePoolSlot(shared);
   assert.deepEqual(slotFiles(dir), []);
+});
+
+test("idea-579: tryClaimPoolSlot defaults staleMs to holdStaleMs/judgeBeat and reclaims dead claims and dead holders", (t) => {
+  const dir = tmp(t);
+  const paths = poolPaths("solo", dir);
+  const reserve = { efi: 1 };
+  const lock = (file, pid, ageMs) => {
+    writeFileSync(file, JSON.stringify({ pid, startedAt: 1, pool: "solo", index: 0 }));
+    const old = new Date(Date.now() - ageMs);
+    utimesSync(file, old, old);
+  };
+  // A live-pid (ours) holder whose beat is 5s old, holdStaleMs 1s (under the 120s default): poolHolders sees it free, so the take must steal it
+  // (staleMs defaulted to holdStaleMs, not the 120s HOLD_STALE_MS, and not left undefined-equals-default).
+  lock(paths.slot(0), process.pid, 5000);
+  const noBeat = tryClaimPoolSlot(paths, { max: 2, reserve, holdStaleMs: 1000, judgeBeat: false });
+  assert.equal(noBeat, null, "judgeBeat:false never steals a live-pid holder");
+  const stolen = [];
+  const slot = tryClaimPoolSlot(paths, { max: 2, reserve, holdStaleMs: 1000, judgeBeat: true, onSteal: (o) => stolen.push(o) });
+  assert.equal(slot?.index, 0, "stale beat reclaimed with the default staleMs");
+  assert.equal(stolen[0]?.reason, "stale");
+  releasePoolSlot(slot);
+  // A dead holder is reclaimed under reservations.
+  lock(paths.slot(0), DEAD_PID, 0);
+  const dead = tryClaimPoolSlot(paths, { max: 2, reserve, judgeBeat: true });
+  assert.equal(dead?.index, 0, "dead holder reclaimed");
+  releasePoolSlot(dead);
+  // A <pool>.claim left by a dead process is reclaimed instead of blocking every take.
+  lock(paths.claim, DEAD_PID, 0);
+  const afterDeadClaim = tryClaimPoolSlot(paths, { max: 2, reserve, judgeBeat: true });
+  assert.equal(afterDeadClaim?.index, 0, "dead claim reclaimed");
+  releasePoolSlot(afterDeadClaim);
+  assert.equal(existsSync(paths.claim), false, "the claim mutex is released");
+  // A live, fresh claim held by someone else makes the take return null (caller retries next poll).
+  lock(paths.claim, process.pid, 0);
+  assert.equal(tryClaimPoolSlot(paths, { max: 2, reserve, judgeBeat: true }), null, "busy claim -> null");
 });

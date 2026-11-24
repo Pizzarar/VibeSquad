@@ -14,10 +14,32 @@ export const START_TOLERANCE_MS = 5000; // spawn() is called just before the OS 
 
 const imageOf = (file) => path.basename(String(file)).toLowerCase();
 
+// Linux: /proc/<pid>/stat starttime is in USER_HZ ticks since boot; 100 on every mainstream arch (a wrong value only skews
+// createdMs, so matchesRecord fails and nothing is killed).
+const USER_HZ = 100;
+
+// Linux start time from the kernel: boot time (/proc/stat btime) + the pid's start ticks. Unlike ps etimes (whole seconds
+// counted back from "now"), it reads the same on every call, so per-pid and batched lookups agree to the ms (B2 G8).
+// Throws when /proc cannot answer; the caller falls back to ps.
+function procInfo(pid, read) {
+  const stat = String(read(`/proc/${pid}/stat`, 'utf8'));
+  const open = stat.indexOf('(');
+  const close = stat.lastIndexOf(')'); // comm may itself contain spaces and parens
+  const fields = stat.slice(close + 2).split(' '); // fields[0] is field 3 (state), so field 22 (starttime) is fields[19]
+  const ticks = Number(fields[19]);
+  const btime = Number(/^btime\s+(\d+)\s*$/m.exec(String(read('/proc/stat', 'utf8')))?.[1]);
+  const name = open >= 0 && close > open ? stat.slice(open + 1, close) : '';
+  if (!name || !Number.isFinite(ticks) || !(btime > 0)) throw new Error('unparsable /proc stat');
+  return { name: name.toLowerCase(), createdMs: btime * 1000 + Math.round((ticks * 1000) / USER_HZ) };
+}
+
 // { name, createdMs } for a live pid, or null if gone OR unknown. Callers treat null as "do not kill".
-export function inspectProcess(pid, { platform = process.platform, run = spawnSync } = {}) {
+export function inspectProcess(pid, { platform = process.platform, run = spawnSync, read = readFileSync } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
+    if (platform === 'linux') {
+      try { return procInfo(pid, read); } catch { /* gone, or no /proc: ps decides */ }
+    }
     if (platform === 'win32') {
       const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p) { $p.Name + '|' + [DateTimeOffset]::new($p.CreationDate).ToUnixTimeMilliseconds() }`;
       const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
@@ -34,12 +56,12 @@ export function inspectProcess(pid, { platform = process.platform, run = spawnSy
 
 // Batched inspectProcess: one PowerShell call for every pid on Windows (~0.7 s each otherwise, before listen).
 // Returns Map<pid, info>; a pid missing from the map means gone or unknown, i.e. "do not kill".
-export function inspectProcesses(pids, { platform = process.platform, run = spawnSync } = {}) {
+export function inspectProcesses(pids, { platform = process.platform, run = spawnSync, read = readFileSync } = {}) {
   const ok = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
   const out = new Map();
   if (!ok.length) return out;
   if (platform !== 'win32') {
-    for (const pid of ok) { const info = inspectProcess(pid, { platform, run }); if (info) out.set(pid, info); }
+    for (const pid of ok) { const info = inspectProcess(pid, { platform, run, read }); if (info) out.set(pid, info); }
     return out;
   }
   try {
@@ -104,11 +126,14 @@ export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, ki
 // write+rename in add() blocked the runner loop ~1-5s under AV (loop-lag 2026-11-22 08:23-09:38Z: writeChildren 36 stalls / 47s,
 // 29 of them renameSync <- add <- spawnNoShell). Crash exposure is unchanged: spawn() has already created the child when add()
 // runs, so a hard kill between spawn and a durable ledger was always possible; the async write starts in the same tick and takes
-// the same wall time, it just no longer holds the loop. Ordering: one write in flight at a time, each rename carries a snapshot
-// taken after the previous one, and the writer only stops once the file holds the newest generation (`written === gen`).
-// clear() keeps the sync writer (a shutdown path must not depend on the loop surviving); if an async rename lands after it,
-// `written` drops below `gen` and the writer re-asserts the current state.
-// afs: the async fs ops (test seam: a held rename makes the clear-vs-rename race deterministic).
+// the same wall time, it just no longer holds the loop.
+// idea-681 (idea-576 part 2): the file only moves forward. Exactly one writer touches it at a time: the async writer, or a sync
+// write that runs only while no async op is in flight (clear() when idle, the writer's own error fallback). A sync write issued
+// while an async rename sat in the threadpool used to be undone when that stale rename landed (clear() then rename: the file
+// went back a generation until the writer re-asserted). Each rename carries a snapshot newer than the file's and is never
+// skipped because the generation moved meanwhile (that starved durability during spawn bursts); the loop just writes again
+// until the file holds the newest generation (`written === gen`).
+// afs: the async fs ops (test seam: a held writeFile/rename makes the interleavings deterministic).
 export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}) {
   const entries = new Map();
   let gen = 0; // bumped on every change
@@ -116,23 +141,23 @@ export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}
   let soon = null; // pending coalesced-removal timer
   let writing = null; // the in-flight async writer, if any
   const file = path.join(home, CHILDREN_FILE);
-  const tmp = `${file}.${process.pid}.async.tmp`; // not the sync writer's tmp: the two can overlap; one async writer at a time
+  const tmp = `${file}.${process.pid}.async.tmp`; // distinct from the sync writer's tmp (sweepOrphans uses that one at boot); one async writer at a time
   const snapshot = () => [...entries.values()];
-  // The sync writer (clear, and the async writer's error fallback). It carries every change made so far, so it also cancels a pending timer.
-  const flush = () => { gen++; if (soon) { clearTimeout(soon); soon = null; } writeChildren(home, snapshot()); written = gen; };
+  // The sync writer. Only called while no async op is in flight (`writing` null, or from the writer's own catch after its
+  // ops settled), so no stale rename can land after it. Carries every change made so far, so it also cancels a pending timer.
+  const flush = () => { if (soon) { clearTimeout(soon); soon = null; } const g = gen; writeChildren(home, snapshot()); written = g; };
   const writeAsync = async () => {
     while (written !== gen) {
       const snap = gen;
       try {
-        await afs.writeFile(tmp, JSON.stringify(snapshot()));
-        if (snap !== gen) continue; // changed meanwhile: re-snapshot instead of renaming a stale one into place
-        await afs.rename(tmp, file);
+        await afs.writeFile(tmp, JSON.stringify(snapshot())); // snapshot taken in this tick: it is generation `snap`
+        await afs.rename(tmp, file); // even if gen moved meanwhile: `snap` > written, so this is progress, never a step back
       } catch {
         try { await afs.rm(tmp, { force: true }); } catch { /* ignore */ }
         flush(); // failed (EPERM/EBUSY under AV): never drop records, fall back to the sync writer
         return;
       }
-      written = snap; // the file holds `snap` now, even if a sync flush wrote a newer state just before this rename landed
+      written = snap; // the sole writer: the file holds `snap` now
     }
   };
   const kick = () => {
@@ -148,7 +173,14 @@ export function createChildLedger(home, { afs = { writeFile, rename, rm } } = {}
       kick(); // at once: an add is never delayed by the removal coalescing window
       child.once?.('exit', () => { if (entries.delete(child.pid)) { gen++; if (!soon) arm(); } });
     },
-    clear() { entries.clear(); flush(); },
+    // Sync and durable on return when no async write is in flight; otherwise the in-flight writer carries it (a sync write
+    // now could be overwritten by the stale rename already issued). settled() resolves once it is on disk either way.
+    clear() {
+      entries.clear();
+      gen++;
+      if (writing) { if (soon) { clearTimeout(soon); soon = null; } return; }
+      flush();
+    },
     get size() { return entries.size; },
     // Resolves once the file holds every change made before the call (tests, diagnostics). Never rejects.
     async settled() {

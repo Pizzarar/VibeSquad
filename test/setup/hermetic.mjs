@@ -1,21 +1,24 @@
-// Preloaded by `npm test` (node --import). Keeps the suite independent of the developer's real ~/.vibesquad:
+// Preloaded by `npm test` (node --import). Keeps the suite independent of the developer's real ~/.vibesquad and of the shell
+// that started it (scripts/test-child-env.mjs hermeticizeEnv):
+//  - every inherited VS_*/VIBESQUAD_*/PASEO_* var is dropped (agent identity: id + token, lane/team/role; the live server's
+//    MESHNET/LAN/PORT config; VIBESQUAD_TEAMS_FILE; VIBESQUAD_START_RUNNER), except the VS_TEST_*/VS_BENCH/VS_ALLOW_REAL_HOME knobs;
+//  - a TMPDIR inside the real ~/.vibesquad (runner shells export ~/.vibesquad/tmp) moves to the OS temp, so temp homes are
+//    not mistaken for the real home by server/test-guard.mjs;
 //  - VIBESQUAD_HOME is an empty temp dir with an empty teams.json, so no real settings, teams, runner lanes or runner agents leak in;
-// Tests that need their own home still set VIBESQUAD_HOME; process.env is per test file (one process each).
+//  - VIBESQUAD_RUNTIME_DIR is an empty temp dir: runtimeDir() prefers it, and a test that synced with the live one would prune
+//    and overwrite the running install.
+// Tests that need their own home still set VIBESQUAD_HOME; process.env is per test file (one process each). Spawned children inherit.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hermeticizeEnv } from "../../scripts/test-child-env.mjs";
 
+hermeticizeEnv(process.env);
 const home = mkdtempSync(join(tmpdir(), "vs-test-home-"));
 writeFileSync(join(home, "teams.json"), JSON.stringify({ teams: [] }));
 process.env.VIBESQUAD_HOME = home;
-delete process.env.VIBESQUAD_TEAMS_FILE;
-// Agent/runner shells export VIBESQUAD_RUNTIME_DIR = the LIVE runtime, and runtimeDir() prefers it: a test that syncs with a default
-// env would prune and overwrite the running install. Point it at an empty per-process temp dir (spawned children inherit it).
 const runtimeDirTmp = mkdtempSync(join(tmpdir(), "vs-test-runtime-"));
 process.env.VIBESQUAD_RUNTIME_DIR = runtimeDirTmp;
-// X1b: the suite often runs inside a runner agent; its identity (id + token) must never make a test process, or a CLI it
-// spawns, an agent caller (owner verbs would refuse, token-bearing calls would 403 against a test server).
-for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_PLUGIN_LOG"]) delete process.env[k];
 process.on("exit", () => {
   try {
     rmSync(home, { recursive: true, force: true });

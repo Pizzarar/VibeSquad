@@ -95,7 +95,8 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     const mainScript = posix(join(main, "cli", "vs.mjs"));
     assert.ok(sh.includes(`if [ -f "${mainScript}" ]`), `primary should be main repo:\n${sh}`);
     assert.ok(!sh.includes(posix(wt)), "worktree path must not appear in the shim");
-    for (const f of ["vs.cmd", "vs.ps1"]) {
+    // .cmd/.ps1 launchers are written on win32 only.
+    for (const f of process.platform === "win32" ? ["vs.cmd", "vs.ps1"] : []) {
       const body = readFileSync(join(bin, f), "utf8").toLowerCase();
       assert.ok(!body.includes(wt.toLowerCase()) && !body.includes(posix(wt).toLowerCase()), `${f} must not pin the worktree`);
     }

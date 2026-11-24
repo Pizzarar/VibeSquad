@@ -52,7 +52,7 @@ test('Art Director spawn starts the Painter; a live partner for the job is not d
 test('non-art profiles spawn alone', async () => {
   const ctx = ctxWith();
   const out = await callTool(ctx, 'spawn_worker', { title: 'x', profile: 'Implement - Sonnet', prompt: 'go' });
-  assert.deepEqual(out, { id: 'rn-1', title: 'x' });
+  assert.deepEqual({ id: out.id, title: out.title }, { id: 'rn-1', title: 'x' }); // idea-440 adds an ab field
   assert.equal(ctx.calls.length, 1);
 });
 

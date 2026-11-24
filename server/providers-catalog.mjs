@@ -2,6 +2,7 @@
 // /__vibesquad/providers[/models|/modes|/usage|/settings]. Shapes match what src/paseoProviders.ts got from the
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
+import { activeQuotaAlerts } from "./quota-alert.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, mkdtempSync, writeFileSync, statSync } from "node:fs";
@@ -352,9 +353,17 @@ const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, mode
 // heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
 // /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
 const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
-export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; repoHeadCheck.clear(); };
+// usa-42: pre-cutover agent logs restored by scripts/usage-import-archive.mjs into <home>/runner/agents-archive/ (read-only here,
+// deduped by agent id; live runner/agents wins). The archive is immutable once imported, so its listing is cached per home and
+// keyed by the archive dir's mtime: an import adds entries, which moves the dir mtime. While the dir stat matches, a request
+// skips the readdir and, once one pass has folded every archived file, every per-file stat too: it reuses the usageFiles
+// entries as they are. A moved dir mtime rescans the listing; files already folded with an unchanged size/mtime are not re-read.
+const archiveIndex = new Map(); // homeDir -> { mtimeMs, names, folded }
+let archiveScans = 0; // listings built (readdir of agents-archive)
+let archiveFolds = 0; // per-file stat passes over the archive
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); archiveIndex.clear(); squadReposCache = null; repoHeadCheck.clear(); };
 let usageReadBytes = 0;
-export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes });
+export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes, archive: { scans: archiveScans, folds: archiveFolds, files: [...archiveIndex.values()].reduce((n, a) => n + a.names.length, 0) } });
 
 /** YYYY-MM-DD for a ts, or null when it is not a valid date (never throws). */
 const dayOf = (ts) => {
@@ -381,6 +390,69 @@ const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
   (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
 );
 
+
+// ---- usa-44: unit evidence for implementers that ran in the MAIN checkout (cwd is not a `unit-*` worktree), so the
+// worktree-basename path in attributeImplementer() can't see them. Folded during the existing event fold (no second pass),
+// only for worker runs whose cwd basename is not a unit worktree. Ranked by precision:
+//   1. labels.unit on the run (explicit spawn label)                                     -> st.unitLabel
+//   2. the work order (first input) assigns it: `vs worktree create <u>` / `branch unit-x`  -> st.unitAssigned (Set)
+//   3. the run's own tool calls enter/create it: `cd .../worktrees/<repo>/<u>`, `vs worktree create <u>`,
+//      `git checkout|switch [-b|-c] unit-x`                                              -> st.unitWorked (Map name -> calls)
+const UNIT_REF_CAP = 12;
+const ASSIGN_CREATE_RE = /vs\s+worktree\s+create\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._-]{2,80})/gi;
+const ASSIGN_BRANCH_RE = /\bbranch\s+[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const WORK_PATH_RE = /[\\/]worktrees[\\/][^\\/\s"'`]+[\\/]([A-Za-z0-9][A-Za-z0-9._-]{2,80})(?=[\\/\s"'`;&|)]|$)/gi;
+const WORK_GIT_RE = /\bgit\s+(?:checkout|switch)\s+(?:-[bcB]\s+)?[`'"]?(unit-[A-Za-z0-9._-]{2,80})/gi;
+const isMainCheckoutWorker = (st) => st.role === "worker" && !/^unit-/i.test(unitNameOfCwd(st.cwd));
+const stripName = (n) => n.replace(/[.,;:)\]]+$/, "").toLowerCase();
+function foldUnitLabel(st, m) {
+  const u = m?.labels?.unit;
+  // gated like the other signals (usa-44 R1 M2): a run that already owns a worktree cwd must not also claim a label unit
+  if (typeof u === "string" && u.trim() && isMainCheckoutWorker(st)) st.unitLabel = u.trim().toLowerCase();
+}
+function foldAssignedUnits(st, text) {
+  if (typeof text !== "string" || !isMainCheckoutWorker(st)) return;
+  // `vs worktree create <u>` is an explicit assignment (strong); `branch unit-x` also matches prose ("branch unit-x is already
+  // merged"), so it is only a mention (weak): usa-44 R1 M3.
+  for (const [re, key] of [[ASSIGN_CREATE_RE, "unitAssigned"], [ASSIGN_BRANCH_RE, "unitMentioned"]]) {
+    const set = (st[key] ??= new Set());
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(text)) && set.size < UNIT_REF_CAP;) set.add(stripName(m[1]));
+  }
+}
+function foldWorkedUnits(st, input) {
+  if (!isMainCheckoutWorker(st)) return;
+  const cmd = typeof input?.command === "string" ? input.command : (typeof input?.cmd === "string" ? input.cmd : (typeof input === "string" ? input : ""));
+  if (!cmd || cmd.length > 20_000) return;
+  const map = (st.unitWorked ??= new Map());
+  const inCall = new Set(); // L1: one call counts a unit once, however often the command repeats its path
+  for (const re of [WORK_PATH_RE, ASSIGN_CREATE_RE, WORK_GIT_RE]) {
+    re.lastIndex = 0;
+    for (let m; (m = re.exec(cmd));) inCall.add(stripName(m[1]));
+  }
+  for (const n of inCall) {
+    if (map.has(n) || map.size < UNIT_REF_CAP) map.set(n, (map.get(n) ?? 0) + 1);
+    else st.unitWorkedOverflow = true; // L2: a dropped unit means the tallies are no longer a trustworthy ranking
+  }
+}
+/** The single unit a main-checkout run is attributed to (never two): label > the work order's one `worktree create` unit > the
+ * unique most-worked unit (>= 2 calls, strictly ahead, no overflow). A unit only mentioned as `branch unit-x` in the work order
+ * counts when the tool calls don't point elsewhere. A run that spread over several units stays unattributed (no splitting, no guessing). */
+function primaryUnitRef(st) {
+  if (st.unitLabel) return st.unitLabel;
+  if (st.unitAssigned?.size === 1) return [...st.unitAssigned][0];
+  if (st.unitAssigned?.size > 1) return null;
+  const w = st.unitWorked && !st.unitWorkedOverflow ? [...st.unitWorked].sort((a, b) => b[1] - a[1]) : [];
+  const worked = w.length && w[0][1] >= 2 && (w.length === 1 || w[0][1] > w[1][1]) ? w[0][0] : null;
+  if (st.unitMentioned?.size > 1) return null;
+  if (st.unitMentioned?.size === 1) {
+    const m = [...st.unitMentioned][0];
+    if (st.unitWorkedOverflow) return null;
+    return !worked || worked === m ? m : null; // tool calls disagree with the prose mention -> ambiguous
+  }
+  return worked;
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -394,6 +466,7 @@ function foldEvent(st, ev) {
     if (ev.cwd !== undefined) st.cwd = ev.cwd;
     if (st.createdAt === undefined && t !== null) st.createdAt = t;
     foldIdentity(st, ev.meta);
+    foldUnitLabel(st, ev.meta);
     if (ev.meta?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "resume") {
     st.restartedOrResumed = true;
@@ -404,6 +477,7 @@ function foldEvent(st, ev) {
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+    foldUnitLabel(st, ev.patch);
     if (ev.patch?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "status") {
     if (t !== null) {
@@ -421,6 +495,7 @@ function foldEvent(st, ev) {
       }
     }
   } else if (ev.type === "exit" || ev.type === "error") {
+    st.curTools = undefined; // usa-40 R1 M3: a failed turn's tools must not leak into the next turn
     st.exited = true;
     if (t !== null) st.exitTs = t;
     if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) {
@@ -434,8 +509,13 @@ function foldEvent(st, ev) {
       st.runningSince = undefined;
     }
   } else if (ev.type === "input") {
+    st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
-    else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    else if (st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED") st.priorPass = false;
+    // L4: an env-stop BLOCKED survives follow-up turns that carry no verdict line; any PASS/FAIL verdict clears it.
+    if (st.msgVerdict === "BLOCKED") st.priorBlocked = true;
+    else if (st.msgVerdict === "PASS" || st.msgVerdict === "FAIL") st.priorBlocked = false;
+    if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
     st.lastLine = "";
@@ -459,8 +539,11 @@ function foldEvent(st, ev) {
     if (typeof ev.text === "string") {
       foldOutputLines(st, ev.text);
       st.msgVerdict = messageVerdict(st);
-      st.pass = st.msgVerdict === "FAIL" ? false : (st.priorPass || st.msgVerdict === "PASS");
+      st.pass = st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
+  } else if (ev.type === "tool") {
+    if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
+    else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -502,8 +585,17 @@ function foldEvent(st, ev) {
       st.compactOutputTokens = (st.compactOutputTokens ?? 0) + st.compactPending.outputTokens;
       st.compactPending = undefined;
     }
+    const turnTools = st.curTools ?? [];
+    st.curTools = undefined;
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
+    // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
+    if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
+      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, waiting: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
+      const k = classifyLeadTurn(turnTools, lt.seen);
+      lt[k].turns += 1;
+      lt[k].costUsd += delta;
+    }
     const b = bucketFor(st, day);
     b.turns += 1;
     b.costUsd += delta;
@@ -523,6 +615,7 @@ function foldIdentity(st, m) {
   const rawProfile = typeof m.profile === "string" && m.profile ? m.profile : (typeof m.labels?.profile === "string" && m.labels.profile ? m.labels.profile : undefined);
   if (rawProfile) st.profile = PROFILE_NAME_BY_ID.get(rawProfile) ?? rawProfile;
   const team = m.team ?? m.labels?.team;
+  if (m.labels?.[RESPAWN_OF_LABEL]) st.respawnOf = true;
   if (typeof team === "string" && team) st.team = team;
   // usa-34: workflow arm label (created.meta.labels.wf / meta.patch.labels.wf), stamped at dispatch by wf-label.mjs.
   const wfLabel = typeof m.labels?.wf === "string" ? normalizeWfLabel(m.labels.wf) : "";
@@ -585,10 +678,13 @@ function foldOutputLines(st, chunk) {
   }
 }
 
+/** idea-655: environment stops (missing lupa dependency, GPU golden mismatch) on a FAIL line are BLOCKED. Narrow on purpose. */
+const ENV_STOP_RE = /(?:No module named ['"]?lupa|(?:ModuleNotFound|Import)Error[^\n]{0,40}\blupa|\blupa(?:\s+(?:module|package))?\s+(?:is\s+)?(?:not installed|not found|missing|unavailable)\b|\b(?:no|missing)\s+lupa\s+(?:module|package|dependency|installed)\b|\bGPU golden(?:s)?\s+(?:mismatch|diff)|\bgolden(?:s)?\s+(?:mismatch|diff)[^\n]{0,30}\bGPU)/i;
+
 /** Verdict on a single line: any uppercase \bFAIL\b wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
 function lineVerdict(line) {
   if (!line || typeof line !== "string") return null;
-  if (/\bFAIL\b/.test(line)) return "FAIL";
+  if (/\bFAIL\b/.test(line)) return ENV_STOP_RE.test(line) ? "BLOCKED" : "FAIL"; // idea-655: an environment stop is BLOCKED, not FAIL
   if (VERDICT_LINE_PASS_RE.test(line) && /\bPASS\b/.test(line)) return "PASS";
   return null;
 }
@@ -598,6 +694,7 @@ function messageVerdict(st) {
   const lastLine = st.curLine.trim() && !/^\s*⚠/.test(st.curLine) ? st.curLine.trim() : st.lastLine;
   const lastV = lineVerdict(lastLine);
   if (firstV === "FAIL" || lastV === "FAIL") return "FAIL";
+  if (firstV === "BLOCKED" || lastV === "BLOCKED") return "BLOCKED";
   if (firstV === "PASS" || lastV === "PASS") return "PASS";
   return null;
 }
@@ -641,7 +738,7 @@ function logLines(file, maxBytes = Infinity) {
       let e;
       try { e = JSON.parse(line); } catch { continue; }
       if (!e || typeof e !== "object") continue;
-      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad }); // t = tsMs(ts), parsed once
+      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad, agent: e.agent, role: e.role, plan: e.plan, pass: e.pass }); // t = tsMs(ts), parsed once
     }
     c.offset += lastNl + 1; // a trailing partial line is re-read next time
   }
@@ -687,6 +784,58 @@ const ROLE_ORDER = ["brainstorm", "lead", "worker"];
 const WORKING_END_STATUSES = new Set(["idle", "parked", "exited"]);
 const SPAWN_BURST_WINDOW_MS = 2 * 60_000;
 const SPAWN_BURST_MIN = 3;
+// usa-40: lead turns past this index are the "long tail"; mirrors RESPAWN_OF_LABEL in server/hooks/agent-duties.ts (a .ts module this .mjs can't import).
+export const LEAD_LONG_TURN_MIN = 80;
+const RESPAWN_OF_LABEL = "respawnOf";
+const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:log|spawn)\b/;
+const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:spawn_worker|report)$/i;
+// usa-43: waiting isn't work. wait/watch calls (shell `vs wait|watch`, or MCP wait/wait_for_agent/watch) no longer count as productive.
+// usa-43 R1 L1/L2: a command segment must BE `vs wait ...` or `vs watch add ...` (not list/cancel, not `echo vs wait`).
+const LEAD_WAIT_SEG_RE = /^vs\s+(?:wait\b|watch\s+add\b)/;
+const LEAD_CD_SEG_RE = /^cd\s/;
+// usa-43 R1 M1: whitespace-free tool names only, so ACP titles like `git push origin feat/wait` never match.
+const LEAD_WAIT_TOOL_RE = /^\S*(?:^|[_./:-])(?:wait(?:_for_agent)?|watch)$/i;
+/** True when every `&&`/`;`/`|`-separated segment is a `cd` or a vs wait/watch-add, with at least one wait. */
+function isWaitCommand(cmd) {
+  const segs = String(cmd).split(/&&|\|\||[;|\n]/).map((x) => x.trim()).filter(Boolean);
+  return segs.some((x) => LEAD_WAIT_SEG_RE.test(x)) && segs.every((x) => LEAD_WAIT_SEG_RE.test(x) || LEAD_CD_SEG_RE.test(x));
+}
+/** Key-order-independent JSON for tool-call signatures. */
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+const toolSig = (t) => `${t.name}|${stableJson(t.input)}`;
+function isProductiveTool(t) {
+  const name = String(t.name ?? "");
+  if (LEAD_PRODUCTIVE_TOOL_RE.test(name)) return true;
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  // usa-40 R1 H1a: ACP tool events carry no input; the title (our `name`) holds the command text, so test it too.
+  return LEAD_PRODUCTIVE_CMD_RE.test(cmd) || LEAD_PRODUCTIVE_CMD_RE.test(name);
+}
+/** A wait/watch call that carries no productive command (so `git commit && vs wait` is not a pure wait). */
+function isWaitTool(t) {
+  if (isProductiveTool(t)) return false;
+  const name = String(t.name ?? "");
+  // usa-43 R1 L2: MCP watch list/cancel (any explicit non-add action) is bookkeeping, not waiting.
+  if (LEAD_WAIT_TOOL_RE.test(name)) return !(typeof t.input?.action === "string" && t.input.action !== "add");
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  return isWaitCommand(cmd) || isWaitCommand(name);
+}
+/** usa-40: classify one long-tail lead turn from its tool calls. Mutates seen (signature -> count over earlier long-tail turns). */
+export function classifyLeadTurn(tools, seen) {
+  // usa-40 R1 H1b: a call with no input (ACP: title only) can't be proven identical to an earlier one, so it never enters the
+  // loop signatures (a bare `title|null` would collapse distinct calls into a false loop).
+  // usa-43 waiting rule: a turn is "waiting" iff it has >=1 tool call and EVERY call is a wait/watch. Checked first, so a wait-only
+  // turn is never productive or loop (waits don't feed loop signatures); any other call alongside makes it non-waiting; zero calls is not waiting.
+  if (tools.length > 0 && tools.every(isWaitTool)) return "waiting";
+  const sigs = tools.filter((t) => t.input !== undefined && !isWaitTool(t)).map(toolSig);
+  const productive = tools.some(isProductiveTool);
+  const repeated = !productive && sigs.some((g) => (seen.get(g) ?? 0) >= 2);
+  for (const g of sigs) seen.set(g, (seen.get(g) ?? 0) + 1);
+  return productive ? "productive" : repeated ? "loop" : "other";
+}
 const ZERO_TURN_EXIT_WINDOW_MS = 5 * 60_000;
 const ZERO_TURN_EXIT_MIN = 3;
 const FIX_AFTER_MERGE_WINDOW_MS = 24 * 3600_000;
@@ -736,6 +885,10 @@ export function readLimits(home) {
   if (isForbiddenRealHome(dir)) return [];
   let text = "";
   try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
+  // Sidecar: last *check* time per provider/window (updated on every poll, even when the sample didn't change).
+  let checked = {};
+  try { checked = JSON.parse(readFileSync(join(dir, "runner", "limits-checked.json"), "utf8")); } catch { checked = {}; }
+  if (typeof checked !== "object" || checked === null || Array.isArray(checked)) checked = {};
   const groups = new Map();
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -764,10 +917,13 @@ export function readLimits(home) {
       const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
       if (last.resetMs === null || eta < last.resetMs) etaToCap = new Date(eta).toISOString();
     }
+    const sidecarMs = tsMs(checked[`${last.provider}|${last.window}`]);
+    const checkedMs = sidecarMs === null ? last.atMs : Math.max(sidecarMs, last.atMs);
     out.push({
       provider: last.provider, window: last.window, usedPct: last.used,
       resetsAt: last.resetMs === null ? null : new Date(last.resetMs).toISOString(),
       source: last.source ?? "provider", agentId: last.agentId ?? null, at: new Date(last.atMs).toISOString(),
+      checkedAt: new Date(checkedMs).toISOString(),
       burnPctPerHour: Math.round(burn * 100) / 100, etaToCap,
     });
   }
@@ -923,7 +1079,8 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const rounds = maxR > 0 ? maxR : fixCount;
-    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
+    // usa-44: also the hand-typed "Merge unit-<name>: ..." form some leads used (11-19..11-20); the name is the branch.
+    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(c.subject)?.[1] ?? null;
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
@@ -1169,8 +1326,10 @@ function agentV2(st, agentId) {
     roleOnly: !!st.roleOnly,
     stakes: normalizeStakes(st.stakes),
     wfLabel: st.wfLabel ?? null,
+    respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
+    unitRef: primaryUnitRef(st),
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1179,6 +1338,7 @@ function agentV2(st, agentId) {
     inputTokens: stats.inputTokens,
     outputTokens: stats.outputTokens,
     pass: !!st.pass,
+    blocked: !st.pass && (st.msgVerdict === "BLOCKED" || (st.msgVerdict === null && !!st.priorBlocked)),
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
@@ -1360,12 +1520,27 @@ const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === 
 function indexWorkers(agents) {
   const byUnit = new Map();
   const byLane = new Map();
+  const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
     getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
+    if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
   }
-  return { byUnit, byLane };
+  return { byUnit, byLane, byRef };
+}
+
+/** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
+ * when a run that did exists. One profile -> the earliest created; several profiles -> ambiguous (null), as for the worktree path. */
+function pickImplementer(cands) {
+  const impls = cands.filter(isImplementerWorker);
+  const worked = impls.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : impls;
+  if (pool.length === 1) return pool[0];
+  if (pool.length > 1 && new Set(pool.map((a) => `${a.provider}|${a.profile}`)).size === 1) {
+    return pool.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
+  }
+  return null;
 }
 
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
@@ -1374,18 +1549,29 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
     const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
-    if (cwdMatches.length === 1) return cwdMatches[0];
-    if (cwdMatches.length > 1) {
+    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return cwdMatches[0];
+    if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length === 1) return impls[0];
-      if (impls.length > 1) {
-        const profiles = new Set(impls.map((a) => `${a.provider}|${a.profile}`));
-        if (profiles.size === 1) {
-          return impls.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
-        }
-      }
-      return null; // ambiguous cwd match across different implementer profiles
+      if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
     }
+    // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
+    // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
+    // Squad) that is not before the run was created, so a later follow-up run is never credited to an earlier merge (R1 M1).
+    const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !index.mergedNames?.has(unitNameOfCwd(a.cwd)) // a run whose own worktree is a merged unit is owned by the byUnit path
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (refs.length) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = refs.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
+      if (picked) return picked;
+      return null; // evidence names this unit but another merge owns it (or it is ambiguous): never fall back to the lane guess (R1 M2)
+    }
+    if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
+    if (cwdMatches.length > 1) return null;
   }
   if (!unit.lane || mergedAtMs === null) return null;
   const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
@@ -1559,6 +1745,78 @@ function readLaneTeams(home) {
   return map;
 }
 
+// ---------------------------------------------------------------- Plan completion score (usa-46, idea-297)
+// getUsage() gains planScores: { pooled, byLane[], byLead[], bySquad[], minN: 5 }. Source: vs-log handoff/done entries with a `plan`
+// field (or `plan=docs/PLAN_*.md` in the text for older lines), grouped by (squad, lane, plan). Started = first Buddy handoff
+// (lead -> lead transfers are not starts; they move credit). Done = latest `done` with pass:true or PASS in the text.
+// Score = done / started over plans started > PLAN_SCORE_FRESH_MS ago; fewer than minN scored plans -> score null, insufficient true.
+export const PLAN_SCORE_MIN_N = 5;
+const PLAN_SCORE_FRESH_MS = 3 * 86400_000;
+const PLAN_SCORE_STALE_MS = 7 * 86400_000;
+const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/i;
+const LEAD_TRANSFER_RE = /^lead\s+(rn-[\w-]+)\s*->\s*(rn-[\w-]+)/;
+const isBuddyHandoff = (e, roleByAgent) => e.role === "brainstorm" || roleByAgent?.get(e.agent) === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
+const planOf = (e) => (typeof e.plan === "string" && e.plan ? e.plan : (PLAN_TEXT_RE.exec(e.text ?? "")?.[1] ?? null));
+const medianOf = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
+
+function planRow(plans, now, extra) {
+  const scored = plans.filter((p) => now - p.startedAt > PLAN_SCORE_FRESH_MS);
+  const scoredDone = scored.filter((p) => p.doneAt !== null).length;
+  const open = plans.filter((p) => p.doneAt === null);
+  const insufficient = scored.length < PLAN_SCORE_MIN_N;
+  const score = insufficient || !scored.length ? null : Math.round((scoredDone / scored.length) * 1000) / 1000;
+  return {
+    ...extra, started: plans.length, done: plans.length - open.length, open: open.length,
+    stale: open.filter((p) => now - p.startedAt > PLAN_SCORE_STALE_MS).length,
+    scored: scored.length, scoredDone, score, insufficient,
+    medianCycleMs: medianOf(plans.filter((p) => p.doneAt !== null).map((p) => Math.max(0, p.doneAt - p.startedAt))),
+    buddy: { handedOff: scored.length, reachedDone: scoredDone, score },
+  };
+}
+
+/** Pure. entries: autonomy-style log entries { ts(ms), lane, type, text, squad, agent, role, plan, pass }. */
+export function buildPlanScores(entries, { now = Date.now(), squad = null, roleByAgent = null } = {}) {
+  const groups = new Map();
+  for (const e of [...entries].sort((a, b) => a.ts - b.ts)) {
+    if (e.type !== "handoff" && e.type !== "done") continue;
+    if (squad && e.squad !== squad) continue;
+    const plan = planOf(e);
+    if (!plan) continue;
+    const key = `${e.squad ?? ""}\u0000${e.lane}\u0000${plan}`;
+    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null }));
+    if (e.type === "handoff") {
+      const tr = LEAD_TRANSFER_RE.exec(e.text ?? "");
+      if (tr) g.transfers.push({ ts: e.ts, from: tr[1], to: tr[2] });
+      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) g.startedAt = e.ts;
+    } else if (e.pass === true || /\bPASS\b/.test(e.text ?? "")) {
+      g.dones.push({ ts: e.ts, agent: e.agent ?? null });
+    }
+  }
+  const plans = [];
+  for (const g of groups.values()) {
+    if (g.startedAt === null) continue;
+    const d = g.dones.filter((x) => x.ts >= g.startedAt).at(-1) ?? null;
+    const tr = d ? g.transfers.filter((t) => t.ts <= d.ts).at(-1) : g.transfers.at(-1);
+    plans.push({
+      squad: g.squad, lane: g.lane, plan: g.plan, startedAt: g.startedAt, doneAt: d ? d.ts : null,
+      startLead: g.transfers[0]?.from ?? d?.agent ?? null,
+      doneLead: d ? (tr?.to ?? d.agent ?? null) : null,
+    });
+  }
+  const group = (keyOf) => { const m = new Map(); for (const p of plans) { const k = keyOf(p); if (k !== null) getOrSet(m, k, () => []).push(p); } return m; };
+  const byLane = [...group((p) => `${p.squad ?? ""}|${p.lane}`).values()].map((ps) => planRow(ps, now, { squad: ps[0].squad, lane: ps[0].lane })).sort((a, b) => b.started - a.started || a.lane.localeCompare(b.lane));
+  const bySquad = [...group((p) => p.squad ?? "unknown").entries()].map(([sq, ps]) => planRow(ps, now, { squad: sq })).sort((a, b) => a.squad.localeCompare(b.squad));
+  // per lead agent: started credited to the first receiving lead, done to the lead holding the plan at done time
+  const leads = new Map();
+  const lead = (id) => getOrSet(leads, id, () => ({ lead: id, lane: null, started: 0, done: 0 }));
+  for (const p of plans) {
+    if (p.startLead) { const l = lead(p.startLead); l.started += 1; l.lane = p.lane; }
+    if (p.doneLead) { const l = lead(p.doneLead); l.done += 1; l.lane = p.lane; }
+  }
+  const byLead = [...leads.values()].sort((a, b) => b.started - a.started || a.lead.localeCompare(b.lead));
+  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, minN: PLAN_SCORE_MIN_N };
+}
+
 // ---------------------------------------------------------------- Autonomy scorecard (usa-24, idea-161)
 // getUsage({ squad }) result gains: `squad` (filter or null), `squads` (all known Squad ids), and
 //   autonomy: {
@@ -1602,7 +1860,7 @@ function* autonomyEntriesSteps(home, laneTeams) {
       if (seen.has(key)) continue;
       seen.add(key);
       const own = typeof e.team === "string" && e.team ? e.team : typeof e.squad === "string" && e.squad ? e.squad : null;
-      out.push({ ts: t, lane, type: e.type, text: textStr, squad: squad ?? own ?? laneTeams.get(lane) ?? null });
+      out.push({ ts: t, lane, type: e.type, text: textStr, squad: squad ?? own ?? laneTeams.get(lane) ?? null, agent: typeof e.agent === "string" ? e.agent : null, role: typeof e.role === "string" ? e.role : null, plan: typeof e.plan === "string" ? e.plan : null, pass: e.pass === true });
     }
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -1725,23 +1983,40 @@ function findStorms(tsList, windowMs, min) {
   return storms.map((s) => ({ firstAt: s.firstAt, lastAt: s.lastAt, count: ts.filter((t) => t >= s.firstAt && t <= s.lastAt).length }));
 }
 
+/** usa-40: lead long-tail (turn > LEAD_LONG_TURN_MIN) split, pooled and per team. Whole-log, unfiltered by squad/day like the other v2 rollups. */
+function buildLeadLongTurns(allAgentSquads) {
+  const zero = () => ({ turns: 0, costUsd: 0 });
+  const mk = () => ({ productive: zero(), waiting: zero(), loop: zero(), other: zero() });
+  const pooled = mk();
+  const by = new Map();
+  for (const { st, squad } of allAgentSquads) {
+    if (!st.longTail) continue;
+    const row = getOrSet(by, squad ?? "unknown", mk);
+    for (const k of ["productive", "waiting", "loop", "other"]) {
+      for (const t of [pooled[k], row[k]]) { t.turns += st.longTail[k].turns; t.costUsd += st.longTail[k].costUsd; }
+    }
+  }
+  return { threshold: LEAD_LONG_TURN_MIN, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })) };
+}
+
 /** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
 function computeSpawnStorms(agents) {
   const groups = new Map();
   for (const a of agents) {
     const lane = a.lane || "unknown";
     const role = a.role || "unknown";
-    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], zeroExits: [] }));
-    if (a.createdAt !== null && a.createdAt !== undefined) g.created.push(a.createdAt);
-    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) g.zeroExits.push(a.exitTs);
+    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], createdExclRespawns: [], zeroExits: [], zeroExitsExclRespawns: [] }));
+    if (a.createdAt !== null && a.createdAt !== undefined) { g.created.push(a.createdAt); if (!a.respawnOf) g.createdExclRespawns.push(a.createdAt); }
+    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) { g.zeroExits.push(a.exitTs); if (!a.respawnOf) g.zeroExitsExclRespawns.push(a.exitTs); }
   }
   const entries = [];
   for (const g of groups.values()) {
     for (const s of findStorms(g.created, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
+      const countExclRespawns = g.createdExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length; // usa-40: burst count with the one-time respawns dropped
+      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
     }
     for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
+      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: g.zeroExitsExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
     }
   }
   entries.sort((a, b) => a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role) || Date.parse(a.firstAt) - Date.parse(b.firstAt));
@@ -1752,6 +2027,7 @@ function computeSpawnStorms(agents) {
       last.lastAt = e.lastAt;
       last.windowMs = Date.parse(last.lastAt) - Date.parse(last.firstAt);
       last.count = Math.max(last.count, e.count);
+      last.countExclRespawns = Math.max(last.countExclRespawns ?? 0, e.countExclRespawns ?? 0);
       last.zeroTurnExits = (last.zeroTurnExits ?? 0) + (e.zeroTurnExits ?? 0);
     } else {
       merged.push({ ...e });
@@ -2038,16 +2314,28 @@ function buildFloor(merged, agents, totals) {
 
 const usageLedgerPath = (home) => join(home || vibesquadHome(), "runner", "usage-ledger.jsonl");
 
-/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. */
+/** Ledger identity: unit records by sha, day records by day; null = not keyed (kept as-is, never superseded). */
+const ledgerKey = (r) => (r?.kind === "unit" && r.sha ? `unit\u0000${r.sha}` : r?.kind === "day" && r.day ? `day\u0000${r.day}` : null);
+/** A unit record whose cost is still unknown (a re-fold may supersede it once its implementer log is readable). */
+const ledgerCostMissing = (r) => !(Number.isFinite(r?.costUsd) && r.costUsd > 0);
+
+/** usage-ledger.jsonl -> records (newest last). Missing file / bad lines tolerated. usa-42: the file is append-only, so a
+ * later line for the same unit sha / day supersedes the earlier one (last wins, kept at the first line's position). */
 export function readUsageLedger(home) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return [];
   let text = "";
   try { text = readFileSync(join(dir, "runner", "usage-ledger.jsonl"), "utf8"); } catch { return []; }
   const out = [];
+  const at = new Map(); // ledgerKey -> index in out
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* bad line */ }
+    let r;
+    try { r = JSON.parse(line); } catch { continue; /* bad line */ }
+    const k = ledgerKey(r);
+    if (k !== null && at.has(k)) { out[at.get(k)] = r; continue; }
+    if (k !== null) at.set(k, out.length);
+    out.push(r);
   }
   return out;
 }
@@ -2055,18 +2343,25 @@ export function readUsageLedger(home) {
 /** Idempotently append snapshot records (kind "unit" keyed by sha, "day" keyed by day) missing from the ledger.
  * Day records are only written once their day has fully completed (day < today UTC), so the archived day is the
  * end-of-day total rather than the first partial snapshot of an in-progress day. Never writes the real home under a
- * test runner (isForbiddenRealHome). Returns the number of new lines appended. */
+ * test runner (isForbiddenRealHome). Returns the number of new lines appended.
+ * usa-42 re-fold: a unit already in the ledger without a cost (written while its implementer's agent log was missing, e.g. the
+ * forge cutover before runner/agents-archive was imported) is superseded by appending the fresh record once that record has a
+ * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent. */
 export function syncUsageLedger(home, snapshot, now = Date.now) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
   const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
+  const costless = new Set(existing.filter((r) => r.kind === "unit" && r.sha && ledgerCostMissing(r)).map((r) => r.sha));
   const lines = [];
   for (const rec of snapshot) {
     if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
-    if (keys.has(key)) continue;
+    if (keys.has(key)) {
+      if (rec.kind === "unit" && costless.has(rec.sha) && !ledgerCostMissing(rec)) { costless.delete(rec.sha); lines.push(JSON.stringify(rec) + "\n"); }
+      continue;
+    }
     keys.add(key);
     lines.push(JSON.stringify(rec) + "\n");
   }
@@ -2241,6 +2536,10 @@ export function loadUsageReviewPrompt({ promptPath, runtimeRoot, envRoot, warn =
   return DEFAULT_USAGE_REVIEW_PROMPT;
 }
 
+/** Cap on the spawn-storm list inlined into the review prompt: an unbounded list only grows the prompt toward the argv
+ * cap it must never ride (idea-580), and more than this many storms carry no extra signal for the reviewer. */
+const SPAWN_STORM_LIST_CAP = 20;
+
 /** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds, plus
  * usa-9 context — recent @usa/usage-lane notes, friction signals, mcp-alias counts, recent agent errors, the active
  * profile catalog and runner turn caps — so Opus and Gemini see *why* friction happened. `home` + `sinceMs` scope the
@@ -2255,7 +2554,11 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   const loops = u.loops?.flagged ?? [];
   if (loops.length) out.push(`Loops flagged: ${loops.map((l) => `${l.agentId} (${l.lane}/${l.role}) ${l.turns}t`).join("; ")}.`);
   const storms = u.spawnStorms ?? [];
-  if (storms.length) out.push(`Spawn storms: ${storms.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}.`);
+  if (storms.length) {
+    const shown = storms.slice(0, SPAWN_STORM_LIST_CAP);
+    const omitted = storms.length - shown.length;
+    out.push(`Spawn storms: ${shown.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}${omitted > 0 ? ` (+${omitted} more)` : ""}.`);
+  }
   const bp = u.byProfile ?? [];
   out.push("By provider/profile/role (runs | turns | costUsd | successRate (basis) | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
   for (const g of bp.slice(0, 30)) out.push(`- ${g.provider} | ${g.profile} | ${g.role} | ${g.runs} | ${g.turns} | ${round2(g.costUsd)} | ${g.successRate === null || g.successRate === undefined ? "-" : g.successRate} (${g.successBasis ?? "no-signal"}) | ${g.costPerMergedUnit ?? "-"} | ${g.avgReviewRounds} | ${g.fixAfterMergeRate}`);
@@ -2664,6 +2967,44 @@ function vsLogFiles(dir) {
   return files;
 }
 
+/** usa-42: the agents-archive listing for a home (sync: getUsage). `folded` = a pass already folded every listed file. */
+function archiveListingSync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = statSync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+/** Async twin of archiveListingSync for the warm path (stat + readdir on the threadpool). */
+async function archiveListingAsync(homeDir) {
+  const dir = join(homeDir, "runner", "agents-archive");
+  let s;
+  try { s = await statAsync(dir); } catch { archiveIndex.delete(homeDir); return { dir, names: [], folded: true }; }
+  const c = archiveIndex.get(homeDir);
+  if (c && c.mtimeMs === s.mtimeMs) return { dir, ...c, entry: c };
+  let names = [];
+  try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* raced away */ }
+  return { dir, ...newArchiveEntry(homeDir, s.mtimeMs, names) };
+}
+function newArchiveEntry(homeDir, mtimeMs, names) {
+  archiveScans += 1;
+  const entry = { mtimeMs, names, folded: false };
+  archiveIndex.set(homeDir, entry);
+  return { ...entry, entry };
+}
+/** Agent logs to fold: live runner/agents first, then archived ids not present live. -> [{ n, file, archived }] + the listing. */
+function agentLogSources(dir, liveNames, arch) {
+  const out = liveNames.map((n) => ({ n, file: join(dir, n), archived: false }));
+  if (arch.names.length) {
+    const live = new Set(liveNames);
+    for (const n of arch.names) if (!live.has(n)) out.push({ n, file: join(arch.dir, n), archived: true });
+  }
+  return out;
+}
+
 /** Brings usageFiles (agent logs) and logLineFiles (vs logs) up to date without holding the loop; returns the agent files folded. */
 async function warmUsageCaches(home) {
   const homeDir = home || vibesquadHome();
@@ -2672,8 +3013,17 @@ async function warmUsageCaches(home) {
   const dir = join(homeDir, "runner", "agents");
   let names = [];
   try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
-  for (let i = 0; i < names.length; i += USAGE_STAT_BATCH) {
-    const files = names.slice(i, i + USAGE_STAT_BATCH).map((n) => join(dir, n));
+  const arch = await archiveListingAsync(homeDir);
+  const sources = agentLogSources(dir, names, arch);
+  // A folded archive listing needs no stats: its files are immutable and already in usageFiles (a missing one is refolded by usageSteps).
+  let toStat = sources;
+  if (arch.folded) {
+    toStat = [];
+    for (const x of sources) { if (x.archived && usageFiles.has(x.file)) warmed.add(x.file); else toStat.push(x); }
+  }
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
+  for (let i = 0; i < toStat.length; i += USAGE_STAT_BATCH) {
+    const files = toStat.slice(i, i + USAGE_STAT_BATCH).map((x) => x.file);
     const stats = await Promise.all(files.map((f) => statAsync(f).catch(() => null)));
     let sliceStart = performance.now();
     for (let k = 0; k < files.length; k++) {
@@ -2686,6 +3036,7 @@ async function warmUsageCaches(home) {
       if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
     }
   }
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const logFiles = vsLogFiles(homeDir);
   const liveLogs = new Set(logFiles);
   const homePrefix = homeDir + sep;
@@ -2743,6 +3094,7 @@ export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
 export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
+  buildPlanScores,
   usageSteps,
 };
 
@@ -2762,15 +3114,17 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const allAgentSquads = []; // unfiltered { st, squad } for the autonomy bySquad comparison
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  const arch = isForbiddenRealHome(homeDir) ? { names: [], folded: true } : archiveListingSync(homeDir); // usa-42
+  if (!arch.folded && arch.names.length) archiveFolds += 1;
   let step = 0;
-  for (const n of names) {
+  for (const { n, file, archived } of agentLogSources(dir, names, arch)) {
     if (++step % USAGE_STEP_EVERY === 0) yield;
-    const file = join(dir, n);
     seen.add(file);
     let st;
-    try { st = (warmed?.has(file) && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; } // warmed: getUsageAsync just folded it
+    // warmed: getUsageAsync just folded it; archived + folded listing: immutable, reuse the fold without a stat
+    try { st = (warmed?.has(file) && usageFiles.get(file)) || (archived && arch.folded && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; }
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
-    allAgentSquads.push({ st, squad: agentSquad });
+    allAgentSquads.push({ st, squad: agentSquad, agentId: n.slice(0, -6) });
     if (squad && agentSquad !== squad) continue;
     agentStates.push({ st, agentId: n.slice(0, -6) });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
@@ -2788,6 +3142,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     }
   }
   for (const f of [...usageFiles.keys()]) if (!seen.has(f)) usageFiles.delete(f); // file removed: forget it
+  if (arch.entry && !arch.folded && archiveIndex.get(homeDir) === arch.entry) arch.entry.folded = true;
   const rows = [...agg.values()].sort((a, b) => b.day.localeCompare(a.day) || b.costUsd - a.costUsd);
   const by = (k) => {
     const m = new Map();
@@ -2836,6 +3191,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
   const workerIndex = indexWorkers(agents);
+  workerIndex.mergesByName = new Map(); // usa-44: `${squad}|${unit name}` -> merges ascending by time (see attributeImplementer)
+  workerIndex.mergedNames = new Set(); // lowercase names of every merged unit
+  for (const u of mergedRaw) {
+    const n = typeof u.unit === "string" ? u.unit.toLowerCase() : "";
+    const ms = tsMs(u.mergedAt);
+    if (!n || ms === null) continue;
+    workerIndex.mergedNames.add(n);
+    getOrSet(workerIndex.mergesByName, `${u.squad ?? ""}|${n}`, () => []).push({ ms, sha: u.sha });
+  }
+  for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
   const merged = [];
   for (const u of mergedRaw) {
@@ -2880,7 +3245,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // (vs.handoff-from only marks a carrier, nothing records acceptance or plan completion), so they report null / no-signal.
   const roleSuccess = (g) => {
     const rate = (n, d) => Math.round((n / d) * 1000) / 1000;
-    if (g.jobKind === "reviewer") return g.runs ? { successRate: rate(g.passCount, g.runs), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
+    if (g.jobKind === "reviewer") return g.runs - g.blockedCount > 0 ? { successRate: rate(g.passCount, g.runs - g.blockedCount), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
     if (g.jobKind === "implementer") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
     return { successRate: null, successBasis: "no-signal" };
   };
@@ -2890,7 +3255,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -2899,6 +3264,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     g.workingMs += a.workingMs;
     g.idleMs += a.idleMs;
     if (a.pass) g.passCount += 1;
+    if (a.blocked) g.blockedCount += 1;
     if (a.loop) g.loopCount += 1;
     g.errorCount += a.errors ?? 0;
   }
@@ -2936,7 +3302,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       tokensPerRun: g.runs ? Math.round((g.inputTokens + g.outputTokens) / g.runs) : 0,
       inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
       workingMs: g.workingMs, idleMs: g.idleMs,
-      passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+      passCount: g.passCount, blockedCount: g.blockedCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
       ...roleSuccess(g),
       loopCount: g.loopCount,
       errorCount: g.errorCount,
@@ -3056,13 +3422,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   });
   yield;
   const spawnStorms = computeSpawnStorms(agents);
+  const leadLongTurns = buildLeadLongTurns(allAgentSquads);
   const readyTime = buildReadyTime(agents);
   yield;
   const bootSize = yield* bootSizesSteps(home, { since, until });
   yield;
 
+  const limitRows = readLimits(home);
   const result = {
     squad, squads, autonomy,
+    planScores: buildPlanScores(entries, { now: now(), squad, roleByAgent: new Map(allAgentSquads.map((a) => [a.agentId, a.st.role])) }),
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals: totalsFinal,
@@ -3071,14 +3440,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byLane: by("lane"),
     byDay: byDayFinal,
     rows,
-    limits: withPoolAgents(readLimits(home), agents),
+    limits: withPoolAgents(limitRows, agents),
+    quotaAlerts: activeQuotaAlerts(limitRows, home, { now: now() }),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
       const gs = byProfile.filter((p) => p.role === r.role && p.successRate !== null);
       const basis = gs.find((p) => p.successBasis === "implementer-first-try-pass") ? "implementer-first-try-pass" : gs[0]?.successBasis;
       const use = gs.filter((p) => p.successBasis === basis);
       const num = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.firstTryCount, 0) : use.reduce((t, p) => t + p.passCount, 0);
-      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs, 0);
+      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs - (p.blockedCount ?? 0), 0);
       return { ...r, successRate: den ? Math.round((num / den) * 1000) / 1000 : null, successBasis: den ? basis : "no-signal" };
     }),
     lanes: lanes.map((l) => ({ ...l, ...(laneV2.get(l.lane) ?? {}) })),
@@ -3088,6 +3458,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms,
+    leadLongTurns,
     readyTime,
     compaction: buildCompaction(agents, floor, compactEvents),
     bootSize,
@@ -3263,6 +3634,8 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     }
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
+    // Light route for the banner poll: limits.jsonl + the alert state only, no usage fold.
+    if (sub === "quota-alerts") return sendJson(res, 200, { quotaAlerts: activeQuotaAlerts(readLimits(home), home) });
     if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {

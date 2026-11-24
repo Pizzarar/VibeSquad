@@ -257,7 +257,9 @@ export const OFFER_PATTERNS = [
   /\bi can [^.?]{1,100} if you('d| would)? (like|want|prefer)\b/,
   /\bif you want( it| that)?( done)?( now)?,? (i can|i'?ll)\b/,
 ];
-export const RISKY_STEP = /\b(delete|deleting|force[- ]?push|release|publish|sign(ing)?|overwrite|reset --hard|wipe|drop (the )?(table|branch)|replace the app|pay|spend|cost)\b/i;
+// Money terms use word boundaries so `buy`/`purchase` catches "buy the domain" and "domain purchase"
+// without matching `buyer` or plain "domains list" docs.
+export const RISKY_STEP = /\b(delete|deleting|force[- ]?push|release|publish|sign(ing)?|overwrite|reset --hard|wipe|drop (the )?(table|branch)|replace the app|pay|spend|cost|purchas\w*|buy|buys|buying|bought|(domain|domains) (purchase|registration|renewal)|register (a |the )?domains?|renew (a |the )?domains?)\b/i;
 export const OPTION_LIST = /(^|\n)\s*(?:[-*\d.]+\s*)?(?:\*\*)?\(?[a-c][).]\)?(?:\*\*)?[\s:]/gi;
 export const STATED_LEAN = /\bi (still |strongly )?(lean|recommend|suggest|propose)|\bmy (pick|recommendation)|\bi'd (go|pick|choose|send|give|keep)\b/i;
 export function offersFix(text) {

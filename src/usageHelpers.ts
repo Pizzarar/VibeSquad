@@ -9,6 +9,7 @@ export type LimitRow = {
   resetsAt: string | null;
   source?: string;
   at?: string;
+  checkedAt?: string | null;
   burnPctPerHour: number;
   etaToCap: string | null;
   poolAgents?: { count: number; agentIds: string[]; text: string };
@@ -67,7 +68,12 @@ export type SpawnStorm = {
   firstAt: string;
   lastAt: string;
   zeroTurnExits: number;
+  countExclRespawns?: number;
 };
+export type LongTurnBucket = { turns: number; costUsd: number };
+export type LongTurnSplit = { productive: LongTurnBucket; waiting?: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
+export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[] };
+
 export type ProfileRow = {
   provider: string;
   profile: string;
@@ -108,6 +114,7 @@ export type UsageData = {
   loops?: { threshold: number; flagged: LoopRow[] };
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
+  leadLongTurns?: LeadLongTurns;
   usageReview?: UsageReview;
   cohorts?: Cohorts;
   floor?: Floor;
@@ -116,6 +123,7 @@ export type UsageData = {
   squad?: string | null;
   squads?: string[];
   autonomy?: Autonomy;
+  planScores?: PlanScores;
   readyTime?: ReadyTime | null;
   compaction?: CompactionStats | null;
 };
@@ -152,6 +160,24 @@ export function etaText(l: LimitRow): string {
   return l.burnPctPerHour > 0 ? "won't cap before reset" : "idle · no burn";
 }
 
+// ---- usa-45: limit sample age (last *check*, not last *change*)
+
+/** A limit sample is "stale" when the last check is more than this long ago. */
+export const LIMIT_STALE_MS = 2 * 3600_000;
+
+/** True when the last check is older than LIMIT_STALE_MS. Missing checkedAt is never stale (no signal to judge). */
+export function limitIsStale(checkedAt: string | null | undefined, now: number): boolean {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  return Number.isFinite(t) && now - t > LIMIT_STALE_MS;
+}
+
+/** "sampled Xh ago" line from the last check time; "" when unknown. */
+export function limitSampledText(checkedAt: string | null | undefined, now: number): string {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  if (!Number.isFinite(t)) return "";
+  return `sampled ${relTime(Math.min(t, now - 1), now)}`;
+}
+
 /** Human duration from ms: `42m`, `3.1h`, `1.2d`, or `—` for missing/negative. */
 export function dur(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return "—";
@@ -178,7 +204,9 @@ export function workIdlePct(workPct: number | null | undefined): string {
 /** One-line spawn-retry storm text: `lane · role · N spawns in Xm` (or `N zero-turn exits`). */
 export function stormText(s: SpawnStorm): string {
   const mins = Math.max(1, Math.round((s.windowMs ?? 0) / 60_000));
-  const tail = s.zeroTurnExits > 0 ? `${s.zeroTurnExits} zero-turn exits` : `${s.count} spawns in ${mins}m`;
+  const m = s.countExclRespawns;
+  const spawns = typeof m === "number" && m !== s.count ? `${s.count} (${m} excl. respawns)` : `${s.count}`; // parenthetical only when it differs
+  const tail = s.zeroTurnExits > 0 ? `${s.zeroTurnExits} zero-turn exits` : `${spawns} spawns in ${mins}m`;
   return `${s.lane} · ${s.role} · ${tail}`;
 }
 
@@ -708,6 +736,7 @@ export const USAGE_EXPORT_MD_URL = "/__vibesquad/providers/usage-export?format=m
 /** Squad filter persistence + URLs (usa-25). */
 export const USAGE_SQUAD_KEY = "vs.usage.squad";
 export const USAGE_URL = "/__vibesquad/providers/usage";
+export const QUOTA_ALERTS_URL = "/__vibesquad/providers/quota-alerts";
 export const squadQuery = (squad: string | null | undefined): string => (squad ? `squad=${encodeURIComponent(squad)}` : "");
 export const usageUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_URL}?${squadQuery(squad)}` : USAGE_URL);
 export const usageExportMdUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_EXPORT_MD_URL}&${squadQuery(squad)}` : USAGE_EXPORT_MD_URL);
@@ -850,4 +879,108 @@ export function filterProfilesByKind<T extends Pick<ProfileView, "jobKind" | "ro
 export function costCellText(p: Pick<ProfileView, "mergedUnits" | "costPerMergedUnit" | "costPerRun">): string {
   if (p.costPerMergedUnit !== null && p.mergedUnits > 0) return usdText(p.costPerMergedUnit);
   return p.costPerRun !== null && p.costPerRun !== undefined ? `${usdText(p.costPerRun)}/run` : "—";
+}
+
+export type LongTurnRow = { key: "productive" | "waiting" | "loop" | "other"; label: string; turns: number; costUsd: number; pct: number | null };
+
+/** Pick the squad row when a squad filter is set (zeros if absent), else pooled. Missing data -> null (tile hidden). */
+export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | null): LongTurnRow[] | null {
+  if (!l || !l.pooled) return null;
+  // Pooled only when no squad filter; a filtered squad with no row shows zero buckets (never another scope's numbers).
+  const src: Partial<LongTurnSplit> = squad ? (l.bySquad?.find((b) => b.teamId === squad) ?? {}) : l.pooled;
+  const keys = [["productive", "Productive"], ["waiting", "Waiting"], ["loop", "Loop"], ["other", "Other"]] as const;
+  const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  const total = keys.reduce((a, [k]) => a + num(src[k]?.costUsd), 0);
+  return keys.map(([key, label]) => ({ key, label, turns: num(src[key]?.turns), costUsd: num(src[key]?.costUsd), pct: total > 0 ? num(src[key]?.costUsd) / total : null }));
+}
+
+/** usa-48: quota alert banner. Active alerts come from usage payload `quotaAlerts` (usa-47). */
+export type QuotaAlert = { provider: string; window: string; usedPct: number; resetsAt: string | null; firedAt?: string };
+export const QUOTA_DISMISS_KEY = "vs.quotaAlert.dismissed";
+export const quotaAlertKey = (a: Pick<QuotaAlert, "provider" | "window" | "resetsAt">): string => `${a.provider}|${a.window}|${a.resetsAt ?? ""}`;
+/** Active alerts minus dismissed minus expired (resetsAt passed even if the payload is stale). Malformed rows are dropped. */
+export function visibleQuotaAlerts(alerts: unknown, dismissed: readonly string[], now: number): QuotaAlert[] {
+  if (!Array.isArray(alerts)) return [];
+  const gone = new Set(dismissed);
+  return alerts.filter((a): a is QuotaAlert => {
+    if (!a || typeof a.provider !== "string" || typeof a.window !== "string" || typeof a.usedPct !== "number") return false;
+    if (a.resetsAt != null) {
+      const t = Date.parse(a.resetsAt);
+      if (Number.isFinite(t) && t <= now) return false;
+    }
+    return !gone.has(quotaAlertKey(a));
+  });
+}
+/** Dismissed keys for storage; drops keys whose resetsAt already passed so the list can't grow forever. */
+export function pruneDismissed(keys: readonly string[], now: number): string[] {
+  return keys.filter((k) => {
+    const t = Date.parse(k.split("|")[2] ?? "");
+    return !Number.isFinite(t) || t > now;
+  });
+}
+export function quotaAlertText(a: QuotaAlert, now: number): string {
+  const left = Math.max(0, Math.round(100 - a.usedPct));
+  const label = `${providerLabel(a.provider)} ${a.window}`;
+  const t = a.resetsAt ? Date.parse(a.resetsAt) : NaN;
+  if (!Number.isFinite(t)) return `${label}: ${left}% left. Spend a reset now?`;
+  const mins = Math.max(0, Math.floor((t - now) / 60_000));
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const rel = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return `${label}: ${left}% left. Resets in ${rel}. Spend a reset now?`;
+}
+
+/** usa-48: in-app "open Usage" request (banner button + ?focus=usage cold start). No page reload. */
+export const OPEN_USAGE_EVENT = "vs:open-usage";
+export const usageFocusRequested = (search: string): boolean => new URLSearchParams(search).get("focus") === "usage";
+export function requestOpenUsage(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(OPEN_USAGE_EVENT));
+}
+
+/** Search string with focus=usage removed (other params kept). */
+export function stripUsageFocus(search: string): string {
+  const p = new URLSearchParams(search);
+  p.delete("focus");
+  const q = p.toString();
+  return q ? `?${q}` : "";
+}
+let coldUsage: boolean | null = null;
+let scrollPending = false;
+/** Cold start (?focus=usage): true once per page load, for every caller; strips the param from the URL so a reload doesn't re-trigger. */
+export function takeColdUsageFocus(): boolean {
+  if (coldUsage === null) {
+    coldUsage = typeof location !== "undefined" && usageFocusRequested(location.search);
+    if (coldUsage) {
+      scrollPending = true;
+      try { history.replaceState(history.state, "", `${location.pathname}${stripUsageFocus(location.search)}${location.hash}`); } catch { /* no history */ }
+    }
+  }
+  return coldUsage;
+}
+/** The Usage dashboard calls this on mount: true once if a cold-start deep link wants it scrolled into view. */
+export function takePendingUsageScroll(): boolean {
+  const v = scrollPending;
+  scrollPending = false;
+  return v;
+}
+export function resetColdUsageForTest(): void { coldUsage = null; scrollPending = false; }
+
+/** usa-46 plan completion score (server/providers-catalog.mjs buildPlanScores). score is null when fewer than minN plans are scored. */
+export type PlanScoreRow = {
+  squad?: string | null; lane?: string; started: number; done: number; open: number; stale: number;
+  scored: number; scoredDone: number; score: number | null; insufficient: boolean; medianCycleMs: number | null;
+  buddy: { handedOff: number; reachedDone: number; score: number | null };
+};
+export type PlanLeadRow = { lead: string; lane: string | null; started: number; done: number };
+export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; minN: number };
+
+/** `73%`, or `n<5 plans` while fewer than minN plans are old enough to score. */
+export function planScoreText(r: Pick<PlanScoreRow, "score" | "insufficient">, minN = 5): string {
+  return r.insufficient || r.score === null || r.score === undefined ? `n<${minN} plans` : `${Math.round(r.score * 100)}%`;
+}
+
+/** Collapsed header for the Plans section. */
+export function plansSummary(p: PlanScores | null | undefined): string {
+  if (!p || !p.pooled.started) return "Plan completion · no plan-tagged handoffs yet";
+  const r = p.pooled;
+  return `Plan completion · ${planScoreText(r, p.minN)} · ${r.done}/${r.started} done · ${r.open} open${r.stale ? ` (${r.stale} stale)` : ""}`;
 }

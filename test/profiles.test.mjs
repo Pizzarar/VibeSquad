@@ -162,6 +162,13 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     }
 
     // Verify all 20 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
+    // The Paseo fixture is a historical snapshot; its team-rule lines (R1..R15) drift as the
+    // shared prefix changes, so compare the role-specific notes body only.
+    const stripRuleLines = (notes) =>
+      String(notes)
+        .split("\n")
+        .filter((line) => !/^- R\d+/.test(line))
+        .join("\n");
     for (const paseoProf of rawFixture.profiles) {
       const vsSpawn = toPaseoSpawnConfig(paseoProf.name, {}, profiles);
       assert.equal(vsSpawn.provider, paseoProf.provider);
@@ -169,7 +176,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
       assert.equal(vsSpawn.modeId, paseoProf.modeId);
       assert.equal(vsSpawn.thinkingOptionId, paseoProf.thinkingOptionId);
       assert.deepEqual(vsSpawn.featureValues ?? undefined, paseoProf.featureValues ?? undefined);
-      assert.equal(vsSpawn.notes, paseoProf.notes);
+      assert.equal(stripRuleLines(vsSpawn.notes), stripRuleLines(paseoProf.notes));
     }
 
     // Also verify brainstorm restart and inbox topic brainstorm spawn payloads against Brainstorm - Gemini
@@ -200,7 +207,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     assert.equal(restartCall.config.modeId, bsGemini.modeId);
     assert.equal(restartCall.config.thinkingOptionId, bsGemini.thinkingOptionId);
     assert.deepEqual(restartCall.config.featureValues, bsGemini.featureValues);
-    assert.equal(restartCall.config.systemPrompt, bsGemini.notes);
+    assert.equal(stripRuleLines(restartCall.config.systemPrompt), stripRuleLines(bsGemini.notes));
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;
@@ -760,6 +767,18 @@ test("R13 act-on-lean rule: same text in the shared prefix of all three sources,
   const root = resolve(import.meta.dirname, "..");
   for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
     assert.ok(readFileSync(join(root, rel), "utf8").includes(RULE), `${rel}: missing R13`);
+  }
+});
+
+test("R15 owner-time-zone rule: same text in the shared prefix of all three sources, after R14", () => {
+  const RULE = "- R15 (Owner time zone): In any text the owner reads (chat replies, needs-you, decision blocks, lane briefs), write clock times in US Eastern with the zone, e.g. \"8:00 AM ET\" (convert from UTC; mind EST/EDT). Machine fields (ISO timestamps, logs, JSON, CLI flags, restart windows config) stay UTC.";
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R15");
+  assert.ok(SHARED_NOTE_PREFIX.indexOf("R14 (Already covered)") < SHARED_NOTE_PREFIX.indexOf(RULE));
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R15`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(RULE), `${rel}: missing R15`);
   }
 });
 

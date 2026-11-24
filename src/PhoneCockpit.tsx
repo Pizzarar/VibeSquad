@@ -11,8 +11,10 @@ import {
   effectiveSurface,
   getBuddyRequest,
   hostHealthLine,
+  isBugsLane,
   isPhoneShell,
   openBuddy,
+  phoneBugsSurface,
   phoneLaneRows,
   subscribeBuddyRequest,
   type PhoneSurface,
@@ -22,7 +24,7 @@ import { skyZonesFor } from "./skyZonesLogic";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
-// E1 (docs/PLAN_ANDROID_END_STATE.md): the whole phone UI. Three surfaces, one chat each, no desktop chrome and no way back to it.
+// E1 (docs/PLAN_ANDROID_END_STATE.md): the whole phone UI. The Trinity (Overlord, RiffBot, Bugs; idea-463) plus an opened Buddy, one chat each, no desktop chrome and no way back to it.
 // Chats are the existing AgentDrawer in chatOnly mode, so Timeline, composer and needs-you handling are reused, not forked.
 
 type Props = {
@@ -42,7 +44,7 @@ type Props = {
   onSettings?: () => void;
 };
 
-const SURFACE_LABEL: Record<PhoneSurface, string> = { overlord: "Overlord", riffbot: "RiffBot", buddy: "Buddy" };
+const SURFACE_LABEL: Record<PhoneSurface, string> = { overlord: "Overlord", riffbot: "RiffBot", bugs: "Bugs", buddy: "Buddy" };
 
 const buddyOf = (view: TeamView | undefined, laneId: string | null): Member | null => {
   if (!view || !laneId) return null;
@@ -118,11 +120,19 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
 
   // E2's contract: openBuddy(laneId) (phoneCockpitLogic.ts) lands here.
   const req = useSyncExternalStore(subscribeBuddyRequest, getBuddyRequest);
+  const bugs = phoneBugsSurface(view);
   useEffect(() => {
     if (!req) return;
-    setBuddyLane(req.laneId);
-    setSurface("buddy");
+    // idea-463: the Bugs lane is a Trinity tab; never open it as a duplicate @<lane> Buddy tab.
+    if (isBugsLane(bugs, req.laneId)) {
+      setSurface("bugs");
+    } else {
+      setBuddyLane(req.laneId);
+      setSurface("buddy");
+    }
     setMenu(false);
+    // Only a new request re-routes; `bugs` is recomputed every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req]);
 
   const shown = effectiveSurface(surface, buddyLane);
@@ -130,7 +140,8 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   const health = hostHealthLine(runnerConn);
   const buddy = buddyOf(view, buddyLane);
   const laneRows = phoneLaneRows(view);
-  const activeMember = shown === "overlord" ? zones.overlord.member : shown === "riffbot" ? zones.riffbot.member : buddy;
+  const activeMember =
+    shown === "overlord" ? zones.overlord.member : shown === "riffbot" ? zones.riffbot.member : shown === "bugs" ? bugs.member : buddy;
   const activeProv = activeMember ? providerSpec(activeMember.agent.provider) : null;
   const switchTarget = activeMember
     ? oppositeProviderTarget(activeMember.agent.provider, (activeMember.agent.labels as Record<string, string> | undefined)?.profile)
@@ -182,6 +193,15 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
     ) : (
       <Empty what="RiffBot isn't running yet." action="Start RiffBot" onAction={zones.hub ? () => onSpinUp(zones.hub!, brainstormProfile) : undefined} />
     );
+  } else if (shown === "bugs") {
+    const m = bugs.member;
+    body = m ? (
+      <AgentDrawer key={m.agent.id} agent={m.agent} chatOnly onClose={() => {}} onSuccessor={() => onSuccessor(m.agent.id)} />
+    ) : bugs.pin ? (
+      <Empty what="Bugs isn't running yet." action="Start Bugs" onAction={() => onSpinUp(bugs.pin!, brainstormProfile)} />
+    ) : (
+      <Empty what="No Bugs lane in this Squad yet." action="" />
+    );
   } else {
     body = buddy ? (
       <AgentDrawer key={buddy.agent.id} agent={buddy.agent} chatOnly onClose={() => {}} onSuccessor={() => onSuccessor(buddy.agent.id)} />
@@ -200,7 +220,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
       data-testid={`phone-tab-${s}`}
       onClick={() => pick(s)}
     >
-      {label}
+      <span className="phone-tab-label">{label}</span>
       {!!badge && <span className="phone-badge" data-testid="phone-needs-you">{badge}</span>}
     </button>
   );
@@ -342,6 +362,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
       <nav className="phone-tabs" role="tablist" aria-label="Cockpit surfaces">
         {tab("overlord", SURFACE_LABEL.overlord, needsYou)}
         {tab("riffbot", SURFACE_LABEL.riffbot)}
+        {tab("bugs", SURFACE_LABEL.bugs, bugs.needsYou)}
         {buddyLane && tab("buddy", `@${buddyLane}`)}
       </nav>
     </div>

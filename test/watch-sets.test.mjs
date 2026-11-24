@@ -1,7 +1,7 @@
 // Watch sets (docs/PLAN_COMPLETION_DIGEST_RELAY.md W1): registry, state machine, one-shot fire, persistence across a restart,
 // stall pings, retired-owner reroute, and the hold-back of watched items from the normal per-event wakes.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,7 @@ function sandbox() {
   const home = join(dir, "home");
   const tmp = join(dir, "tmp");
   mkdirSync(home, { recursive: true });
-  mkdirSync(tmp, { recursive: true });
+  mkdirSync(tmp, { recursive: true, mode: 0o700 }); // the watcher refuses suite files from a group/other-open dir (checkTestLockDir)
   return { dir, home, tmp, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -505,6 +505,40 @@ test("unit-watch-false-stall-2 B (idea-171): a permission event with an empty pe
 // ---------------------------------------------------------------------------
 // Suite + restart items (W3 / restart-runtime contracts, from fixtures)
 // ---------------------------------------------------------------------------
+
+// Tier A review M1 (forge 11-23): the suite files live in a shared /tmp. A dir another user could write (open mode, a symlink)
+// must read as no result, so a forged PASS never satisfies a suite item; once the dir is private again it counts.
+test("suite item: a last-run record in a group/other-open or symlinked lock dir is ignored", { skip: process.platform === "win32" && "POSIX modes" }, async () => {
+  const sb = sandbox();
+  try {
+    const pass = JSON.stringify({ agentId: "rn-runner", pid: 111, startedAt: iso(T0 + 1000), full: true, files: [], finishedAt: iso(T0 + 2000), tests: 5, pass: 5, fail: 0, failingFiles: [] });
+    // A symlinked dir pointing at a dir holding a PASS record.
+    const real = join(sb.dir, "elsewhere");
+    mkdirSync(real, { mode: 0o700 });
+    writeFileSync(join(real, SUITE_RESULT_FILE), pass);
+    const link = join(sb.dir, "linked");
+    symlinkSync(real, link);
+    const a = addWatch({ owner: "lead-1", items: [{ kind: "suite", ref: "rn-runner" }] }, { home: sb.home, now: T0 });
+    const viaLink = engineFor({ ...sb, tmp: link }, { clock: { t: T0 + 3000 } });
+    await viaLink.engine.tick();
+    assert.equal(viaLink.delivered.length, 0, "a symlinked lock dir is not read");
+    viaLink.engine.stop?.();
+    // The sandbox's own dir, opened up to group/other.
+    writeFileSync(join(sb.tmp, SUITE_RESULT_FILE), pass);
+    chmodSync(sb.tmp, 0o775);
+    const { engine, delivered, clock } = engineFor(sb, { clock: { t: T0 + 3000 } });
+    await engine.tick();
+    assert.equal(delivered.length, 0, "an open lock dir is not read");
+    assert.notEqual(engine.get(a.id).items[0].state, "done");
+    chmodSync(sb.tmp, 0o700);
+    clock.t += 1000;
+    await engine.tick();
+    assert.equal(engine.get(a.id).items[0].state, "done", "the same record counts from a private dir");
+    assert.match(delivered[0]?.text ?? "", /suite \(rn-runner\): done — PASS 5\/5 pass/);
+  } finally {
+    sb.cleanup();
+  }
+});
 
 test("suite item: PASS record = done, FAIL record = done-with-FAIL (pinged), dead holder with no result = stall, died record = stall", async () => {
   const sb = sandbox();
@@ -1132,6 +1166,7 @@ async function pluginHarness(sb, agents, extra = {}) {
     setLabels: async () => {},
     archiveAgent: async () => {},
     watchSets: { home: sb.home, tmpdir: sb.tmp, retryMs: 0, ...(extra.watchSets ?? {}) },
+    ...(extra.deps ?? {}),
   })(server);
   const paseo = {
     agents: {
@@ -2390,6 +2425,74 @@ test(
   }),
 );
 
+/**
+ * idea-524: `owner`'s watch on w-1 (feat-alpha) fires on w-1's final through the real watch ping (marked forwarded on delivery);
+ * then (optionally after a later turn with a different final) w-1's digest dg-1 turns up orphaned (a restart left it open past
+ * digestStaleMs) and the sweep runs at `now`. Returns the [done] entries the sweep wrote for w-1.
+ */
+async function orphanSweepAfterWatchPing(sb, owner, { laterFinal = "" } = {}) {
+  const agents = new Map([
+    ["ovl", mk("ovl", "lead", "vibesquad")],
+    ["lead-fa", mk("lead-fa", "lead", "feat-alpha")],
+    ["w-1", mk("w-1", "worker", "feat-alpha")],
+  ]);
+  let current = "PASS 0/0/0 deadbeef: w1 shipped";
+  const clock = { t: Date.now() };
+  const { id } = addWatch({ owner, team: "vibesquad", lane: "feat-alpha", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+  const h = await pluginHarness(sb, agents, {
+    timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: current } }] : []),
+    watchSets: { now: () => clock.t },
+  });
+  try {
+    h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    h.watch.onRunnerEvent(agentEv("w-1", "running"));
+    clock.t += MIN;
+    h.watch.onRunnerEvent(agentEv("w-1", "idle"));
+    h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    clock.t += 20 * MIN;
+    await h.watch.tick();
+    await wait(250);
+    const pings = h.sent.filter((s) => s.to === owner && s.text.includes(`Watch ${id}`));
+    assert.equal(pings.length, 1, JSON.stringify(h.sent));
+    assert.match(pings[0].text, /PASS 0\/0\/0 deadbeef: w1 shipped/, "the ping carried w-1's final");
+    if (laterFinal) current = laterFinal;
+    const now = Date.now();
+    agents.set("dg-1", { ...mk("dg-1", "worker", "feat-alpha", { digestFor: "w-1" }), createdAt: iso(now - 20 * MIN) });
+    assert.deepEqual(await h.stop.sweepStaleDigests(now), ["dg-1"], "the orphaned digest is archived");
+    const log = join(sb.home, "teams", "vibesquad", "log.jsonl");
+    const lines = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+    return lines.filter((e) => e.type === "done" && (e.refs ?? []).includes("w-1"));
+  } finally {
+    h.stop();
+  }
+}
+
+test(
+  "idea-524: orphan sweep — the lane lead's own watch ping already delivered w-1's final, so no duplicate UNVERIFIED [done]",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "lead-fa");
+    assert.equal(done.length, 0, JSON.stringify(done));
+  }),
+);
+
+test(
+  "idea-524 H1: orphan sweep — an Overlord's watch ping does not suppress the lane lead's UNVERIFIED [done]",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "ovl");
+    assert.equal(done.length, 1, JSON.stringify(done));
+    assert.equal(done[0].text, "UNVERIFIED (digest orphaned): PASS 0/0/0 deadbeef: w1 shipped");
+  }),
+);
+
+test(
+  "idea-524: orphan sweep — a later turn's different final is still written after the lead got the earlier one",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "lead-fa", { laterFinal: "FAIL 1/0/0 cafef00d: w1 round two" });
+    assert.equal(done.length, 1, JSON.stringify(done));
+    assert.equal(done[0].text, "UNVERIFIED (digest orphaned): FAIL 1/0/0 cafef00d: w1 round two");
+  }),
+);
+
 test(
   "idea-450 H2: digest-first order forwards once — the lead's own watch holds the [done], the watch ping is the one copy",
   withPluginEnv(async (sb) => {
@@ -2815,6 +2918,37 @@ test("idea-575: start() prunes a closed set past retention and logs one metric l
     await wait(100);
     assert.equal(JSON.parse(readFileSync(file, "utf8")).sets.some((s) => s.id === id), false, "pruned on load");
     assert.equal(logs.filter((m) => /pruned 1 closed/.test(m)).length, 1, `one metric line: ${logs}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("idea-596: prune metric goes to the mutating engine's own log (not a shared module logger); a fired set with an unsent ping survives; cancel/reown prune", async () => {
+  const sb = sandbox();
+  try {
+    const file = watchesPath({ home: sb.home });
+    const mk = (ref) => addWatch({ owner: "o", items: [{ kind: "agent", ref }] }, { home: sb.home, now: T0 }).id;
+    const stuck = mk("a-stuck"); const gone = mk("a-gone"); const live = mk("a-live");
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    const by = (id) => doc.sets.find((s) => s.id === id);
+    by(stuck).firedAt = iso(T0 - 3 * 60 * MIN); by(stuck).pings = [{ key: "complete" }]; // >2h fired, ping never attempted
+    by(gone).firedAt = iso(T0 - 3 * 60 * MIN); by(gone).pings = [{ key: "complete", attemptedAt: iso(T0 - 3 * 60 * MIN) }];
+    writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+    // Engine A is created second-last, engine B last: B's log must receive the line, A's must not (the old module-level logger was last-writer-wins).
+    const logsA = []; const logsB = [];
+    engineFor(sb, { clock: { t: T0 + 10 * MIN }, log: (m) => logsA.push(m) });
+    const { engine: b } = engineFor(sb, { clock: { t: T0 + 10 * MIN }, log: (m) => logsB.push(m) });
+    await wait(150);
+    const ids = JSON.parse(readFileSync(file, "utf8")).sets.map((s) => s.id);
+    assert.equal(ids.includes(stuck), true, "unsent ping keeps a >2h fired set");
+    assert.equal(ids.includes(gone), false);
+    assert.equal(logsA.filter((m) => /pruned/.test(m)).length + logsB.filter((m) => /pruned/.test(m)).length, 1, `exactly one metric line: ${logsA} | ${logsB}`);
+    // cancel prunes a closed set too (sync path: no log, still prunes)
+    const doc2 = JSON.parse(readFileSync(file, "utf8"));
+    doc2.sets.find((s) => s.id === stuck).cancelledAt = iso(T0 - 3 * 60 * MIN);
+    writeFileSync(file, JSON.stringify(doc2, null, 2) + "\n");
+    cancelWatch(live, "o", { home: sb.home, now: T0 + 10 * MIN });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).sets.some((s) => s.id === stuck), false, "cancel mutation prunes a closed set");
   } finally {
     sb.cleanup();
   }

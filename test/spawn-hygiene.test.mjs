@@ -352,7 +352,10 @@ test("backupBrief never files an empty lane under vibesquad", () => {
     const f = join(dir, "b.md");
     writeFileSync(f, "x");
     const dest = backupBrief("---", f);
-    assert.ok(dest.includes("_unnamed") && !dest.includes("vibesquad"));
+    // judge the path under the fixture dir only: os.tmpdir() itself may contain "vibesquad" (TMPDIR=~/.cache/vibesquad-tmp, idea-709)
+    assert.ok(dest.startsWith(dir), "dest is under the fixture dir");
+    const rel = dest.slice(dir.length);
+    assert.ok(rel.includes("_unnamed") && !rel.toLowerCase().includes("vibesquad"));
   } finally {
     prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
     rmSync(dir, { recursive: true, force: true });
@@ -372,4 +375,10 @@ test("pin spawn logs brief-inlined: lane=X", async () => {
     prev === undefined ? delete process.env.VIBESQUAD_HOME : (process.env.VIBESQUAD_HOME = prev);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("idea-542: worker brief tells workers to run tests in the foreground, once", () => {
+  const prefix = injectedPrefix("worker", "");
+  const composed = [prefix, dedupeNotesAgainst(SHARED_NOTE_PREFIX, prefix)].join("\n\n");
+  assert.equal(composed.split("in the foreground: never start a background shell or Monitor").length - 1, 1);
 });

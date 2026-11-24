@@ -300,15 +300,31 @@ describe("desktop proxy: first-launch mode choice, greyed LAN/Meshnet buttons, a
       assert.match(setupBefore.body, /id="preset-lan" data-host="" style="display:none"/);
       assert.match(setupBefore.body, /id="preset-meshnet" data-host="" style="display:none"/);
 
-      // 4. Pair with remote server over TLS: proxy auto-fetches http://<remoteHost>/ca.crt, pins it, and redeems code over HTTPS
+      // 4a. idea-525 fail closed: remote pairing without the CA fingerprint is refused up front (400), and nothing is
+      // pinned. The code is still unredeemed afterwards, so it was never sent.
       auth.resetPairRateLimitForTest();
       const pairCode = auth.createPairCode();
-      const pairResp = await httpCall({
+      const noFpResp = await httpCall({
         port: proxyPort,
         path: "/__desktop/pair",
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ serverHost: remoteHost, code: pairCode }),
+      });
+      assert.equal(noFpResp.status, 400, `Expected 400 without fp, got ${noFpResp.status}: ${noFpResp.body}`);
+      const noFpBody = JSON.parse(noFpResp.body);
+      assert.equal(noFpBody.ok, false);
+      assert.match(noFpBody.error, /Pair a device/);
+      assert.equal(existsSync(join(configDir, "trusted-cas")) && readdirSync(join(configDir, "trusted-cas")).length > 0, false, "Nothing may be pinned without a fingerprint");
+
+      // 4b. Pair with remote server over TLS: proxy fetches http://<remoteHost>/ca.crt, verifies it against the
+      // pairing fingerprint, pins it, and redeems the code over HTTPS
+      const pairResp = await httpCall({
+        port: proxyPort,
+        path: "/__desktop/pair",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ serverHost: remoteHost, code: pairCode, fp: auth.caFingerprint().full }),
       });
       assert.equal(pairResp.status, 200, `Expected 200 from /__desktop/pair, got ${pairResp.status}: ${pairResp.body}`);
       const pairBody = JSON.parse(pairResp.body);

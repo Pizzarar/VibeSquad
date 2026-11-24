@@ -362,7 +362,9 @@ test('done check (real processes): the worker\'s orphaned listener is reaped; it
     // The worker's process ends (park kills its tree; the orphan is out of it). cli2 ends too: its listener is an orphan as well.
     cli1.kill();
     cli2.kill();
-    await tick(500);
+    // 1500, not 500: on Linux the snapshot dates a pid from `ps etimes` (whole seconds back from the probe's now), so a listener
+    // under ~1 s old reads as created AFTER endedAt and is skipped 'created-after-end' (fail-safe), which flaked this check on forge.
+    await tick(1500);
     assert.ok(alive(orphan.pid), 'precondition: the CLI\'s death left the listener running (the leak)');
     const r = await createDevServerReaper()({ agentId: w1, token: tok1, since: Date.now() - 120_000, endedAt: Date.now(), protectedPids: [held.pid, process.pid], cliPid: cli1.pid });
     assert.equal(r.error, undefined, `reaper error: ${r.error}`);

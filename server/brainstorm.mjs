@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { PLAN_HANDOFF_DEDUPE_MS, planLogFields } from "./plan-log.mjs";
+import { linesFromEndSync } from "./log-tail.mjs";
 import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { liveRoles, roleNameHit, roleSpawnConfig } from "./spawn-route.mjs";
@@ -197,26 +199,53 @@ export function findLanePlanFile(cwd, rootDir = REPO_ROOT, laneId = "", briefTex
   return best ? best.rel : "(none yet)";
 }
 
-export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [] }) {
+/** The newest same-agent handoff entry for the same plan inside the dedupe window of this lane log, or null. */
+function recentPlanHandoff(laneLogPath, entry) {
+  try {
+    if (!existsSync(laneLogPath)) return null;
+    const floor = Date.parse(entry.ts) - PLAN_HANDOFF_DEDUPE_MS;
+    let n = 0;
+    for (const line of linesFromEndSync(laneLogPath)) {
+      if (++n > 300) break;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      const t = Date.parse(e?.ts);
+      if (Number.isFinite(t) && t < floor) break;
+      if (e?.type === "handoff" && e.agent === entry.agent && e.lane === entry.lane && String(e.plan ?? "").toLowerCase() === entry.plan.toLowerCase()) return e;
+    }
+  } catch { /* an unreadable log never blocks a write */ }
+  return null;
+}
+
+export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [], plan = "", pass = false }) {
   const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
   const safeTeam = safeSegment(teamId || "vibesquad");
   const safeLane = safeSegment(laneId || safeTeam || "vibesquad");
-  const cleanText = String(text ?? "").trim().slice(0, MAX_LOG_TEXT);
-  if (!cleanText) throw new Error("log text cannot be empty");
+  const rawText = String(text ?? "").trim().slice(0, MAX_LOG_TEXT);
+  if (!rawText) throw new Error("log text cannot be empty");
+  const pf = planLogFields(String(type || "metric"), rawText, plan, pass === true);
 
   const entry = {
     ts: new Date().toISOString(),
     agent: String(agent || "you"),
     lane: safeLane,
     type: String(type || "metric"),
-    text: cleanText,
+    text: pf.text,
     refs: Array.isArray(refs) ? refs.map(String) : [],
+    ...(pf.plan ? { plan: pf.plan } : {}),
+    ...(pf.plan && pf.pass ? { pass: true } : {}),
   };
   const line = JSON.stringify(entry) + "\n";
 
   const logsDir = join(baseHome, "logs");
   mkdirSync(logsDir, { recursive: true });
   const laneLogPath = join(logsDir, `${safeTeam}--${safeLane}.jsonl`);
+  // idea-454: one handoff per (lane, agent, plan) per window, checked against the log itself so a CLI spawn, an MCP send and an
+  // explicit `vs log handoff --plan` (separate processes) cannot double-log one Buddy -> lead handoff.
+  if (entry.type === "handoff" && entry.plan) {
+    const dup = recentPlanHandoff(laneLogPath, entry);
+    if (dup) return { entry: dup, path: laneLogPath, teamLogPath: join(baseHome, "teams", safeTeam, "log.jsonl"), deduped: true };
+  }
   appendFileSync(laneLogPath, line, "utf8");
 
   const tDir = join(baseHome, "teams", safeTeam);

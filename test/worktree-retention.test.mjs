@@ -139,9 +139,12 @@ test("dry run: a stale unmerged tree with an archived owner is listed with sizes
     utimesSync(join(wt, "README.md"), new Date(), new Date()); // stat-dirty, content-clean: plain `git status` refreshes
     utimesSync(indexPath, old, old);
     retentionSweep({ root: sanctuary, agents: [archivedAgent("a1", wt)], ...OPTS });
-    assert.equal(lstatSync(indexPath).mtimeMs, old.getTime(), "dry run left the index alone");
+    // utimes -> read back can land sub-millisecond off the written value on some filesystems (e.g. 1793729051487.999):
+    // compare with a 1ms tolerance instead of exact float equality.
+    const unchanged = (ms) => Math.abs(lstatSync(indexPath).mtimeMs - ms) < 1;
+    assert.ok(unchanged(old.getTime()), `dry run left the index alone (mtime ${lstatSync(indexPath).mtimeMs} vs ${old.getTime()})`);
     git(["status", "--porcelain"], wt);
-    assert.notEqual(lstatSync(indexPath).mtimeMs, old.getTime(), "setup check: a plain status does refresh the index");
+    assert.ok(!unchanged(old.getTime()), "setup check: a plain status does refresh the index");
   }));
 
 test("skip rules: live cwd, owner live (resumable lost), recent touch, merged, roster unknown on apply", () =>

@@ -36,7 +36,7 @@ export const SHARED_NOTE_PREFIX = [
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
-  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats.",
+  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats. Workers run their own tests and builds in the foreground: never start a background shell or Monitor and end your turn \"waiting\" on it.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
   "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
   "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs hwo`→vs who, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
@@ -45,6 +45,7 @@ export const SHARED_NOTE_PREFIX = [
   "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)",
   "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.",
   "- R14 (Already covered): Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow covers it, say already-covered-by-X instead of rebuilding it.",
+  "- R15 (Owner time zone): In any text the owner reads (chat replies, needs-you, decision blocks, lane briefs), write clock times in US Eastern with the zone, e.g. \"8:00 AM ET\" (convert from UTC; mind EST/EDT). Machine fields (ISO timestamps, logs, JSON, CLI flags, restart windows config) stay UTC.",
 ].join("\n");
 
 export const PRIOR_ART_CHECK_RULE =
@@ -114,7 +115,7 @@ const CAUSE_GATE_NOTE =
   'Cause-vs-symptom gate: your verdict must answer "Does this fix the cause or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.';
 
 const VERDICT_LINE_NOTE =
-  "Final verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`).";
+  "Final verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`). For a docs-only review of untracked lane docs (no commit), put a docs target in the sha slot instead: `docs:<repo-relative path>` (e.g. `PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md`) or a bare repo-relative path ending in `.md` (e.g. `PASS 0/0/0 EXP3.md`).";
 
 const NOTE_BODIES = {
   "Lead - Claude": LEAD_NOTE_BODY,

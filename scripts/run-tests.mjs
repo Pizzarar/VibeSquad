@@ -1,6 +1,6 @@
 // `npm test` entry: only one suite may run at a time machine-wide (parallel suites each spawn runners/MCP servers and flood the box).
-// Holds <tmpdir>/vibesquad-npm-test.lock {pid, agentId, startedAt, full, files} for the run; a dead owner or a lock older than 2h is stale
-// and taken over (the dead run gets a {died:true} record). On exit it writes <tmpdir>/vibesquad-npm-test-last.json with the
+// Holds <lockdir>/vibesquad-npm-test.lock {pid, agentId, startedAt, full, files} for the run; a dead owner or a lock older than 2h is stale
+// and taken over (the dead run gets a {died:true} record). On exit it writes <lockdir>/vibesquad-npm-test-last.json with the
 // counts and failing files. Files and fields: scripts/suite-lock.mjs.
 //   npm test                     refuse (exit 1) if another suite holds the slot
 //   npm test -- --queue [files]  wait FIFO for the slot instead, printing the queue position
@@ -17,13 +17,24 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "../server/restart-coord.mjs";
-import { childEnv } from "./test-child-env.mjs";
+import { childEnv, testTmpdirEnv } from "./test-child-env.mjs";
 import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
+import { ensureTestLockDir } from "../cli/fifo-queue.mjs";
 import { killTree, startOrphanGuard } from "./orphan-guard.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Forge 11-23: runner shells export TMPDIR=~/.vibesquad/tmp, and temp homes under ~/.vibesquad trip the real-home guard. Move it
+// to the OS temp, matching what childEnv() gives the children. The suite lock does not follow TMPDIR: suitePaths() uses the fixed
+// machine-wide testLockDir() (cli/fifo-queue.mjs), so every caller shares one slot and one last-run record.
+Object.assign(process.env, testTmpdirEnv());
 const paths = suitePaths();
+try {
+  ensureTestLockDir(paths.dir); // fails closed on a symlink, a foreign owner or open permissions (cli/fifo-queue.mjs)
+} catch (e) {
+  console.error(`npm test: ${e.message}`);
+  process.exit(1);
+}
 const args = process.argv.slice(2);
 const queue = args.includes("--queue");
 const ignoreDrain = drainOverrideRequested(args);
@@ -101,10 +112,10 @@ if (queue) {
   }
 }
 
-// Node's default reporter is spec (Node < 23: spec on a TTY, tap otherwise). Naming it keeps the output identical while the
-// silent summary reporter writes the counts to a side file.
-const major = Number(process.versions.node.split(".")[0]);
-const reporter = major >= 23 || process.stdout.isTTY ? "spec" : "tap";
+// Pin the human reporter to spec: Node's default is spec on a TTY (and on every stream from Node 23) but tap on a non-TTY
+// under Node 22, which made the output (and tests matching `ℹ pass N`) differ by Node version. The silent summary reporter
+// writes the counts to a side file.
+const reporter = "spec";
 const summaryFile = path.join(paths.dir, `vibesquad-npm-test-summary-${process.pid}.json`);
 const summaryReporter = pathToFileURL(path.join(root, "scripts", "test-summary-reporter.mjs")).href;
 const progressFile = path.join(paths.dir, `vibesquad-npm-test-progress-${process.pid}.jsonl`);

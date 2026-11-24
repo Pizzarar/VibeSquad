@@ -20,11 +20,17 @@ The env var `VS_PLAYTEST_UI_SCALE` sets the dock scale. Without it the addon use
 - Reports retry with one `clientReportId`, so a retry never makes a second card.
 
 ## Remote VS (owner device pairing)
-For a VS server that is not on this machine, set `vs_playtest/server_url` to `https://<host>:<port>`, then use "Pair with VS" in the dock: compare the CA fingerprint with the one in the VS pair dialog, confirm, and type the 6-digit owner pairing code. Plain http is refused for remote hosts (only the `/ca.crt` bootstrap fetch uses it), and the device token is sent only over TLS pinned to the confirmed VS CA. "Unpair" deletes both files.
+For a VS server that is not on this machine, set `vs_playtest/server_url` to `https://<host>:<port>`, then pair:
+1. In VibeSquad's Pair Device dialog, mint a **Playtest code** (6 digits). The dialog shows the CA SHA-256 fingerprint.
+2. In the dock, type the code and press "Pair with VS". The addon fetches the CA from `/ca.crt` over plain http (nothing secret rides on it) and shows its SHA-256 fingerprint.
+3. Confirm the fingerprint matches the one in the VS dialog.
+4. The code is redeemed over https pinned to that CA. You are paired with the least-privilege `owner-playtest` role (report/thread only).
+
+Plain http is refused for remote hosts (only the `/ca.crt` bootstrap fetch uses it), and the device token is sent only over TLS pinned to the confirmed VS CA. "Unpair" deletes both files. If the dock shows "Full owner token: re-pair with a Playtest code", this device was paired with an old full-owner code: Unpair, then pair again with a Playtest code.
 
 - `vs_playtest/device_token_path`: absolute path of the device token file. Default `$VIBESQUAD_HOME/playtest-device-token`, else `~/.vibesquad/playtest-device-token`.
 - `vs_playtest/ca_cert_path`: absolute path of the pinned VS CA. Default `$VIBESQUAD_HOME/playtest-ca.crt`, else `~/.vibesquad/playtest-ca.crt`.
-- Both must be absolute filesystem paths such as `<host-path>/playtest-device-token`. `res://`, `user://` and relative paths are refused (the token never enters the project), and the addon then does not pair or send.
+- Both must be absolute filesystem paths such as `<host-path>/playtest-device-token`. `res://`, `user://`, relative paths, paths inside the project folder and UNC network shares (`\\server\share`, `//server/share`) are refused (the token never enters the project or a share), and the addon then does not pair or send.
 
 ## Export gate
 The dock and the bridge hooks run only in the editor, or in a build whose preset carries the feature tag `vs_playtest`. In any other build `VSPlaytest.enabled` is `false`, and the autoload does nothing and makes no network calls.

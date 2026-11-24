@@ -1,6 +1,6 @@
 // Block 3/4: runner auto mode + child env, VS MCP server (stdio round trip + Paseo-name aliases), vs spawn/send/status,
 // and rn- identity through the backend seam. Every filesystem touch is under a temp HOME/VIBESQUAD_HOME.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -19,7 +19,16 @@ import { commandAgentVerb, parseArgs, resolveIdentity, runAgentVerb } from '../c
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MCP_SERVER = path.join(ROOT, 'server', 'mcp', 'server.mjs');
 const CLI = path.join(ROOT, 'cli', 'vs.mjs');
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-'));
+// idea-672: every temp dir this file makes is removed in a file-level after(), pass or fail (node:test runs it on failure too).
+const tmpDirs = [];
+const tmp = () => {
+  const d = mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-'));
+  tmpDirs.push(d);
+  return d;
+};
+after(() => {
+  for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 const tick = () => new Promise((r) => setTimeout(r, 15));
 
 function isolatedEnv(extra = {}) {
@@ -219,7 +228,7 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'brainstorm', lane: 'evil' } });
-  assert.deepEqual(out, { id: 'rn-new', title: 'Do it' });
+  assert.deepEqual({ ...out, ab: undefined }, { id: 'rn-new', title: 'Do it', ab: undefined });
   const [, req] = runnerBackend.calls[0];
   assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd], ['claude', 'claude-sonnet-5-5', 'auto', '/work']);
   assert.equal(req.initialPrompt, 'go');
@@ -326,6 +335,17 @@ test('send / wait / status / cancel / list route by id and lane; status caps las
   assert.deepEqual(l.map((a) => a.id), ['rn-1'], 'lane-scoped');
 });
 
+test('status / get_agent_status surface the queue position for a queued agent (idea-683)', async () => {
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgent: async (id) => ({ agent: { id, status: 'initializing', title: 'T', queued: { ahead: 3 } } }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const s = await callTool(ctx, 'status', { id: 'rn-1' });
+  assert.equal(s.status, 'initializing');
+  assert.deepEqual(s.queued, { ahead: 3 }, 'a queued agent reports its queue position, not a bare initializing');
+  const st = await callTool(ctx, 'get_agent_status', { agentId: 'rn-1' });
+  assert.equal(st.status, 'initializing');
+  assert.deepEqual(st.queued, { ahead: 3 }, 'the Paseo-name alias carries it too');
+});
+
 test('report writes as the caller; types are restricted', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'blocker', text: 'stuck' });
@@ -368,7 +388,7 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x' }, ctx);
-  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' });
+  assert.deepEqual({ ...spawned, ab: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined });
   assert.equal(runnerBackend.calls[0][1].labels.role, 'worker');
   assert.deepEqual(await runAgentVerb('send', { _: ['rn-1', 'hello', 'there'] }, ctx), { id: 'rn-1', sent: true });
   assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'hello there']);
@@ -382,7 +402,7 @@ test('vs spawn --stakes parses and the stakes value reaches the spawn request (i
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'mechanical' }, ctx);
-  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' });
+  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' }); // mechanical is never EXP6-picked: no ab
   assert.equal(runnerBackend.calls[0][1].labels.stakes, 'mechanical');
   await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
 });
@@ -439,7 +459,7 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
       (s) => { out += s; },
     );
     assert.equal(code, 0);
-    assert.deepEqual(JSON.parse(out), { id: 'rn-new', title: 'Sub job' });
+    assert.deepEqual({ ...JSON.parse(out), ab: undefined }, { id: 'rn-new', title: 'Sub job', ab: undefined });
     assert.deepEqual(seen, [{ agentId: 'rn-work1', token: FAKE_TOKEN, team: 'efi', lane: 'own', role: 'worker' }]);
     const req = runnerBackend.calls[0][1];
     assert.deepEqual(

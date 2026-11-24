@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -148,11 +148,15 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const level = used >= 90 ? "hot" : used >= 70 ? "warn" : "ok";
   const resetMs = l.resetsAt ? Date.parse(l.resetsAt) : null;
   const estimate = l.source === "estimate";
+  const checked = l.checkedAt ?? l.at;
+  const stale = limitIsStale(checked, now);
+  const sampled = limitSampledText(checked, now);
   return (
-    <div className={`usage-limit usage-${level}`} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
+    <div className={`usage-limit usage-${level}${stale ? " usage-limit-stale" : ""}`} data-stale={stale ? "true" : undefined} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
       <div className="usage-limit-head">
         <span className="usage-limit-name" title={limitTooltip(l)}>{providerLabel(l.provider)}</span>
         <span className="usage-limit-win">{WINDOW_LABEL[l.window] ?? l.window}</span>
+        {stale && <span className="usage-stale-tag" title="Last limit check was over 2h ago">stale</span>}
         {estimate && <span className="usage-estimate" title="Local estimate from our own token counts, not a provider-reported number">estimate</span>}
       </div>
       {l.poolAgents && <div className="usage-limit-pool small muted">{l.poolAgents.text}</div>}
@@ -164,6 +168,7 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
         <span title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
         <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
       </div>
+      {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? new Date(checked).toLocaleString() : undefined}>{sampled}</div>}
       <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
     </div>
   );
@@ -307,6 +312,11 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
     }
   };
 
+  // Cold-start ?focus=usage (Psycho): scroll the dashboard into view once it mounts. No timers.
+  useEffect(() => {
+    if (takePendingUsageScroll()) document.querySelector('[data-testid="squads-dashboard"]')?.scrollIntoView?.({ block: "start" });
+  }, []);
+
   const limits = useMemo(() => {
     const rank = (l: LimitRow) => (l.provider === "antigravity-cli" && l.window === "5h" ? 0 : l.provider === "claude" && l.window === "weekly" ? 1 : 2);
     return [...(data?.limits ?? [])].sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider) || a.window.localeCompare(b.window));
@@ -339,6 +349,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const stale = (data.squad ?? null) !== activeSquad; // scope switch in flight: keep the old numbers visible but dimmed
   const flagged = data.loops?.flagged ?? [];
   const storms = data.spawnStorms ?? [];
+  const leadLongRows = leadLongTurnRows(data.leadLongTurns, activeSquad);
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
@@ -424,6 +435,48 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </section>
         </Collapse>
       )}
+
+      <Collapse id="plans" testid="usage-plans" summary={plansSummary(data.planScores)}>
+        <section className="usage-plans" data-testid="usage-plans-body">
+          {data.planScores && data.planScores.byLane.length > 0 ? (
+            <div className="usage-table-wrap">
+              <table className="usage-table" data-testid="usage-plans-table">
+                <thead><tr><th>Lane</th><th className="num">Started</th><th className="num">Done</th><th className="num">Open</th><th className="num">Stale</th><th className="num">Score</th><th className="num">Median cycle</th></tr></thead>
+                <tbody>
+                  {data.planScores.byLane.map((r) => (
+                    <tr key={`${r.squad ?? ""}|${r.lane}`} data-testid="usage-plans-row" data-lane={r.lane}>
+                      <td>{r.lane}</td>
+                      <td className="num">{r.started}</td>
+                      <td className="num">{r.done}</td>
+                      <td className="num">{r.open}</td>
+                      <td className="num">{r.stale}</td>
+                      <td className="num" data-testid="usage-plans-score">{planScoreText(r, data.planScores!.minN)}</td>
+                      <td className="num">{r.medianCycleMs === null ? "—" : dur(r.medianCycleMs)}</td>
+                    </tr>
+                  ))}
+                  <tr data-testid="usage-plans-pooled">
+                    <td>All lanes</td>
+                    <td className="num">{data.planScores.pooled.started}</td>
+                    <td className="num">{data.planScores.pooled.done}</td>
+                    <td className="num">{data.planScores.pooled.open}</td>
+                    <td className="num">{data.planScores.pooled.stale}</td>
+                    <td className="num">{planScoreText(data.planScores.pooled, data.planScores.minN)}</td>
+                    <td className="num">{data.planScores.pooled.medianCycleMs === null ? "—" : dur(data.planScores.pooled.medianCycleMs)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {data.planScores.byLead.length > 0 && (
+                <div className="small muted" data-testid="usage-plans-leads">
+                  Per lead: {data.planScores.byLead.map((l) => `${l.lane ?? "?"} ${l.lead.slice(-6)} ${l.done}/${l.started}`).join(" · ")}
+                </div>
+              )}
+              <div className="small muted">Score = done / started over plans started more than 3 days ago. Open for 7+ days is stale.</div>
+            </div>
+          ) : (
+            <div className="usage-empty muted small" data-testid="usage-plans-empty">no plan-tagged handoffs yet — appears after the next `vs log handoff --plan`</div>
+          )}
+        </section>
+      </Collapse>
 
       <Collapse id="ready-time" testid="usage-ready-time" summary={readyTimeSummary(data.readyTime, data.compaction)}>
         <section className="usage-ready" data-testid="usage-ready-time-body">
@@ -620,7 +673,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </Collapse>
       )}
 
-      {(data.cohorts || data.floor) && (
+      {(data.cohorts || data.floor || leadLongRows) && (
         <Collapse id="efficiency" testid="usage-efficiency-collapse" summary={efficiencySummary(data.cohorts, data.floor)}>
         <section className="usage-efficiency" data-testid="usage-efficiency-strip">
           {data.cohorts && (
@@ -665,6 +718,16 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 Clean-run floor: <strong>{usdText(data.floor.cleanCostPerUnit)}</strong>/unit · <strong>{tokText(data.floor.cleanTokensPerUnit)}</strong> tokens/unit
                 {data.floor.cleanShare !== null && <> · clean {pctText(data.floor.cleanShare)} of spend</>}
               </div>
+            </div>
+          )}
+          {leadLongRows && (
+            <div className="usage-lead-long-turns" data-testid="usage-lead-long-turns">
+              <div className="usage-cohort-label small">Lead turns &gt; {data.leadLongTurns!.threshold}{activeSquad ? ` · ${squadLabel(activeSquad)}` : ""}</div>
+              {leadLongRows.map((r) => (
+                <div className="small" key={r.key} data-bucket={r.key}>
+                  {r.label}: <strong>{r.turns}</strong> turns · {usdText(r.costUsd)} · {pctText(r.pct)}
+                </div>
+              ))}
             </div>
           )}
         </section>

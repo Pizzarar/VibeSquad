@@ -150,3 +150,24 @@ test("staleWarning suppresses once refs/heads/master moves (reset --keep dropped
   writeFileSync(join(gitDir, "refs", "heads", "master"), `${A}\n`);
   assert.equal(staleWarning(env), null);
 });
+
+test("idea-595: a master that moved (reset away) invalidates the 60s cache for refreshStale, getStale and peekStale", async () => {
+  const { refreshStale, peekStale } = await import("../server/stale-runtime.mjs");
+  const home = tmp();
+  const repo = tmp(); // acts as the git dir: readRefSha reads refs/heads/master from it
+  mkdirSync(join(repo, "refs", "heads"), { recursive: true });
+  const setMaster = (c) => writeFileSync(join(repo, "refs", "heads", "master"), `${c.repeat(40)}\n`);
+  const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo });
+  resetStaleCache();
+  setMaster("b");
+  let calls = 0;
+  const compute = async () => { calls++; return { built: "aaaaaaa", head: "bbbbbbb", behind: 2 }; };
+  await refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 1000, compute });
+  await refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 2000, compute });
+  assert.equal(calls, 1, "unchanged master stays cached");
+  assert.equal(peekStale(rootDir).behind, 2);
+  setMaster("c"); // reset-away / new commit within the 60s window
+  assert.equal(peekStale(rootDir), null, "peek drops the value at once");
+  await refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 3000, compute });
+  assert.equal(calls, 2, "refresh recomputes despite being inside 60s");
+});

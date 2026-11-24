@@ -20,7 +20,11 @@ export const DEVICE_COOKIE = "vs_device";
 // `allowedTeams`. Only an owner device is owner proof; a tester is its own caller kind and the API allowlists it (deny by
 // default). Non-browser clients (the in-game tester build) present the device token in DEVICE_TOKEN_HEADER or as
 // `Authorization: Bearer <token>` instead of the vs_device cookie.
-export const DEVICE_ROLES = Object.freeze(["owner", "bug-tester"]);
+// PTO v1.1 (docs/lanes/playtest-overlay/PLAN_V1_1_ROLE.md): "owner-playtest" is the Godot playtest addon's least-privilege
+// role. It covers every Squad (allowedTeams null) but is never owner proof and never mints a code; the API holds it to
+// PLAYTEST_ROUTE_ALLOWLIST (report + reply thread + its own auth status), deny by default.
+export const OWNER_PLAYTEST_ROLE = "owner-playtest";
+export const DEVICE_ROLES = Object.freeze(["owner", "bug-tester", OWNER_PLAYTEST_ROLE]);
 export const DEVICE_TOKEN_HEADER = "x-vs-device-token";
 const TEAM_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const DEVICE_TOKEN_RE = /^[A-Za-z0-9_-]{16,256}$/; // base64url, like randomBytes(32).toString("base64url")
@@ -33,12 +37,20 @@ const badScope = (msg) => Object.assign(new Error(msg), { status: 400 });
 
 /**
  * The pairing scope a code / device carries: `{ role: "owner", allowedTeams: null }` (the default) or
- * `{ role: "bug-tester", allowedTeams: [<team id>, ...] }` (non-empty, lowercased, deduped). Throws a 400 Error otherwise.
+ * `{ role: "bug-tester", allowedTeams: [<team id>, ...] }` (non-empty, lowercased, deduped) or
+ * `{ role: "owner-playtest", allowedTeams: null }` (every Squad; a non-empty allowedTeams is refused, never silently dropped:
+ * per-Squad playtest scoping does not exist yet). Throws a 400 Error otherwise.
  */
 export function normalizePairScope({ role, allowedTeams } = {}) {
   const r = role === undefined || role === null ? "owner" : role;
   if (typeof r !== "string" || !DEVICE_ROLES.includes(r)) throw badScope(`unknown role (expected one of: ${DEVICE_ROLES.join(", ")})`);
   if (r === "owner") return { role: "owner", allowedTeams: null };
+  if (r === OWNER_PLAYTEST_ROLE) {
+    if (allowedTeams !== undefined && allowedTeams !== null && !(Array.isArray(allowedTeams) && allowedTeams.length === 0)) {
+      throw badScope("an owner-playtest device covers every Squad: leave allowedTeams out");
+    }
+    return { role: OWNER_PLAYTEST_ROLE, allowedTeams: null };
+  }
   if (!Array.isArray(allowedTeams) || allowedTeams.length === 0) throw badScope("a bug-tester needs allowedTeams: a non-empty list of Squad ids");
   if (allowedTeams.length > MAX_ALLOWED_TEAMS) throw badScope(`allowedTeams: at most ${MAX_ALLOWED_TEAMS} Squads`);
   const out = [];
@@ -53,9 +65,12 @@ export function normalizePairScope({ role, allowedTeams } = {}) {
 /** The role a stored device record has (pre-E6a records have none: owner). An unknown stored role is kept as-is (no rights). */
 const deviceRoleOf = (d) => (typeof d?.role === "string" && d.role ? d.role : "owner");
 
-/** A stored record's allowedTeams: null for an owner, else only the entries that are still valid Squad ids (fail closed). */
+/**
+ * A stored record's allowedTeams: null for an owner or an owner-playtest device (every Squad; display only, it grants
+ * nothing), else only the entries that are still valid Squad ids (fail closed).
+ */
 function deviceAllowedTeamsOf(d) {
-  if (isOwnerDevice(d)) return null;
+  if (isOwnerDevice(d) || d?.role === OWNER_PLAYTEST_ROLE) return null;
   if (!Array.isArray(d?.allowedTeams)) return [];
   const out = [];
   for (const t of d.allowedTeams) {
@@ -1048,13 +1063,20 @@ export function ownerProof(req) {
 /** E6a: the caller record for a bug-tester device. allowedTeams is a fresh copy (only valid Squad ids; [] = none). */
 const testerCaller = (dev) => ({ kind: "tester", id: dev.id, name: dev.name, role: "bug-tester", allowedTeams: deviceAllowedTeamsOf(dev) ?? [] });
 
-/** owner | tester | unknown for a request without agent headers, with a single authenticate() pass. */
+/**
+ * PTO v1.1: the caller record for an owner-playtest device. Its own kind ("playtest"), never "owner" and never the handler-only
+ * synthetic owner-playtest caller: vibesquad-api.mjs sends it to playtestGated (PLAYTEST_ROUTE_ALLOWLIST) before any other rule.
+ */
+export const playtestCaller = (dev) => ({ kind: "playtest", id: dev?.id, name: dev?.name, role: OWNER_PLAYTEST_ROLE });
+
+/** owner | tester | playtest | unknown for a request without agent headers, with a single authenticate() pass. */
 function nonAgentCaller(req) {
   if (hasAgentHeaders(req)) return { kind: "unknown" }; // defensive: an agent-naming request is never resolved here
   if (isLocalOwner(req)) return { kind: "owner" };
   const dev = authenticate(req);
   if (isOwnerDevice(dev)) return { kind: "owner" };
   if (dev?.role === "bug-tester") return testerCaller(dev);
+  if (dev?.role === OWNER_PLAYTEST_ROLE) return playtestCaller(dev); // PTO R1 L1: by role alone; an id-less record still gets gated
   return { kind: "unknown" };
 }
 
@@ -1103,7 +1125,7 @@ export function callerFromRequest(req, { verifyAgent = defaultVerifyAgent } = {}
 /** The already-resolved caller of `req` (set by callerFromRequest / the middleware), or null before resolution. */
 export const callerOf = (req) => req?.[CALLER_VALUE] ?? null;
 
-/** Synchronous resolution for a request without agent headers (owner | tester | unknown); cached like callerFromRequest. */
+/** Synchronous resolution for a request without agent headers (owner | tester | playtest | unknown); cached like callerFromRequest. */
 export function resolveNonAgentCaller(req) {
   if (req[CALLER_VALUE]) return req[CALLER_VALUE];
   const c = nonAgentCaller(req);
@@ -1552,7 +1574,7 @@ export async function handlePairStart(req, res, readBody) {
   // approval-required codes.
   const localOwner = !hasAgentHeaders(req) && isLocalOwner(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
   const minter = localOwner || hasAgentHeaders(req) ? null : authenticate(req);
-  // E6a: only the owner mints (PC local token or an owner-role device). A bug-tester device can never mint any code.
+  // E6a: only the owner mints (PC local token or an owner-role device). A bug-tester or owner-playtest device can never mint any code.
   if (!localOwner && !isOwnerDevice(minter)) {
     return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired owner device" });
   }

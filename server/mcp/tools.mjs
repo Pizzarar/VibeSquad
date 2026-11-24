@@ -13,7 +13,9 @@ import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
+import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
+import { decideArm, readArmCaps, readPerfectionVerdict } from "../exp6-arm.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -236,10 +238,10 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent }) {
+    async writeLog({ type, text, refs, agent, plan, pass }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
-      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(name ? { agent: name } : {}) };
+      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -248,7 +250,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       } catch (e) {
         if (!e?.unreachable) throw e;
         const { appendVsLogEntry } = await import("../brainstorm.mjs");
-        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs }).entry;
+        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass }).entry;
       }
     },
     // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
@@ -314,11 +316,36 @@ export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
 
 const agentOf = (res) => res?.agent ?? res;
 
+// idea-454: a Buddy -> lead plan handoff logs `handoff plan=<path>`. Dedupe is server-side (appendVsLogEntry checks the lane log for
+// the same agent + plan inside the window), so CLI/MCP processes, spawn + send and an explicit `vs log handoff --plan` log one entry.
+async function logPlanHandoff(ctx, text, how) {
+  try {
+    const plan = planPathInText(text);
+    if (!plan) return;
+    await ctx.writeLog({ type: "handoff", text: `buddy -> lead plan handoff (${how})`, plan });
+  } catch { /* metrics are best effort: never fail the spawn/send */ }
+}
+
+/** True when `id` is a live lead of the sender's own team + lane (a Buddy's note to a Buddy or worker is not a lead handoff). */
+async function isOwnLaneLead(ctx, id) {
+  try {
+    const rec = await fetchCallerRecord(ctx, id);
+    if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt) return false;
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    const mine = findLaneInRegistry(clean(ctx.identity.lane), teams);
+    const theirs = findLaneInRegistry(clean(rec.labels?.lane || rec.labels?.lead), teams);
+    return Boolean(mine && theirs && mine.lane.id === theirs.lane.id && mine.team.id === theirs.team.id);
+  } catch { return false; }
+}
+
 async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
     const agent = agentOf(await b.fetchAgent(id));
     const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline)?.call(b, id, { direction: "tail", limit: 50, projection: "projected" });
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE) };
+    // A queued agent reads "initializing" (STATUS map, runner-backend.mjs) but is not stuck — it is waiting its turn. Surface
+    // the queue position (same convention as `vs who` / the pin UI) so `vs status` / get_agent_status can say "queued(N ahead)"
+    // instead of a bare "initializing" for a slow provider (agy) that sits in the queue for a while.
+    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE), ...(agent?.queued ? { queued: { ahead: agent.queued.ahead } } : {}) };
   });
 }
 
@@ -351,9 +378,33 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const given = { provider: clean(args.provider), model: clean(args.model), modeId: clean(pick(args, "modeId", "mode")) };
   let spawn = {};
   let profile = null;
+  // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
+  // After the EXP6 verdict the same pick applies the EXP6_WINNER default (DSP); a swap never targets a capped arm (idea-703).
+  let ab = null;
+  let pickedProfile = profileName;
+  // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
+  if (profileName && !given.provider && !given.model) {
+    const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
+    // Same precedence the spawn stamps below (identity wins over a caller label).
+    const abLane = clean(ctx.identity.lane) || clean(args.labels?.lane);
+    const abTeam = clean(ctx.identity.team) || clean(args.labels?.team);
+    ab = await decideArm({
+      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
+      endIso: ctx.env?.VS_EXP6_END,
+      verdictProbe: () => readPerfectionVerdict({ home: ctx.env?.VIBESQUAD_HOME }),
+      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
+      listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
+    });
+    if (ab?.swapped) pickedProfile = ab.profile;
+  }
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const hit = await ctx.resolveProfile(profileName, profiles, { stakes: clean(args.labels?.stakes) || clean(args.stakes) });
+    const stk = { stakes: clean(args.labels?.stakes) || clean(args.stakes) };
+    let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
+    if (!hit && ab?.swapped) { // fail open: the swapped-to profile is not installed, keep the requested one
+      hit = await ctx.resolveProfile(profileName, profiles, stk);
+      ab = { ...ab, arm: ab.requestedArm, swapped: false, failOpen: true };
+    }
     if (!hit) {
       const known = profiles.map((p) => p.name).join(", ");
       throw new Error(`unknown profile "${profileName}". Known: ${known}`);
@@ -467,6 +518,16 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   );
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  if (ab) {
+    result.ab = { arm: ab.arm, swapped: ab.swapped, counts: ab.counts, ...(ab.mode === "default" ? { mode: "default" } : {}), ...(ab.capped ? { capped: true } : {}) };
+    // D3 re-read counts `exp6-default:` lines (swaps and cap-kept spawns); `exp6-arm swap:` stays the alternation metric.
+    // A fail-open keep (swap target not installed) logs nothing, like the alternation.
+    const metric = ab.mode === "default"
+      ? ab.swapped || ab.capped ? `exp6-default: ${profileName} -> ${ab.swapped ? ab.profile : `${profileName} (kept: winner capped)`} wf=${ab.arm} lane=${labels.lane ?? ""}` : ""
+      : ab.swapped ? `exp6-arm swap: ${profileName} -> ${ab.profile} wf=${ab.arm} lane=${labels.lane ?? ""} counts=sonnet:${ab.counts.sonnet},dsp:${ab.counts.dsp}` : "";
+    if (metric) { try { await ctx.writeLog({ type: "metric", text: metric }); } catch { /* metrics are best effort: never fail the spawn */ } }
+  }
+  if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;
   if (partnerName) {
     try {
@@ -519,6 +580,7 @@ async function sendTool(ctx, args = {}) {
   const sender = callerAgentId(ctx);
   const opts = sender ? { senderId: sender } : (await hasOwnerProof(ctx)) ? { owner: true } : undefined;
   const res = await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
+  if (clean(ctx.identity.role).toLowerCase() === "brainstorm" && planPathInText(text) && (await isOwnLaneLead(ctx, res?.redirectedTo || id))) await logPlanHandoff(ctx, text, "send");
   return res?.redirectedTo ? { id, sent: true, redirectedTo: res.redirectedTo } : { id, sent: true };
 }
 
