@@ -4,8 +4,9 @@
 // (e.g. #8 .gd comments) need it and degrade gracefully without it.
 import { makeRegistry, validateFinding } from "../schema.mjs";
 import * as structural from "./structural.mjs";
+import * as text from "./text.mjs";
 
-export const CHECK_MODULES = [structural];
+export const CHECK_MODULES = [structural, text];
 
 const num = (id) => Number(String(id).slice(1));
 const refKey = (f) => (f.entityRef ? `${f.entityRef.kind}:${f.entityRef.id}` : "");

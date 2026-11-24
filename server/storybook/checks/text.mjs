@@ -169,7 +169,7 @@ export function runSpeakers(ctx) {
   for (const u of collectUnits(reg)) {
     const card = cardFor(cards, u.speaker);
     if (!card) continue;
-    const bans = card.data.neverSays.map((t) => ({ t, re: termRegex(t) }));
+    const bans = (Array.isArray(card.data.neverSays) ? card.data.neverSays : []).map((t) => ({ t, re: termRegex(t) }));
     const callsRunner = (card.data.callsPlayer ?? []).some((c) => c.toLowerCase() === "runner");
     const forbidsRunner = (card.data.callsPlayer ?? []).length > 0 && !callsRunner;
     for (const f of u.fields) {
@@ -303,7 +303,7 @@ export function runPronouns(ctx) {
       const ranges = [];
       const re = /(?:^|[\s(\[—-])'(.+?)'(?=$|[\s.,;:!?)\]—-])|"(.+?)"/g;
       let m;
-      while ((m = re.exec(text))) { const g = m[1] ?? m[2]; const s = m.index + m[0].indexOf(g); ranges.push([s, s + g.length]); }
+      while ((m = re.exec(text))) { const g = m[1] ?? m[2]; if (!/\s/.test(g)) continue; /* single-word quotes are scare quotes, not speech */ const s = m.index + m[0].indexOf(g); ranges.push([s, s + g.length]); }
       const firstPerson = !ranges.length && /\b(?:I|I'm|I've|I'll|me|my)\b/.test(text);
       if (firstPerson) ranges.push([0, text.length]);
       const inRange = (i) => ranges.find(([a, b]) => i >= a && i < b) ?? null;
@@ -338,7 +338,7 @@ export const TONE_TERMS = [
   { cat: "adventurer", re: /\badventurers?\b/i },
   { cat: "fourth wall", re: /\b(?:npcs?|video ?games?|fourth wall|playtest\w*|in-game|game devs?|game designers?)\b/i },
 ];
-const ALCOHOL = /\b(?:alcohol|fuel|ethanol|distill\w*|methylated|denatured|liquor|moonshine|booze|burn(?:s|ing)?|bottle[sd]?|solvent|flask|drink|rubbing|surgical|white spirits?|mineral|proof|still)\b/i;
+const ALCOHOL = /\b(?:alcohol|fuel|ethanol|distill\w*|methylated|denatured|liquor|moonshine|booze|burn(?:s|ing)?|bottle[sd]?|solvent|flask|drink|rubbing|surgical|white spirits?|mineral|proof)\b/i;
 /** Context allowlist: a hit is dropped when `when(match, text, entity)` is true. */
 export const TONE_ALLOWLIST = [
   { id: "spirits-alcohol", cat: "paranormal", term: /^spirits?$/i, why: "spirits = alcohol/solvent in a fuel/recipe/item context", when: (m, text, e) => ["recipe", "item"].includes(e.kind) || ALCOHOL.test(text) },
@@ -356,11 +356,12 @@ function toneTexts(reg) {
     seen.add(k);
     items.push({ entity, field, text: t });
   };
-  for (const u of collectUnits(reg)) for (const f of u.fields) add(u.entity, f.field, f.text);
+  // native entities first so the dedupe keeps their kind (the spirits allowlist keys on recipe/item), then narrative units
   for (const e of reg.byKind("recipe")) add(e, "description", e.data.description);
   for (const e of reg.byKind("item")) add(e, "description", e.data.description);
   for (const e of reg.byKind("trader")) add(e, "description", e.data.description);
   for (const e of reg.byKind("location")) add(e, "danger_rating", e.data.danger_rating);
+  for (const u of collectUnits(reg)) for (const f of u.fields) add(u.entity, f.field, f.text);
   return items;
 }
 
@@ -553,7 +554,7 @@ function claimNames(reg) {
   const out = [];
   for (const kind of ["item", "enemy", "location", "room"]) for (const e of reg.byKind(kind)) {
     for (const n of [e.display, e.id.replace(/_/g, " ")]) {
-      const k = n.toLowerCase();
+      const k = dehyphen(String(n).toLowerCase());
       if (k.length < 4 || seen.has(k)) continue;
       seen.add(k);
       out.push({ label: k, re: new RegExp(`(?<![\\w'])${esc(k)}s?(?![\\w'])`, "gi") });
@@ -586,6 +587,7 @@ function dataIndex(reg) {
 
 function vibeDrift(reg, hooks) {
   const out = [];
+  if (!hooks?.spawnWindow) return out; // no adapter hook: cannot judge spawns
   for (const l of reg.byKind("lore")) {
     if (!["map_vibe", "band_vibe"].includes(l.data.lore_kind)) continue;
     const locs = l.links.filter((k) => k.rel === "describes" && k.kind === "location").map((k) => k.id).filter((id) => reg.has("location", id));

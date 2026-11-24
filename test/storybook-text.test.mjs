@@ -17,7 +17,7 @@ async function run(id, mutate) {
     const registry = makeRegistry(snapshot.entities);
     const fs = await checks.find((c) => c.id === id).run({ snapshot, registry, adapter: efiAdapter, hooks: efiAdapter.hooks });
     for (const f of fs) assert.equal(validateFinding(f).ok, true, JSON.stringify(f));
-    return id === "#9" ? fs.filter((f) => !String(f.entityRef?.id).startsWith("csv:data/questlines.json:12:")) : fs; // fixture csv row 12 has a "he'll" contraction: not under test here
+    return fs;
   } finally { fake.cleanup(); }
 }
 const ql = (files, fn) => { const j = JSON.parse(files["data/questlines.json"]); fn(j.questlines); files["data/questlines.json"] = JSON.stringify(j, null, 2); };
@@ -54,6 +54,14 @@ test("#3 drift: qty, stale cite, stale quote, ghost row, chain count all warn", 
 test("#3 a quote that drops a modifier is not drift (significant-word containment)", async () => {
   const fs = await run("#3", (f) => { f["docs/narrative/QUEST_AUDIT.md"] += '\nDoc asks for "build the bench" (data/questlines.json:' + (f["data/questlines.json"].slice(0, f["data/questlines.json"].indexOf('"story": "Build a bench."')).split("\n").length) + ").\n"; });
   assert.deepEqual(sev(fs, "warn"), []);
+});
+
+test("#3 claimed hyphenated item names are matched (First-Aid Kit)", async () => {
+  const fs = await run("#3", (f) => {
+    const j = JSON.parse(f["data/items.json"]); j.items.push({ id: "first_aid", name: "First-Aid Kit", category: "medical", tier: 1, weight: 1, base_value: 9 }); f["data/items.json"] = JSON.stringify(j, null, 2);
+    f["docs/narrative/QUEST_AUDIT.md"] += '\nPopper wants a first aid kit (data/questlines.json:' + (f["data/questlines.json"].slice(0, f["data/questlines.json"].indexOf('"id": "doc_1"')).split("\n").length) + ").\n";
+  });
+  assert.match(sev(fs, "warn").map((x) => x.msg).join("\n"), /says "first aid kit"/);
 });
 
 test("#4 base fixture: only inference tallies (info)", async () => {
@@ -96,6 +104,27 @@ test("#9 rival pronouns in speech never flag; own-gender slip and wrong rival ge
   assert.match(m, /"him".*Doc/);
   assert.match(m, /"she".*Popper/);
 });
+test("#9 single-word scare quotes are not rival speech; unnamed-rival speech still is", async () => {
+  // base fixture already carries "he'll" in a Popper unit; the unfiltered base run must be clean
+  assert.deepEqual(await run("#9"), []);
+  const scare = await run("#9", (f) => rel(f, (t) => { t.popper.lines.wary = 'Popper keeps what he calls a "fair" ledger, and "him" stays out of it.'; }));
+  assert.deepEqual(scare, []);
+  // unnamed rival (Doc never named in the quote): "her" is right for Doc (she), "him" is wrong
+  const okUnnamed = await run("#9", (f) => rel(f, (t) => { t.popper.lines.wary = 'Popper says "Tell her I said so."'; }));
+  assert.deepEqual(okUnnamed, []);
+});
+test("#3 without hooks does not throw; #4 tolerates a null neverSays; #3 matches hyphenated names", async () => {
+  const files = { ...FILES };
+  const fake = makeFakeRepo(files);
+  try {
+    const snapshot = await loadSnapshot(efiAdapter, makeReader(fake.clone, fake.sha), { ref: "origin/main", generatedAt: "2026-01-01T00:00:00.000Z" });
+    const registry = makeRegistry(snapshot.entities);
+    const c3 = checks.find((c) => c.id === "#3");
+    assert.doesNotThrow(() => c3.run({ snapshot, registry }));
+    for (const e of registry.byKind("voice_card")) e.data.neverSays = null;
+    assert.doesNotThrow(() => checks.find((c) => c.id === "#4").run({ snapshot, registry, adapter: efiAdapter, hooks: efiAdapter.hooks }));
+  } finally { fake.cleanup(); }
+});
 test("#9 unset squad pronouns are skipped", async () => {
   const fs = await run("#9", (f) => {
     const j = JSON.parse(f["data/squad.json"]); j.members[0].bio = "Saint packs her trauma kit and his own pride."; f["data/squad.json"] = JSON.stringify(j, null, 2);
@@ -114,6 +143,17 @@ test("#10 base clean; 'spirits' in a recipe is allowlisted but a ghost in prose 
   assert.match(m, /paranormal.*ghost/i);
   assert.match(m, /meme slang.*lol/i);
   assert.ok(bad.every((x) => x.severity === "warn"));
+});
+
+test("#10 'still' is not an alcohol word; a recipe whose text is also a csv row keeps recipe kind", async () => {
+  const bad = await run("#10", (f) => rel(f, (t) => { t.doc.lines.wary = "I still believe in spirits."; }));
+  assert.match(bad.map((x) => x.msg).join("\n"), /spirits/i, "'still' must not allowlist spirits");
+  const dup = "Clear industrial spirits.";
+  const fs = await run("#10", (f) => {
+    const r = JSON.parse(f["data/recipes.json"]); r.recipes.fuel_from_alcohol = { ingredients: { cloth: 1 }, result_id: "bandage", result_qty: 1, description: dup, skill_req: "medicine", level_req: 1, required_workshop: "workshop" }; f["data/recipes.json"] = JSON.stringify(r, null, 2);
+    f["docs/review/text_review.csv"] += `Recipes,data,data/recipes.json,1,"recipes.fuel_from_alcohol.description",,${dup},recipes,,,verify,,,OWNER-OK,,,\r\n`;
+  });
+  assert.deepEqual(fs, []);
 });
 
 test("#11 base coherent; incoherent title is info (never warn); item category counts as a title match", async () => {
