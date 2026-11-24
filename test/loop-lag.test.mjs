@@ -98,8 +98,9 @@ console.log(JSON.stringify({ blockedMs }));`);
 test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
   // The capture races real machine load, so a single run may legitimately land late (flagged as captureLate, see the next test).
   // The on-time path — frames starting with the blocker — must be proven by at least one of 4 attempts. A late capture in
-  // disguise (the pause lands in the post-block sleep(600) continuation before the heartbeat bumps) is retried; empty or
-  // unrelated frames fail hard (never skip hollow), and all-4-late fails (no skip fallback).
+  // disguise (the pause lands in the post-block top-level code or sleep(600) continuation before the heartbeat bumps) is retried;
+  // empty or unrelated frames fail hard (never skip hollow), and all-4-late fails: no skip on load, only budgets widen (load-budget.mjs).
+  // The watchdog pipelines Debugger.enable+pause so the pause is queued before the native call returns (idea-723), so on-time is the norm.
   let proved = false, lateCount = 0;
   for (let i = 0; i < 4 && !proved; i++) {
     const { r, lines } = nativeCallRun();
@@ -125,6 +126,9 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     const timerFrame = (f) => f.startsWith("sleep ") || f.startsWith("setTimeout ") || f.includes("node:internal/timers");
     const sleepContinuation = (f) =>
       timerFrame(f) || f.includes("node:internal/priority_queue") || f.startsWith("noop util/debuglog") || f.startsWith("(anon) ");
+    // idea-723: the pause can also land right after blockOnChildProcess() unwound but before sleep() ran, i.e. on the child's top-level
+    // code: the whole stack is the lone module-level "(anon) .../child.mjs" frame, no blocker, heartbeat unmoved. Same disguise, retried.
+    if (stall.frames.length === 1 && /^\(anon\) .*child\.mjs:\d+$/.test(stall.frames[0])) { lateCount++; continue; }
     // idea-593: anon frames are tolerated only alongside a real timer frame, so an all-anon wrong capture fails instead of retrying into skip.
     assert.ok(stall.frames.some(timerFrame) && stall.frames.every(sleepContinuation), `non-blocker frames are not the sleep continuation: ${JSON.stringify(stall.frames)}`);
     lateCount++;
@@ -286,4 +290,23 @@ test("lateReason: heartbeat-moved wins, empty frames stay usable", () => {
   assert.equal(lateReason({ late: true, frames: [] }), "heartbeat-moved");
   assert.equal(lateReason({ frames: [] }), null);
   assert.equal(lateReason({}), null);
+});
+
+test("stop() during an in-flight capture releases a waiting lag line: flush() resolves promptly (idea-723)", async () => {
+  const lines = [];
+  // Own clock so the stall spans the announced capture.
+  let t = 1_000_000;
+  const mm = createLoopLagMonitor({ proc: "t", file: "x", watchdog: true, now: () => t, cpuUsage: () => ({ user: 0, system: 0 }), heapUsed: () => 1, append: async (_f, l) => { lines.push(JSON.parse(l)); } }).start();
+  try {
+    mm.tick();
+    t += 2000;
+    mm.ingestCapture({ captureStarted: true, stallStartedAt: 1_000_100 }); // the worker announced a capture that never arrives
+    mm.tick(); // lag line; fin is scheduled after the grace and will wait for the capture
+    await new Promise((r) => setTimeout(r, 400)); // past GRACE_MS: fin is now waiting
+    const t0 = Date.now();
+    mm.stop();
+    await mm.flush();
+    assert.ok(Date.now() - t0 < 1000, `flush took ${Date.now() - t0}ms after stop()`);
+    assert.equal(lines.filter((l) => l.driftMs > 1000).length, 1);
+  } finally { mm.stop(); }
 });
