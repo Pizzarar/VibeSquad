@@ -187,7 +187,10 @@ export function demoWorkspaces(): Map<string, unknown> {
 }
 
 export function demoAgents(): Map<string, PaseoAgent> {
-  return new Map(CAST.map((s) => [s.id, agent(s)]));
+  // ?idle=1 (screenshot variant): no agent is running, so the Squad reads genuinely idle
+  // (data-squad-state="idle", Working-now card shows the open agent's idle state). Closed/error stay.
+  const idleCast = typeof location !== "undefined" && new URLSearchParams(location.search).has("idle");
+  return new Map(CAST.map((s) => [s.id, agent(idleCast && s.status === "running" ? { ...s, status: "idle" } : s)]));
 }
 
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
