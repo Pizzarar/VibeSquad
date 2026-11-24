@@ -1400,6 +1400,7 @@ html[data-vibe="boring"] .boring-drawer .tl-assistant,
 html[data-vibe="boring"] .boring-drawer .timeline .tl-assistant { position: relative; padding: 30px 0 12px 58px; min-height: 56px; }
 html[data-vibe="boring"] .boring-drawer .tl-assistant::before { content: ""; position: absolute; left: 0; top: 12px; width: 44px; height: 44px; border-radius: 12px; background: var(--surface-3) var(--boring-bust, none) center / 42px 42px no-repeat; image-rendering: pixelated; }
 html[data-vibe="boring"] .boring-drawer .tl-assistant::after { content: var(--boring-who, "") "  ·  " var(--boring-role, ""); position: absolute; left: 58px; top: 10px; font-size: 14px; font-weight: 700; line-height: 20px; color: var(--text-1); white-space: pre; }
+html[data-vibe="boring"][data-theme="light"] .boring-drawer .tl-assistant::before { background-image: var(--boring-bust-light, var(--boring-bust, none)); }
 /* Your messages: right-aligned bubble, no avatar (mockup .me .bub). */
 html[data-vibe="boring"] .boring-drawer .tl-user,
 html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-left: auto; margin-right: max(0px, calc((100% - var(--measure-col)) / 2)); max-width: min(640px, 85%); width: fit-content; box-sizing: border-box; padding: 10px 16px; border: 0; border-left: 0; border-radius: 16px 16px 4px 16px; background: var(--surface-3); }

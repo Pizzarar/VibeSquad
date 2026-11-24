@@ -1,7 +1,7 @@
-/** B13c: single source for Normal-mode mascot bust art (placeholder crops until B13e swaps in canon exports at the same paths). */
+/** Single source for Normal-mode mascot bust art: Art14 canon 64x64 exports (B13e, public/ui/busts/busts.json); light theme uses the -light variants. */
 export type BustRole = "overlord" | "riffbot" | "bugs" | "buddy" | "lead" | "worker";
 
-export const bustUrl = (role: BustRole): string => `/ui/busts/${role}.png`;
+export const bustUrl = (role: BustRole, theme: "dark" | "light" = "dark"): string => `/ui/busts/${role}${theme === "light" ? "-light" : ""}.png`;
 
 const norm = (v: unknown): string => String(v ?? "").trim().toLowerCase();
 

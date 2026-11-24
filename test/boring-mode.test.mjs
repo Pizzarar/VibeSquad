@@ -2219,6 +2219,8 @@ test("B13c: boringBusts maps agent labels to the six bust roles and urls", async
   writeFileSync(f, code);
   const { bustUrl, bustRoleForAgent } = await import(pathToFileURL(f).href);
   assert.equal(bustUrl("overlord"), "/ui/busts/overlord.png");
+  assert.equal(bustUrl("overlord", "light"), "/ui/busts/overlord-light.png");
+  for (const n of ["overlord", "riffbot", "bugs", "buddy", "lead", "worker"]) assert.ok(readFileSync(resolve(import.meta.dirname, "..", "public", "ui", "busts", `${n}-light.png`)).length > 100, `${n}-light`);
   const r = (role, lane) => bustRoleForAgent({ labels: { role, lane } });
   assert.equal(r("lead", "hub"), "overlord");
   assert.equal(r("brainstorm", "hub"), "riffbot");
@@ -2251,6 +2253,7 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
     .replace(/import \{ isHubLaneId \} from "\.\/teams";/, "const isHubLaneId = () => false;")
     .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
     .replace(/from "\.\/boringBusts"/, 'from "./b13dBusts.mjs"')
+    .replace(/import \{ useTheme \} from "\.\/useBotFace";/, 'const useTheme = () => "dark";')
     .replace(/^import type .*$/gm, "");
   const f = join(dir, "b13dWorkingNow.mjs");
   writeFileSync(f, `import React from ${JSON.stringify(reactUrl)};\n` + code);
@@ -2281,6 +2284,7 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
   assert.equal(v["--boring-bust"], 'url("/ui/busts/lead.png")');
   assert.equal(v["--boring-who"], '"★ Bor13"');
   assert.equal(v["--boring-role"], '"Lead"');
+  assert.equal(v["--boring-bust-light"], 'url("/ui/busts/lead-light.png")');
 });
 
 test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is boring-scoped (avatars, own bubbles, warm perm card)", () => {

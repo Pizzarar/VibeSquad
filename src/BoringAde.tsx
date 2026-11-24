@@ -26,6 +26,7 @@ import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLast
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
+import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { UsageDashboard } from "./UsageDashboard";
 
@@ -386,6 +387,7 @@ type Props = {
 
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>("project");
+  const theme = useTheme(); // B13e: light theme shows the -light busts
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
@@ -738,7 +740,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const role: BustRole | null = pin && isLive(pin.lead) ? "lead" : pin?.brainstorm ? "buddy" : pin && pin.workers.length > 0 ? "worker" : null;
     const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
     if (!role) return <span className="boring-lane-mini none" aria-hidden="true" />;
-    return <span className={`boring-lane-mini ${state}${status === "running" ? " lit" : ""}`} aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role)} alt="" width={22} height={22} /></span>;
+    return <span className={`boring-lane-mini ${state}${status === "running" ? " lit" : ""}`} aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={22} height={22} /></span>;
   };
   /** One lane shape for Bugs and every feature lane: chevron column, dot, name, collapsed badge; workers under the chevron. */
   const laneRow = (v: TeamView, c: { laneId: string; name: string; topicLabel?: string; code: string; pin: Pin | null; status: string; needsYou: number; err: boolean; age: string; titleTestId?: string; onOpen: () => void }) => {
@@ -788,7 +790,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working · ${age}` : status === "none" ? "no agent" : `idle${age ? ` · ${age}` : ""}`;
     return (
       <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick}>
-        <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role)} alt="" width={48} height={48} /></span>
+        <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>
         <span className="boring-row-label boring-mate-name" title={label}>{label}</span>
         <span className="boring-mate-cap">{caption}</span>
         {badge(needsYou, err)}

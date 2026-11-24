@@ -8,6 +8,7 @@ import type { Member } from "./teams";
 import { isHubLaneId } from "./teams";
 import { agentDisplayName } from "./identity";
 import { bustRoleForAgent, bustUrl } from "./boringBusts";
+import { useTheme } from "./useBotFace";
 
 const MAX_CHIPS = 3;
 
@@ -34,6 +35,7 @@ const hhmm = (iso: string | null | undefined): string => {
 const nameOf = (a: PaseoAgent): string => agentDisplayName(a, { isHubLaneId }) || a.title || a.id.slice(0, 8);
 
 export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; members: Member[]; subs: number }) {
+  const theme = useTheme();
   const rows: PaseoAgent[] = members.map((m) => m.agent);
   if (agent.status === "running" && !rows.some((r) => r.id === agent.id)) rows.push(agent);
   const busy = rows.length > 0 || subs > 0;
@@ -56,7 +58,7 @@ export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; 
         title={canOpen ? `Open ${nameOf(focal)}` : undefined}
         onClick={() => canOpen && openAgent(focal.id)}
       >
-        <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(focal))} alt="" width={68} height={68} />
+        <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(focal), theme)} alt="" width={68} height={68} />
       </button>
       <div className="boring-now-text">
         <div className="boring-now-t">{busy ? "Working now" : "Idle"}</div>
@@ -69,7 +71,7 @@ export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; 
         <div className="boring-now-chips">
           {chips.map((a) => (
             <button key={a.id} type="button" className="boring-now-chip" data-testid={`boring-working-now-${a.id}`} title={`Open ${nameOf(a)} · ${workingActivity(a)}`} onClick={() => openAgent(a.id)}>
-              <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(a))} alt="" width={22} height={22} />
+              <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(a), theme)} alt="" width={22} height={22} />
               <span>{nameOf(a)}</span>
             </button>
           ))}
@@ -86,6 +88,7 @@ export function boringChatVars(agent: PaseoAgent): Record<string, string> {
   const role = ROLE_LABEL[String(agent.labels?.role ?? "").trim().toLowerCase()] ?? "Agent";
   return {
     "--boring-bust": `url("${bustUrl(bustRoleForAgent(agent))}")`,
+    "--boring-bust-light": `url("${bustUrl(bustRoleForAgent(agent), "light")}")`,
     "--boring-who": JSON.stringify(nameOf(agent)),
     "--boring-role": JSON.stringify(role),
   };
