@@ -472,35 +472,31 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 </div>
               )}
               {data.planScores.plans && data.planScores.plans.length > 0 && (
-                <table className="usage-table usage-plan-rows" data-testid="usage-plan-rows">
-                  <thead><tr><th>Plan</th><th>Status</th><th>Lane</th><th>Lead</th><th className="num">Started</th><th className="num">Cycle</th></tr></thead>
-                  <tbody>
-                    {data.planScores.plans.map((p) => (
-                      <tr key={`${p.path}|${p.startedAt}`} data-testid="usage-plan-row" data-status={p.status}>
-                        <td colSpan={6} className="usage-plan-cell">
-                          <details className="usage-plan-details">
-                            <summary className="usage-plan-summary">
-                              <a className="usage-plan-path" href={`#${encodeURI(p.path)}`} data-testid="usage-plan-path" title={p.path} onClick={(e) => e.stopPropagation()}>{p.path.split("/").pop()}</a>
-                              <span className={`usage-plan-status is-${p.status}`}>{planStatusLabel(p.status)}</span>
-                              <span className="muted">{p.lane ?? "?"}</span>
-                              <span className="muted">{shortLead(p.currentLead)}</span>
-                              <span className="muted">{relTime(p.startedAt, Date.now())}</span>
-                              <span className="muted">{p.cycleMs === null ? "—" : dur(p.cycleMs)}</span>
-                            </summary>
-                            <dl className="usage-plan-detail small" data-testid="usage-plan-detail">
-                              <dt>Path</dt><dd>{p.path}</dd>
-                              <dt>Team</dt><dd>{p.team ?? "—"}</dd>
-                              <dt>Buddy</dt><dd>{shortLead(p.buddy)}</dd>
-                              <dt>Current lead</dt><dd>{shortLead(p.currentLead)}</dd>
-                              <dt>Started</dt><dd>{new Date(p.startedAt).toLocaleString()}</dd>
-                              <dt>Done</dt><dd>{p.doneAt === null ? "—" : new Date(p.doneAt).toLocaleString()}</dd>
-                            </dl>
-                          </details>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="usage-plan-rows" data-testid="usage-plan-rows">
+                  <div className="usage-plan-grid usage-plan-head small muted">
+                    <span>Plan</span><span>Status</span><span>Lane</span><span>Lead</span><span className="num">Started</span><span className="num">Cycle</span>
+                  </div>
+                  {data.planScores.plans.map((p) => (
+                    <details key={`${p.path}|${p.startedAt}`} className="usage-plan-details" data-testid="usage-plan-row" data-status={p.status}>
+                      <summary className="usage-plan-grid usage-plan-summary">
+                        <span className="usage-plan-name" title={p.path}>{p.path.split("/").pop()}</span>
+                        <span className={`usage-plan-status is-${p.status}`}>{planStatusLabel(p.status)}</span>
+                        <span className="muted">{p.lane ?? "?"}</span>
+                        <span className="muted">{shortLead(p.currentLead)}</span>
+                        <span className="num muted">{relTime(p.startedAt, Date.now())}</span>
+                        <span className="num muted">{p.cycleMs === null ? "—" : dur(p.cycleMs)}</span>
+                      </summary>
+                      <dl className="usage-plan-detail small" data-testid="usage-plan-detail">
+                        <dt>Path</dt><dd><a className="usage-plan-path" href={`#${encodeURI(p.path)}`} data-testid="usage-plan-path">{p.path}</a></dd>
+                        <dt>Team</dt><dd>{p.team ?? "—"}</dd>
+                        <dt>Buddy</dt><dd>{shortLead(p.buddy)}</dd>
+                        <dt>Current lead</dt><dd>{shortLead(p.currentLead)}</dd>
+                        <dt>Started</dt><dd>{new Date(p.startedAt).toLocaleString()}</dd>
+                        <dt>Done</dt><dd>{p.doneAt === null ? "—" : new Date(p.doneAt).toLocaleString()}</dd>
+                      </dl>
+                    </details>
+                  ))}
+                </div>
               )}
               <div className="small muted">Score = done / started over plans started more than 3 days ago. Open for 7+ days is stale.</div>
             </div>
@@ -786,7 +782,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </Collapse>
       )}
 
-      {(data.savings || workflows.length > 0) && (
+      {(data.savings || workflows.length > 0 || data.burstCohorts) && (
         <Collapse id="workflows" testid="usage-workflows-collapse" summary={workflowSummary(data.savings, workflows.length)}>
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">

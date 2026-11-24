@@ -610,6 +610,6 @@ test("burstCellText / planStatusLabel / shortLead (usa-53)", async () => {
   assert.equal(burstCellText({ insufficient: false }, 2.5, (n) => n.toFixed(1)), "2.5");
   assert.equal(planStatusLabel("stale"), "stale (7d+)");
   assert.equal(planStatusLabel("done"), "done");
-  assert.equal(shortLead("rn-64cf71d9a16d"), "9a16d".length === 5 ? "d9a16d".slice(-6) : "1d9a16d".slice(-6));
+  assert.equal(shortLead("rn-64cf71d9a16d"), "d9a16d");
   assert.equal(shortLead(null), "—");
 });
