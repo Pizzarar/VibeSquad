@@ -3,14 +3,14 @@
 //
 // A crossing is the soft meter going over a stage threshold. Each stage gets one compaction attempt per crossing, before that
 // stage's handoff step (lead: the 150k nudge and the 250k packet stage; Buddy: its restart cap). The attempt re-arms when the
-// meter is back under REARM_RATIO x the lowest stage AND at least REARM_MIN_DROP under the stage it was tried for: a compaction
+// meter is back under min(REARM_RATIO x the lowest stage, (1 - REARM_MIN_DROP) x the stage tried) (90% / 75%): a compaction
 // that lands just under the cap (150k -> 130k) does not re-arm and burn the life cap at the next turns (hysteresis). After COMPACT_LIFE_CAP attempts in one agent life the agent hands off instead (summaries of summaries
 // degrade). The caller falls through to its unchanged handoff on a failed / still-over attempt, and that crossing is not tried
 // again (loop guard). The raw-meter hard cap is the caller's, never delayed by this.
 //
 // Labels (they survive a server restart; the runner merges label patches key by key, runner/fold-index.mjs):
-//   vs.compacted-at   ISO of the last attempt. compact-step writes it and refuses to run while it is set (its own once-guard),
-//                     so an armed attempt hands compact-step a snapshot with it cleared.
+//   vs.compacted-at   ISO of the last attempt. compact-step writes it; its once-guard (refuse while set) applies to unarmed runs
+//                     only: the callers here pass `armed: true`, so this tracker (not the label) decides whether to attempt.
 //   vs.compact-stage  the stage threshold (tokens) the last attempt (or life-cap hand-off) was for; "" once re-armed. Persisted
 //                     for a life cap too, so a server restart does not log the same crossing's compact-life-cap line again.
 //   vs.compact-count  attempts in this life. Written with vs.compacted-at in compact-step's one label write; a busy skip writes

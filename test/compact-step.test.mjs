@@ -582,6 +582,64 @@ test("K2c fix: hardCap -> the retry loop stops with reason=hard-cap once the fre
   assert.match(lines[0], /reason=hard-cap attempts=1 -> falling through to handoff/);
 });
 
+test("K2 tail A1: a started /compact turn that runs past the hard cap stops at once with reason=hard-cap (no wait for the turn timeout)", async () => {
+  const a = K("rn-a1");
+  let fetched = 0;
+  const { c, sends } = scripted(a, {
+    onSend: () => ({ ok: true, queued: false }), // the turn opens and never ends (no boundary, no turn_ended)
+    fresh: (n) => { fetched = n; return n === 1 ? { status: "idle" } : { status: "running", usedTokens: n >= 3 ? 305_000 : 160_000 }; },
+    events: DIRECT_LOG,
+  });
+  const t0 = Date.now();
+  const res = await c.run(a, { focus: "x", cap: 200_000, hardCap: 300_000 });
+  assert.equal(res.outcome, "failed");
+  assert.equal(res.reason, "hard-cap");
+  assert.equal(res.rawUsed, 305_000);
+  assert.equal(sends.length, 1);
+  assert.ok(Date.now() - t0 < 120, `stopped by the poll, not the 150ms turn timeout: ${Date.now() - t0}ms`);
+  assert.equal(fetched, 3); // A2: the reading that tripped the cap is reported, no refetch after the stop
+});
+
+test("K2 tail A1: without a hardCap the started turn still waits out its own timeout (no meter polling)", async () => {
+  const a = K("rn-a1b");
+  let fetched = 0;
+  const { c } = scripted(a, { onSend: () => ({ ok: true, queued: false }), fresh: (n) => { fetched = n; return { status: n === 1 ? "idle" : "running", usedTokens: 999_000 }; }, events: DIRECT_LOG });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "timeout");
+  assert.equal(res.reason, "turn");
+  assert.equal(fetched, 1); // only the pre-send busy check
+});
+
+test("K2 tail A1: a queued /compact is not meter-polled before its turn starts (the hard cap stop needs a started turn)", async () => {
+  const a = K("rn-a1q");
+  let fetched = 0;
+  const { c } = scripted(a, {
+    onSend: (_n, later) => { later(40, STARTED); return { ok: true, queued: true }; },
+    fresh: (n) => { fetched = n; return n === 1 ? { status: "idle" } : { status: "running", usedTokens: 305_000 }; },
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { focus: "x", cap: 200_000, hardCap: 300_000 });
+  assert.equal(res.reason, "hard-cap");
+  assert.equal(res.rawUsed, 305_000);
+  assert.equal(fetched, 2); // first poll after the turn started
+});
+
+test("K2 tail A2: a hard-cap stop from awaitIdle reports the raw value it saw, even when a later fetch would read lower", async () => {
+  const a = K("rn-a2");
+  let fetched = 0;
+  const { c, sends } = scripted(a, {
+    onSend: (_n, later) => { later(10, ENDED); return { ok: true, queued: false }; },
+    // 1: pre-send busy check; 2: awaitIdle sees the wake turn over the cap; later reads drop (meter reset / stale snapshot).
+    fresh: (n) => { fetched = n; return n === 1 ? { status: "idle" } : n === 2 ? { status: "running", usedTokens: 310_000 } : { status: "idle", usedTokens: 1_000 }; },
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { focus: "x", cap: 200_000, hardCap: 300_000 });
+  assert.equal(res.reason, "hard-cap");
+  assert.equal(res.rawUsed, 310_000);
+  assert.equal(fetched, 2);
+  assert.equal(sends.length, 1);
+});
+
 test("K2c fix: armed run skips the once-per-life guards and writes only the label patch + vs.compacted-at", async () => {
   const a = { ...K("rn-arm"), labels: { role: "lead", [COMPACTED_AT_LABEL]: "2026-11-20T00:00:00Z", "vs.compact-count": "1" } };
   const { c, labelWrites } = scripted(a, { onSend: (_n, later) => { later(5, COMPACTED); return { ok: true, queued: false }; }, events: DIRECT_LOG });

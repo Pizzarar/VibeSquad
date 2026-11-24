@@ -1441,8 +1441,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
 
     // K2c: compaction is the default path. Before each soft stage (150k nudge, 250k packet) a Claude lead gets one compaction
-    // attempt per crossing (server/compact-crossing.mjs: re-armed once the meter is back under 90% of the soft threshold, at
-    // most COMPACT_LIFE_CAP per life). Busy = defer to the next idle upsert. Anything else but a clean "ok" under the stage
+    // attempt per crossing (server/compact-crossing.mjs: re-armed once the meter is back under min(90% of the lowest stage,
+    // 75% of the stage tried), at most COMPACT_LIFE_CAP per life). Busy = defer to the next idle upsert. Anything else but a clean "ok" under the stage
     // threshold falls through to the unchanged ladder, and that crossing is not tried again. The hard cap (raw meter) is never
     // delayed by an attempt, and a handoff already under way is not compacted.
     // A self handoff through ANY coordinator (MCP handoff_lead / vs handoff use the HTTP route's) shows in the shared slot maps

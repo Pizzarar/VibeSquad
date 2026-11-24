@@ -178,7 +178,8 @@ export function startTokenWatcher({
     if (labels["vs.restarted-into"] || restarted.has(agent.id)) return;
     const used = leadUsedTokens(agent);
     const { warnTokens, restartTokens } = getBuddyThresholds(agent);
-    // K2c: one compaction attempt per crossing of the restart cap (re-armed under 90% of it, at most COMPACT_LIFE_CAP per life).
+    // K2c: one compaction attempt per crossing of the restart cap (re-armed under min(90%, 75%) = 75% of it, the one stage being
+    // both the lowest and the tried one; at most COMPACT_LIFE_CAP per life).
     const plan = isClaudeAgent(agent) ? buddyCrossing.decide(agent, used, [restartTokens]) : { action: "none" };
     if (plan.action === "rearm") {
       // A new crossing: the brief update is asked for again before its compaction (warn state re-armed with the attempt).
