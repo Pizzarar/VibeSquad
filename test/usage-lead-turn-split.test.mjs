@@ -69,6 +69,40 @@ test('lead long-tail split: non-lead roles and short runs contribute nothing', (
   const l = getUsage({ home, git: noGit }).leadLongTurns;
   assert.equal(l.pooled.other.turns + l.pooled.loop.turns + l.pooled.productive.turns, 0);
   assert.deepEqual(l.bySquad, []);
+  assert.deepEqual(l.byLaneRole, [], 'workers never appear in byLaneRole');
+});
+
+function runOf(team, lane, role, n) {
+  const evs = leadRun(team, n, () => [bash('ls')]);
+  evs[0].meta.lane = lane; evs[0].meta.role = role;
+  return evs;
+}
+
+test('usa-49: Buddy >80 turns is in byLaneRole as brainstorm, not in pooled/bySquad; two lanes give two rows', () => {
+  const home = tmp();
+  const N = LEAD_LONG_TURN_MIN + 5;
+  writeAgent(home, 'rn-b1', runOf('alpha', 'usage', 'brainstorm', N));
+  writeAgent(home, 'rn-b2', runOf('alpha', 'bug', 'brainstorm', N));
+  writeAgent(home, 'rn-l1', runOf('alpha', 'usage', 'lead', N));
+  const l = getUsage({ home, git: noGit }).leadLongTurns;
+  const sum = (r) => r.productive.turns + r.waiting.turns + r.loop.turns + r.other.turns;
+  assert.deepEqual(l.byLaneRole.map((r) => [r.teamId, r.lane, r.role]), [['alpha', 'bug', 'brainstorm'], ['alpha', 'usage', 'brainstorm'], ['alpha', 'usage', 'lead']]);
+  for (const r of l.byLaneRole) assert.equal(sum(r), 5);
+  assert.equal(sum(l.pooled), 5, 'pooled is lead-only');
+  assert.equal(l.bySquad.length, 1);
+  assert.equal(sum(l.bySquad[0]), 5);
+});
+
+test('usa-49: lead-only fixture leaves pooled/bySquad unchanged and mirrors them in byLaneRole', () => {
+  const home = tmp();
+  writeAgent(home, 'rn-a', runOf('alpha', 'usage', 'lead', LEAD_LONG_TURN_MIN + 10));
+  const l = getUsage({ home, git: noGit }).leadLongTurns;
+  assert.equal(l.byLaneRole.length, 1);
+  const { teamId, lane, role, ...buckets } = l.byLaneRole[0];
+  assert.equal(role, 'lead');
+  const { teamId: t2, ...bs } = l.bySquad[0];
+  assert.deepEqual(buckets, bs);
+  assert.deepEqual(l.pooled, bs);
 });
 
 test('spawn storms: countExclRespawns drops respawned agents, raw count unchanged', () => {

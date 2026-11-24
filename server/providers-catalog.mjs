@@ -542,7 +542,7 @@ function foldEvent(st, ev) {
       st.pass = st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
   } else if (ev.type === "tool") {
-    if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
+    if ((st.role === "lead" || st.role === "brainstorm") && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
     else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
@@ -590,7 +590,7 @@ function foldEvent(st, ev) {
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
     // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
-    if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
+    if ((st.role === "lead" || st.role === "brainstorm") && st.turns + 1 > LEAD_LONG_TURN_MIN) {
       const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, waiting: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
       const k = classifyLeadTurn(turnTools, lt.seen);
       lt[k].turns += 1;
@@ -1989,14 +1989,19 @@ function buildLeadLongTurns(allAgentSquads) {
   const mk = () => ({ productive: zero(), waiting: zero(), loop: zero(), other: zero() });
   const pooled = mk();
   const by = new Map();
+  const byLR = new Map(); // usa-49: per (team, lane, role), lead + brainstorm
   for (const { st, squad } of allAgentSquads) {
     if (!st.longTail) continue;
+    const lr = getOrSet(byLR, JSON.stringify([squad ?? "unknown", st.lane ?? "", st.role]), () => ({ teamId: squad ?? "unknown", lane: st.lane ?? "", role: st.role, ...mk() }));
+    for (const k of ["productive", "waiting", "loop", "other"]) { lr[k].turns += st.longTail[k].turns; lr[k].costUsd += st.longTail[k].costUsd; }
+    if (st.role !== "lead") continue; // pooled + bySquad stay lead-only
     const row = getOrSet(by, squad ?? "unknown", mk);
     for (const k of ["productive", "waiting", "loop", "other"]) {
       for (const t of [pooled[k], row[k]]) { t.turns += st.longTail[k].turns; t.costUsd += st.longTail[k].costUsd; }
     }
   }
-  return { threshold: LEAD_LONG_TURN_MIN, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })) };
+  return { threshold: LEAD_LONG_TURN_MIN, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })),
+    byLaneRole: [...byLR.values()].sort((a, b) => a.teamId.localeCompare(b.teamId) || a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role)) };
 }
 
 /** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
