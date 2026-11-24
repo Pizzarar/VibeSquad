@@ -77,8 +77,8 @@ function runWatchdog() {
       if (!delivered) { try { parentPort.postMessage({ captureAbandoned: true, stallStartedAt: startedAt }); } catch {} }
     };
     cap = session;
+    try { session.connectToMainThread(); } catch { cap = null; return; } // never announced, so nothing for the main thread to wait on
     try { parentPort.postMessage({ captureStarted: true, stallStartedAt: startedAt }); } catch {}
-    try { session.connectToMainThread(); } catch { cap = null; return; }
     const urls = new Map(); // callFrame.url is empty for ESM; Debugger.enable replays scriptParsed for every loaded script
     session.on('Debugger.scriptParsed', (m) => { if (m.params.url) urls.set(m.params.scriptId, m.params.url); });
     session.on('Debugger.paused', (m) => {
@@ -234,6 +234,12 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     const w = waiters; waiters = [];
     for (const f of w) f();
   }
+  // The worker is gone (error/exit/stop): nothing in flight will ever arrive, so release every lag line waiting on it now.
+  function dropInflight() {
+    inflight.clear();
+    const w = waiters; waiters = [];
+    for (const f of w) f();
+  }
   // Resolve once a capture matching pred is delivered, or no matching capture is in flight (abandoned/never started). Bounded by 5.2s.
   async function waitCapture(pred) {
     const deadline = Date.now() + 5200;
@@ -248,7 +254,8 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
       worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab, deferPauseUntilResume }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
       worker.unref();
       worker.on('message', ingestCapture);
-      worker.on('error', () => { worker = null; hb = null; });
+      worker.on('error', () => { worker = null; hb = null; dropInflight(); });
+      worker.on('exit', dropInflight);
     } catch { worker = null; hb = null; }
   }
   let timers = [];
@@ -263,7 +270,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
       if (watchdog) startWatchdog();
       return this;
     },
-    stop() { for (const x of timers) clearInterval(x); timers = []; obs?.disconnect(); obs = null; worker?.terminate(); worker = null; hb = null; },
+    stop() { for (const x of timers) clearInterval(x); timers = []; obs?.disconnect(); obs = null; worker?.terminate(); worker = null; hb = null; dropInflight(); },
     onGc,
     ingestCapture, // feed a watchdog capture message directly (tests with a fake inspector)
     captures: () => attribs.slice(), // watchdog captures received so far (tests, diagnostics)

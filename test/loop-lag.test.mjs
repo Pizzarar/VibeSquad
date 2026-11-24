@@ -291,3 +291,22 @@ test("lateReason: heartbeat-moved wins, empty frames stay usable", () => {
   assert.equal(lateReason({ frames: [] }), null);
   assert.equal(lateReason({}), null);
 });
+
+test("stop() during an in-flight capture releases a waiting lag line: flush() resolves promptly (idea-723)", async () => {
+  const lines = [];
+  // Own clock so the stall spans the announced capture.
+  let t = 1_000_000;
+  const mm = createLoopLagMonitor({ proc: "t", file: "x", watchdog: true, now: () => t, cpuUsage: () => ({ user: 0, system: 0 }), heapUsed: () => 1, append: async (_f, l) => { lines.push(JSON.parse(l)); } }).start();
+  try {
+    mm.tick();
+    t += 2000;
+    mm.ingestCapture({ captureStarted: true, stallStartedAt: 1_000_100 }); // the worker announced a capture that never arrives
+    mm.tick(); // lag line; fin is scheduled after the grace and will wait for the capture
+    await new Promise((r) => setTimeout(r, 400)); // past GRACE_MS: fin is now waiting
+    const t0 = Date.now();
+    mm.stop();
+    await mm.flush();
+    assert.ok(Date.now() - t0 < 1000, `flush took ${Date.now() - t0}ms after stop()`);
+    assert.equal(lines.filter((l) => l.driftMs > 1000).length, 1);
+  } finally { mm.stop(); }
+});
