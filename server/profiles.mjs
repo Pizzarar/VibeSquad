@@ -786,9 +786,20 @@ function matchesProfileIdentity(a, b) {
 // sha256 of every note a built-in profile has shipped with (current included). A stored note
 // whose hash is here was never user-edited, so it is safe to upgrade to the current default.
 // When you change a default note, append the NEW note's hash (a test enforces it).
-const NOTE_HISTORY = new Set(
-  JSON.parse(readFileSync(new URL("./profile-note-history.json", import.meta.url), "utf8")),
-);
+// A runtime missing the file (an older `vs install` copy, idea-772) must not crash module load: fall back to an empty set,
+// so isKnownDefaultNote is false and stored notes are never auto-upgraded (the safe direction: no edited note is overwritten).
+export function loadNoteHistory(file, warn = (m) => process.stderr.write(m)) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    if (Array.isArray(parsed)) return new Set(parsed);
+    warn(`[vibesquad] profile-note-history.json is not an array (${file}); default-note auto-upgrade disabled\n`);
+  } catch (err) {
+    const why = err?.code === "ENOENT" ? "missing" : `unreadable (${err?.message ?? err})`;
+    warn(`[vibesquad] profile-note-history.json ${why} (${file}); default-note auto-upgrade disabled. Re-run \`vs install\`.\n`);
+  }
+  return new Set();
+}
+const NOTE_HISTORY = loadNoteHistory(new URL("./profile-note-history.json", import.meta.url));
 
 export function hashNote(notes) {
   // CRLF/trailing whitespace differences (editors, git autocrlf) must not hide a never-edited default.
