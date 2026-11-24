@@ -257,11 +257,13 @@ test("H1: hostHealthLine takes a real host label and restart states", () => {
   assert.equal(hostHealthLine("up", "pc", null).tone, "ok");
 });
 
-test("H1: getAuthStatus carries hostLabel, headless and restartRequest (null when absent/corrupt)", async () => {
-  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+test("H1: getAuthStatus carries hostLabel, headless and restartRequest (summary when open; null when absent/terminal/corrupt)", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const home = mkdtempSync(join(tmpdir(), "vs-h1-"));
+  const file = join(home, "restart-request.json");
+  const writeCurrent = (current) => writeFileSync(file, JSON.stringify({ version: 1, current, history: [] }), "utf8");
   const prev = { h: process.env.VIBESQUAD_HOME, l: process.env.VIBESQUAD_HOST_LABEL, hl: process.env.VIBESQUAD_HEADLESS };
   process.env.VIBESQUAD_HOME = home;
   process.env.VIBESQUAD_HOST_LABEL = "test-box";
@@ -271,9 +273,24 @@ test("H1: getAuthStatus carries hostLabel, headless and restartRequest (null whe
     const st = auth.getAuthStatus();
     assert.equal(st.hostLabel, "test-box");
     assert.equal(st.headless, true);
-    assert.equal(st.restartRequest, null);
+    assert.equal(st.restartRequest, null, "no file -> null");
+
+    writeCurrent({ id: "rr-q", state: "queued", tip: "abc1234", windowAt: "2026-11-25T13:00:00.000Z", deadline: "2026-11-25T13:30:00.000Z" });
+    assert.deepEqual(auth.getAuthStatus().restartRequest, { id: "rr-q", state: "queued", windowAt: "2026-11-25T13:00:00.000Z", deadlineAt: "2026-11-25T13:30:00.000Z", summary: "queued · abc1234" });
+    writeCurrent({ id: "rr-d", state: "draining", tip: "def5678", deadline: "2026-11-24T23:30:00.000Z" });
+    assert.deepEqual(auth.getAuthStatus().restartRequest, { id: "rr-d", state: "draining", windowAt: null, deadlineAt: "2026-11-24T23:30:00.000Z", summary: "draining · def5678" });
+
+    for (const state of ["done", "aborted"]) {
+      writeCurrent({ id: `rr-${state}`, state, tip: "abc1234" });
+      assert.equal(auth.getAuthStatus().restartRequest, null, `${state} (terminal) -> null`);
+    }
+    writeCurrent({ id: "rr-bad", state: 7, tip: "abc1234" });
+    assert.equal(auth.getAuthStatus().restartRequest, null, "non-string state -> null");
+    writeFileSync(file, "{not json", "utf8");
+    assert.equal(auth.getAuthStatus().restartRequest, null, "corrupt file -> null");
   } finally {
     for (const [k, v] of [["VIBESQUAD_HOME", prev.h], ["VIBESQUAD_HOST_LABEL", prev.l], ["VIBESQUAD_HEADLESS", prev.hl]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

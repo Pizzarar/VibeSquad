@@ -280,7 +280,7 @@ const artifactShaFields = ({ desktopInstaller, androidApk }) => ({
 function restartRequestSummary() {
   try {
     const r = readRestartRequest(vibesquadHome());
-    if (!r || RESTART_TERMINAL.has(r.state)) return null;
+    if (!r || typeof r.state !== "string" || RESTART_TERMINAL.has(r.state)) return null;
     return { id: r.id ?? null, state: r.state, windowAt: r.windowAt ?? null, deadlineAt: r.deadline ?? null, summary: `${r.state}${r.tip ? ` · ${r.tip}` : ""}` };
   } catch {
     return null;

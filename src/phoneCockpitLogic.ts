@@ -22,7 +22,7 @@ export function effectiveSurface(surface: PhoneSurface, buddyLaneId: string | nu
   return surface === "buddy" && !buddyLaneId ? "overlord" : surface;
 }
 
-/** Restart states that show in the host line (H1); anything else (requested/ready/done/aborted/none) is quiet. */
+/** Restart states that show in the host line (H1): queued -> "Restart queued"; requested/draining/ready -> "Draining for restart…"; firing -> "Restarting host…". Anything else (done/aborted/none) is quiet. */
 const RESTART_LINES: Record<string, string> = { queued: "Restart queued", requested: "Draining for restart…", draining: "Draining for restart…", ready: "Draining for restart…", firing: "Restarting host…" };
 export function restartStateLabel(restartState?: string | null): string | null {
   return (restartState && RESTART_LINES[restartState]) || null;
