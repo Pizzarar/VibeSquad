@@ -35,10 +35,14 @@ export function pluginsOffSettings(home = os.homedir(), extra = {}) {
 // runner has a drain path (whether or not drain.json exists yet), so agents spawned before a drain still get it; with no drain
 // it exits 0 before reading stdin (one node start per Bash/PowerShell call) and any error fails open.
 export const DRAIN_HOOK_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'drain-hook.mjs');
-export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT) {
+// idea-767: role=worker agents also get --git-guard (runner/git-guard.mjs: no destructive git in a repo's main checkout);
+// a worker on a runner without a drain path still gets the hook, with `-` for the drain file.
+export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT, { gitGuard = false } = {}) {
   const arg = (p) => { const s = path.resolve(p).replace(/\\/g, '/'); return /\s/.test(s) ? `"${s}"` : s; };
-  return { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: `node ${arg(script)} ${arg(drainFile)}`, timeout: 10 }] }] };
+  const command = `node ${arg(script)} ${drainFile ? arg(drainFile) : '-'}${gitGuard ? ' --git-guard' : ''}`;
+  return { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command, timeout: 10 }] }] };
 }
+export const isWorkerAgent = (meta = {}, env = {}) => String(env?.VS_ROLE ?? meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase() === 'worker';
 // Extras are opt-in: a profile with mcpExtras:["playwright"] (server/profiles.mjs; the backend stamps it as the vs.mcp label)
 // or any agent labelled vs.mcp=playwright (comma list).
 export const wantsPlaywright = (meta = {}) => String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes('playwright');
@@ -73,7 +77,8 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
       if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
-      args.push('--settings', pluginsOffSettings(os.homedir(), drainFile ? { hooks: drainHookSettings(drainFile) } : {}));
+      const gitGuard = isWorkerAgent(meta, env);
+      args.push('--settings', pluginsOffSettings(os.homedir(), drainFile || gitGuard ? { hooks: drainHookSettings(drainFile, DRAIN_HOOK_SCRIPT, { gitGuard }) } : {}));
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
         // Via a file too: server args/env grow without bound toward the same 32,767-char cap.

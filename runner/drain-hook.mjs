@@ -5,6 +5,9 @@
 // The drain file is written by Runner.setDrain and removed on clear, expiry and runner start; the hook also checks `until`
 // itself, so a file a crashed runner left behind never blocks anything past its TTL. Any read/parse error allows (exit 0).
 // Exit 2 + stderr is Claude Code's "block this tool call and show the model why".
+// idea-767: with --git-guard (installed for role=worker agents only) the same hook also refuses destructive git in a repo's
+// main checkout (runner/git-guard.mjs). Workers always read stdin; everyone else keeps the no-drain fast path.
+//   node runner/drain-hook.mjs <drain.json | -> [--git-guard]
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,16 +52,28 @@ export function readDrain(file, warn = (m) => process.stderr.write(`${m}\n`)) {
 
 const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
 if (process.argv[1] && norm(fileURLToPath(import.meta.url)) === norm(process.argv[1])) {
-  const drain = readDrain(process.argv[2] ?? '');
-  if (!drain || !Number.isFinite(drain.until) || Date.now() >= drain.until) process.exit(0); // the common case: no stdin read at all
+  const argv = process.argv.slice(2);
+  const gitGuard = argv.includes('--git-guard');
+  const drainPath = argv.find((a) => !a.startsWith('--')) ?? '';
+  const drain = drainPath && drainPath !== '-' ? readDrain(drainPath) : null;
+  const draining = Boolean(drain && Number.isFinite(drain.until) && Date.now() < drain.until);
+  if (!draining && !gitGuard) process.exit(0); // the common case for leads/Buddies: no stdin read at all
   let raw = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (c) => { raw += c; });
   process.stdin.on('error', () => process.exit(0));
-  process.stdin.on('end', () => {
+  process.stdin.on('end', async () => {
     let input = null;
     try { input = JSON.parse(raw); } catch { process.exit(0); }
-    const why = drainHookDecision(input, drain);
+    let why = draining ? drainHookDecision(input, drain) : null;
+    if (!why && gitGuard) {
+      try {
+        const { gitGuardDecision } = await import('./git-guard.mjs');
+        why = gitGuardDecision(input);
+      } catch (e) {
+        process.stderr.write(`vs git-guard: check failed (${e?.message ?? e}); command allowed\n`);
+      }
+    }
     if (!why) process.exit(0);
     process.stderr.write(why + '\n');
     process.exit(2);
