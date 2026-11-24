@@ -66,3 +66,32 @@ R15 reviewed context refs, not B13, so there is no like-for-like table. Nothing 
 ## What passed
 
 Fonts, tokens and living sky render in both themes. The Desk 3-tile grid is identical across expanded projects. Lane mini-avatars are present on every lane. Name · Role is present on messages. The permission card is warm and legible in both themes. The light theme is clean, with 1 contrast miss at 4.46:1. Counts stay consistent in demo, riff, idle and crowd.
+
+---
+
+# R16b re-review: `b9adedff` (B13f r4, merges master `dd9b9c49`)
+
+Rebuilt with `npx vite build`, served statically. Passes: 3200×1800 @ 1.2 and 1920×1080, dark and light, 5 agent states each (permission worker, needs-you worker, needs-you lead, errored idle agent, stalled worker in `&idle=1`). 0 page errors in all 20 passes. Screenshots: `artifacts/ux-r16/r16b-*` (untracked).
+
+**Verdict: PASS 0/0/4** (critical/major/minor open). That is the 2 queued carry-overs (m3, m5, to @bug, idea-740) plus 2 new nits (n1, n2).
+
+| Item | Status | Evidence |
+|---|---|---|
+| **M1** Working-now claimed work while blocked | **fixed** | Strip is `data-state="needs-you"`, label "NEEDS YOU", amber, headline "Audit - token scout needs your OK". Holds for the permission worker, the pick worker and the Lead, in all 4 viewport/theme combos. The old "is running Bash / running sub-agents" text is gone from blocked states. It stays only where nothing is blocked ("Mechanical - rename sweep is running sub-agents", state `busy`). See `r16b-dark-1920-aud` |
+| **m1** Desk captions truncate | **fixed** | Captions are "working now", "idle 12m", "no agent", "idle now". `scrollWidth > clientWidth` is false for all of them at 1920 and 3200, in both themes |
+| **m2** `Allow` contrast | **fixed** | Dark: `rgb(20,17,28)` on `rgb(155,114,232)` ≈ 5.3:1. Light: white on `rgb(109,75,201)` ≈ 6.4:1. Applied to the Needs-you `Allow` in both themes |
+| **m4** Selected row indistinguishable | **fixed** | The selected Desk worker row has an `aria-current` and a visible purple accent rule and fill, distinct from the amber/red attention tints (`r16b-dark-1920-aud`, `r16b-light-1920-idleagent`). The selected project/lane row carries `aria-current="page"`. One gap remains: the Needs-you row for the open agent still has no marker (n3 below) |
+| **m6** Strip and permission card off the message column | **fixed** | 1920: strip 444-1324 (centre 884), card 505-1263 (centre 884), composer and timeline span 444-1324, so the centres match. 3200: strip and column share the same right edge, 2000. The three are one column |
+| m3, m5 | queued to @bug (idea-740) | Not re-tested, not counted against B13 |
+
+## Idle copy
+
+"Idle · is idle" is **not a missing name**. The strip builds `` `${nameOf(focal)} ${idleActivity(agent)}` `` (`src/BoringWorkingNow.tsx`), so the live text is "Review - Gemini · retry hit an error" under the "IDLE" label. The default case reads "<Name> is idle" under the same "IDLE" label, so the pair is redundant but never nameless. Two nits (n1, n2) came out of this check.
+
+## New findings (minor)
+
+- **n1 · An errored agent is labelled "IDLE", and the default idle copy repeats itself.** The strip's label is "Idle" for an agent whose headline says "hit an error" (`r16b-light-1920-idleagent`), while the sidebar dot and the banner above are red, and "Idle / <Name> is idle" says the same thing twice. Cause: `src/BoringWorkingNow.tsx:71` has only Needs you / Working now / Idle labels. Fix: label by state ("Error", "Finished", "Idle") and drop "is idle" from the default tail. Effort: XS. Not a B13 gate item.
+- **n2 · Pick/question needs-you reads "needs your OK".** "Review - Sonnet · drawer needs your OK" when the item is "pick option A or B", and the same for the Lead's merge approval. "OK" suits a permission but not a choice. Fix: use "needs your input" when `tone="needs-you"`. Effort: XS.
+- **n3 (nit, folded into m4's gap):** the open agent's own Needs-you row has no selected marker, so a user can't see that the highlighted tree row and the top-list row are the same agent.
+
+No critical or major finding is open in the B13 area at `b9adedff`.
