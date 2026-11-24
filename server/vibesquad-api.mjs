@@ -1,7 +1,8 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleStorybookRoute } from "./storybook/api.mjs";
 import { loopLagStats } from "../runner/loop-lag.mjs";
-import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, testerTeamRecords } from "./runner-api.mjs";
+import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, stampTesterText, testerTeamRecords } from "./runner-api.mjs";
+import { appendTesterThreadLine, isTesterCard, testerThreadLines } from "./tester-thread.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
@@ -362,6 +363,7 @@ export const AGENT_WRITE_ALLOWLIST = Object.freeze([
   "/__vibesquad/vs-log",
   "/__vibesquad/inbox",
   "/__vibesquad/inbox/triage",
+  "/__vibesquad/inbox/reply",
   "/__vibesquad/handoff",
   "/__vibesquad/lead-handoff",
   "/__vibesquad/lead-handoff/confirm",
@@ -1385,6 +1387,38 @@ async function handleInboxTriage(req, res, rootDir) {
   }
 }
 
+/**
+ * PTO v1.2 T: POST /__vibesquad/inbox/reply { cardId, text } (`vs inbox reply <cardId> "<text>"`): the bug-intake agent's
+ * answer to an alpha tester, the only agent output a tester ever reads (GET /tester/thread). Verified agents only (the owner,
+ * testers and owner-playtest devices are 403: not in their route sets / refused here), a lead or Buddy of the card's own
+ * Squad, and the card must be an alpha-tester card. The line is stored under that card's tester device, nowhere else.
+ */
+async function handleInboxReply(req, res) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const caller = agentCaller(req);
+    if (!caller) throw forbidden("inbox reply is for the Squad's bug-intake agent (vs inbox reply); the owner answers in the app");
+    if (caller.role !== "lead" && caller.role !== "brainstorm") throw forbidden(`inbox reply is for leads and Buddies of the card's Squad; ${caller.id} is a ${caller.role || "worker"}`);
+    const body = await readCleanBody(req);
+    const cardId = typeof body?.cardId === "string" ? body.cardId.trim() : "";
+    if (!TESTER_CARD_ID_RE.test(cardId)) throw testerStatus("cardId must be an inbox card id (idea-<n>)", 400);
+    if (typeof body.text !== "string") throw testerStatus("text must be a string", 400);
+    const text = sanitizeTesterInput(body.text);
+    if (!text) throw testerStatus("text is required", 400);
+    if (text.length > TESTER_TEXT_MAX_CHARS) throw testerStatus(`text too long (${TESTER_TEXT_MAX_CHARS} chars max)`, 413);
+    const card = readInboxCards().find((c) => c?.id === cardId);
+    if (!card) throw testerStatus(`Card not found: ${cardId}`, 404);
+    if (!sameId(card.teamId, caller.team) || !String(caller.team ?? "").trim()) throw forbidden(`card ${cardId} is not in your Squad`);
+    if (!isTesterCard(card)) throw forbidden(`card ${cardId} is not an alpha-tester card; only tester cards take a reply`);
+    const line = await appendTesterThreadLine(card.testerDeviceId, { role: "assistant", kind: "reply", teamId: card.teamId, cardId: card.id, text, agentId: caller.id });
+    return sendJson(res, 200, { ok: true, cardId: card.id, seq: line.seq });
+  } catch (e) {
+    if (sendServerFsError(res, e, "inbox reply", INBOX_BUSY)) return;
+    const status = [400, 403, 404, 413].includes(e?.status) ? e.status : 400;
+    return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
+  }
+}
+
 async function handleInboxSend(req, res, rootDir) {
   if (req.method !== "POST") {
     res.statusCode = 405;
@@ -2284,8 +2318,6 @@ function testerCardView(c) {
 }
 
 const TESTER_CARD_ID_RE = /^idea-\d{1,12}$/;
-/** The card id a stamped tester chat line carries (`[Alpha Tester · <name> · card:<id>] ...`), or null. */
-const testerChatCardId = (text) => /^\[Alpha Tester · [^\]\n·]* · card:(idea-\d{1,12})\] /.exec(String(text ?? ""))?.[1] ?? null;
 /** The caller's own card `cardId` (testerDeviceId === caller.id, on an allowed Squad), else 403 (also for a missing card). */
 function ownTesterCard(caller, cardId) {
   const id = String(cardId ?? "").trim();
@@ -2406,6 +2438,9 @@ async function fileTesterReport({ caller, team, laneId, text, telemetry, shot, r
  * GET /__vibesquad/tester/thread?teamId=&limit=&after= -> { ok, teamId, laneId, agent: { id, title, status } | null, messages,
  * cursor }; `after` (a message id) returns only the messages strictly after it when it is still in the window; `cursor` is the
  * last returned id (or `after` when nothing is newer, or null). messages[] carry `cardId` when the line was card-tagged.
+ * PTO v1.2 T: a bug-tester gets its own per-device thread (ids `tt:<seq>`): the lines it posted (delivered report cards,
+ * thread / runner input lines) and the agent replies addressed to its own cards (`vs inbox reply`), never the agent's raw
+ * timeline. The owner-playtest caller (local owner / owner device) keeps the intake agent's timeline (its own Buddy).
  * POST { teamId?, text, cardId? } -> the line goes to the bug-intake agent, prefixed (with `card:<cardId>` for one of the
  * caller's own cards on that Squad) and non-owner -> { ok, agentId }.
  */
@@ -2417,17 +2452,33 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const limit = Math.min(Math.max(Number(q.get("limit")) || TESTER_THREAD_DEFAULT, 1), TESTER_THREAD_MAX);
       const after = (q.get("after") ?? "").trim();
       const a = await testerIntakeAgentFor(backend, team);
+      const agentView = a ? { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") } : null;
+      if (!isOwnerPlaytest(caller)) {
+        // PTO v1.2 T: a bug-tester never gets the intake agent's raw timeline (owner chat, lane work, other testers). Only its
+        // own stored lines and the replies addressed to its own cards (server/tester-thread.mjs), paged the same way.
+        const all = testerThreadLines(String(caller.id), team.id, readInboxCards(), undefined).map((l) => ({
+          id: `tt:${l.seq}`,
+          role: l.role,
+          text: redactTester(l.text),
+          ts: l.ts ?? null,
+          ...(l.cardId ? { cardId: l.cardId } : {}),
+        }));
+        const at = after ? all.findIndex((m) => m.id === after) : -1;
+        const messages = at >= 0 ? all.slice(at + 1, at + 1 + limit) : all.slice(-limit);
+        const cursor = messages.length ? messages[messages.length - 1].id : at >= 0 ? after : null;
+        return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: agentView, messages, cursor });
+      }
       if (!a) return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: null, messages: [], cursor: null });
       const t = await fetchTesterTimeline(backend, a.id, { limit: after ? TESTER_THREAD_MAX : limit });
       const all = t.entries.map((e) => {
         const role = e.item.type === "user_message" ? "user" : "assistant";
-        const cardId = role === "user" ? (isOwnerPlaytest(caller) ? ownerPlaytestChatCardId : testerChatCardId)(e.item.text) : null;
+        const cardId = role === "user" ? ownerPlaytestChatCardId(e.item.text) : null;
         return { id: `${a.id}:${e.seqStart ?? ""}`, role, text: e.item.text, ts: e.timestamp ?? null, ...(cardId ? { cardId } : {}) };
       });
       const at = after ? all.findIndex((m) => m.id === after) : -1;
       const messages = at >= 0 ? all.slice(at + 1, at + 1 + limit) : all.slice(-limit);
       const cursor = messages.length ? messages[messages.length - 1].id : at >= 0 ? after : null;
-      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") }, messages, cursor });
+      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: agentView, messages, cursor });
     }
     if (req.method === "POST") {
       const body = await readTesterBody(req);
@@ -2443,7 +2494,11 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const a = await testerIntakeAgentFor(backend, team);
       if (!a) throw testerStatus(`no live bug-intake agent in Squad "${team.id}"; your report is parked in the inbox`, 409);
       if (isOwnerPlaytest(caller)) await backend.sendAgentPrompt(a.id, `${ownerPlaytestChatPrefix(cardId)}${sanitizeTesterInput(text)}`, { owner: true });
-      else await sendTesterInput(backend, caller, a.id, text, { cardId });
+      else {
+        await sendTesterInput(backend, caller, a.id, text, { cardId });
+        // PTO v1.2 T: the caller's own line, as the agent got it, in its own thread.
+        await appendTesterThreadLine(String(caller.id), { role: "user", kind: "chat", teamId: team.id, cardId, text: stampTesterText(caller, sanitizeTesterInput(text), { cardId }) });
+      }
       return sendJson(res, 200, { ok: true, agentId: a.id });
     }
     return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2644,6 +2699,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInboxTriage(req, res, rootDir);
       case "/__vibesquad/inbox/send":
         return handleInboxSend(req, res, rootDir);
+      case "/__vibesquad/inbox/reply":
+        return handleInboxReply(req, res);
       case "/__vibesquad/inbox/attachment": // owner-only (non-GET gate above): raw image body, ?cardId=
         return handleInboxAttachment(req, res);
       case "/__vibesquad/push/vapid-public-key":

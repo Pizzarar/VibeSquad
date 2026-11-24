@@ -559,7 +559,9 @@ describe("tester gating is unchanged", () => {
     assert.equal(prompts.length, 0);
     const g = await call({ url: `${THREAD}?teamId=efi`, headers: bearer(alice) });
     assert.equal(g.status, 200);
-    assert.ok(g.json().messages.every((m) => !("cardId" in m)), "owner card tags are not surfaced to a tester");
+    // PTO v1.2 T: the tester's thread is its own lines only (its own report cards may carry their cardId), never an owner line.
+    assert.ok(g.json().messages.every((m) => m.cardId !== ownerCard.id && !m.text.includes("[Owner playtest")), "owner lines / card tags never reach a tester");
+    assert.ok(g.json().messages.every((m) => !m.cardId || cardById(m.cardId)?.testerDeviceId), "only tester cards are tagged");
   });
 
   test("attacker: a tester's local-token-shaped header does not make it the owner (stays a tester, still scoped)", async () => {

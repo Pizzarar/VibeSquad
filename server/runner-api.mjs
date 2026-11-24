@@ -2,7 +2,8 @@
 // Writes are gated by the caller (vibesquad-api.mjs: owner, or an allow-listed verified agent forwarded to the runner's scope rules).
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { callerOf } from "./auth.mjs";
-import { pickBugIntakeAgent } from "./inbox.mjs";
+import { pickBugIntakeAgent, readInboxCards } from "./inbox.mjs";
+import { appendTesterThreadLine, testerThreadLines } from "./tester-thread.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -219,6 +220,32 @@ export async function fetchTesterTimeline(backend, id, { limit, before } = {}) {
   };
 }
 
+/**
+ * PTO v1.2 T: the tester's own thread on `teamId`, in the runner timeline shape (so the Tester Desk's AgentDrawer keeps
+ * working): `seqStart`/`seqEnd` are the per-device thread seq, not the agent's. Never the agent's raw timeline.
+ */
+export function testerOwnTimeline(caller, teamId, { limit, before } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 0, 0), TESTER_TIMELINE_MAX) || TESTER_TIMELINE_MAX;
+  let lines = testerThreadLines(String(caller?.id ?? ""), teamId, readInboxCards());
+  if (Number.isFinite(before)) lines = lines.filter((l) => l.seq < before);
+  const page = lines.slice(-n);
+  const entries = page.map((l) => ({
+    ...(typeof l.ts === "string" ? { timestamp: l.ts } : {}),
+    seqStart: l.seq,
+    seqEnd: l.seq,
+    item: { type: l.role === "user" ? "user_message" : "assistant_message", text: redactText(l.text) },
+  }));
+  return {
+    entries,
+    hasOlder: lines.length > page.length,
+    ...(page.length ? { lastSeq: page[page.length - 1].seq } : {}),
+    startCursor: page.length ? { epoch: "runner", seq: page[0].seq } : null,
+  };
+}
+
+/** The allowed Squad whose bug-intake agent is `id` (one of `teams`), or null. */
+const intakeTeamOf = (agents, teams, id) => teams.find((t) => pickBugIntakeAgent(agents, t)?.id === id) ?? null;
+
 /** C0 controls and DEL out; \t and \n stay (a tester's line may be multi-line); \r goes too, so \r\n collapses to \n. */
 const stripTesterControl = (s) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 /** A tester's chat text, sanitized: control chars stripped, prompt fences defanged, ``` runs broken (no fake code blocks). */
@@ -301,7 +328,11 @@ async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, ca
     const parts = path.slice(PREFIX.length).split("/"); // exact shape: an empty segment never matches below
     const url = new URL(req.url, "http://x");
     const teamsOf = () => testerTeamRecords(caller, testerTeams);
-    const allowedNow = async () => testerIntakeAgents(await backend.listAgents().catch(() => []), teamsOf());
+    const agentsNow = async () => {
+      const list = await backend.listAgents().catch(() => []);
+      return Array.isArray(list) ? list.map((a) => a?.agent ?? a).filter(Boolean) : [];
+    };
+    const allowedNow = async () => testerIntakeAgents(await agentsNow(), teamsOf());
     if (req.method === "GET" && parts.length === 1 && parts[0] === "status") return sendJson(res, 200, { enabled: true });
     if (req.method === "GET" && parts.length === 1 && parts[0] === "events") return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf));
     if (req.method === "GET" && parts.length === 1 && parts[0] === "agents") {
@@ -314,15 +345,20 @@ async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, ca
       const isRead = req.method === "GET" && (parts.length === 2 || action === "timeline");
       const isInput = req.method === "POST" && action === "input";
       if (!isRead && !isInput) throw testerForbidden();
-      const allowed = await allowedNow();
+      const agents = await agentsNow();
+      const allowed = testerIntakeAgents(agents, teamsOf());
       if (!allowed.has(id)) throw testerForbidden("forbidden: not a bug-intake agent of your Squads");
       if (parts.length === 2) return sendJson(res, 200, { agent: testerAgentView(allowed.get(id)) });
+      const team = intakeTeamOf(agents, teamsOf(), id);
+      if (!team) throw testerForbidden("forbidden: not a bug-intake agent of your Squads");
       if (action === "timeline") {
+        // PTO v1.2 T: the caller's own thread on that Squad, never the agent's raw timeline (owner chat, other testers).
         const before = url.searchParams.get("direction") === "before" ? Number(url.searchParams.get("cursor")) : NaN;
-        return sendJson(res, 200, await fetchTesterTimeline(backend, id, { limit: url.searchParams.get("limit"), before }));
+        return sendJson(res, 200, testerOwnTimeline(caller, team.id, { limit: url.searchParams.get("limit"), before }));
       }
       const body = (await readBody(req)) ?? {};
       await sendTesterInput(backend, caller, id, body?.text); // only `text` is read: owner / interrupt / steerOnly / images never pass
+      await appendTesterThreadLine(String(caller.id), { role: "user", kind: "chat", teamId: team.id, cardId: null, text: stampTesterText(caller, sanitizeTesterInput(body.text)) });
       return sendJson(res, 200, { ok: true });
     }
     throw testerForbidden();

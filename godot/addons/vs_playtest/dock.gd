@@ -1,5 +1,5 @@
 extends PanelContainer
-## F8 side chat. Plain and readable first (18 px base font x ui_scale); the only flourish is the header gradient + bug button.
+## F4 side chat. Plain and readable first (18 px base font x ui_scale); the only flourish is the header gradient + bug button.
 ## The owner of this node (vs_playtest.gd) drives polling; the dock only renders and emits.
 
 signal bug_pressed

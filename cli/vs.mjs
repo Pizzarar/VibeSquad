@@ -545,6 +545,7 @@ Usage:
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
+  vs inbox reply <idea-N> "<text>"   answer an alpha tester on their card (the only agent text a tester sees; leads/Buddies of the card's Squad)
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
@@ -1106,7 +1107,22 @@ async function commandInbox(flags) {
     throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
-  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage`);
+  if (sub === "reply") {
+    // PTO v1.2 T: the bug-intake agent's answer to an alpha tester's card, the only agent output a tester reads (its thread).
+    // Agents only (id + token, verified by the server: a lead/Buddy of the card's Squad, tester cards only); never the owner.
+    const cardId = String(flags._.shift() ?? "").trim();
+    const text = flags._.map((s) => String(s)).join(" ").trim();
+    if (!/^idea-\d{1,12}$/.test(cardId) || !text) throw new Error('inbox reply needs a card id and text: vs inbox reply <idea-N> "<text>"');
+    const me = resolveIdentity(flags, { recordWins: true });
+    const ctx = createContext({ env: process.env, identity: callerIdentity(me) });
+    if (!agentCallerOf(ctx)) throw new Error("vs inbox reply is for the Squad's bug-intake agent (needs VS_AGENT_ID + VS_AGENT_TOKEN); the owner answers in the app.");
+    await verifyCaller(ctx);
+    const res = await postToVsServer(ctx, "/__vibesquad/inbox/reply", { cardId, text });
+    process.stdout.write(`replied on ${res.cardId} (tester thread line ${res.seq})\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage | reply`);
 }
 
 const WHO_TARGETS = new Set(["lead", "brainstorm", "buddy", "workers", "worker", "all"]);

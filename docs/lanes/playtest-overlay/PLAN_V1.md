@@ -30,7 +30,7 @@ Hub15: "v1 is owner-only: no tester mode, no meshnet, no E6 dependency for v1. K
   - `describe_node(node: Node) -> String`; the default is `node.get_path()`, goes into `telemetry.cursorNode`
   - `get_cheats() -> Array[Dictionary]`, each `{id, label, args?: Array}`
   - `run_cheat(id: String, args: Array) -> Variant`
-- Project settings: `vs_playtest/team_id` (the Squad that receives reports; required), `vs_playtest/server_url` (default `http://127.0.0.1:<VS port>`), `vs_playtest/hotkey_dock` (default F8), `vs_playtest/hotkey_bug` (default F9).
+- Project settings: `vs_playtest/team_id` (the Squad that receives reports; required), `vs_playtest/server_url` (default `http://127.0.0.1:<VS port>`), `vs_playtest/hotkey_dock` (default F4), `vs_playtest/hotkey_bug` (default F3).
 - Signals: `report_sent(card_id)`, `reply_received(message)`.
 - Capture payload: exactly the E6a body `{teamId, text, screenshotBase64, screenshotMime, clientReportId, telemetry:{clickedPoint, viewport, cursorNode, scene, state, seed, adapter, buildHash, engine, platform, logLines(last 200)}}`.
 - Agent-side (bridge): the community server's verbs (tree, node get/set, call, screenshot, input, eval), plus `VSPlaytest.state()`, `.seed()`, `.cheats()` and `.cheat(id, args)` reached through call/eval. Pause/step stays Open until B0 shows whether it exists.
@@ -50,8 +50,8 @@ No workarounds in v1.
 **Order:** B0 and B1 run in parallel. B2 starts in parallel with them; its HTTP layer can stub until B1 merges. Then B3, B4 (after the B0 verdict), B5.
 
 **Done-check (v1):** on Aub's PC, a sample Godot project with the addon:
-1. F9, then click a node. A card appears in that Squad's bug lane with the screenshot, cursorNode, scene, state, seed and buildHash.
-2. A reply from the intake agent shows up in the F8 dock within 5 s, and a dock reply reaches the agent.
+1. F3, then click a node. A card appears in that Squad's bug lane with the screenshot, cursorNode, scene, state, seed and buildHash.
+2. A reply from the intake agent shows up in the F4 dock within 5 s, and a dock reply reaches the agent.
 3. A VS agent fetches the scene tree and a screenshot through the bridge and runs one adapter cheat.
 4. Exporting with a release preset (no `vs_playtest` tag) yields a .pck with zero `vs_playtest` files (checked with `--export-pack` plus a file listing).
 5. Headless Godot tests pass and the server test suite passes.

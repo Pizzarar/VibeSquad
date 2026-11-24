@@ -44,7 +44,7 @@ How you update on Stable: a bar across the top of the window says **Update avail
 Both are on the **About** tab, on the host PC only (they don't show on a remotely connected device).
 
 - **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
-- **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
+- **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Nothing is cancelled: it restarts now if no agent is busy, else once they finish." Choose **Restart now** or **Cancel**. If no agent is mid-turn or holding background work, it says "Runner restarted". Otherwise it never cancels anything: it says "Runner restarts once N busy agent(s) finish", and the runner restarts by itself as soon as they are done.
 
 Three kinds of restart behave differently:
 
@@ -52,10 +52,10 @@ Three kinds of restart behave differently:
 - **Automatic runner restart** (the server restarting the runner when new runner code is installed): waits until no turns are running and no agent holds background work, then restarts. It does not resume agents for you.
 - **Desktop Restart & Update**: installs and restarts straight away. It does neither of the above.
 
-If the server itself restarted, an agent turn that finished while it was down is replayed once, so you still get the ping. The **Restart runner** button in Settings still cancels running turns, as its prompt says.
+If the server itself restarted, an agent turn that finished while it was down is replayed once, so you still get the ping. The **Restart runner** button in Settings never cancels running turns: it waits until no agent is busy.
 
 - **Change it when:** a send hangs (try **Unstick VibeSquad** first), or after an update the runner still behaves like the old version (**Restart runner**).
-- **Safe default:** don't press either while an agent is mid-turn that you care about, since a restart cancels running turns.
+- **Safe default:** **Restart runner** is safe mid-turn (it waits for busy agents). **Unstick**'s restart of a runner that is not responding still stops running agents, so use it only when sends are stuck.
 
 ## Profiles
 
