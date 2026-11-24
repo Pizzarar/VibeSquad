@@ -71,9 +71,9 @@ export class TerminalManager {
       if (t.buf.length > SCROLLBACK_CHARS) t.buf = t.buf.slice(-SCROLLBACK_CHARS);
       t.events.emit("data", data);
     };
-    const finish = (code) => {
+    const finish = (code, reason) => {
       if (t.exited) return;
-      t.exited = { code: code ?? null };
+      t.exited = { code: code ?? null, ...(reason ? { reason } : {}) };
       t.events.emit("exit", t.exited);
       setTimeout(() => { if (this.terms.get(id) === t) this.terms.delete(id); }, this.evictMs).unref();
     };
@@ -113,6 +113,7 @@ export class TerminalManager {
       };
       t.resize = () => {};
     }
+    t.finish = finish;
     this.terms.set(id, t);
     return this.info(t);
   }
@@ -194,6 +195,8 @@ export class TerminalManager {
   killAll({ sync = false } = {}) {
     const live = [...this.terms.values()].filter((t) => !t.exited);
     this.terms.clear();
+    // idea-698: tell subscribers WHY before the kill (a server restart used to look like a silent dead pane, or "exited with code 0").
+    for (const t of live) { try { t.finish?.(null, "server-restart"); } catch {} }
     killTerms(live, { sync });
   }
 }
