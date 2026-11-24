@@ -28,7 +28,7 @@ import { listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 import { reownWatchesAsync } from "./watch-sets.mjs";
-import { compactBusy, compactNotAttempted, COMPACTED_AT, createCrossingTracker, lifeCapMetric } from "./compact-crossing.mjs";
+import { compactBusy, compactNotAttempted, COMPACTED_AT, compactPending, createCrossingTracker, lifeCapMetric } from "./compact-crossing.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
@@ -639,6 +639,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
   const forced300 = new Set();
   const selfHandedOff = new Set();
   const compactCrossing = deps.compactCrossing ?? createCrossingTracker(); // K2c: one compaction attempt per stage per crossing
+  // K2a: ids with a compaction in flight (compact-step run), shared with token-watch's compactor: this coordinator (also the
+  // HTTP route's, which has no compactStep) defers its soft stages while one runs.
+  const compactInFlight = deps.compactPending ?? compactPending;
   const pendingTakeover = new Map(); // successorId -> takeover record
   const confirmedTakeovers = new Set();
   const deletedHeartbeats = [];
@@ -1429,39 +1432,70 @@ export function createLeadHandoffCoordinator(deps = {}) {
     // (used >= hardCapTokens) may act on a running lead, unchanged.
     // The hard cap is a safety net on the RAW meter: the subtraction applies to the soft stages (compact, 150k, 250k) only.
     const used = leadWorkingTokens(lead, options.usedTokens);
-    const rawUsed = leadUsedTokens(lead, options.usedTokens);
+    let rawUsed = leadUsedTokens(lead, options.usedTokens);
     const { flagTokens, autoHandoffTokens, hardCapTokens } = thresholds;
+
+    // A compaction in flight (token-watch's evaluation holds it): no nudge / packet / handoff on top of it. The hard cap excepted.
+    if (compactInFlight.has(lead.id) && rawUsed < hardCapTokens) {
+      return { stage: "compact-deferred", triggered: false, usedTokens: used };
+    }
 
     // K2c: compaction is the default path. Before each soft stage (150k nudge, 250k packet) a Claude lead gets one compaction
     // attempt per crossing (server/compact-crossing.mjs: re-armed once the meter is back under 90% of the soft threshold, at
     // most COMPACT_LIFE_CAP per life). Busy = defer to the next idle upsert. Anything else but a clean "ok" under the stage
     // threshold falls through to the unchanged ladder, and that crossing is not tried again. The hard cap (raw meter) is never
     // delayed by an attempt, and a handoff already under way is not compacted.
+    // A self handoff through ANY coordinator (MCP handoff_lead / vs handoff use the HTTP route's) shows in the shared slot maps
+    // (key as in triggerSelfHandoff) until the old lead is retired.
+    const slotKey = `${deps.sharedSlots ? `${rootDir}:` : ""}${teamId}:${laneId}:ord${parseLeadOrd(lead)}`;
     const handoffUnderway =
       selfHandedOff.has(lead.id) || autoHandedOff250.has(lead.id) || forced300.has(lead.id) || writePrompted250.has(lead.id) ||
+      inFlightBySlot.has(slotKey) || completedBySlot.has(slotKey) ||
       labels["handoff-auto-250"] === "1" || labels["handoff-hard-300"] === "1" || labels["handoff-write-prompted"] === "1";
+    // After an ok compaction / on re-arm the 150k soft flag is stale: clear it (and its nudge stamp, so the next crossing can
+    // nudge again). Its needs-you is cleared only if it is still the soft flag's (an owner-facing needs-you set since stays).
+    const softFlagClear = () => {
+      flagged150.delete(lead.id);
+      const patch = {};
+      if (labels["handoff-nudged"]) patch["handoff-nudged"] = "";
+      if (labels["handoff-flagged"]) patch["handoff-flagged"] = "";
+      if (labels["needs-you"] === SOFT_FLAG_REASON) Object.assign(patch, { "needs-you": "", "needs-you-reason": "", "needs-you-at": "" });
+      return patch;
+    };
     if (typeof deps.compactStep === "function" && rawUsed < hardCapTokens && !handoffUnderway) {
       const plan = compactCrossing.decide(lead, used, [flagTokens, autoHandoffTokens]);
       if (plan.action === "rearm") {
         compactCrossing.rearm(lead.id, plan.count);
-        labels = plan.labels;
-        await setLabels(lead.id, labels).catch((e) => console.warn(`[vibesquad] compact re-arm ${lead.id}: ${e?.message ?? e}`));
+        const patch = { ...plan.labels, ...softFlagClear() };
+        labels = { ...labels, ...patch };
+        await setLabels(lead.id, patch).catch((e) => console.warn(`[vibesquad] compact re-arm ${lead.id}: ${e?.message ?? e}`));
       } else if (plan.action === "life-cap") {
         compactCrossing.record(lead.id, plan.cap, plan.count);
+        labels = { ...labels, ...plan.labels };
+        await setLabels(lead.id, plan.labels).catch((e) => console.warn(`[vibesquad] compact life-cap ${lead.id}: ${e?.message ?? e}`));
         try {
           appendLog(teamId, { lane: laneId, agent: lead.id, type: "metric", text: lifeCapMetric({ kind: "lead", id: lead.id, count: plan.count, cap: plan.cap, used }) });
         } catch { /* logging never blocks the ladder */ }
       } else if (plan.action === "compact") {
         const res = await deps
-          .compactStep({ ...lead, labels: plan.labels }, { focus: LEAD_COMPACT_FOCUS, cap: plan.cap, kind: "lead", teamId, laneId })
+          .compactStep(lead, { focus: LEAD_COMPACT_FOCUS, cap: plan.cap, kind: "lead", teamId, laneId, armed: true, labels: plan.labels, hardCap: hardCapTokens })
           .catch(() => null);
         // Mid-turn or queued (K2a: the runner's status decides): wait for the idle upsert, no stamp, no nudge.
         if (compactBusy(res)) return { stage: "compact-deferred", triggered: false, usedTokens: used };
         if (!compactNotAttempted(res)) {
           compactCrossing.record(lead.id, plan.cap, plan.count);
-          labels = { ...plan.labels, [COMPACTED_AT]: new Date().toISOString() };
+          labels = { ...labels, ...plan.labels, [COMPACTED_AT]: new Date().toISOString() };
         }
-        if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
+        if (res?.outcome === "ok") {
+          const patch = softFlagClear();
+          if (Object.keys(patch).length) {
+            labels = { ...labels, ...patch };
+            await setLabels(lead.id, patch).catch((e) => console.warn(`[vibesquad] compact soft-flag clear ${lead.id}: ${e?.message ?? e}`));
+          }
+          return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
+        }
+        // The raw meter passed the hard cap while the compaction waited: the forced handoff below runs now, not at the next upsert.
+        if (res?.reason === "hard-cap" && Number.isFinite(res.rawUsed)) rawUsed = Math.max(rawUsed, res.rawUsed);
       }
     }
 

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { startTokenWatcher, WARN_LABEL } from "../server/token-watch.mjs";
+import { BRAINSTORM_WARN_NUDGE, startTokenWatcher, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
 import { createCompactor, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
 import {
@@ -15,7 +15,16 @@ import {
   COMPACTED_AT,
   createCrossingTracker,
 } from "../server/compact-crossing.mjs";
-import { LEAD_AUTO_HANDOFF_DEFAULT, LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "../server/lead-handoff.mjs";
+import {
+  createLeadHandoffCoordinator,
+  LEAD_AUTO_HANDOFF_DEFAULT,
+  LEAD_FLAG_DEFAULT,
+  LEAD_HARD_CAP_DEFAULT,
+  resetLeadHandoffState,
+  SOFT_FLAG_NUDGE,
+  SOFT_FLAG_REASON,
+  WRITE_HANDOFF_PROMPT,
+} from "../server/lead-handoff.mjs";
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 const FLAG = LEAD_FLAG_DEFAULT;
@@ -104,7 +113,7 @@ test("tracker: armed -> compact; same stage again -> none; higher stage -> compa
   const p1 = t.decide(a, FLAG + 1, [FLAG, AUTO]);
   assert.equal(p1.action, "compact");
   assert.equal(p1.cap, FLAG);
-  assert.deepEqual([p1.labels[COMPACTED_AT], p1.labels[COMPACT_STAGE_LABEL], p1.labels[COMPACT_COUNT_LABEL]], ["", String(FLAG), "1"]);
+  assert.deepEqual(p1.labels, { [COMPACT_STAGE_LABEL]: String(FLAG), [COMPACT_COUNT_LABEL]: "1" }); // a patch: compact-step adds vs.compacted-at
   t.record("x", p1.cap, p1.count);
   assert.equal(t.decide(a, FLAG + 9, [FLAG, AUTO]).action, "none"); // mem covers a snapshot without the label yet
   assert.equal(t.decide(a, 140_000, [FLAG, AUTO]).action, "none"); // inside the hysteresis band
@@ -113,7 +122,7 @@ test("tracker: armed -> compact; same stage again -> none; higher stage -> compa
   t.record("x", p2.cap, p2.count);
   const re = t.decide(a, REARM_LINE - 1, [FLAG, AUTO]);
   assert.equal(re.action, "rearm");
-  assert.deepEqual([re.labels[COMPACTED_AT], re.labels[COMPACT_STAGE_LABEL]], ["", ""]);
+  assert.deepEqual(re.labels, { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "" }); // only the two keys: never the snapshot (count)
   t.rearm("x", re.count);
   assert.deepEqual(t.decide(a, FLAG, [FLAG, AUTO]).count, 3);
 });
@@ -125,7 +134,7 @@ test("tracker: pre-K2c label (vs.compacted-at only) reads as one attempt at the 
   assert.deepEqual(t.decide(legacy, AUTO + 1, [FLAG, AUTO]).count, 2);
   assert.equal(t.decide(legacy, 10_000, [FLAG, AUTO]).action, "rearm");
   const spent = { id: "y", labels: { [COMPACT_COUNT_LABEL]: String(COMPACT_LIFE_CAP) } };
-  assert.deepEqual(t.decide(spent, FLAG + 1, [FLAG, AUTO]), { action: "life-cap", cap: FLAG, count: COMPACT_LIFE_CAP });
+  assert.deepEqual(t.decide(spent, FLAG + 1, [FLAG, AUTO]), { action: "life-cap", cap: FLAG, count: COMPACT_LIFE_CAP, labels: { [COMPACT_STAGE_LABEL]: String(FLAG) } });
 });
 
 // ---- lead ladder ----
@@ -230,8 +239,10 @@ test("lead: a busy skip (K2a: running or queued) defers to the next idle: no nud
   const second = await w.evaluate({ ...r.agents.get("rn-l") });
   assert.equal(second.result.stage, "compact");
   assert.equal(calls.length, 2);
-  assert.equal(calls[1].labels[COMPACT_COUNT_LABEL], "1"); // the busy skip did not count
+  assert.equal(calls[1].opts.labels[COMPACT_COUNT_LABEL], "1"); // the busy skip did not count
   assert.equal(calls[1].opts.focus, LEAD_COMPACT_FOCUS);
+  assert.equal(calls[1].opts.armed, true); // the crossing tracker is the loop guard (no tried/label workaround)
+  assert.equal(calls[1].opts.hardCap, LEAD_HARD_CAP_DEFAULT);
   w.stop();
 });
 
@@ -267,13 +278,19 @@ test("lead: the stage write after a failed attempt keeps the attempt labels (run
 
 // ---- Buddy path ----
 
-test("buddy: re-armed after the meter drops; the second crossing compacts again, no restart", async () => {
+test("buddy: re-armed after the meter drops (warn re-armed too); the second crossing updates the brief, then compacts, no restart", async () => {
   const { r, w, restarts } = setup("ok");
   r.agents.set("rn-b", buddy("rn-b"));
   await step(r, "rn-b", BUDDY_CAP + 1, 250);
   await step(r, "rn-b", 40_000);
-  assert.equal(r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL], "");
-  await step(r, "rn-b", BUDDY_CAP + 2, 250);
+  const l = r.agents.get("rn-b").labels;
+  assert.deepEqual([l[COMPACT_STAGE_LABEL], l[WARN_LABEL]], ["", ""]);
+  const rearmWrite = r.labelWrites.at(-1);
+  assert.deepEqual(rearmWrite.labels, { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "", [WARN_LABEL]: "" }); // a patch, no snapshot spread
+  await step(r, "rn-b", BUDDY_CAP + 2, 100);
+  assert.deepEqual(texts(r), ["/compact", BRAINSTORM_WARN_NUDGE]); // the brief is updated before this crossing's compaction
+  r.emit({ kind: "turn_ended", agentId: "rn-b", agent: { ...r.agents.get("rn-b") } }); // the brief turn ends
+  await step(r, "rn-b", BUDDY_CAP + 3, 250);
   assert.equal(compacts(r).length, 2);
   assert.equal(restarts.length, 0);
   w.stop();
@@ -313,7 +330,7 @@ test("buddy: life cap -> restart, logged reason=life-cap", async () => {
 test("buddy: a busy skip defers (no restart, not counted); the next idle compacts", async () => {
   const outcomes = [{ outcome: "skipped", reason: "busy" }, { outcome: "ok", after: 40_000 }];
   const calls = [];
-  const compactor = { tried: new Set(), run: async (agent) => { calls.push({ ...agent.labels }); return outcomes.shift(); } };
+  const compactor = { tried: new Set(), run: async (_agent, opts) => { calls.push({ ...opts.labels }); return outcomes.shift(); } };
   const { r, w, restarts } = setup("ok", { compactor });
   r.agents.set("rn-b", buddy("rn-b"));
   await step(r, "rn-b", BUDDY_CAP + 1);
@@ -323,4 +340,108 @@ test("buddy: a busy skip defers (no restart, not counted); the next idle compact
   assert.equal(calls.length, 2);
   assert.equal(calls[1][COMPACT_COUNT_LABEL], "1");
   w.stop();
+});
+
+// ---- K2a+K2c fix round ----
+
+test("tracker: re-arm needs a real drop -- 25% under the tried stage as well as under 90% of the lowest stage", () => {
+  const t = createCrossingTracker();
+  const a = { id: "x", labels: {} };
+  t.record("x", FLAG, 1);
+  assert.equal(t.decide(a, 130_000, [FLAG, AUTO]).action, "none"); // 150k -> 130k: under 135k but not a 25% drop
+  assert.equal(t.decide(a, 113_000, [FLAG, AUTO]).action, "none");
+  assert.equal(t.decide(a, 112_000, [FLAG, AUTO]).action, "rearm"); // < 112.5k
+  t.record("y", AUTO, 2);
+  assert.equal(t.decide({ id: "y", labels: {} }, 134_000, [FLAG, AUTO]).action, "rearm"); // 250k stage: the 135k line binds
+});
+
+test("lead: an ok compaction clears the stale 150k soft flag (needs-you trio, handoff-nudged/-flagged, flagged150); the next crossing nudges again", async () => {
+  const { r, w } = setup("over");
+  r.agents.set("rn-l", lead("rn-l"));
+  await step(r, "rn-l", FLAG + 5, 250); // still over -> nudge + needs-you
+  assert.equal(r.agents.get("rn-l").labels["needs-you"], SOFT_FLAG_REASON);
+  r.mode = "ok";
+  await step(r, "rn-l", AUTO + 5, 250); // 250k stage compacts ok
+  let l = r.agents.get("rn-l").labels;
+  assert.deepEqual([l["needs-you"], l["needs-you-reason"], l["needs-you-at"], l["handoff-nudged"], l["handoff-flagged"]], ["", "", "", "", ""]);
+  assert.equal(w.coordinator.state.flagged150.has("rn-l"), false);
+  await step(r, "rn-l", 40_000); // re-arm
+  r.mode = "over";
+  await step(r, "rn-l", FLAG + 7, 250);
+  assert.deepEqual(texts(r), ["/compact", "nudge", "/compact", "/compact", "nudge"]);
+  w.stop();
+});
+
+test("lead: re-arm clears the soft flag too, but never an owner-facing needs-you that is not the soft flag's", async () => {
+  const { r, w } = setup("ok");
+  r.agents.set("rn-l", lead("rn-l", { [COMPACT_STAGE_LABEL]: String(FLAG), [COMPACT_COUNT_LABEL]: "1", "handoff-nudged": "1", "needs-you": SOFT_FLAG_REASON, "needs-you-reason": SOFT_FLAG_REASON }));
+  r.agents.set("rn-m", lead("rn-m", { [COMPACT_STAGE_LABEL]: String(FLAG), [COMPACT_COUNT_LABEL]: "1", "handoff-nudged": "1", "needs-you": "pick a schema", ord: "2" }));
+  await step(r, "rn-l", 40_000);
+  await step(r, "rn-m", 40_000);
+  assert.deepEqual([r.agents.get("rn-l").labels["needs-you"], r.agents.get("rn-l").labels["handoff-nudged"]], ["", ""]);
+  assert.deepEqual([r.agents.get("rn-m").labels["needs-you"], r.agents.get("rn-m").labels["handoff-nudged"]], ["pick a schema", ""]);
+  const rearm = r.labelWrites.find((x) => x.id === "rn-m").labels;
+  assert.equal(COMPACT_COUNT_LABEL in rearm, false); // a patch: the count is never written back from a snapshot
+  w.stop();
+});
+
+test("lead: a compaction in flight (shared pending) defers another coordinator's soft stages; the hard cap still acts", async () => {
+  const { r, w } = setup("ok");
+  r.agents.set("rn-l", lead("rn-l"));
+  const pending = new Set(["rn-l"]);
+  const http = createLeadHandoffCoordinator({
+    rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, compactPending: pending,
+    setLabels: (id, labels) => r.updateAgent(id, { labels }), sendMessage: (id, text) => r.sendAgentPrompt(id, text),
+    createAgent: (p) => r.createAgent(p), listAgents: async () => [...r.agents.values()], getAgent: async (id) => r.agents.get(id) ?? null,
+    deleteHeartbeat: async () => {},
+  });
+  const res = await http.evaluateLead({ ...r.agents.get("rn-l"), lastUsage: { contextWindowUsedTokens: FLAG + 5 } });
+  assert.equal(res.stage, "compact-deferred");
+  assert.equal(r.sent.length, 0);
+  const hard = await http.evaluateLead({ ...r.agents.get("rn-l"), lastUsage: { contextWindowUsedTokens: LEAD_HARD_CAP_DEFAULT + 1 } });
+  assert.equal(hard.stage, "hard-300");
+  assert.equal(r.created.length, 1);
+  w.stop();
+});
+
+test("lead: a self handoff through another coordinator (shared slot maps) is under way: no compaction", async () => {
+  resetLeadHandoffState();
+  const { r, w } = setup("ok");
+  r.agents.set("rn-l", lead("rn-l"));
+  const http = createLeadHandoffCoordinator({
+    rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, sharedSlots: true,
+    setLabels: (id, labels) => r.updateAgent(id, { labels }), sendMessage: (id, text) => r.sendAgentPrompt(id, text),
+    createAgent: (p) => r.createAgent({ ...p, labels: p.labels }), listAgents: async () => [...r.agents.values()], getAgent: async (id) => r.agents.get(id) ?? null,
+    deleteHeartbeat: async () => {},
+  });
+  const res = await http.triggerSelfHandoff(r.agents.get("rn-l"));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await step(r, "rn-l", FLAG + 5, 200);
+  assert.equal(compacts(r).length, 0);
+  w.stop();
+  resetLeadHandoffState();
+});
+
+test("lead: a compaction stopped at the hard cap (reason=hard-cap) hands off in the same evaluation", async () => {
+  const compactor = { tried: new Set(), run: async () => ({ outcome: "failed", reason: "hard-cap", rawUsed: LEAD_HARD_CAP_DEFAULT + 10 }) };
+  const { r, w } = setup("ok", { compactor });
+  r.agents.set("rn-l", lead("rn-l"));
+  r.agents.get("rn-l").lastUsage = { contextWindowUsedTokens: AUTO + 5, inputTokens: AUTO + 5 };
+  const res = await w.evaluate({ ...r.agents.get("rn-l") });
+  assert.equal(res.result.stage, "hard-300");
+  assert.equal(r.created.length, 1);
+  assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
+  w.stop();
+});
+
+test("life cap: vs.compact-stage persisted, so a server restart does not log the same crossing's life-cap line again", async () => {
+  const { r, w, restarts, laneLog } = setup("ok");
+  r.agents.set("rn-b", buddy("rn-b", { [COMPACT_COUNT_LABEL]: String(COMPACT_LIFE_CAP) }));
+  await step(r, "rn-b", BUDDY_CAP + 1);
+  assert.equal(r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL], String(BUDDY_CAP));
+  w.stop();
+  const w2 = startTokenWatcher({ runner: r, rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, compactor: createCompactor({ runner: r }), restartBuddy: async (b) => { restarts.push(b); } });
+  await step(r, "rn-b", BUDDY_CAP + 2);
+  assert.equal(laneLog().split("\n").filter((x) => x.includes("reason=life-cap")).length, 1);
+  w2.stop();
 });

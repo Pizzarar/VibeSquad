@@ -5,6 +5,7 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LEAD_COMPACT_FOCUS, leadUsedTokens } from "./lead-handoff.mjs";
+import { compactPending } from "./compact-crossing.mjs";
 import { vibesquadHome } from "./user-settings.mjs";
 
 export const COMPACTED_AT_LABEL = "vs.compacted-at";
@@ -21,6 +22,8 @@ export const COMPACT_SETTLE_MS = 1_500;
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
 const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+// An input that carries a /compact line anywhere: also one coalesced behind a queued wake (C3: "<wake>\n\n/compact ...").
+const COMPACT_LINE_RE = /(^|\n)\s*\/compact\b/i;
 /** Per-turn cost from session-cumulative `turn_done.costUsd`: delta vs the previous turn_done (a drop means the session restarted: take it whole). */
 export const costDelta = (cost, base) => Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6;
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
@@ -59,10 +62,16 @@ export function compactSpendFromLog(events) {
  * K2a C1: where the last `/compact` input landed, from the agent's runner log. "steered" = the last status before it read running
  * (a wake opened the turn first: the CLI holds the /compact and, 16 of 20 times, runs it as its own turn right after, with the
  * runner showing idle); "gone" = the process was parked or exited after it (a CLI-held /compact died with it); else "direct".
+ * since (ms): anchors on THIS send -- an input logged before it (an earlier attempt's) is never read as this one; an event
+ * without a ts is not filtered. A coalesced input ("<wake>\n\n/compact") counts as the send's input.
  */
-export function compactLanding(events) {
+export function compactLanding(events, { since } = {}) {
   let j = -1;
-  for (let i = events.length - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_INPUT_RE.test(String(events[i].text ?? ""))) { j = i; break; }
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (since != null && Number.isFinite(Number(e?.ts)) && Number(e.ts) < since) break; // older than this send
+    if (e?.type === "input" && COMPACT_LINE_RE.test(String(e.text ?? ""))) { j = i; break; }
+  }
   if (j < 0) return "direct";
   for (let i = j + 1; i < events.length; i++) if (events[i]?.type === "parked" || events[i]?.type === "exit") return "gone";
   for (let i = j - 1; i >= 0; i--) if (events[i]?.type === "status") return events[i].status === "running" ? "steered" : "direct";
@@ -101,7 +110,8 @@ const busyForCompact = (agent) => !isIdleForCompact(agent) || !!agent?.queued;
  * deps: runner (sendAgentPrompt, updateAgent, fetchAgent, subscribeEvents), log({agent, text, teamId, laneId}) (lane-aware),
  * timeoutMs (per attempt, from turn start), queueTimeoutMs (while the /compact waits in the runner queue), maxAttempts, settleMs,
  * idlePollMs, lateBoundaryMs (how long a steered /compact's late boundary is awaited before a re-send; default timeoutMs),
- * readEvents(id) (parsed runner-log events; default reads the agent log under VIBESQUAD_HOME). run() never throws; its outcome is one of
+ * readEvents(id) (parsed runner-log events; default reads the agent log under VIBESQUAD_HOME), pending (Set of agent ids with a run in
+ * flight; default the shared compactPending, read by lead-handoff evaluateLead). run() never throws; its outcome is one of
  * ok | still-over | failed | timeout | skipped (skipped carries a reason and sends nothing). Non-ok outcomes carry a reason, also on
  * the metric line (reason=, attempts=; K2a).
  *
@@ -125,8 +135,10 @@ export function createCompactor({
   idlePollMs = 1_000,
   lateBoundaryMs = timeoutMs,
   readEvents = readAgentLogTail,
+  pending = compactPending,
 } = {}) {
   const tried = new Set(); // agent ids: one compaction per agent, even before the label write lands or across a replay
+  const overCap = (agent, hardCap) => Number.isFinite(hardCap) && !!agent && leadUsedTokens(agent) >= hardCap;
 
   /** The runner's view now (a usage upsert can lag a turn that already started); null when unreadable. */
   async function freshAgent(id) {
@@ -187,8 +199,8 @@ export function createCompactor({
     }
   }
 
-  const landing = async (id) => {
-    try { return compactLanding(await readEvents(id)); } catch { return "direct"; } // unreadable log: re-send as before
+  const landing = async (id, since) => {
+    try { return compactLanding(await readEvents(id), { since }); } catch { return "direct"; } // unreadable log: re-send as before
   };
 
   /**
@@ -196,7 +208,7 @@ export function createCompactor({
    * while the runner shows idle. Re-sending at once would compact twice (and skew the adapter's turn count), so wait for that
    * boundary first: "compacted", or "none" at the deadline / once the process is parked or exits (the held /compact died).
    */
-  async function awaitLate(w, id) {
+  async function awaitLate(w, id, since, hardCap) {
     const deadline = Date.now() + lateBoundaryMs;
     for (;;) {
       const left = deadline - Date.now();
@@ -204,16 +216,19 @@ export function createCompactor({
       const s = await w.next(Math.min(left, idlePollMs));
       if (s === "compacted") return "compacted";
       if (s === "cancelled") return "none";
-      if (s === "tick" && (await landing(id)) === "gone") return "none";
+      if (s !== "tick") continue;
+      if ((await landing(id, since)) === "gone") return "none";
+      if (Number.isFinite(hardCap) && overCap(await freshAgent(id), hardCap)) return "hard-cap";
     }
   }
 
   /** After a no-boundary turn: waits until the runner shows the agent idle with nothing queued (or a late boundary lands). */
-  async function awaitIdle(w, id) {
+  async function awaitIdle(w, id, hardCap) {
     if (typeof runner.fetchAgent !== "function") return "idle"; // no status source: the turn end is all there is (as the gate)
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const now = await freshAgent(id);
+      if (overCap(now, hardCap)) return "hard-cap"; // K2c: the raw meter passed the hard cap meanwhile: the forced handoff wins
       if (now && !busyForCompact(now)) return "idle";
       const left = deadline - Date.now();
       if (left <= 0) return "busy";
@@ -245,11 +260,28 @@ export function createCompactor({
     }
   }
 
-  async function run(agent, { focus, cap, kind = "agent", teamId, laneId } = {}) {
+  /**
+   * opts: focus, cap (soft: still-over at or above it), kind, teamId, laneId, plus (K2c) armed: the caller's crossing tracker is
+   * the loop guard, so the once-per-life guards (vs.compacted-at label, `tried`) are not checked; labels: the label PATCH written
+   * with vs.compacted-at (default: the agent's labels, pre-K2c); hardCap: the raw meter at which a pending retry stops
+   * (reason=hard-cap) so the caller's forced handoff is not held behind the compaction.
+   */
+  async function run(agent, opts = {}) {
     const id = agent?.id;
     if (!id || !isClaudeAgent(agent)) return { outcome: "skipped", reason: "non-claude" };
+    if (pending.has(id)) return { outcome: "skipped", reason: "busy" }; // a run for this agent is already in flight
+    pending.add(id);
+    try {
+      return await runOnce(agent, opts);
+    } finally {
+      pending.delete(id);
+    }
+  }
+
+  async function runOnce(agent, { focus, cap, kind = "agent", teamId, laneId, armed = false, labels: patch, hardCap } = {}) {
+    const id = agent.id;
     const labels = agent.labels ?? {};
-    if (labels[COMPACTED_AT_LABEL] || tried.has(id)) return { outcome: "skipped", reason: "already-compacted" };
+    if (!armed && (labels[COMPACTED_AT_LABEL] || tried.has(id))) return { outcome: "skipped", reason: "already-compacted" };
     if (busyForCompact(agent)) return { outcome: "skipped", reason: "busy" };
     // C1: the snapshot that triggered this can be stale (the turn a wake started is already running): the runner decides.
     const now = await freshAgent(id);
@@ -274,7 +306,7 @@ export function createCompactor({
       return res;
     };
     try {
-      await runner.updateAgent(id, { labels: { ...labels, [COMPACTED_AT_LABEL]: new Date().toISOString() } });
+      await runner.updateAgent(id, { labels: { ...(patch ?? labels), [COMPACTED_AT_LABEL]: new Date().toISOString() } });
     } catch {
       return finish("failed", { reason: "label-write" }); // without the label a replay could loop: do not compact
     }
@@ -287,18 +319,26 @@ export function createCompactor({
         if (w.drain()) { got = "compacted"; break; }
         attempts++;
         let sent;
+        const sentAt = Date.now();
         try {
           sent = await runner.sendAgentPrompt(id, text);
         } catch {
           return finish("failed", { reason: "send" });
         }
         got = await awaitAttempt(w, sent?.queued === true);
-        if (got !== "no-boundary" || attempts >= maxAttempts) break;
-        // C1/C3/C4: the /compact rode along with another message. A steered one first gets its late boundary window (C1);
-        // then it is re-sent alone once the agent is idle again (a boundary that lands meanwhile is the success it looks like).
-        if ((await landing(id)) === "steered" && (await awaitLate(w, id)) === "compacted") { got = "compacted"; break; }
-        const idle = await awaitIdle(w, id);
+        if (got !== "no-boundary") break;
+        // C1/C3/C4: the /compact rode along with another message. A steered one first gets its late boundary window (C1), also
+        // on the last attempt: the CLI can still run the held /compact, and the caller's handoff must not overlap it.
+        if ((await landing(id, sentAt)) === "steered") {
+          const late = await awaitLate(w, id, sentAt, hardCap);
+          if (late === "compacted") { got = "compacted"; break; }
+          if (late === "hard-cap") { got = "hard-cap"; break; }
+        }
+        if (attempts >= maxAttempts) break;
+        // Then it is re-sent alone once the agent is idle again (a boundary that lands meanwhile is the success it looks like).
+        const idle = await awaitIdle(w, id, hardCap);
         if (idle === "compacted") { got = "compacted"; break; }
+        if (idle === "hard-cap") { got = "hard-cap"; break; }
         if (idle !== "idle") { got = "no-boundary"; break; }
       }
     } finally {
@@ -306,6 +346,7 @@ export function createCompactor({
     }
     if (got === "turn-timeout") return finish("timeout", { reason: "turn" });
     if (got === "queue-timeout") return finish("timeout", { reason: "queue" });
+    if (got === "hard-cap") return finish("failed", { reason: "hard-cap", rawUsed: leadUsedTokens((await freshAgent(id)) ?? agent) });
     if (got !== "compacted") return finish("failed", { reason: got });
     const after = await usedNow(id, before);
     const spend = await spendOf(id);

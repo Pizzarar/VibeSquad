@@ -979,7 +979,7 @@ export class RunnerBackend {
    * the runner, which then sets owner/senderId from the verified caller and scopes the send; see X1a), steerOnly (idea-169: join
    * the agent's open turn or drop it; never starts, resumes or revives a turn) }.
    * Returns the runner's answer: { delivered, reason? } for a steerOnly send (so the caller learns whether it was dropped), else
- * { ok, queued, ahead? } (queued: the turn waits for a family slot), or { redirectedTo } for a retired-lead redirect.
+   * { ok, queued, ahead? } (queued: the turn waits for a family slot), or { redirectedTo } for a retired-lead redirect.
    */
   async sendAgentPrompt(id, text, opts = {}) {
     const as = "caller" in opts ? { caller: opts.caller } : {};
