@@ -108,3 +108,13 @@
   .sb-notice, .sb-warn { margin-left: 10px; margin-right: 10px; }
   .sb-head-right { width: 100%; justify-content: space-between; }
 }
+
+/* Entity-kind and finding-category accents (template classes sb-k-<kind>, sb-cat-<category>) and section/check hooks. */
+.sb-section { margin: 0 0 8px; }
+.sb-check { font-weight: 500; color: var(--sb-text2); }
+.sb-cat-broken { border-color: var(--sb-bad); }
+.sb-cat-inconsistent, .sb-cat-unreviewed { border-color: var(--sb-warn); }
+.sb-cat-missing { border-color: var(--sb-accent); }
+.sb-k-quest_step, .sb-k-location, .sb-k-trader, .sb-k-squad { font-weight: 600; }
+.sb-k-enemy, .sb-k-item, .sb-k-room, .sb-k-skill, .sb-k-contract { font-weight: 500; }
+.sb-k-line, .sb-k-lore, .sb-k-voice_card { font-style: italic; }

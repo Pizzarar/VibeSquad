@@ -1675,13 +1675,13 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
-    closeStorybook("replace"); // a palette/sidebar pick must leave a Storybook takeover (no-op otherwise)
     setFullView(false);
     setFocus(false);
     exitSquadsHome();
     setTeamId(id);
     setScreen("teams");
     perfStart("switch-team", id);
+    closeStorybook("replace"); // a palette/sidebar pick must leave a Storybook takeover (sync, order-independent; no-op otherwise)
   }, []);
 
   const onToggleTeamExpand = useCallback((id: string) => {
