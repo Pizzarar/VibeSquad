@@ -88,6 +88,12 @@ test('usa-49: Buddy >80 turns is in byLaneRole as brainstorm, not in pooled/bySq
   const sum = (r) => r.productive.turns + r.waiting.turns + r.loop.turns + r.other.turns;
   assert.deepEqual(l.byLaneRole.map((r) => [r.teamId, r.lane, r.role]), [['alpha', 'bug', 'brainstorm'], ['alpha', 'usage', 'brainstorm'], ['alpha', 'usage', 'lead']]);
   for (const r of l.byLaneRole) assert.equal(sum(r), 5);
+  const bud = l.byLaneRole.find((r) => r.lane === 'usage' && r.role === 'brainstorm');
+  assert.equal(bud.other.turns, 2);
+  assert.equal(bud.loop.turns, 3);
+  assert.equal(bud.productive.turns + bud.waiting.turns, 0);
+  assert.ok(Math.abs(bud.other.costUsd - 0.2) < 1e-6, `other cost ${bud.other.costUsd}`);
+  assert.ok(Math.abs(bud.loop.costUsd - 0.3) < 1e-6, `loop cost ${bud.loop.costUsd}`);
   assert.equal(sum(l.pooled), 5, 'pooled is lead-only');
   assert.equal(l.bySquad.length, 1);
   assert.equal(sum(l.bySquad[0]), 5);

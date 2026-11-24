@@ -4,6 +4,7 @@
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
 import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, mkdtempSync, writeFileSync, statSync } from "node:fs";
 import { readdir as readdirAsync, stat as statAsync } from "node:fs/promises";
@@ -806,7 +807,8 @@ function stableJson(v) {
   if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(",")}}`;
   return JSON.stringify(v) ?? "null";
 }
-const toolSig = (t) => `${t.name}|${stableJson(t.input)}`;
+// usa-49: hashed so st.longTail.seen keys stay bounded (Buddy Write/Edit inputs carry whole docs).
+const toolSig = (t) => createHash("sha256").update(`${t.name}|${stableJson(t.input)}`).digest("base64url");
 function isProductiveTool(t) {
   const name = String(t.name ?? "");
   if (LEAD_PRODUCTIVE_TOOL_RE.test(name)) return true;
