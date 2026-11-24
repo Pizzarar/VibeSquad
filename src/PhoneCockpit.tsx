@@ -11,6 +11,7 @@ import {
   effectiveSurface,
   getBuddyRequest,
   hostHealthLine,
+  restartStateLabel,
   isBugsLane,
   isPhoneShell,
   openBuddy,
@@ -100,6 +101,26 @@ function Empty({ what, action, busy, onAction }: { what: string; action: string;
   );
 }
 
+type HostStatus = { hostLabel?: string; headless?: boolean; restartRequest?: { state: string; summary?: string } | null; relay?: { running?: boolean; connected?: boolean } | null };
+
+/** H1: host label / headless / relay / restart window from /api/auth/status; once on mount, then every 30s only while the ⋯ drawer is open. */
+function useHostStatus(open: boolean): HostStatus | null {
+  const [st, setSt] = useState<HostStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch("/api/auth/status")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => alive && j && setSt(j as HostStatus))
+        .catch(() => {});
+    load();
+    if (!open) return () => { alive = false; };
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [open]);
+  return st;
+}
+
 export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSlot, onSuccessor, onSpinUp, onSpinUpOverlord, overlordBusy = false, onSettings }: Props) {
   const needsYou = view?.needsYou ?? 0;
   const [vibe] = usePref("app.vibe");
@@ -111,6 +132,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
     /gemini/i.test(getLastBrainstormProfile()) ? "gemini" : "claude",
   );
   const [switching, setSwitching] = useState(false);
+  const host = useHostStatus(menu);
 
   const chooseDefaultProv = (next: "claude" | "gemini") => {
     setDefaultProv(next);
@@ -138,7 +160,8 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
 
   const shown = effectiveSurface(surface, buddyLane);
   const zones = skyZonesFor(view);
-  const health = hostHealthLine(runnerConn);
+  const restartState = host?.restartRequest?.state ?? null;
+  const health = hostHealthLine(runnerConn, host?.hostLabel, restartState);
   const buddy = buddyOf(view, buddyLane);
   const laneRows = phoneLaneRows(view);
   const activeMember =
@@ -271,7 +294,15 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
         <aside className="phone-drawer" data-testid="phone-drawer" aria-label="Host">
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
+            {host?.headless && <span className="phone-host-badge" data-testid="phone-host-headless">headless</span>}
           </div>
+          {host && (
+            <div className="phone-host-block muted small" data-testid="phone-host-block">
+              <span data-testid="phone-host-runner">Runner: {runnerConn === "up" ? "online" : runnerConn === "down" ? "offline" : "reconnecting"}</span>
+              {host.relay && <span data-testid="phone-host-relay">Relay: {host.relay.connected ? "connected" : host.relay.running ? "connecting…" : "off"}</span>}
+              {restartStateLabel(restartState) && <span data-testid="phone-host-restart">{restartStateLabel(restartState)}</span>}
+            </div>
+          )}
           {view && !probeStorybook(view.team.id) && (
             <button
               type="button"

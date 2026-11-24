@@ -247,3 +247,39 @@ test("idea-463 PhoneCockpit: Bugs tab after RiffBot, openBuddy(bugsLane) routes 
   const css = src("styles.css");
   assert.ok(css.includes(".phone-tab-label") && /\.phone-tab \{[^}]*min-width: 0;[^}]*white-space: nowrap;/.test(css), "4 tabs fit narrow phones");
 });
+
+test("H1: hostHealthLine takes a real host label and restart states", () => {
+  assert.deepEqual(hostHealthLine("up", "brimble-pc"), { text: "brimble-pc · Online", tone: "ok" });
+  assert.equal(hostHealthLine("up", undefined, "queued").text, "Home PC · Restart queued");
+  assert.equal(hostHealthLine("up", "pc", "draining").text, "pc · Draining for restart…");
+  assert.equal(hostHealthLine("down", "pc", "firing").text, "pc · Restarting host…");
+  assert.equal(hostHealthLine("down", "pc", "done").text, "pc · Offline");
+  assert.equal(hostHealthLine("up", "pc", null).tone, "ok");
+});
+
+test("H1: getAuthStatus carries hostLabel, headless and restartRequest (null when absent/corrupt)", async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const home = mkdtempSync(join(tmpdir(), "vs-h1-"));
+  const prev = { h: process.env.VIBESQUAD_HOME, l: process.env.VIBESQUAD_HOST_LABEL, hl: process.env.VIBESQUAD_HEADLESS };
+  process.env.VIBESQUAD_HOME = home;
+  process.env.VIBESQUAD_HOST_LABEL = "test-box";
+  process.env.VIBESQUAD_HEADLESS = "1";
+  try {
+    const auth = await import("../server/auth.mjs");
+    const st = auth.getAuthStatus();
+    assert.equal(st.hostLabel, "test-box");
+    assert.equal(st.headless, true);
+    assert.equal(st.restartRequest, null);
+  } finally {
+    for (const [k, v] of [["VIBESQUAD_HOME", prev.h], ["VIBESQUAD_HOST_LABEL", prev.l], ["VIBESQUAD_HEADLESS", prev.hl]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  }
+});
+
+test("H1: PhoneCockpit fetches host status and renders the host block in the drawer", () => {
+  const t = src("PhoneCockpit.tsx");
+  assert.match(t, /\/api\/auth\/status/);
+  assert.match(t, /phone-host-block/);
+  assert.match(t, /hostHealthLine\(runnerConn, host\?\.hostLabel, restartState\)/);
+});
