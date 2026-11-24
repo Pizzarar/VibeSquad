@@ -108,17 +108,27 @@ test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onS
   assert.ok(/state === "none"\) onSpinUp\(r\.pin(?:,\s*[^)]+)?\);\s*openBuddy\(r\.laneId\)/.test(s));
 });
 
-test("idea-838: phone shell has a Storybook entry gated by probeStorybook, opens via openStorybook, Back returns to cockpit", () => {
+test("idea-838: phone shell has a Storybook entry gated by the known-missing probe, opens via openStorybook, Back returns to cockpit", () => {
   const c = src("PhoneCockpit.tsx");
-  assert.ok(c.includes('import { openStorybook, probeStorybook } from "./StorybookView";'), "imports openStorybook + probeStorybook");
+  assert.ok(c.includes('import { openStorybook, useStorybookMissing } from "./StorybookView";'), "imports openStorybook + useStorybookMissing");
   assert.ok(c.includes("phone-storybook-btn"), "entry present");
-  assert.match(c, /!probeStorybook\(view\.team\.id\)/, "entry hidden when probe reports no Storybook");
+  assert.match(c, /const sbMissing = useStorybookMissing\(view\?\.team\.id \?\? null\)/, "probe read through the subscribe/notify hook so a resolved probe re-renders");
+  assert.match(c, /\{view && !sbMissing && \(/, "entry hidden when the probe reports no Storybook");
   assert.match(c, /openStorybook\(view\.team\.id, view\.team\.name\)/, "entry opens the current project's Storybook");
   // Storybook takeover must precede the phone-shell gate so a phone user actually sees the view (and its ← Back closes it).
   const app = src("App.tsx");
   const sbGate = app.indexOf("storybookOpen && deviceRole");
   const phoneGate = app.indexOf("if (phoneShell)");
   assert.ok(sbGate > 0 && sbGate < phoneGate, "StorybookHost branch precedes the phone shell, so Back returns to the cockpit");
+});
+
+test("idea-838 m2: Storybook entry names the project like the desktop item, project name ellipsized when long", () => {
+  const c = src("PhoneCockpit.tsx");
+  assert.match(c, /<span className="phone-storybook-label">Open Storybook · <\/span>/);
+  assert.match(c, /<span className="phone-storybook-name">\{view\.team\.name\}<\/span>/);
+  const css = src("styles.css");
+  for (const cls of [".phone-storybook-btn", ".phone-storybook-label", ".phone-storybook-name"]) assert.ok(css.includes(cls), cls);
+  assert.match(css, /\.phone-storybook-name \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
 });
 
 test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher & corpo settings search", () => {

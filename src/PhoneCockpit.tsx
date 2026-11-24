@@ -21,7 +21,7 @@ import {
 } from "./phoneCockpitLogic";
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
-import { openStorybook, probeStorybook } from "./StorybookView";
+import { openStorybook, useStorybookMissing } from "./StorybookView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -141,6 +141,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   const health = hostHealthLine(runnerConn);
   const buddy = buddyOf(view, buddyLane);
   const laneRows = phoneLaneRows(view);
+  const sbMissing = useStorybookMissing(view?.team.id ?? null);
   const activeMember =
     shown === "overlord" ? zones.overlord.member : shown === "riffbot" ? zones.riffbot.member : shown === "bugs" ? bugs.member : buddy;
   const activeProv = activeMember ? providerSpec(activeMember.agent.provider) : null;
@@ -272,7 +273,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
           </div>
-          {view && !probeStorybook(view.team.id) && (
+          {view && !sbMissing && (
             <button
               type="button"
               className="btn ghost phone-storybook-btn"
@@ -282,7 +283,8 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
                 openStorybook(view.team.id, view.team.name);
               }}
             >
-              ◉ Storybook
+              <span className="phone-storybook-label">Open Storybook · </span>
+              <span className="phone-storybook-name">{view.team.name}</span>
             </button>
           )}
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
