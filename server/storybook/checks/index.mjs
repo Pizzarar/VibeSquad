@@ -9,9 +9,10 @@ export const CHECK_MODULES = [structural];
 
 const num = (id) => Number(String(id).slice(1));
 const refKey = (f) => (f.entityRef ? `${f.entityRef.kind}:${f.entityRef.id}` : "");
+const cs = (a, b) => (a < b ? -1 : a > b ? 1 : 0); // code-unit order: host-independent
 function cmp(a, b) {
-  return num(a.check) - num(b.check) || refKey(a).localeCompare(refKey(b)) || (a.source?.path ?? "").localeCompare(b.source?.path ?? "")
-    || (a.source?.line ?? 0) - (b.source?.line ?? 0) || a.msg.localeCompare(b.msg);
+  return num(a.check) - num(b.check) || cs(refKey(a), refKey(b)) || cs(a.source?.path ?? "", b.source?.path ?? "")
+    || (a.source?.line ?? 0) - (b.source?.line ?? 0) || cs(a.msg, b.msg);
 }
 
 /** Run every registered check. Never throws for a check's failure: that becomes one warn finding. Deterministic order. */
@@ -22,11 +23,11 @@ export async function runChecks(snapshot, adapter, { reader = null, modules = CH
   for (const mod of modules) {
     for (const c of mod.checks) {
       let found;
-      try { found = await c.run(ctx); } catch (e) {
+      try { found = await c.run(ctx); if (found == null) found = []; if (!Array.isArray(found)) throw new Error("run() did not return an array"); } catch (e) {
         out.push({ check: c.id, severity: "warn", entityRef: null, msg: `check ${c.id} (${c.title}) threw: ${String(e?.message ?? e).slice(0, 200)}`, source: null });
         continue;
       }
-      for (const f of found ?? []) {
+      for (const f of found) {
         const v = validateFinding(f);
         if (v.ok) out.push(f);
         else out.push({ check: c.id, severity: "warn", entityRef: null, msg: `check ${c.id} produced an invalid finding: ${v.errors.join("; ")}`, source: null });

@@ -153,3 +153,24 @@ test("#8 negative: no STORY-TODO anywhere -> 0; without a reader the .gd part is
   assert.equal((await run(files)).by("#8").length, 1);
   assert.equal((await run(files, { reader: false })).by("#8").length, 0);
 });
+
+test("SB2-FIX M1: a check returning a non-array becomes a warn, others still run", async () => {
+  const fake = makeFakeRepo(); cleanups.push(fake.cleanup);
+  const snap = await loadSnapshot(efiAdapter, makeReader(fake.clone, fake.sha), { ref: "x" });
+  const mods = [{ checks: [{ id: "#9", title: "obj", run: () => ({ check: "#9" }) }, { id: "#3", title: "ok", run: () => [{ check: "#3", severity: "info", entityRef: null, msg: "fine", source: null }] }] }];
+  const f = await runChecks(snap, efiAdapter, { modules: mods });
+  assert.deepEqual(f.map((x) => [x.check, x.severity]), [["#3", "info"], ["#9", "warn"]]);
+});
+
+test("SB2-FIX L2: single-word collision keys on the token (punctuated names)", async () => {
+  const items = JSON.parse(FILES["data/items.json"]); items.items.push({ id: "tool_tank", name: "(Tank)", category: "tool", tier: 1, weight: 1, base_value: 1 });
+  const en = JSON.parse(FILES["data/enemies.json"]); en.enemies.big_tank = { name: "Big Tank", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
+  const r = await run({ ...FILES, "data/items.json": JSON.stringify(items), "data/enemies.json": JSON.stringify(en) });
+  assert.ok(r.by("#7").some((f) => /word "tank"/.test(f.msg) && /tool_tank/.test(f.msg) && /big_tank/.test(f.msg)), r.by("#7").map((f) => f.msg).join("\n"));
+});
+
+test("SB2-FIX L3: STORY-TODO without a space still trims the marker", async () => {
+  const q = edit("data/questlines.json", (j) => { j.questlines.popper.steps[0].title = "STORY-TODO:fix intro"; });
+  const r = await run({ ...FILES, ...q });
+  assert.ok(r.by("#8").some((f) => f.msg.includes('"fix intro"')), r.by("#8").map((f) => f.msg).join("\n"));
+});

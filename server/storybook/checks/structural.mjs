@@ -70,7 +70,8 @@ const ID_KINDS = ["trader", "squad", "enemy", "location", "room", "item", "skill
 const NAME_KINDS = ["trader", "squad", "enemy", "location", "room", "item"];
 const normName = (s) => String(s).trim().toLowerCase().replace(/\s+/g, " ").replace(/^(?:the|a|an) /, "");
 const tokens = (s) => normName(s).split(/[^a-z0-9']+/).filter(Boolean);
-const byRef = (a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`);
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0); // code-unit order: host-independent
+const byRef = (a, b) => cmpStr(`${a.kind}:${a.id}`, `${b.kind}:${b.id}`);
 
 function collisions({ registry }) {
   const out = [];
@@ -90,7 +91,7 @@ function collisions({ registry }) {
   const exact = new Map();
   for (const e of named) for (const n of names(e)) (exact.get(n) ?? exact.set(n, []).get(n)).push(e);
   const seen = new Set();
-  for (const [n, es] of [...exact].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [n, es] of [...exact].sort(([a], [b]) => cmpStr(a, b))) {
     if (es.length < 2) continue;
     es.sort(byRef);
     seen.add(n);
@@ -98,8 +99,8 @@ function collisions({ registry }) {
     out.push(F("#7", same ? "warn" : "info", es[0], `name "${n}" is shared by ${es.map((e) => `${e.kind} ${e.id} (${e.display})`).join(", ")}`));
   }
   const single = new Map();
-  for (const e of named) for (const n of names(e)) if (tokens(n).length === 1) (single.get(n) ?? single.set(n, []).get(n)).push(e);
-  for (const [w, owners] of [...single].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const e of named) for (const n of names(e)) if (tokens(n).length === 1) { const w = tokens(n)[0]; (single.get(w) ?? single.set(w, []).get(w)).push(e); }
+  for (const [w, owners] of [...single].sort(([a], [b]) => cmpStr(a, b))) {
     const hits = named.filter((e) => !owners.includes(e) && names(e).some((n) => tokens(n).length > 1 && tokens(n).includes(w)));
     if (!hits.length || seen.has(w)) continue;
     const all = [...owners, ...hits].sort(byRef);
@@ -112,11 +113,11 @@ function collisions({ registry }) {
 async function storyTodo({ registry, hooks, reader }) {
   const out = [];
   for (const s of registry.byKind("quest_step")) {
-    for (const f of ["title", "story"]) if (isTodoText(s.data[f])) out.push(F("#8", "info", s, `${s.id}.${f} still carries STORY-TODO: ${JSON.stringify(s.data[f].slice(12).trim().slice(0, 50))}`));
+    for (const f of ["title", "story"]) if (isTodoText(s.data[f])) out.push(F("#8", "info", s, `${s.id}.${f} still carries STORY-TODO: ${JSON.stringify(s.data[f].slice(11).trim().slice(0, 50))}`));
   }
   for (const l of registry.byKind("line")) {
     if (l.data.origin === "csv" || l.data.origin === "raid_story") continue; // csv rows mirror the same strings (status column); raid_story is code
-    if (isTodoText(l.data.text)) out.push(F("#8", "info", l, `${l.id} still carries STORY-TODO: ${JSON.stringify(l.data.text.slice(12).trim().slice(0, 50))}`));
+    if (isTodoText(l.data.text)) out.push(F("#8", "info", l, `${l.id} still carries STORY-TODO: ${JSON.stringify(l.data.text.slice(11).trim().slice(0, 50))}`));
   }
   if (reader && typeof hooks.sourceTodoComments === "function") {
     for (const c of await hooks.sourceTodoComments(reader)) out.push({ check: "#8", severity: "info", entityRef: null, msg: `STORY-TODO comment in ${c.path}:${c.line}: ${c.text}`, source: { path: c.path, line: c.line } });
