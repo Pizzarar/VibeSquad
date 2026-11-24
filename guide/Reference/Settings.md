@@ -46,9 +46,10 @@ Both are on the **About** tab, on the host PC only (they don't show on a remotel
 - **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
 - **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
 
-Three kinds of restart behave differently:
+Four kinds of restart behave differently:
 
 - **`vs restart`** (the command): waits for agents to go idle, and for background work an idle agent started (like a test run). If background work is still going when the wait runs out, it puts the restart off and stops nothing. Otherwise it restarts, then resumes the agents the restart lost and checks each one woke, with one retry. One that still won't wake is marked lost: it shows as closed in the UI, and your next message to it can resume it.
+- **`vs restart request`** (owner/Overlord only): a non-urgent request is queued for the next fixed UTC restart window (`13:00Z` or `21:00Z`; `VS_RESTART_WINDOWS` overrides). Nothing is asked or held before then, and further requests fold into the queued one. `--urgent` drains immediately.
 - **Automatic runner restart** (the server restarting the runner when new runner code is installed): waits until no turns are running and no agent holds background work, then restarts. It does not resume agents for you.
 - **Desktop Restart & Update**: installs and restarts straight away. It does neither of the above.
 
@@ -103,7 +104,7 @@ An amber **⚠ CONFIG WARNING** box appears at the top only when a config file c
 
 ![The Runner & Providers tab: one card per provider with a status pill, its version, an Enabled checkbox, and the Extra models, Extra modes and Default model fields](../assets/screenshots/07g-settings-runner.png)
 
-The runner is the background program that actually runs your agents. This tab lists the providers it can start (Claude Code, Codex and so on). VibeSquad finds them by probing the command-line tools installed on this PC. Each provider has a status pill, its version when known, and an **Enabled** checkbox. Three fields let you add to what the pickers offer:
+The runner is the background program that actually runs your agents. This tab lists the providers it can start (Claude Code, Codex and so on). VibeSquad finds them by probing the command-line tools installed on this PC. Each provider has a status pill, its version when known, and an **Enabled** checkbox. Under each provider, **OFFERED MODELS (N)** lists the models the pickers will show, with a small source note: **from CLI** (read live from the provider's command), **last good list** (the last successful read, used when the CLI can't be asked) or **built-in list** (the fallback). A failed read adds "probe failed" with the reason. **Refresh** asks the CLI again. Three fields let you add to what the pickers offer:
 
 - **EXTRA MODELS (comma-separated)**: model names to add to the list.
 - **EXTRA MODES (comma-separated)**: modes to add to the list.
@@ -113,6 +114,10 @@ The runner is the background program that actually runs your agents. This tab li
 
 - **Change it when:** a provider you installed isn't offered, or you want a model that isn't in the list.
 - **Safe default:** leave everything as found. Untick **Enabled** only for a provider you never want offered.
+
+### Quota alert banner
+
+When a provider's usage window is nearly used up, a red, dismissible banner appears across the app, for example "Claude 5h: 8% left. Resets in 1h 20m. Spend a reset now?". **Open Usage** jumps to the Usage dashboard; **✕** dismisses that alert.
 
 ## Remote Control
 

@@ -31,7 +31,7 @@ The VibeSquad **agent runner** (`runner/`) manages agent sessions; the VS server
 - **Desktop app (Windows):** a Tauri shell with an NSIS installer (`src-tauri/tauri.conf.json`).
 - **Web:** the same UI served by the local server (`npm start`, default port 4180).
 - **Android app / PWA:** open **Link / Pair a Device (QR & 6-Digit Code)** on the PC, then scan the QR (or type the 6-digit code) on the phone. The window shows the **CA SHA-256 FINGERPRINT** to compare against what the phone shows, and **PAIRED DEVICES** has a **Revoke** button that signs a device out at once. Other devices are off by default (loopback only) until you enable remote access. Details: [Settings reference](guide/Reference/Settings.md).
-- **`vs restart`:** owner/Overlord only. It waits for agents to go idle (and for background work such as a test run), then restarts the runner and VS server and resumes the agents the restart lost. If background work is still running when the wait ends, the restart is put off and nothing is stopped.
+- **`vs restart`:** owner/Overlord only. It waits for agents to go idle (and for background work such as a test run), then restarts the runner and VS server and resumes the agents the restart lost. If background work is still running when the wait ends, the restart is put off and nothing is stopped. `vs restart request <tip>` queues a restart for the next fixed UTC window (`13:00Z` / `21:00Z`; `--urgent` drains immediately).
 - **Live-Needs:** merge commits carry a `Live-Needs:` trailer (`none`, `build`, `frontend-reload`, `runner-restart`, `server-restart`) saying what a merge needs to go live.
 
 ## Install (Windows, one-stop installer)
