@@ -321,7 +321,7 @@ async function load(reader, sha) {
     for (const t of r.upgrade_tiers ?? []) for (const k of Object.keys(t.materials ?? {})) L("upgrade_material", "item", k);
     E({
       id, kind: "room", display: r.display_name ?? titleCase(id), aliases: [id, r.starter_display_name], source: src(P.rooms, ro.f.key(id)), links: L.links,
-      data: { starter_display_name: r.starter_display_name ?? null, tiers: (r.upgrade_tiers ?? []).length },
+      data: { starter_display_name: r.starter_display_name ?? null, tiers: (r.upgrade_tiers ?? []).length, max_level: Math.max(0, ...(r.upgrade_tiers ?? []).map((t) => Number(t.max) || 0)) || null },
     });
   }
   // items
@@ -498,10 +498,42 @@ function killTargetLocations(registry, enemyId) {
   return registry.byKind("location").filter((l) => poolRows(l, enemyId).length || l.data.boss?.enemy_id === enemyId).map((l) => l.id);
 }
 
+/** Index of the first `#` outside a string literal on one GDScript line, or -1. */
+function commentStart(line) {
+  let q = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === "\\") i++; else if (c === q) q = null; } else if (c === '"' || c === "'") q = c; else if (c === "#") return i;
+  }
+  return -1;
+}
+const GD_DIRS = ["scenes", "systems", "autoloads", "scripts"];
+/**
+ * `STORY-TODO` code comments in .gd files (SB2 check #8). Read through the pinned reader only (ls-tree + show).
+ * A hit is a line where `#` precedes STORY-TODO outside a string literal prefix; returns [{path,line,text}] sorted by path, line.
+ */
+async function sourceTodoComments(reader) {
+  const files = [];
+  for (const d of GD_DIRS) for (const e of await reader.listTree(d, { recursive: true })) if (e.type === "blob" && e.path.endsWith(".gd")) files.push(e.path);
+  files.sort();
+  const out = [];
+  for (let i = 0; i < files.length; i += 16) {
+    const batch = await Promise.all(files.slice(i, i + 16).map(async (p) => [p, await reader.readFile(p)]));
+    for (const [p, text] of batch) {
+      if (text == null || !text.includes("STORY-TODO")) continue;
+      text.split("\n").forEach((l, n) => {
+        const h = commentStart(l);
+        if (h >= 0 && l.indexOf("STORY-TODO", h) > h) out.push({ path: p, line: n + 1, text: l.slice(h).trim().slice(0, 160) });
+      });
+    }
+  }
+  return out;
+}
+
 export const efiAdapter = {
   id: "efi",
   defaultRepoPath: null, // never hardcoded: the caller (SB4, from VS project config) supplies the repo path
   load,
-  hooks: { spawnWindow, killTargetLocations },
+  hooks: { spawnWindow, killTargetLocations, sourceTodoComments },
 };
 export default efiAdapter;
