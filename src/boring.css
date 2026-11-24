@@ -1374,3 +1374,45 @@ html[data-vibe="boring"] .boring-lane-mini.err { box-shadow: 0 0 0 1.5px var(--s
 html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit { box-shadow: 0 0 0 1.5px var(--living-warm); }
 html[data-vibe="boring"] [data-squad-state="idle"] .boring-lane-mini.lit { filter: grayscale(0.85) brightness(0.8); }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-mate-av, html[data-vibe="boring"] .boring-lane-mini { transition: none; } }
+
+/* ---- B13d: chat "Working now" focal card, message avatars + name line, right-aligned own bubbles, warm permission card (mockup 2-living). Normal only; Psycho never matches. ---- */
+html[data-vibe="boring"] .boring-now { display: flex; align-items: center; gap: 18px; margin: 16px auto 0; width: calc(100% - 48px); max-width: var(--measure-col); box-sizing: border-box; padding: 16px 20px; border-radius: 16px; background: color-mix(in srgb, var(--surface-1) 85%, transparent); border: 1px solid color-mix(in srgb, var(--text-1) 8%, transparent); color: var(--text-1); transition: border-color 1.2s cubic-bezier(.2,.7,.2,1), box-shadow 1.2s cubic-bezier(.2,.7,.2,1); }
+html[data-vibe="boring"] .boring-now[data-state="busy"] { border-color: color-mix(in srgb, var(--living-warm) 40%, transparent); box-shadow: 0 10px 40px -18px var(--living-warm); }
+html[data-vibe="boring"] .boring-now-big { flex: none; display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 18px; overflow: hidden; background: var(--surface-3); cursor: pointer; transition: box-shadow 1.2s cubic-bezier(.2,.7,.2,1), filter 1.2s; }
+html[data-vibe="boring"] .boring-now-big:disabled { cursor: default; }
+html[data-vibe="boring"] .boring-now-big:focus-visible,
+html[data-vibe="boring"] .boring-now-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+html[data-vibe="boring"] .boring-now[data-state="busy"] .boring-now-big { box-shadow: 0 0 0 2px var(--living-warm), 0 0 30px -4px color-mix(in srgb, var(--living-warm) 67%, transparent); }
+html[data-vibe="boring"] .boring-now[data-state="idle"] .boring-now-big { filter: grayscale(0.8) brightness(0.85); }
+html[data-vibe="boring"] .boring-now-text { min-width: 0; flex: 1 1 auto; }
+html[data-vibe="boring"] .boring-now-t { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+html[data-vibe="boring"] .boring-now[data-state="busy"] .boring-now-t { color: var(--living-warm); }
+html[data-vibe="boring"] .boring-now-h { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
+html[data-vibe="boring"] .boring-now-s2 { margin-top: 2px; font-size: 13px; color: var(--text-2); }
+html[data-vibe="boring"] .boring-now-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; max-width: 40%; }
+html[data-vibe="boring"] .boring-now-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 2px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+html[data-vibe="boring"] .boring-now-chip:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-now-chip img { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 1.5px var(--living-warm); }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
+
+/* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */
+html[data-vibe="boring"] .boring-drawer .tl-assistant,
+html[data-vibe="boring"] .boring-drawer .timeline .tl-assistant { position: relative; padding: 30px 0 12px 58px; min-height: 56px; }
+html[data-vibe="boring"] .boring-drawer .tl-assistant::before { content: ""; position: absolute; left: 0; top: 12px; width: 44px; height: 44px; border-radius: 12px; background: var(--surface-3) var(--boring-bust, none) center / 42px 42px no-repeat; image-rendering: pixelated; }
+html[data-vibe="boring"] .boring-drawer .tl-assistant::after { content: var(--boring-who, "") "  ·  " var(--boring-role, ""); position: absolute; left: 58px; top: 10px; font-size: 14px; font-weight: 700; line-height: 20px; color: var(--text-1); white-space: pre; }
+/* Your messages: right-aligned bubble, no avatar (mockup .me .bub). */
+html[data-vibe="boring"] .boring-drawer .tl-user,
+html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-left: auto; margin-right: max(0px, calc((100% - var(--measure-col)) / 2)); max-width: min(640px, 85%); width: fit-content; box-sizing: border-box; padding: 10px 16px; border: 0; border-left: 0; border-radius: 16px 16px 4px 16px; background: var(--surface-3); }
+
+/* Warm permission card: dark card, amber-tinted border, amber header band ("Needs your OK"), mono "$ cmd", Allow in the living amber. */
+html[data-vibe="boring"] .perm-card { overflow: hidden; padding: 0 16px 14px; background: var(--surface-1); border: 1px solid color-mix(in srgb, var(--st-attn) 33%, transparent); border-left: 1px solid color-mix(in srgb, var(--st-attn) 33%, transparent); border-radius: 14px; }
+html[data-vibe="boring"] .perm-card .perm-head { margin: 0 -16px 12px; padding: 10px 16px; background: color-mix(in srgb, var(--st-attn) 8%, var(--surface-1)); }
+html[data-vibe="boring"] .perm-card .perm-head-main > b { font-size: 13px; font-weight: 700; color: var(--st-attn); }
+html[data-vibe="boring"] .perm-card .perm-head-main > b::before { content: "● Needs your OK · "; }
+html[data-vibe="boring"] .perm-card .perm-preview-cmd { margin: 0; padding: 4px 0; background: transparent; font-family: var(--mono); font-size: 16px; color: var(--text-1); white-space: pre-wrap; }
+html[data-vibe="boring"] .perm-card .perm-preview-cmd::before { content: "$ "; color: var(--text-3); }
+html[data-vibe="boring"] .perm-card .perm-preview-diff,
+html[data-vibe="boring"] .perm-card .perm-preview-input { border-radius: 8px; font-family: var(--mono); }
+html[data-vibe="boring"] .perm-card .btn { border-radius: 9px; font-weight: 700; }
+html[data-vibe="boring"] .perm-card .btn.perm-allow,
+html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }

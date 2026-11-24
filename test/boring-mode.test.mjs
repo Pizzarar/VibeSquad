@@ -2239,5 +2239,71 @@ test("B13c: Desk is a 3-tile mascot grid and lanes carry mini avatars (source + 
   assert.match(css, /\.boring-mate\.idle \.boring-mate-av \{ filter: grayscale\(0\.85\) brightness\(0\.8\)/);
   assert.match(css, /\.boring-bust-img \{[^}]*image-rendering: pixelated/);
   assert.ok(!/\.boring-mate[^{]*\{[^}]*opacity/.test(css), "no opacity on mascot tiles");
-  assert.ok(!/Hypnospace/.test(ade.split("\n").filter((l) => /["'`>]/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n").replace(/\/\*.*?\*\//g, "")) || true);
+  const uiLines = ade.split("\n").filter((l) => /["'`>]/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n").replace(/\/\*.*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.ok(!/Hypnospace/.test(uiLines), "no user-facing Hypnospace copy in BoringAde");
+});
+
+test("B13d: Working-now focal card: busy = first running agent + activity, idle = greyed card with this agent's state", async () => {
+  const rdSrc = (n) => readFileSync(resolve(import.meta.dirname, "..", "src", n), "utf8");
+  writeFileSync(join(dir, "b13dBusts.mjs"), transformSync("boringBusts.ts", rdSrc("boringBusts.ts"), { lang: "ts" }).code);
+  const code = transformSync("BoringWorkingNow.tsx", rdSrc("BoringWorkingNow.tsx"), { lang: "tsx", jsx: { runtime: "classic" } }).code
+    .replace(/import \{ openAgent \} from "\.\/panes";/, "const openAgent = () => {};")
+    .replace(/import \{ isHubLaneId \} from "\.\/teams";/, "const isHubLaneId = () => false;")
+    .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
+    .replace(/from "\.\/boringBusts"/, 'from "./b13dBusts.mjs"')
+    .replace(/^import type .*$/gm, "");
+  const f = join(dir, "b13dWorkingNow.mjs");
+  writeFileSync(f, `import React from ${JSON.stringify(reactUrl)};\n` + code);
+  const { BoringWorkingNow, workingActivity, idleActivity, boringChatVars } = await import(pathToFileURL(f).href);
+  assert.equal(workingActivity({ openToolName: "Bash" }), "running Bash");
+  assert.equal(workingActivity({ openToolName: null }), "thinking");
+  assert.equal(workingActivity({ queued: { ahead: 2 } }), "queued (2 ahead)");
+  assert.equal(idleActivity({ status: "idle", attentionReason: "finished" }), "finished · waiting on you");
+  assert.equal(idleActivity({ status: "idle", pendingPermissions: [{}] }), "needs your OK");
+  assert.equal(idleActivity({ status: "error" }), "hit an error");
+  assert.equal(idleActivity({ status: "idle" }), "is idle");
+  const me = { id: "me", title: "Buddy", status: "idle", labels: { role: "brainstorm", lane: "boring-mode" } };
+  const idle = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: me, members: [], subs: 0 }));
+  assert.match(idle, /data-testid="boring-working-now" data-state="idle"/);
+  assert.match(idle, />Idle</);
+  assert.match(idle, /Buddy is idle/);
+  assert.match(idle, /src="\/ui\/busts\/buddy\.png"/);
+  const lead = { id: "ld", title: "★ Bor13", status: "running", openToolName: "Edit", labels: { role: "lead", lane: "boring-mode" } };
+  const w1 = { id: "w1", title: "Worker A", status: "running", labels: {} };
+  const busy = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: me, members: [{ agent: lead }, { agent: w1 }], subs: 1 }));
+  assert.match(busy, /data-state="busy"/);
+  assert.match(busy, />Working now</);
+  assert.match(busy, /★ Bor13 is running Edit/);
+  assert.match(busy, /src="\/ui\/busts\/lead\.png"/);
+  assert.match(busy, /data-testid="boring-working-now-w1"/);
+  assert.match(busy, /1 sub-agent call</);
+  const v = boringChatVars(lead);
+  assert.equal(v["--boring-bust"], 'url("/ui/busts/lead.png")');
+  assert.equal(v["--boring-who"], '"★ Bor13"');
+  assert.equal(v["--boring-role"], '"Lead"');
+});
+
+test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is boring-scoped (avatars, own bubbles, warm perm card)", () => {
+  const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
+  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} \/>\}/);
+  assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
+  assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
+  const i = css.indexOf("/* ---- B13d:");
+  assert.ok(i > 0);
+  const sect = css.slice(i);
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  assert.ok(!/@keyframes/.test(sect));
+  assert.match(sect, /\.boring-now\[data-state="busy"\] \.boring-now-big \{ box-shadow: 0 0 0 2px var\(--living-warm\)/);
+  assert.match(sect, /\.boring-now\[data-state="idle"\] \.boring-now-big \{ filter: grayscale/);
+  assert.match(sect, /\.boring-drawer \.tl-assistant::before \{[^}]*width: 44px;[^}]*var\(--boring-bust, none\)/);
+  assert.match(sect, /\.boring-drawer \.tl-assistant::after \{ content: var\(--boring-who, ""\)/);
+  assert.match(sect, /\.boring-drawer \.timeline \.tl-user \{ margin-left: auto;[^}]*border-radius: 16px 16px 4px 16px/);
+  assert.match(sect, /\.perm-card \.perm-head \{[^}]*var\(--st-attn\) 8%/);
+  assert.match(sect, /\.perm-card \.perm-preview-cmd::before \{ content: "\$ "/);
+  assert.match(sect, /\.perm-card \.btn\.perm-allow,[\s\S]*?background: var\(--living-prime\)/);
+  assert.match(sect, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-now, /);
+  assert.ok(!/!important/.test(sect));
+  assert.match(readFileSync(resolve(import.meta.dirname, "..", "src", "PermissionCard.tsx"), "utf8"), /style=\{vibe === "boring" \? undefined : \{ fontFamily: "monospace", fontSize: 11 \}\}/);
 });

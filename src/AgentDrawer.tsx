@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { expandFolderMentions } from "./projectContext";
 import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "./agentTypes";
@@ -40,6 +40,7 @@ import { BoringAgentHeader } from "./BoringAgentHeader";
 import { useVibe } from "./AngelBezel";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers } from "./WorkingBar";
+import { BoringWorkingNow, boringChatVars } from "./BoringWorkingNow";
 import { RightDock } from "./RightDock";
 import { BoringContextPanel, useContextPanel } from "./BoringContextPanel";
 
@@ -187,6 +188,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   setAgentCwd(agent.id, agent.cwd);
 
   const vibe = useVibe();
+  const boringChat = vibe === "boring" && !chatOnly;
   const [ctxPanelOpen, toggleCtxPanel] = useContextPanel();
   const isBs = isBrainstormAgent(agent);
   const isTopicBs = isTopicBrainstorm(agent);
@@ -527,7 +529,8 @@ ${draft}`);
 
   return (
     <aside
-      className="drawer"
+      className={boringChat ? "drawer boring-drawer" : "drawer"}
+      style={boringChat ? (boringChatVars(agent) as CSSProperties) : undefined}
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer?.types ?? []).includes("Files")) {
           e.preventDefault();
@@ -647,6 +650,8 @@ ${draft}`);
         chatOnly={chatOnly}
       />
       )}
+
+      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} />}
 
       {agent.pendingPermissions?.map((p) => (
         <PermissionCard
