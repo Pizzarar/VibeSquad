@@ -51,6 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
+import { StorybookHost, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
@@ -1537,6 +1538,7 @@ export function App() {
   );
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [screen, setScreen] = useState<"teams">("teams");
+  const storybookOpen = useStorybookTarget() != null;
   const [query, setQuery] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
@@ -1998,6 +2000,9 @@ export function App() {
       )}
     </>
   );
+
+  // Storybook (SB5): read-only per-project view, opened from the project ⋯ menu; replaces the cockpit until Back.
+  if (storybookOpen && deviceRole !== "bug-tester") return (<><StorybookHost />{overlays}</>);
 
   // E6b: a scoped bug-tester device gets the Alpha Tester Desk on desktop AND phone: no IDE chrome, owner menus or pairing modals.
   if (deviceRole === "bug-tester") {
