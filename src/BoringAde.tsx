@@ -807,7 +807,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
     // m1: keep the tile caption short so the age survives the 3-col grid at 1920 ("idle 12m", not "idle · 12m ago").
     const shortAge = age === "just now" ? "now" : age.replace(/ ago$/, "");
-    const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working ${shortAge}` : status === "none" ? "no agent" : `idle${age ? ` ${shortAge}` : ""}`;
+    // n4: "working 1m" clips to "working n…" in the 290px sidebar at 1280/1440 — drop the age from the working caption.
+    const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? "working" : status === "none" ? "no agent" : `idle${age ? ` ${shortAge}` : ""}`;
     return (
       <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} title={label} aria-current={isOn(v, key) || extraOn ? "true" : undefined} aria-label={`${short} ${caption}${needsYou > 0 ? ` (${needsYou})` : ""}`}>
         <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>

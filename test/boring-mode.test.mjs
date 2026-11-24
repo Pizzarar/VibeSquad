@@ -2219,7 +2219,7 @@ test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky"
 
 test("B13c: boringBusts maps agent labels to the six bust roles and urls", async () => {
   const code = transformSync("boringBusts.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringBusts.ts"), "utf8"), { lang: "ts" }).code
-    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = () => false; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];');
+    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = (l) => l === "vibesquad"; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];');
   const f = join(dir, "boringBustsReal.mjs");
   writeFileSync(f, code);
   const { bustUrl, bustRoleForAgent } = await import(pathToFileURL(f).href);
@@ -2232,6 +2232,8 @@ test("B13c: boringBusts maps agent labels to the six bust roles and urls", async
   assert.equal(r("lead", "riffbot"), "overlord"); // demo-hub-overlord
   assert.equal(r("lead", "_overlord"), "overlord");
   assert.equal(r("brainstorm", "_riffbot"), "riffbot");
+  assert.equal(r("lead", "vibesquad"), "overlord"); // isHubLaneId fallback (stubbed: vibesquad is a hub lane)
+  assert.equal(r("brainstorm", "vibesquad"), "riffbot"); // isHubLaneId fallback
   assert.equal(r("lead", "bug-chaser"), "bugs");
   assert.equal(r("worker", "bug-runner"), "bugs"); // BUG_LANE_FALLBACK_IDS includes bug-runner
   assert.equal(r("worker", "_bugs"), "bugs");
