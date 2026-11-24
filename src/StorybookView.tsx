@@ -35,8 +35,11 @@ export function openStorybook(projectId: string, name?: string): void {
 }
 export function closeStorybook(): void {
   if (!target) return;
-  if (pushed && urlProject()) { history.back(); return; } // undo our own push; the popstate handler below closes the store
+  // Undo our own push only while it is still the current entry; if anything else pushed since (R19 M3), back() would land on
+  // Storybook's own entry and the popstate handler would keep it open, so strip ?sb= in place instead.
+  if (pushed && urlProject() && history.state?.sb === target.projectId) { history.back(); return; } // popstate handler closes the store
   target = null;
+  pushed = false;
   if (urlProject()) history.replaceState(history.state, "", withSb(null));
   emit();
 }
@@ -58,7 +61,7 @@ const missing = new Map<string, boolean>();
 export function probeStorybook(projectId: string): boolean {
   if (!missing.has(projectId)) {
     missing.set(projectId, false);
-    void fetch(api(projectId)).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
+    void fetch(api(projectId), { method: "HEAD" }).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
   }
   return missing.get(projectId) === true;
 }
@@ -81,8 +84,11 @@ function useCard(idx: EntityIndex) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   const hide = useCallback(() => { clear(); setCard(null); }, []);
+  const quietUntil = useRef(0);
+  const quiet = useCallback((ms: number) => { quietUntil.current = Date.now() + ms; }, []);
   const show = useCallback((entity: SbEntity, el: Element, delay = 0) => {
     clear();
+    if (delay && Date.now() < quietUntil.current) return; // hover left under the pointer after a jump must not open a wrong card
     const anchor = el.getBoundingClientRect();
     if (delay) timer.current = setTimeout(() => setCard({ entity, anchor }), delay);
     else setCard({ entity, anchor });
@@ -90,7 +96,7 @@ function useCard(idx: EntityIndex) {
   const cancel = useCallback(() => clear(), []);
   useEffect(() => clear, []);
   const node = card ? <CardPopover entity={card.entity} anchor={card.anchor} idx={idx} onClose={hide} /> : null;
-  return { show, hide, cancel, node };
+  return { show, hide, cancel, quiet, node };
 }
 
 function CardPopover({ entity, anchor, idx, onClose }: { entity: SbEntity; anchor: DOMRect; idx: EntityIndex; onClose: () => void }) {
@@ -368,6 +374,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const pick = (t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s }));
   // Finding → its entity: open the view that shows it; kinds with no dedicated view get the card.
   const goTo = (e: SbEntity) => {
+    card.quiet(900);
     if (e.kind === "location") { pick("locations")(e.id); setTab("locations"); }
     else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); setJump(`${e.kind}\u0000${e.id}`); }
     else if (e.kind === "line" || e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
@@ -378,6 +385,21 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
       if (el) card.show(e, el);
     }
   };
+
+  // Esc = Back (UX R19 M3). Capture phase + preventDefault so App's Esc → Squads Home handler skips it; an open card takes Esc first.
+  const cardOpen = card.node != null;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || cardOpen) return;
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector(".modal-back, [role='dialog']")) return;
+      e.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [cardOpen, onClose]);
 
   // Finding → quest step: scroll to the step's chip, focus it (which opens its card) and flash it (UX R18 m9).
   useEffect(() => {
@@ -434,8 +456,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
 }
 
 /** Mounted by App when a project's Storybook is open. */
-export function StorybookHost({ needsYou, onNeedsYou }: { needsYou?: number; onNeedsYou?: () => void }) {
+export function StorybookHost({ needsYou, onNeedsYou, projectName }: { needsYou?: number; onNeedsYou?: () => void; projectName?: (id: string) => string | undefined }) {
   const t = useStorybookTarget();
   if (!t) return null;
-  return <StorybookView key={t.projectId} projectId={t.projectId} name={t.name} onClose={closeStorybook} needsYou={needsYou} onNeedsYou={onNeedsYou} />;
+  return <StorybookView key={t.projectId} projectId={t.projectId} name={projectName?.(t.projectId) ?? t.name} onClose={closeStorybook} needsYou={needsYou} onNeedsYou={onNeedsYou} />;
 }

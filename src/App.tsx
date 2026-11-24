@@ -51,7 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
-import { StorybookHost, closeStorybook, useStorybookTarget } from "./StorybookView";
+import { StorybookHost, closeStorybook, probeStorybook, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
@@ -1675,6 +1675,7 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    closeStorybook(); // a palette/sidebar pick must leave a Storybook takeover (no-op otherwise)
     setFullView(false);
     setFocus(false);
     exitSquadsHome();
@@ -1746,6 +1747,7 @@ export function App() {
   );
 
   const onAgent = useCallback((tid: string, aid: string) => {
+    closeStorybook();
     setTeamId(tid);
     selectAgent(aid);
     setScreen("teams");
@@ -1847,6 +1849,7 @@ export function App() {
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
+  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.length]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   const sbNav = useRef(`${activeTeamId}|${urlAgentId}`);
   useEffect(() => {
     const k = `${activeTeamId}|${urlAgentId}`;
@@ -2009,7 +2012,7 @@ export function App() {
   );
 
   // Storybook (SB5): read-only per-project view, opened from the project ⋯ menu; replaces the cockpit until Back.
-  if (storybookOpen && deviceRole !== "bug-tester") return (<><StorybookHost needsYou={needsYouTotal(filterAwakeViews(views, getFolders()), nowTickValue())} onNeedsYou={openTopNeedsYou} />{overlays}</>);
+  if (storybookOpen && deviceRole !== "bug-tester") return (<><StorybookHost needsYou={needsYouTotal(filterAwakeViews(views, getFolders()), nowTickValue())} onNeedsYou={openTopNeedsYou} projectName={(id) => views.find((v) => v.team.id === id)?.team.name} />{overlays}</>);
 
   // E6b: a scoped bug-tester device gets the Alpha Tester Desk on desktop AND phone: no IDE chrome, owner menus or pairing modals.
   if (deviceRole === "bug-tester") {
