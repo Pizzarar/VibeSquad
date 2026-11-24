@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -350,6 +350,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const flagged = data.loops?.flagged ?? [];
   const storms = data.spawnStorms ?? [];
   const leadLongRows = leadLongTurnRows(data.leadLongTurns, activeSquad);
+  const laneRoleTile = laneRoleRows(data.leadLongTurns, activeSquad);
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
@@ -728,6 +729,26 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                   {r.label}: <strong>{r.turns}</strong> turns · {usdText(r.costUsd)} · {pctText(r.pct)}
                 </div>
               ))}
+            </div>
+          )}
+          {laneRoleTile && laneRoleTile.length > 0 && (
+            <div className="usage-lane-role" data-testid="usage-lane-role">
+              <div className="usage-cohort-label small">Long turns by lane × role (sorted by loop $)</div>
+              <div className="usage-table-wrap">
+                <table className="usage-table">
+                  <thead><tr><th>Lane</th><th>Role</th><th className="num">Productive</th><th className="num">Waiting</th><th className="num">Loop</th><th className="num">Other</th></tr></thead>
+                  <tbody>
+                    {laneRoleTile.map((r) => (
+                      <tr key={r.key} data-lane={r.lane} data-role={r.role}>
+                        <td>{r.lane || "—"}</td><td>{r.role}</td>
+                        {(["productive", "waiting", "loop", "other"] as const).map((k) => (
+                          <td key={k} className="num">{r[k].turns} · {usdText(r[k].costUsd)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </section>

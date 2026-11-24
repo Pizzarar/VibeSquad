@@ -72,7 +72,8 @@ export type SpawnStorm = {
 };
 export type LongTurnBucket = { turns: number; costUsd: number };
 export type LongTurnSplit = { productive: LongTurnBucket; waiting?: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
-export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[] };
+export type LaneRoleLongTurns = Partial<LongTurnSplit> & { teamId: string; lane: string; role: string };
+export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[]; byLaneRole?: LaneRoleLongTurns[] };
 
 export type ProfileRow = {
   provider: string;
@@ -892,6 +893,28 @@ export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | n
   const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
   const total = keys.reduce((a, [k]) => a + num(src[k]?.costUsd), 0);
   return keys.map(([key, label]) => ({ key, label, turns: num(src[key]?.turns), costUsd: num(src[key]?.costUsd), pct: total > 0 ? num(src[key]?.costUsd) / total : null }));
+}
+
+export type LaneRoleRow = { key: string; lane: string; role: string; productive: LongTurnBucket; waiting: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
+
+/** usa-52: lane x role long-turn rows (usa-49 byLaneRole), squad-filtered, summed across teams, sorted by loop $ desc (then lane/role). Missing/empty -> null (tile hidden). */
+export function laneRoleRows(l: LeadLongTurns | undefined, squad: string | null): LaneRoleRow[] | null {
+  const src = l?.byLaneRole;
+  if (!Array.isArray(src) || src.length === 0) return null;
+  const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  const b = (x?: LongTurnBucket): LongTurnBucket => ({ turns: num(x?.turns), costUsd: num(x?.costUsd) });
+  const map = new Map<string, LaneRoleRow>();
+  for (const r of src) {
+    if (!r || (squad && r.teamId !== squad)) continue;
+    const key = `${r.lane}\u0000${r.role}`;
+    const row = map.get(key) ?? { key, lane: r.lane, role: r.role, productive: b(), waiting: b(), loop: b(), other: b() };
+    for (const k of ["productive", "waiting", "loop", "other"] as const) {
+      const v = b(r[k]);
+      row[k] = { turns: row[k].turns + v.turns, costUsd: row[k].costUsd + v.costUsd };
+    }
+    map.set(key, row);
+  }
+  return [...map.values()].sort((a, b2) => b2.loop.costUsd - a.loop.costUsd || a.lane.localeCompare(b2.lane) || a.role.localeCompare(b2.role));
 }
 
 /** usa-48: quota alert banner. Active alerts come from usage payload `quotaAlerts` (usa-47). */
