@@ -362,7 +362,7 @@ function UnstickButton() {
   );
 }
 
-type RestartRunnerResult = { ok: boolean; cancelled?: string[]; restarted?: boolean; error?: string };
+type RestartRunnerResult = { ok: boolean; cancelled?: string[]; restarted?: boolean; deferred?: boolean; busy?: string[]; error?: string };
 
 function RestartRunnerButton() {
   const [busy, setBusy] = useState(false);
@@ -385,7 +385,7 @@ function RestartRunnerButton() {
       <p className="muted small">Runner fixes not going live? Restarts the runner so the latest runner code loads.</p>
       {confirming ? (
         <div data-testid="settings-restart-runner-confirm">
-          <p className="muted small">Restart runner? Running turns are cancelled; agents resume on next message.</p>
+          <p className="muted small">Restart runner? Nothing is cancelled: it restarts now if no agent is busy, else once they finish.</p>
           <button className="btn small" disabled={busy} onClick={() => void run()}>Restart now</button>{" "}
           <button className="btn ghost small" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
         </div>
@@ -397,7 +397,11 @@ function RestartRunnerButton() {
       {res && (
         <div className="muted small" data-testid="settings-restart-runner-result">
           {res.ok ? (
-            <>Runner restarted{res.cancelled?.length ? ` · cancelled ${res.cancelled.length}` : ""}</>
+            res.deferred ? (
+              <>Runner restarts once {res.busy?.length || "the"} busy agent(s) finish</>
+            ) : (
+              <>Runner restarted</>
+            )
           ) : (
             <>Failed: {res.error}</>
           )}
