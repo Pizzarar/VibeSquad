@@ -2276,7 +2276,7 @@ export async function commandVerdict(flags, makeContext = createContext, { out =
 }
 
 // Every repo file cli/vs.mjs can reach through relative imports (static or dynamic), so the runtime copy stays complete.
-function vsImportClosure(repoRoot) {
+export function vsImportClosure(repoRoot) {
   const seen = new Set();
   const walk = (rel) => {
     if (seen.has(rel)) return;
@@ -2286,6 +2286,8 @@ function vsImportClosure(repoRoot) {
     for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs|ts))["']/g)) {
       walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
     }
+    // Data files read beside the module (`new URL("./x.json", import.meta.url)`) are not imports but the module needs them (idea-772).
+    for (const m of text.matchAll(/new\s+URL\(\s*["'](\.{1,2}\/[^"']+\.json)["']\s*,\s*import\.meta\.url/g)) seen.add(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
     // The plugin imports the server package by name: @vibesquad/server/x.mjs -> server/x.mjs.
     for (const m of text.matchAll(/(?:from\s+|import\(\s*)["']@vibesquad\/server\/([^"']+\.(?:mjs|js|cjs|ts))["']/g)) walk(path.posix.join("server", m[1]));
   };
