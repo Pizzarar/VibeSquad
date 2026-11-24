@@ -27,6 +27,7 @@ import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { foldersOf, isTeamAsleep, patchTeamsRegistryAsync, readTeamsConfig, resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateFoldersBody, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
+import { createCrunchToggle } from "./crunch-toggle.mjs";
 import { isServerSideFsError } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
@@ -655,7 +656,7 @@ export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
 
 // The teams registry the CLI and plugin read (see teams-file.mjs). Writes keep the other top-level keys.
 // GET adds `revision`; a write that sends one must still match the file, or it gets 409 with the current registry.
-function handleTeams(req, res, rootDir) {
+function handleTeams(req, res, rootDir, opts = {}) {
   if (req.method === "GET") {
     const file = resolveTeamsFilePath(rootDir);
     const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
@@ -695,6 +696,15 @@ function handleTeams(req, res, rootDir) {
       } catch (e) {
         console.warn(`[vibesquad] hub brief seed failed after a teams write: ${e?.message ?? e}`); // the write landed
       }
+      // C2: live wake on a per-Squad vibeMode flip. Fire-and-forget; a toggle failure never fails or delays the save.
+      const backend = opts.backend ?? sharedRunnerBackend();
+      createCrunchToggle({
+        rootDir,
+        listAgents: () => backend.listAgents(),
+        send: (id, text, o) => backend.sendAgentPrompt(id, text, o),
+      })
+        .onTeamsSave(result.prevTeams, result.body.teams)
+        .catch((e) => console.warn(`[vibesquad] crunch-toggle: ${e?.message ?? e}`));
     }
     sendJson(res, result.status, result.body);
   }, (e) => {
@@ -2570,7 +2580,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
-    if (path === "/api/teams") return handleTeams(req, res, rootDir);
+    if (path === "/api/teams") return handleTeams(req, res, rootDir, opts);
     if (path === "/api/profiles") return handleProfiles(req, res);
     if (path.startsWith("/api/storybook/") && handleStorybookRoute(req, res, { rootDir, ...opts.storybook })) return; // SB4; behind the same guard as /api/teams (POST refresh = owner write)
     if (path === "/__vibesquad/local-image") return handleLocalImage(req, res);
@@ -2606,7 +2616,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/devices/revoke":
         return handleRevoke(req, res, readBody);
       case "/__vibesquad/teams":
-        return handleTeams(req, res, rootDir);
+        return handleTeams(req, res, rootDir, opts);
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendServerError(res, e, "first-run status")); // idea-249
