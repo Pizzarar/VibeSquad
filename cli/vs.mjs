@@ -2286,8 +2286,13 @@ export function vsImportClosure(repoRoot) {
     for (const m of text.matchAll(/(?:from\s+|import\(\s*)["'](\.{1,2}\/[^"']+\.(?:mjs|js|cjs|ts))["']/g)) {
       walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
     }
-    // Data files read beside the module (`new URL("./x.json", import.meta.url)`) are not imports but the module needs them (idea-772).
-    for (const m of text.matchAll(/new\s+URL\(\s*["'](\.{1,2}\/[^"']+\.json)["']\s*,\s*import\.meta\.url/g)) seen.add(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
+    // JSON data files a module loads from beside itself via a URL relative to import.meta.url (idea-772). Kept inside
+    // repoRoot and only when the file exists, so a stray match never yields a bogus or escaping entry.
+    for (const m of text.matchAll(/new\s+URL\(\s*["'](\.{1,2}\/[^"']+\.json)["']\s*,\s*import\.meta\.url/g)) {
+      const dataRel = path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]));
+      if (dataRel === ".." || dataRel.startsWith("../") || path.posix.isAbsolute(dataRel)) continue;
+      if (fs.existsSync(path.join(repoRoot, dataRel))) seen.add(dataRel);
+    }
     // The plugin imports the server package by name: @vibesquad/server/x.mjs -> server/x.mjs.
     for (const m of text.matchAll(/(?:from\s+|import\(\s*)["']@vibesquad\/server\/([^"']+\.(?:mjs|js|cjs|ts))["']/g)) walk(path.posix.join("server", m[1]));
   };

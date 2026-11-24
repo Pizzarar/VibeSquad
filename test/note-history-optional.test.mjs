@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,4 +35,23 @@ test("loadNoteHistory: bad JSON / wrong shape -> empty set + warning; good file 
 
 test("vs install runtime copy list includes server/profile-note-history.json (data file beside profiles.mjs)", () => {
   assert.ok(vsImportClosure(repo).includes("server/profile-note-history.json"));
+});
+
+test("vsImportClosure: every returned path exists (no bogus data-file entries)", () => {
+  for (const rel of vsImportClosure(repo)) assert.ok(existsSync(join(repo, rel)), `${rel} does not exist`);
+});
+
+test("vsImportClosure: a ../ JSON reference escaping the repo root is rejected; an in-repo one is kept", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nh772c-"));
+  try {
+    const root = join(dir, "repo");
+    mkdirSync(join(root, "cli"), { recursive: true });
+    writeFileSync(join(dir, "outside.json"), "[]");
+    writeFileSync(join(root, "ok.json"), "[]");
+    writeFileSync(join(root, "cli", "vs.mjs"),
+      'const a = new URL("../../outside.json", import.meta.url);\nconst b = new URL("../ok.json", import.meta.url);\n');
+    const got = vsImportClosure(root);
+    assert.ok(!got.some((p) => p.includes("outside")), JSON.stringify(got));
+    assert.ok(got.includes("ok.json"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
