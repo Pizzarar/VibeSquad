@@ -11,7 +11,7 @@ import { RemoveTeamDialog } from "./PinRemove";
 import { captureFocusReturn } from "./ctxMenuLogic";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
-import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
+import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from "./IdeaInbox";
 import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
@@ -407,6 +407,14 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
   const inboxCount = useInboxCards().length;
+  // R13-1: a ref popover's "Open in Inbox" (Normal) flips to the overview's Idea Inbox tab; the list flashes the card.
+  const focusedInboxCard = useFocusedInboxCard();
+  useEffect(() => {
+    if (focusedInboxCard) {
+      setMode("project");
+      setOverviewTab("inbox");
+    }
+  }, [focusedInboxCard]);
   const [feedCount, setFeedCount] = useState<number>(() => (globalThis as { __feedCount?: number }).__feedCount ?? 0);
   const [feedRows, setFeedRows] = useState<{ lane: string; text: string; ts: string; type?: string }[]>([]);
   useEffect(() => {

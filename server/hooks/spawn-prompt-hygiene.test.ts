@@ -22,6 +22,7 @@ const RULE_MARKERS = [
   "- R4 (Large files)",
   "- R8 (Worktrees & Lanes)",
   "- R12 (Owner principles)",
+  "- R16 (Cite, don't rehash)",
   "- Attribution (Community Accolades)",
   "Project rules first:",
   "To find your current lead:",

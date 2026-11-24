@@ -162,7 +162,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     }
 
     // Verify all 20 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
-    // The Paseo fixture is a historical snapshot; its team-rule lines (R1..R15) drift as the
+    // The Paseo fixture is a historical snapshot; its team-rule lines (R1..R16) drift as the
     // shared prefix changes, so compare the role-specific notes body only.
     const stripRuleLines = (notes) =>
       String(notes)
@@ -779,6 +779,18 @@ test("R15 owner-time-zone rule: same text in the shared prefix of all three sour
   for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
     const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
     assert.ok(src.includes(RULE), `${rel}: missing R15`);
+  }
+});
+
+test("R16 cite-don't-rehash rule: same text in the shared prefix of all three sources, after R15", () => {
+  const RULE = "- R16 (Cite, don't rehash): Point at earlier context with `msg:-N` (your Nth earlier reply) or `idea-N` in backticks; the owner hovers/taps it for the full text. Don't restate what a ref covers.";
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R16");
+  assert.ok(SHARED_NOTE_PREFIX.indexOf("R15 (Owner time zone)") < SHARED_NOTE_PREFIX.indexOf(RULE));
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R16`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(RULE), `${rel}: missing R16`);
   }
 });
 
