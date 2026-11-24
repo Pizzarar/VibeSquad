@@ -7,8 +7,6 @@
 // term list from NEVER_SAYS_OVERRIDES below, keyed by card id. A term starting with `re:` is a case-insensitive regex source,
 // anything else is a case-insensitive whole-word/phrase. card.data.neverSays = extracted ∪ override terms (deduped);
 // card.data.neverSaysProse keeps the raw sentence; card.data.neverSaysExtracted / neverSaysOverride show where each came from.
-import os from "node:os";
-import path from "node:path";
 import { parseCsvObjects } from "../csv.mjs";
 import { entity, makeRegistry } from "../schema.mjs";
 
@@ -502,7 +500,7 @@ function killTargetLocations(registry, enemyId) {
 
 export const efiAdapter = {
   id: "efi",
-  defaultRepoPath: path.join(os.homedir(), "projects", "Escape-From-Idle"),
+  defaultRepoPath: null, // never hardcoded: the caller (SB4, from VS project config) supplies the repo path
   load,
   hooks: { spawnWindow, killTargetLocations },
 };

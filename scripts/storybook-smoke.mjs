@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Dev smoke: load a project through its adapter at a pinned sha and print [STORYBOOK] counts. Read-only; never fetches.
-// usage: node scripts/storybook-smoke.mjs <repoPath> [ref=origin/<default>]
+// usage: node scripts/storybook-smoke.mjs <repoPath> [ref=origin/<default>]   (repoPath is required; nothing is hardcoded)
 import path from "node:path";
 import { openReader } from "../server/storybook/git-read.mjs";
 import { efiAdapter } from "../server/storybook/adapters/efi.mjs";
 import { loadSnapshot } from "../server/storybook/adapter.mjs";
 import { makeRegistry, validateSnapshot } from "../server/storybook/schema.mjs";
 
-const repo = path.resolve(process.argv[2] ?? efiAdapter.defaultRepoPath);
+if (!process.argv[2]) { console.error("usage: node scripts/storybook-smoke.mjs <repoPath> [ref]"); process.exit(2); }
+const repo = path.resolve(process.argv[2]);
 const ref = process.argv[3] ?? "";
 const reader = await openReader(repo, ref || undefined);
 const snap = await loadSnapshot(efiAdapter, reader, { ref: ref || "origin/HEAD" });

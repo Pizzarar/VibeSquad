@@ -18,7 +18,7 @@
  *
  * @typedef {Object} Adapter
  * @property {string} id                   project key, e.g. 'efi'
- * @property {string} defaultRepoPath      where the project's repo lives by default (absolute; ~ already expanded)
+ * @property {string|null} defaultRepoPath  optional default repo location; null = the caller supplies the path (EFI: always null, no hardcoded paths)
  * @property {(reader:Reader, sha:string)=>Promise<{entities:Entity[], warnings:string[]}>} load
  *   Read-only ingest at one pinned sha. Put anything odd (missing file, unparsable block) in warnings, never throw for content.
  * @property {AdapterHooks} hooks
@@ -29,7 +29,7 @@ export function assertAdapter(a) {
   const bad = (m) => { throw new Error(`storybook adapter: ${m}`); };
   if (!a || typeof a !== "object") bad("not an object");
   if (typeof a.id !== "string" || !a.id) bad("id missing");
-  if (typeof a.defaultRepoPath !== "string") bad("defaultRepoPath missing");
+  if (a.defaultRepoPath !== null && typeof a.defaultRepoPath !== "string") bad("defaultRepoPath missing");
   if (typeof a.load !== "function") bad("load() missing");
   if (!a.hooks || typeof a.hooks.spawnWindow !== "function" || typeof a.hooks.killTargetLocations !== "function") bad("hooks.spawnWindow/killTargetLocations missing");
   return a;
