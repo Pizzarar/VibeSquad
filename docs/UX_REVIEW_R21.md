@@ -2,7 +2,7 @@
 
 Date: 2026-11-24 · Build: `sb5-storybook-view` @ `d3716c20` (history races + HEAD probe).
 
-**Setup: the branch's own server route, not the live server.** The scratch harness lives outside the repo. It serves the `npx vite build` output and passes `/api/storybook/*` to the branch's `handleStorybookRoute` (`server/storybook/api.mjs` @ `d3716c20`), with injected teams `efi` → the local Escape-From-Idle checkout, plus `site` and `vibesquad` (no adapter). All git access was read-only: I never pressed Refresh, so nothing was fetched. Other `/api` calls return 404, and `?demo=1` supplies the views. The real server's auth guard sits in front of the route, and the harness bypasses it.
+**Setup: the branch's own server route, not the live server.** The scratch harness lives outside the repo. It serves the `npx vite build` output and passes `/api/storybook/*` to the branch's `handleStorybookRoute` (`server/storybook/api.mjs` @ `d3716c20`), with injected teams `efi` → the local EFI checkout, plus `site` and `vibesquad` (no adapter). All git access was read-only: I never pressed Refresh, so nothing was fetched. Other `/api` calls return 404, and `?demo=1` supplies the views. The real server's auth guard sits in front of the route, and the harness bypasses it.
 
 Browser: Normal and Psycho, dark, 1920×1080. There were 0 page errors. Every Storybook-path sequence was also run with no Storybook involved (BASE), so pre-existing cockpit history behaviour isn't charged to SB5. Screenshots are in `docs/lanes/storybook/ux-r21/`. No source edits.
 
