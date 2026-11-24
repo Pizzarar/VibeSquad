@@ -879,7 +879,9 @@ html[data-vibe="boring"] .drawer-head .btn.on {
 
 /* Plan / Tasks bar and permission card sit on the centred conversation column. */
 html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
-html[data-vibe="boring"] .perm-card { width: 100%; max-width: var(--measure-prose); margin-inline: auto; box-sizing: border-box; }
+/* n5: the permission card matches the message column width (--measure-col), not the narrower prose measure, so its
+   left edge lines up with the strip and messages at every width (24px gutter, like the strip). */
+html[data-vibe="boring"] .perm-card { width: calc(100% - 48px); max-width: var(--measure-col); margin-inline: auto; box-sizing: border-box; }
 
 /* Sidebar: default text-2/400, selected text-1/500; row pitch exactly --row-h. */
 html[data-vibe="boring"] .boring-project-name { font-weight: 500; }
@@ -1364,22 +1366,17 @@ html[data-vibe="boring"] .boring-now-chips { display: flex; flex-wrap: wrap; jus
 html[data-vibe="boring"] .boring-now-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 2px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 html[data-vibe="boring"] .boring-now-chip:hover { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-now-chip img { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 1.5px var(--living-warm); }
-/* m6: centre the Working-now strip + permission card on the timeline column (which sits left of the context panel),
-   not the whole drawer. Constrain their width to the timeline column and centre on it (like the message column);
-   no translateX, so nothing clips at narrow widths (M1). */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) { --ctx-panel-w: 460px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-panel-w: 36px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .boring-now,
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
-  --timeline-col: min(var(--measure-col), calc(100% - var(--ctx-panel-w, 0px) - 48px));
-  width: var(--timeline-col);
-  margin-left: calc(50% - var(--timeline-col) / 2 - var(--ctx-panel-w, 0px) / 2);
-  margin-right: calc(50% - var(--timeline-col) / 2 + var(--ctx-panel-w, 0px) / 2);
+/* Bor19 (n5/n6): the Working-now strip + permission card live INSIDE the chat column (the flex row's left child,
+   beside the context panel), not as full-width siblings of the panel row, so the panel spans full height. The column
+   centres strip/card/messages on the same --measure-col, so their left edges share; no translateX / ctx-panel width math. */
+html[data-vibe="boring"] .drawer-shell > .boring-convo-col {
+  display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden;
 }
-/* the permission card is prose-measure (narrower than the Working-now card): centre it at its own width */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
-  --timeline-col: min(var(--measure-prose), calc(100% - var(--ctx-panel-w, 0px) - 48px));
-}
+/* The timeline-col is now one level deeper, so re-apply the chat counter-zoom that .drawer-shell > .timeline-col got in styles.css. */
+html[data-vibe="boring"] .boring-convo-col > .timeline-col { zoom: var(--chat-zoom, 1); --u3-px: var(--u3-px-chat, 2px); }
+/* strip + card are fixed-height at the top of the column; the timeline below scrolls. */
+html[data-vibe="boring"] .boring-convo-col > .boring-now,
+html[data-vibe="boring"] .boring-convo-col > .perm-card { flex: none; }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
 
 /* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */

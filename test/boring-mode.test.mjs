@@ -2326,7 +2326,10 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
-  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>\}/);
+  assert.match(drawer, /<div className="boring-convo-col">/);
+  assert.match(drawer, /boring-convo-col">[\s\S]*?<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>/);
+  assert.match(drawer, /\{!boringChat && permCards\}/);
+  assert.match(drawer, /const permCards = agent\.pendingPermissions\?\.map/);
   assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
   assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
   const i = css.indexOf("/* ---- B13d:");
