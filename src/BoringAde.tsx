@@ -26,6 +26,8 @@ import type { FolderDef, Member, TeamView } from "./teams";
 import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLastFolder, patchTeamsFolder, setLastFolder, type FolderOp } from "./boringFolders";
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
+import { bustUrl, type BustRole } from "./boringBusts";
+import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { UsageDashboard } from "./UsageDashboard";
 
@@ -206,8 +208,9 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   const pinMembers = (p: Pin | null | undefined): Member[] =>
     p ? view?.lanes?.find((l) => l.lane.id === p.lane.id)?.members ?? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : [];
   const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now);
-  const zoneRow = (label: string, z: typeof zones.overlord) => ({
+  const zoneRow = (label: string, short: string, z: typeof zones.overlord) => ({
     label,
+    short,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
     err: memberErr(z.member),
@@ -223,10 +226,11 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   }
   const core = {
     deskWorkers,
-    overlord: zoneRow("Lead · Overlord", zones.overlord),
-    riffbot: zoneRow("Brainstorm · RiffBot", zones.riffbot),
+    overlord: zoneRow("Lead · Overlord", "★ Overlord", zones.overlord),
+    riffbot: zoneRow("Brainstorm · RiffBot", "RiffBot", zones.riffbot),
     bugs: {
       label: "Bugs",
+      short: "Bugs",
       pin: bugs.pin,
       err: pinErr(bugs.pin),
       agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
@@ -387,6 +391,7 @@ type Props = {
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
+  const theme = useTheme(); // B13e: light theme shows the -light busts
   useEffect(() => {
     const open = () => setMode("usage");
     window.addEventListener(OPEN_USAGE_EVENT, open);
@@ -616,16 +621,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     }
   };
 
-  const surrealMotif = (
-    <svg className="boring-surreal-motif" aria-hidden="true" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid slice">
-      <circle cx="100" cy="46" r="26" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <ellipse cx="100" cy="46" rx="14" ry="8" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="100" cy="46" r="3.5" fill="currentColor" />
-      <line x1="0" y1="58" x2="200" y2="58" stroke="currentColor" strokeWidth="1" />
-      <line x1="30" y1="66" x2="170" y2="66" stroke="currentColor" strokeWidth="0.8" />
-    </svg>
-  );
-
   // One stable key per start: the Bugs lane may be created mid-flight (pin goes null -> set), which must not drop busy/error.
   const startKeyFor = (pin: Pin | null) => (selectedLaneId === "_bugs" ? "_bugs" : pin ? `${pin.squad?.id}/${pin.lane.id}` : null);
   const runStart = (laneKey: string, start: () => Promise<string | null>) => {
@@ -664,7 +659,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const spec = emptySpec();
     return (
       <div className="boring-empty-card" data-testid="boring-empty-card">
-        {surrealMotif}
         <p>{spec.text}</p>
         <button type="button" className="boring-primary-cta" data-testid="boring-empty-cta" disabled={spec.disabled} onClick={() => void spec.run()}>
           {spec.cta}
@@ -728,7 +722,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     );
   const suffix = (v: TeamView, base: string) => (v.team.id === activeTeamId ? base : `${base}-${v.team.id}`);
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
-    <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
+    <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} aria-current={isOn(v, "worker:" + w.agent.id) ? "true" : undefined} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
       <span className={`boring-dot ${w.agent.status} ${glyphCls(glyphStatusOf(w.agent, now), w.attention?.tone)}`} />
       <span className="boring-row-label" title={w.agent.title ?? w.agent.id.slice(0, 8)}>{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
@@ -759,6 +753,13 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       </div>
     );
   };
+  /** B13c: 22px mini mascot for a lane row: Lead > Brainstorm > worker bust, hollow square when the lane has no agent. */
+  const laneMini = (pin: Pin | null, status: string, needsYou: number, err: boolean) => {
+    const role: BustRole | null = pin && isLive(pin.lead) ? "lead" : pin?.brainstorm ? "buddy" : pin && pin.workers.length > 0 ? "worker" : null;
+    const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
+    if (!role) return <span className="boring-lane-mini none" aria-hidden="true" />;
+    return <span className={`boring-lane-mini ${state}${status === "running" ? " lit" : ""}`} aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={22} height={22} /></span>;
+  };
   /** One lane shape for Bugs and every feature lane: chevron column, dot, name, collapsed badge; workers under the chevron. */
   const laneRow = (v: TeamView, c: { laneId: string; name: string; topicLabel?: string; code: string; pin: Pin | null; status: string; needsYou: number; err: boolean; age: string; titleTestId?: string; onOpen: () => void }) => {
     const key = `${v.team.id}/${c.laneId}`;
@@ -779,6 +780,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             {!expandable ? "" : open ? "▾" : "▸"}
           </button>
           <button type="button" className="boring-conv-title" data-testid={c.titleTestId} title={c.topicLabel || undefined} onClick={c.onOpen}>
+            {laneMini(c.pin, c.status, c.needsYou, c.err)}
             <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`} />
             <span className="boring-row-label" title={c.name}>{c.name}</span>
             {c.code && <code className="boring-conv-code">{c.code}</code>}
@@ -800,36 +802,65 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       </div>
     );
   };
-  const coreRow = (v: TeamView, testid: string, key: string, label: string, status: string, needsYou: number, age: string, onClick: () => void, agentObj?: typeof agent, err = false) => (
-    <div key={testid} className="boring-conv-line">
-      {chevronCol(false, null, label)}
-      <button type="button" className={`boring-core-row ${isOn(v, key) ? "on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick}>
-        {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />}
-        <span className="boring-row-label" title={label}>{label}</span>
-        <span className="boring-conv-age">{age}</span>
+  /** B13c: one Desk mascot tile (bust + label + state caption); state rings come from CSS classes, never opacity. */
+  const deskTile = (v: TeamView, testid: string, key: string, role: BustRole, label: string, short: string, status: string, needsYou: number, err: boolean, age: string, onClick: () => void, extraOn = false) => {
+    const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
+    // m1: keep the tile caption short so the age survives the 3-col grid at 1920 ("idle 12m", not "idle · 12m ago").
+    const shortAge = age === "just now" ? "now" : age.replace(/ ago$/, "");
+    // n4: "working 1m" clips to "working n…" in the 290px sidebar at 1280/1440 — drop the age from the working caption.
+    const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? "working" : status === "none" ? "no agent" : `idle${age ? ` ${shortAge}` : ""}`;
+    return (
+      <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} title={label} aria-current={isOn(v, key) || extraOn ? "true" : undefined} aria-label={`${short} ${caption}${needsYou > 0 ? ` (${needsYou})` : ""}`}>
+        <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>
+        <span className="boring-row-label boring-mate-name">{short}</span>
+        <span className="boring-mate-cap">{caption}</span>
         {badge(needsYou, err)}
       </button>
-    </div>
-  );
-  /** B8a: Overlord + RiffBot + Bugs sit in one always-visible Trinity card, separate from the feature lanes (no collapsed Desk). */
+    );
+  };
+  /** B13c: Overlord + RiffBot + Bugs as a 3-tile mascot grid in the always-visible Desk card, separate from the feature lanes. */
   const trinityCard = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
     const hubPinV = skyZonesFor(v).hub;
     const inDesk = sel.teamId === v.team.id && (sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk");
     const hw = m.core.deskWorkers;
+    const b = m.core.bugs;
+    const bugsKey = `${v.team.id}/_bugs`;
+    const bugsSel = sel.teamId === v.team.id && sel.laneId === "_bugs";
+    const bugsOpen = laneOpen[bugsKey] ?? bugsSel;
+    const bugsLead = b.pin && isLive(b.pin.lead) ? b.pin.lead : null;
+    const bugsWorkers = b.pin?.workers ?? [];
+    const bugsExpandable = bugsWorkers.length > 0 || Boolean(bugsLead);
+    const bugsStatus = b.pin?.running ? "running" : b.pin?.brainstorm?.agent.status ?? "none";
+    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(b); };
+    const bugsMenu = b.pin ? () => laneCtxItems(v, b.pin!, { displayName: b.label }) : null;
+    const bugsLeadKey = "lane:_bugs:lead";
     return (
       <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
         <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Desk</span>{badge(m.deskWorkersNeedsYou, m.deskWorkersErr)}</div>
-        {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId), m.core.overlord.err)}
+        <div className="boring-desk-grid">
+          {deskTile(v, "boring-core-overlord", "desk:lead", "overlord", m.core.overlord.label, m.core.overlord.short, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.err, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
+          {deskTile(v, "boring-core-riffbot", "desk:brainstorm", "riffbot", m.core.riffbot.label, m.core.riffbot.short, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.err, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id))}
+          <div className="boring-desk-cell" data-testid="boring-conv-_bugs" onContextMenu={bugsMenu ? (e) => openContextMenu(e, bugsMenu()) : undefined}>
+            {deskTile(v, "boring-core-bugs", "lane:_bugs", "bugs", b.label, b.short, bugsStatus, b.needsYou, b.err, b.age, openBugs, !bugsOpen && bugsSel && sel.rowKey !== null)}
+            {bugsMenu && <button type="button" className="boring-row-menu-btn boring-desk-menu" data-testid="boring-lane-menu-_bugs" aria-haspopup="menu" aria-label={`${b.label} lane actions`} title="Lane actions" onClick={(e) => openContextMenu(e, bugsMenu())}>⋯</button>}
+          </div>
+        </div>
         {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
-        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId), m.core.riffbot.err)}
-        {bugsRow(v, m)}
+        {bugsExpandable && b.pin && (
+          <div className="boring-bugs-subs">
+            <button type="button" className="boring-chevron-btn" data-testid="boring-conv-toggle-_bugs" aria-expanded={bugsOpen} aria-label={bugsOpen ? "Collapse lane" : "Expand lane"} onClick={() => setLaneOpen((o) => ({ ...o, [bugsKey]: !bugsOpen }))}>{bugsOpen ? "▾" : "▸"}</button>
+            {bugsOpen && bugsLead && (
+              <button type="button" className={workerRowCls(isOn(v, bugsLeadKey), bugsLead)} data-testid="boring-lead-_bugs" title={bugsLead.agent.title ?? bugsLead.agent.id.slice(0, 8)} aria-current={isOn(v, bugsLeadKey) ? "true" : undefined} aria-label={`Lead · ${bugsLead.agent.status}${bugsLead.attention?.tone ? ` · ${bugsLead.attention.tone}` : ""}`} onClick={() => pickRoleIn(v, b.pin!, "_bugs", "lead")}>
+                <span className={`boring-dot ${bugsLead.agent.status} ${glyphCls(bugsLead.agent.status, bugsLead.attention?.tone)}`} />
+                <span className="boring-row-label">Lead</span>
+                <span className="boring-conv-age">{formatTimestamp(bugsLead.agent.updatedAt, "relative")}</span>
+              </button>
+            )}
+            {bugsOpen && bugsWorkers.length > 0 && workerList(v, b.pin, "_bugs", bugsWorkers, "boring-workers-_bugs", "boring-workers-fold-_bugs", bugsSel, openBugs)}
+          </div>
+        )}
       </div>
     );
-  };
-  const bugsRow = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
-    const b = m.core.bugs;
-    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(b); };
-    return laneRow(v, { laneId: "_bugs", name: b.label, code: "", pin: b.pin, status: b.pin?.running ? "running" : b.pin?.brainstorm?.agent.status ?? "none", needsYou: b.needsYou, err: b.err, age: b.age, titleTestId: suffix(v, "boring-core-bugs"), onOpen: openBugs });
   };
 
   /** B11b: sidebar project folders. Open state persists in localStorage; unfoldered projects stay on top. */
@@ -865,6 +896,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const partition = partitionViews(allViews, folders, stat);
   const awakeViews = filterAwakeViews(allViews, folders);
   const activeAsleep = view ? isViewAsleep(view, folders) : false;
+  // B13b: the living sky reacts to Squad state; an asleep project is always idle.
+  const squadState: "idle" | "busy" = view && !activeAsleep && (view.running ?? 0) > 0 ? "busy" : "idle";
   const renderProject = (v: TeamView) => {
     const active = v.team.id === activeTeamId;
     const open = projectIsOpen(v.team.id);
@@ -898,7 +931,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   };
 
   return (
-    <div className="boring-app" data-testid="boring-app">
+    <div className="boring-app" data-testid="boring-app" data-squad-state={squadState}>
       {removingPin && <RemoveTeamDialog pin={removingPin.pin} displayName={removingPin.name} noun="lane" returnTo={removingPin.returnTo} onClose={() => setRemovingPin(null)} />}
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
@@ -953,6 +986,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         </div>
       </aside>
       <main className="boring-main" data-testid="boring-main">
+        <div className="boring-sky" data-testid="boring-sky" aria-hidden="true">
+          <i className="boring-sky-dusk" />
+          <i className="boring-sky-glow" />
+          <i className="boring-sky-grain" />
+        </div>
         {banners}
         <header className="boring-topbar" data-testid="boring-topbar">
           <nav className="boring-topbar-title boring-breadcrumb" data-testid="boring-breadcrumb" aria-label="Breadcrumb">

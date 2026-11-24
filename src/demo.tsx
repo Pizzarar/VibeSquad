@@ -76,8 +76,8 @@ const CAST: Spec[] = [
   { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-impl-2" }), used: 21_000, ago: 14, extra: { openToolSince: null, openToolName: null, openToolTimeoutMs: null } }, // R4-1: quiet 14m, server says no tool: stalled in Needs you
   { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B", "vs.parent": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
   {
-    id: "demo-aud", who: "gemini", title: "Audit - token scout", labels: vs({ role: "worker" }), used: 186_000, ago: 5,
-    extra: { pendingPermissions: [{ id: "p1", name: "Bash", title: "Bash: rg --stats", description: "Count tokens per handoff" }] },
+    id: "demo-aud", who: "gemini", title: "Audit - token scout", status: "running", labels: vs({ role: "worker" }), used: 186_000, ago: 5,
+    extra: { openToolName: "Bash", pendingPermissions: [{ id: "p1", name: "Bash", title: "Bash: rg --stats", description: "Count tokens per handoff" }] },
   },
   { id: "demo-attached", who: "claude", title: "Implement - legacy hook", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-old-2" }), used: 28_000, ago: 3 },
   { id: DEMO_AGY_IDLE, who: "gemini", title: "Mechanical - doc sweep (Gemini)", labels: vs({ role: "worker" }), used: 58_000, ago: 3 },
@@ -112,11 +112,13 @@ CAST.push(
 );
 
 // ?riff=1: a live RiffBot + Overlord on the VibeSquad hub lane (lane label "riffbot"), so the Sky page can open Riff's chat,
-// slam him into the Overlord and land the takeover. Off by default: the plain demo's hub is idle ("Spin Up RiffBot").
+// slam him into the Overlord and land the takeover. Also a needs-you Bug Runner so the Boring Desk's three tiles have states.
+// Off by default: the plain demo's hub is idle ("Spin Up RiffBot").
 if (typeof location !== "undefined" && new URLSearchParams(location.search).has("riff")) {
   CAST.push(
     { id: "demo-hub-riff", who: "claude", title: "RiffBot · VibeSquad hub", status: "running", labels: vs({ role: "brainstorm", lane: "riffbot" }), used: 40_000, ago: 1 },
     { id: "demo-hub-overlord", who: "gemini", title: "★ OVERLORD · VibeSquad hub", status: "running", labels: vs({ role: "lead", lane: "riffbot" }), used: 60_000, ago: 1 },
+    { id: "demo-bugs", who: "gemini", title: "Bug Runner · triage", labels: vs({ role: "brainstorm", lane: "bug-chaser", "needs-you": "pick", "needs-you-reason": "Pick the batch to sweep" }), used: 12_000, ago: 2 },
   );
 }
 
@@ -187,7 +189,10 @@ export function demoWorkspaces(): Map<string, unknown> {
 }
 
 export function demoAgents(): Map<string, PaseoAgent> {
-  return new Map(CAST.map((s) => [s.id, agent(s)]));
+  // ?idle=1 (screenshot variant): no agent is running, so the Squad reads genuinely idle
+  // (data-squad-state="idle", Working-now card shows the open agent's idle state). Closed/error stay.
+  const idleCast = typeof location !== "undefined" && new URLSearchParams(location.search).has("idle");
+  return new Map(CAST.map((s) => [s.id, agent(idleCast && s.status === "running" ? { ...s, status: "idle" } : s)]));
 }
 
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();

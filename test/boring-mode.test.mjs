@@ -115,6 +115,7 @@ export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.
 const realSetInterval = globalThis.setInterval;
 globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t?.unref?.(); return t; };
 stub("useNowTick.mjs", "export const useNowTick = () => Date.now();");
+stub("boringBusts.mjs", `export const bustUrl = (r) => "/ui/busts/" + r + ".png";`);
 stub("demo.mjs", "export const demoLog = () => [];");
 stub("demoFlag.mjs", "export const DEMO = false;");
 stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length; export const isInNeedsYou = (m) => Boolean(m.stalled) || Boolean(m.attention && m.attention.tone !== "finished"); export const glyphStatusOf = (a) => a.glyph ?? a.status;`);
@@ -550,7 +551,7 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /--t-body: 15px; --lh-body: 24px/);
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
   assert.match(css, /--accent: var\(--cyan\)/);
-  assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replace("@media (prefers-reduced-motion: reduce)", ""), /@media/);
+  assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replaceAll("@media (prefers-reduced-motion: reduce)", ""), /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
   assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none/);
   assert.match(css, /\.drawer-head \.drawer-title \{ font-size: var\(--t-title\) !important/);
@@ -638,9 +639,9 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.doesNotMatch(ade, /BORING_OVERVIEW_LAYOUT_KEY|boring-lane-map|boring-layout-/);
   assert.match(ade, /data-testid="boring-lane-table"/);
   // B6d
-  assert.doesNotMatch(css, /--boring-sunset|--boring-wash|radial-gradient/);
+  assert.doesNotMatch(css, /--boring-sunset|--boring-wash/);
   assert.match(css, /\.boring-main \{ background: var\(--surface-0\)/);
-  assert.match(ade, /className="boring-surreal-motif"/);
+  assert.doesNotMatch(ade, /boring-surreal-motif/); // B13b: the living sky replaces it
 });
 
 test("D2: Overview lane table CSS is scoped to Normal mode; map CSS is gone", () => {
@@ -704,7 +705,7 @@ test("D1: type + colour tokens, no vw type, flat canvas, measure and row density
   for (const [t, v] of [["caption", "11px"], ["small", "12px"], ["ui", "13px"], ["body", "15px"], ["mono", "13px"], ["title", "17px"], ["page", "20px"]]) assert.ok(css.includes(`--t-${t}: ${v}`), t);
   assert.ok(!css.includes("font-size: clamp("), "no clamp()/vw font sizes");
   for (const t of ["--surface-0", "--surface-1", "--surface-2", "--surface-3", "--surface-sunken", "--border-strong", "--text-1", "--text-2", "--text-3", "--focus", "--st-run", "--st-attn", "--st-err", "--st-done", "--st-ok"]) assert.ok(css.includes(t + ":"), t);
-  assert.ok(css.includes("--surface-0: #f6f4f9; --surface-1: #ffffff"), "neutral light surfaces");
+  assert.ok(css.includes("--surface-0: #f7f6f3; --surface-1: #ffffff"), "neutral light surfaces");
   assert.ok(css.includes("--measure-col: 880px") && css.includes("--measure-prose: 760px"));
   assert.ok(css.includes("--row-h: 32px"));
   assert.ok(css.includes("@media (pointer: coarse) { html[data-vibe=\"boring\"] { --row-h: 40px; } }"));
@@ -1232,7 +1233,7 @@ test("R2.5: every row has the fixed 16px chevron column; hub workers hang off th
   assert.equal(byId(t, "boring-desk-workers-toggle"), null);
   assert.deepEqual(boringSelectionForAgent(view, "hw"), { laneId: "_desk", role: "worker" });
   const cols = walk(t, (n) => /boring-chevron-btn/.test(String(n.props?.className ?? "")));
-  assert.ok(cols.length >= 6); // project, desk, overlord, riffbot, hub workers, bugs, lanes
+  assert.ok(cols.length >= 3); // B13c: Desk tiles have no chevron column; project, hub workers, lanes keep theirs
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(css, /\.boring-chevron-btn \{ flex: 0 0 16px; width: 16px; min-width: 16px/);
   assert.match(css, /\.boring-badge\.err \{ background: var\(--st-err\)/);
@@ -1386,7 +1387,10 @@ test("B8a: Overlord and RiffBot rows are always rendered inside the Trinity card
     assert.ok(card);
     for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(walk(card, (n) => n.props?.["data-testid"] === id).length > 0, id);
   }
-  assert.match(JSON.stringify(byId(render(props(hubView([], { overlord: zone(mem("ov", "error")) }))), "boring-core-overlord").props.children), /st-err/);
+  // B13c: the Desk tile carries the error state as a ring class + "error" caption (no dot glyph).
+  const errTile = byId(render(props(hubView([], { overlord: zone(mem("ov", "error")) }))), "boring-core-overlord");
+  assert.match(errTile.props.className, /boring-mate err/);
+  assert.match(JSON.stringify(errTile.props.children), /"error"/);
 });
 
 // ---- Desk R2 Unit 2: Needs you = 2-line rows, cap 5 + more, Done recently, hub "Desk", clean titles -------
@@ -1648,7 +1652,7 @@ test("Shift+click on an agent opener opens it in the right pane; a plain click d
 
 test("split CSS: grid panes, no width media queries, only new rules; no state literals in the new classNames", () => {
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
-  const sect = css.slice(css.indexOf("idea-257: optional 2-pane split"));
+  const sect = css.slice(css.indexOf("idea-257: optional 2-pane split"), css.indexOf("B13b: state-reactive")); // B13 tail has its own reduced-motion media
   assert.match(sect, /\.boring-chat-split \{[^}]*display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/);
   for (const c of [".boring-pane ", ".boring-pane-active", ".boring-split-empty"]) assert.ok(sect.includes(c), c);
   assert.ok(!/@media/.test(sect));
@@ -2192,4 +2196,153 @@ test("B10: expanded project is a container card (.open, --surface-1, 14px); coll
   const flat = css.match(/^html\[data-vibe="boring"\] \.boring-project-block \{([^}]*)\}/m);
   assert.ok(flat && !/background|border|padding(?!-inline)/.test(flat[1]), "collapsed stays flat (R10-1: only the 9px inline inset that matches the open card)");
   assert.ok(!/!important/.test(rule[0]));
+});
+
+test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const css = readFileSync("src/boring.css", "utf8");
+  const fontsCss = readFileSync("src/boring-fonts.css", "utf8");
+  const ade = readFileSync("src/BoringAde.tsx", "utf8");
+  for (const f of ["plus-jakarta-sans-latin.woff2", "ibm-plex-mono-400.woff2", "ibm-plex-mono-500.woff2", "OFL-Plus-Jakarta-Sans.txt", "OFL-IBM-Plex-Mono.txt"]) assert.ok(existsSync("public/fonts/" + f), f);
+  assert.match(fontsCss, /@font-face[^}]*url\("\/fonts\/plus-jakarta-sans-latin\.woff2"\)/);
+  assert.match(fontsCss, /@font-face[^}]*url\("\/fonts\/ibm-plex-mono-500\.woff2"\)/);
+  assert.match(css, /--sans: "Plus Jakarta Sans"/);
+  assert.match(css, /--surface-0: #121218/);
+  assert.ok(!/fonts\.googleapis|fonts\.gstatic/.test(css + readFileSync("index.html", "utf8")));
+  assert.match(ade, /!activeAsleep && \(view\.running \?\? 0\) > 0 \? "busy" : "idle"/);
+  assert.match(ade, /data-squad-state=\{squadState\}/);
+  assert.match(ade, /data-testid="boring-sky"/);
+  assert.match(css, /\[data-squad-state="busy"\] \.boring-sky-glow \{ opacity: 0\.55/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-sky i/);
+  assert.match(readFileSync("CREDITS.md", "utf8"), /Plus Jakarta Sans[\s\S]*Tokotype[\s\S]*IBM Plex Mono/);
+});
+
+test("B13c: boringBusts maps agent labels to the six bust roles and urls", async () => {
+  const code = transformSync("boringBusts.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringBusts.ts"), "utf8"), { lang: "ts" }).code
+    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = (l) => l === "vibesquad"; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];');
+  const f = join(dir, "boringBustsReal.mjs");
+  writeFileSync(f, code);
+  const { bustUrl, bustRoleForAgent } = await import(pathToFileURL(f).href);
+  assert.equal(bustUrl("overlord"), "/ui/busts/overlord.png");
+  assert.equal(bustUrl("overlord", "light"), "/ui/busts/overlord-light.png");
+  for (const n of ["overlord", "riffbot", "bugs", "buddy", "lead", "worker"]) assert.ok(readFileSync(resolve(import.meta.dirname, "..", "public", "ui", "busts", `${n}-light.png`)).length > 100, `${n}-light`);
+  const r = (role, lane) => bustRoleForAgent({ labels: { role, lane } });
+  assert.equal(r("lead", "hub"), "overlord");
+  assert.equal(r("brainstorm", "hub"), "riffbot");
+  assert.equal(r("lead", "riffbot"), "overlord"); // demo-hub-overlord
+  assert.equal(r("lead", "_overlord"), "overlord");
+  assert.equal(r("brainstorm", "_riffbot"), "riffbot");
+  assert.equal(r("lead", "vibesquad"), "overlord"); // isHubLaneId fallback (stubbed: vibesquad is a hub lane)
+  assert.equal(r("brainstorm", "vibesquad"), "riffbot"); // isHubLaneId fallback
+  assert.equal(r("lead", "bug-chaser"), "bugs");
+  assert.equal(r("worker", "bug-runner"), "bugs"); // BUG_LANE_FALLBACK_IDS includes bug-runner
+  assert.equal(r("worker", "_bugs"), "bugs");
+  assert.equal(r("brainstorm", "ade"), "buddy");
+  assert.equal(r("lead", "ade"), "lead");
+  assert.equal(r("worker", "ade"), "worker");
+  assert.equal(bustRoleForAgent(null), "worker");
+  for (const n of ["overlord", "riffbot", "bugs", "buddy", "lead", "worker"]) assert.ok(readFileSync(resolve(import.meta.dirname, "..", "public", "ui", "busts", `${n}.png`)).length > 100, n);
+});
+
+test("B13c: Desk is a 3-tile mascot grid and lanes carry mini avatars (source + css)", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.ok(ade.includes('className="boring-desk-grid"') && ade.includes("boring-lane-mini") && ade.includes("bustUrl("));
+  for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(`"${id}"`), id);
+  assert.match(css, /\.boring-desk-grid \{[^}]*repeat\(3,/);
+  assert.match(css, /\.boring-mate\.idle \.boring-mate-av \{ filter: grayscale\(0\.85\) brightness\(0\.8\)/);
+  assert.match(css, /\.boring-bust-img \{[^}]*image-rendering: pixelated/);
+  assert.ok(!/\.boring-mate[^{]*\{[^}]*opacity/.test(css), "no opacity on mascot tiles");
+  const uiLines = ade.split("\n").filter((l) => /["'`>]/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n").replace(/\/\*.*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.ok(!/Hypnospace/.test(uiLines), "no user-facing Hypnospace copy in BoringAde");
+});
+
+test("B13d: Working-now focal card: busy = first running agent + activity, idle = greyed card with this agent's state", async () => {
+  const rdSrc = (n) => readFileSync(resolve(import.meta.dirname, "..", "src", n), "utf8");
+  writeFileSync(join(dir, "b13dBusts.mjs"), transformSync("boringBusts.ts", rdSrc("boringBusts.ts"), { lang: "ts" }).code
+    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = () => false; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];'));
+  const code = transformSync("BoringWorkingNow.tsx", rdSrc("BoringWorkingNow.tsx"), { lang: "tsx", jsx: { runtime: "classic" } }).code
+    .replace(/import \{ openAgent \} from "\.\/panes";/, "const openAgent = () => {};")
+    .replace(/import \{ isHubLaneId \} from "\.\/teams";/, "const isHubLaneId = () => false;")
+    .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
+    .replace(/from "\.\/boringBusts"/, 'from "./b13dBusts.mjs"')
+    .replace(/import \{ useTheme \} from "\.\/useBotFace";/, 'const useTheme = () => "dark";')
+    .replace(/^import type .*$/gm, "");
+  const f = join(dir, "b13dWorkingNow.mjs");
+  writeFileSync(f, `import React from ${JSON.stringify(reactUrl)};\n` + code);
+  const { BoringWorkingNow, workingActivity, idleActivity, boringChatVars } = await import(pathToFileURL(f).href);
+  assert.equal(workingActivity({ openToolName: "Bash" }), "running Bash");
+  assert.equal(workingActivity({ openToolName: null }), "thinking");
+  assert.equal(workingActivity({ queued: { ahead: 2 } }), "queued (2 ahead)");
+  assert.equal(idleActivity({ status: "idle", attentionReason: "finished" }), "finished · waiting on you");
+  assert.equal(idleActivity({ status: "idle", pendingPermissions: [{}] }), "needs your OK");
+  assert.equal(idleActivity({ status: "error" }), "hit an error");
+  assert.equal(idleActivity({ status: "idle" }), "is idle");
+  const me = { id: "me", title: "Buddy", status: "idle", labels: { role: "brainstorm", lane: "boring-mode" } };
+  const idle = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: me, members: [], subs: 0 }));
+  assert.match(idle, /data-testid="boring-working-now" data-state="idle"/);
+  assert.match(idle, />Idle</);
+  assert.match(idle, /Buddy is idle/);
+  assert.match(idle, /src="\/ui\/busts\/buddy\.png"/);
+  const lead = { id: "ld", title: "★ Bor13", status: "running", openToolName: "Edit", labels: { role: "lead", lane: "boring-mode" } };
+  const w1 = { id: "w1", title: "Worker A", status: "running", labels: {} };
+  const busy = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: me, members: [{ agent: lead }, { agent: w1 }], subs: 1 }));
+  assert.match(busy, /data-state="busy"/);
+  assert.match(busy, />Working now</);
+  assert.match(busy, /★ Bor13 is running Edit/);
+  assert.match(busy, /src="\/ui\/busts\/lead\.png"/);
+  assert.match(busy, /data-testid="boring-working-now-w1"/);
+  assert.match(busy, /1 sub-agent call</);
+  // M1: a pending permission / needs-you beats "working" (running agent + sub-agents): data-state="needs-you",
+  // label "Needs you", headline "<Name> needs your OK" — never "Working now" / "is running …".
+  const blocked = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: lead, members: [{ agent: w1 }], subs: 1, attention: { tone: "permission", reason: "1 permission request(s)" } }));
+  assert.match(blocked, /data-state="needs-you"/);
+  assert.match(blocked, />Needs you</);
+  assert.match(blocked, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(blocked, /Working now/);
+  assert.doesNotMatch(blocked, /is running Edit/);
+  const blockedLabel = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, labels: { role: "lead", lane: "boring-mode", "needs-you": "pick" } }, members: [], subs: 0, attention: { tone: "needs-you", reason: "pick" } }));
+  assert.match(blockedLabel, /data-state="needs-you"/);
+  assert.match(blockedLabel, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(blockedLabel, /is thinking/);
+  // L5: needsYou also triggers on the raw agent fields (pendingPermissions / attentionReason) with no attention prop,
+  // and the "N sub-agent calls" sub-line is hidden in the needs-you state.
+  const permOnly = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, pendingPermissions: [{}] }, members: [], subs: 2 }));
+  assert.match(permOnly, /data-state="needs-you"/);
+  assert.match(permOnly, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(permOnly, /sub-agent call/);
+  const reasonOnly = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, attentionReason: "permission" }, members: [{ agent: w1 }], subs: 1 }));
+  assert.match(reasonOnly, /data-state="needs-you"/);
+  assert.match(reasonOnly, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(reasonOnly, /sub-agent call/);
+  assert.doesNotMatch(reasonOnly, /is running Edit/);
+  const v = boringChatVars(lead);
+  assert.equal(v["--boring-bust"], 'url("/ui/busts/lead.png")');
+  assert.equal(v["--boring-who"], '"★ Bor13"');
+  assert.equal(v["--boring-role"], '"Lead"');
+  assert.equal(v["--boring-bust-light"], 'url("/ui/busts/lead-light.png")');
+});
+
+test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is boring-scoped (avatars, own bubbles, warm perm card)", () => {
+  const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
+  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>\}/);
+  assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
+  assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
+  const i = css.indexOf("/* ---- B13d:");
+  assert.ok(i > 0);
+  const sect = css.slice(i);
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  assert.ok(!/@keyframes/.test(sect));
+  assert.match(sect, /\.boring-now\[data-state="busy"\] \.boring-now-big \{ box-shadow: 0 0 0 2px var\(--living-warm\)/);
+  assert.match(sect, /\.boring-now\[data-state="idle"\] \.boring-now-big \{ filter: grayscale/);
+  assert.match(sect, /\.boring-drawer \.tl-assistant::before \{[^}]*width: 44px;[^}]*var\(--boring-bust, none\)/);
+  assert.match(sect, /\.boring-drawer \.tl-assistant::after \{ content: var\(--boring-who, ""\)/);
+  assert.match(sect, /\.boring-drawer \.timeline \.tl-user \{ margin-left: auto;[^}]*border-radius: 16px 16px 4px 16px/);
+  assert.match(sect, /\.perm-card \.perm-head \{[^}]*var\(--st-attn\) 8%/);
+  assert.match(sect, /\.perm-card \.perm-preview-cmd::before \{ content: "\$ "/);
+  assert.match(sect, /\.perm-card \.btn\.perm-allow,[\s\S]*?background: var\(--living-prime\)/);
+  assert.match(sect, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-now, /);
+  assert.ok(!/!important/.test(sect));
+  assert.match(readFileSync(resolve(import.meta.dirname, "..", "src", "PermissionCard.tsx"), "utf8"), /style=\{vibe === "boring" \? undefined : \{ fontFamily: "monospace", fontSize: 11 \}\}/);
 });

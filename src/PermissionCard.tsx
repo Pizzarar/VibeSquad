@@ -3,6 +3,7 @@ import { DEMO } from "./demoFlag";
 import { isImeComposing } from "./IdeaInbox";
 import { MarkdownRenderer } from "./Timeline";
 import { AllowRulesModal } from "./AllowRulesModal";
+import { useVibe } from "./AngelBezel";
 import { buildKeepPlanning, buildPlanApprove, orderPlanActions, planWasEdited, suggestionLabel, suggestionScope, type PlanAction } from "./paseoPermissionsLogic";
 
 type PermissionCardProps = {
@@ -139,6 +140,7 @@ export function buildQuestionSubmission(
 export function PermissionCard({ p, agentId, agentName, permInputs, setPermInputs }: PermissionCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const vibe = useVibe(); // B13d: Normal styles the command line in boring.css (mono 16px); Psycho keeps the inline 11px
   const [denyMsg, setDenyMsg] = useState("");
   const [selectedByQ, setSelectedByQ] = useState<Record<number, string>>({});
   const [otherByQ, setOtherByQ] = useState<Record<number, string>>({});
@@ -401,7 +403,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           <pre
             className="perm-preview-cmd"
             data-testid="perm-preview-cmd"
-            style={{ fontFamily: "monospace", fontSize: 11 }}
+            style={vibe === "boring" ? undefined : { fontFamily: "monospace", fontSize: 11 }}
           >
             {commandPreview}
           </pre>

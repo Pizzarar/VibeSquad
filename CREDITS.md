@@ -44,3 +44,5 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 
 - **@noble/curves 2.4.0** by `Paul Miller` (MIT) — runtime dependency: X25519 key agreement for the E2E relay tunnel (pure-JS fallback where WebCrypto lacks it)
 - **godot-mcp-runtime** by `Erodenn` (Owen Sterling) (MIT, commit `3b8a4f31`, v4.0.1) — external dev tool: MCP server + `McpBridge` autoload used for Godot playtest debugging. Not vendored or copied into this repo. Copyright (c) 2025-2026 Owen Sterling.
+
+- Implemented Normal-mode self-hosted typography — Thanks to **Plus Jakarta Sans** by `Tokotype` (SIL OFL 1.1) and **IBM Plex Mono** by `IBM` (SIL OFL 1.1); woff2 + licences in `public/fonts/`

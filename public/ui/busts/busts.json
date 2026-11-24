@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "cell": "64x64",
+  "width": 64,
+  "height": 64,
+  "format": "RGBA PNG, transparent outside the character; render with image-rendering: pixelated",
+  "palettes": {
+    "dark": "art/palette/pc98-dark.gpl",
+    "light": "art/palette/pc98-light.gpl"
+  },
+  "build": "art/ui/busts/build.lua (Aseprite -b), then node art/ui/busts/manifest.mjs",
+  "roles": [
+    {
+      "id": "overlord",
+      "label": "Overlord",
+      "src": "/ui/busts/overlord.png",
+      "light": "/ui/busts/overlord-light.png",
+      "source": "art/ui/busts/overlord.aseprite",
+      "note": "canon brain-jar TV (locked)"
+    },
+    {
+      "id": "riffbot",
+      "label": "RiffBot",
+      "src": "/ui/busts/riffbot.png",
+      "light": "/ui/busts/riffbot-light.png",
+      "source": "art/ui/busts/riffbot.aseprite",
+      "note": "canon CRT head, stock-arrow mouth"
+    },
+    {
+      "id": "bugs",
+      "label": "Bugs",
+      "src": "/ui/busts/bugs.png",
+      "light": "/ui/busts/bugs-light.png",
+      "source": "art/ui/busts/bugs.aseprite",
+      "note": "canon Hypnospace roach"
+    },
+    {
+      "id": "buddy",
+      "label": "Buddy",
+      "src": "/ui/busts/buddy.png",
+      "light": "/ui/busts/buddy-light.png",
+      "source": "art/cast/hypno/buddy-bust.aseprite",
+      "note": "H0 bust, fx layer hidden"
+    },
+    {
+      "id": "lead",
+      "label": "Lead",
+      "src": "/ui/busts/lead.png",
+      "light": "/ui/busts/lead-light.png",
+      "source": "art/cast/hypno/lead-bust.aseprite",
+      "note": "H0 bust, fx layer hidden"
+    },
+    {
+      "id": "worker",
+      "label": "Worker",
+      "src": "/ui/busts/worker.png",
+      "light": "/ui/busts/worker-light.png",
+      "source": "art/cast/hypno/mechanical-bust.aseprite",
+      "note": "S2 mechanical bust, fx layer hidden"
+    }
+  ],
+  "aliases": {
+    "mech": "worker"
+  }
+}

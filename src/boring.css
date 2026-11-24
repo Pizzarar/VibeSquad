@@ -18,8 +18,8 @@ html[data-vibe="boring"][data-theme="light"] {
 }
 
 html[data-vibe="boring"] {
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --pixel: var(--sans); --arcade: var(--sans); --display: var(--sans);
   font-family: var(--sans);
   font-size: 16px;
@@ -687,20 +687,22 @@ html[data-vibe="boring"] {
 /* 4.6 semantic colour tokens. Dark: Midnight Mall tinted surfaces. */
 html[data-vibe="boring"],
 html[data-vibe="boring"][data-theme="dark"] {
-  --surface-0: #14111c; --surface-1: #1a1624; --surface-2: #221d2f; --surface-3: #2c2640; --surface-sunken: #0f0c16;
-  --border: #332c47; --border-strong: #4a4064;
-  --text-1: #efeaf7; --text-2: #b8afcb; --text-3: #8b829f;
+  --surface-0: #121218; --surface-1: #16161d; --surface-2: #1d1d26; --surface-3: #262632; --surface-sunken: #0d0d12;
+  --border: #2b2b38; --border-strong: #39394a;
+  --text-1: #f3f1f7; --text-2: #c3c0cf; --text-3: #9a97a8;
   --accent: #9b72e8; --focus: #c3a8ff; --on-accent: #14111c;
-  --st-run: #4fd6cf; --st-attn: #ffc46c; --st-err: #ff6b8a; --st-done: #8fb3ff; --st-ok: #79dfa8;
+  --st-run: #5ee0c8; --st-attn: #ffc15e; --st-err: #ff7f93; --st-done: #8fb3ff; --st-ok: #79dfa8;
+  --living-warm: #ff9d5c; --living-coral: #ff7a7a; --living-prime: #ffb057; --living-on-prime: #1c1206;
   --st-run-bg: #4fd6cf1a; --st-attn-bg: #ffc46c1a; --st-err-bg: #ff6b8a1a; --st-done-bg: #8fb3ff1a;
 }
 /* Neutral light surfaces (fixes C5 mauve-on-mauve): #f6f4f9 canvas, #ffffff panels. */
 html[data-vibe="boring"][data-theme="light"] {
-  --surface-0: #f6f4f9; --surface-1: #ffffff; --surface-2: #f0edf5; --surface-3: #e6e1ef; --surface-sunken: #ece8f2;
-  --border: #dcd6e6; --border-strong: #c4bcd3;
-  --text-1: #1f1830; --text-2: #4c4363; --text-3: #6f6787;
+  --surface-0: #f7f6f3; --surface-1: #ffffff; --surface-2: #f0eeea; --surface-3: #e6e3dd; --surface-sunken: #ebe8e2;
+  --border: #dad6ce; --border-strong: #c2bdb2;
+  --text-1: #1d1a24; --text-2: #4a4558; --text-3: #5e5868;
   --accent: #6d4bc9; --focus: #6d4bc9; --on-accent: #ffffff;
-  --st-run: #16857f; --st-attn: #a86a00; --st-err: #c22a52; --st-done: #3a64c9; --st-ok: #1f7a4c;
+  --st-run: #147a74; --st-attn: #8a5700; --st-err: #c22a52; --st-done: #3a64c9; --st-ok: #1f7a4c;
+  --living-warm: #bd520c; --living-coral: #c23a3a; --living-prime: #b85a00; --living-on-prime: #ffffff;
   --st-run-bg: #16857f1a; --st-attn-bg: #a86a001a; --st-err-bg: #c22a521a; --st-done-bg: #3a64c91a;
 }
 /* Alias the legacy styles.css tokens that the B5/B6 rules use onto the flat semantic ones. */
@@ -891,9 +893,6 @@ html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted):not(.err) { background: #8a5700; color: #ffffff; }
 
-/* Light permission card: amber, not beige-pink. */
-html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00; }
-
 /* Context meter: neutral until it is genuinely high. */
 html[data-vibe="boring"] .brainstorm-ctx-fill,
 html[data-vibe="boring"] .brainstorm-ctx-fill.tone-amber { background: var(--border-strong); }
@@ -922,7 +921,7 @@ html[data-vibe="boring"] .boring-needs-actions:empty { display: none; }
 html[data-vibe="boring"] .boring-needs-btn { min-height: 24px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: var(--t-small); cursor: pointer; }
 html[data-vibe="boring"] .boring-needs-btn:hover:not(:disabled) { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-needs-btn:disabled { opacity: 0.5; cursor: default; }
-html[data-vibe="boring"] .boring-needs-btn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+html[data-vibe="boring"] .boring-needs-btn.ok { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 html[data-vibe="boring"] .boring-needs-btn.ok:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 html[data-vibe="boring"] .boring-needs-btn.bad { border-color: var(--border-strong); color: var(--text-1); }
 html[data-vibe="boring"] .boring-needs-err { padding: 4px 8px; font-size: var(--t-small); color: var(--st-err); }
@@ -945,7 +944,7 @@ html[data-vibe="boring"] .boring-project-lanes { padding-left: 14px; display: fl
 html[data-vibe="boring"] .boring-worker-list { display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px 28px; }
 html[data-vibe="boring"] .boring-worker-row { display: flex; align-items: center; gap: 6px; min-height: var(--row-h); padding: 2px 8px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-small); text-align: left; cursor: pointer; }
 html[data-vibe="boring"] .boring-worker-row:hover { background: var(--surface-3); color: var(--text-1); }
-html[data-vibe="boring"] .boring-worker-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); color: var(--text-1); }
+html[data-vibe="boring"] .boring-worker-row.on { background: color-mix(in srgb, var(--accent) 16%, var(--surface-3)); box-shadow: inset 2px 0 0 var(--accent); color: var(--text-1); }
 html[data-vibe="boring"] .boring-worker-row .boring-row-label { color: var(--text-2); }
 html[data-vibe="boring"] .boring-worker-row.on .boring-row-label { font-weight: 500; color: var(--text-1); }
 /* The active lane highlight belongs to its own line, not the workers under it. */
@@ -1183,30 +1182,6 @@ html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: v
 /* U3 survivor: light-mode badge text is white; beats the styles.css `:is(.badge, ...)` on-pastel colour (boring-badge also carries .badge). */
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { color: #ffffff !important; }
 
-/* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
-/* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { --d4-panel-w: 36px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer { position: relative; border-top-color: transparent; background-color: transparent; background-image: linear-gradient(to right, var(--bg) calc(100% - var(--d4-panel-w)), var(--panel) calc(100% - var(--d4-panel-w))); }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::before { content: ""; position: absolute; top: -1px; left: 0; right: var(--d4-panel-w); border-top: 1px solid var(--border); pointer-events: none; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::after { content: ""; position: absolute; top: -1px; bottom: 0; right: var(--d4-panel-w); border-left: 1px solid var(--border); pointer-events: none; }
-html[data-vibe="boring"] .boring-ctx-tabs { min-height: 36px; box-sizing: border-box; padding: 0 8px; gap: 2px; align-items: stretch; }
-html[data-vibe="boring"] .boring-ctx-tab { height: 36px; padding: 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-html[data-vibe="boring"] .boring-ctx-tab.on { background: transparent; border-bottom-color: var(--accent); }
-html[data-vibe="boring"] .boring-ctx-collapse { align-self: center; }
-html[data-vibe="boring"] .boring-ctx-idle-toggle { align-self: flex-start; background: transparent; border: 0; padding: 6px 8px; cursor: pointer; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-3); }
-html[data-vibe="boring"] .boring-ctx-idle-toggle:hover { color: var(--text-1); }
-html[data-vibe="boring"] .boring-ctx-no-agent-action { display: block; margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--accent); font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer; }
-html[data-vibe="boring"] .boring-ctx-no-agent-action:hover:not(:disabled) { border-color: var(--accent); }
-html[data-vibe="boring"] .boring-ctx-no-agent-action:disabled { opacity: 0.5; cursor: default; }
-html[data-vibe="boring"] .boring-ctx-worker.idle { opacity: 0.75; }
-html[data-vibe="boring"] .boring-ctx-rail-btn { position: relative; padding-top: 28px; }
-html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); writing-mode: horizontal-tb; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; font: 600 11px/18px var(--font-sans, inherit); text-align: center; color: #ffffff; background: var(--st-attn); }
-html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
-/* Plan tab open: the in-timeline pinned todo bar duplicates it. */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
-
-
 /* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
 html[data-vibe="boring"] .boring-needs-item { position: relative; }
 html[data-vibe="boring"] .boring-needs-item.attn-stalled { background: var(--st-attn-bg); border-left-color: var(--st-attn); }
@@ -1314,3 +1289,141 @@ html[data-vibe="boring"][data-theme="dark"] .modal .btn.bad,
 html[data-vibe="boring"][data-theme="dark"] .shortcut-modal .btn.bad { color: #1a1624; } /* dark --st-err is a light tint (text-on-dark): dark label keeps >= 4.5:1 */
 html[data-vibe="boring"] .modal .btn.bad:hover:not(:disabled),
 html[data-vibe="boring"] .shortcut-modal .btn.bad:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* ===== B13b: state-reactive living sunset sky (idle dusk -> busy amber/coral). Kept clear of the B11b slice. ===== */
+html[data-vibe="boring"] .boring-main { position: relative; isolation: isolate; background: var(--surface-0); }
+html[data-vibe="boring"] .boring-sky { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+html[data-vibe="boring"] .boring-sky i { position: absolute; inset: 0; transition: opacity 1.2s cubic-bezier(.2,.7,.2,1); }
+html[data-vibe="boring"] .boring-sky-dusk { background: radial-gradient(120% 60% at 70% -10%, #3a3270 0%, #2a2454 28%, transparent 62%), radial-gradient(90% 50% at 50% 112%, #2b2a5e 0%, transparent 60%), var(--surface-0); }
+html[data-vibe="boring"] .boring-sky-glow { background: radial-gradient(110% 58% at 72% -14%, #ff9d5c 0%, #e0607a 22%, #5b2f6e 44%, transparent 66%), radial-gradient(80% 42% at 50% 115%, #ff8a5c 0%, #8a3a62 34%, transparent 64%), var(--surface-0); }
+html[data-vibe="boring"] .boring-sky-grain { background-image: radial-gradient(#ffffff0d 1px, transparent 1.2px); background-size: 5px 5px; mix-blend-mode: overlay; }
+html[data-vibe="boring"] [data-squad-state="idle"] .boring-sky-glow { opacity: 0; }
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-sky-glow { opacity: 0.55; }
+html[data-vibe="boring"][data-theme="light"] .boring-sky-dusk { background: radial-gradient(120% 60% at 70% -10%, #e4e8f2 0%, transparent 62%), var(--surface-0); }
+html[data-vibe="boring"][data-theme="light"] .boring-sky-glow { background: radial-gradient(110% 58% at 72% -14%, #ffd9b8 0%, #ffe6d2 30%, transparent 66%), radial-gradient(80% 42% at 50% 115%, #ffe3cf 0%, transparent 64%), var(--surface-0); }
+html[data-vibe="boring"][data-theme="light"] [data-squad-state="busy"] .boring-sky-glow { opacity: 0.7; }
+html[data-vibe="boring"][data-theme="light"] .boring-sky-grain { background-image: radial-gradient(#0000000a 1px, transparent 1.2px); mix-blend-mode: multiply; }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-sky i { transition: none; } }
+
+/* B13a: translucent graphite topbar + living-amber primary Send. */
+html[data-vibe="boring"] .boring-topbar { background: color-mix(in srgb, var(--surface-0) 75%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid color-mix(in srgb, var(--text-1) 8%, transparent); }
+html[data-vibe="boring"] .composer .send,
+html[data-vibe="boring"] .composer-send { background: var(--living-prime); background-color: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }
+html[data-vibe="boring"] .composer .send:disabled,
+html[data-vibe="boring"] .composer-send:disabled { background: #475569; background-color: #475569; border-color: #475569; color: #ffffff; }
+
+/* ---- B13c: Desk mascot tiles + lane mini-avatars (mockup 2-living). Idle = filter on the image only, text dimmed by colour; never opacity. ---- */
+html[data-vibe="boring"] .boring-desk-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 2px 0 4px; }
+html[data-vibe="boring"] .boring-desk-cell { position: relative; display: flex; min-width: 0; }
+html[data-vibe="boring"] .boring-desk-cell > .boring-mate { flex: 1 1 auto; }
+html[data-vibe="boring"] .boring-desk-menu { position: absolute; top: 2px; right: 2px; }
+html[data-vibe="boring"] .boring-mate { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 8px 2px 6px; border: 0; border-radius: 12px; background: var(--surface-1); color: var(--text-1); text-align: center; cursor: pointer; font: inherit; }
+html[data-vibe="boring"] .boring-mate:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-mate.on { background: var(--surface-3); box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+html[data-vibe="boring"] .boring-mate-av { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 12px; overflow: hidden; background: var(--surface-sunken); transition: box-shadow 0.9s ease, background 0.9s ease, filter 0.9s ease; }
+html[data-vibe="boring"] .boring-bust-img { display: block; image-rendering: pixelated; }
+html[data-vibe="boring"] .boring-mate .boring-mate-name { max-width: 100%; margin-top: 4px; font-size: 12.5px; font-weight: 700; color: var(--text-1); }
+html[data-vibe="boring"] .boring-mate-cap { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-3); }
+html[data-vibe="boring"] .boring-mate.run .boring-mate-cap { color: var(--st-run); }
+html[data-vibe="boring"] .boring-mate.attn .boring-mate-cap { color: var(--st-attn); font-weight: 600; }
+html[data-vibe="boring"] .boring-mate.err .boring-mate-cap { color: var(--st-err); font-weight: 600; }
+html[data-vibe="boring"] .boring-mate.idle .boring-mate-av { filter: grayscale(0.85) brightness(0.8); }
+html[data-vibe="boring"] .boring-mate.attn .boring-mate-av { box-shadow: 0 0 0 2px var(--st-attn); }
+html[data-vibe="boring"] .boring-mate.err .boring-mate-av { box-shadow: 0 0 0 2px var(--st-err); }
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-mate.run .boring-mate-av { box-shadow: 0 0 0 2px var(--living-warm), 0 0 22px -2px color-mix(in srgb, var(--living-warm) 60%, transparent); }
+html[data-vibe="boring"] [data-squad-state="idle"] .boring-mate.run .boring-mate-av { filter: grayscale(0.85) brightness(0.8); }
+html[data-vibe="boring"] .boring-mate > .boring-badge { position: absolute; top: 4px; right: 4px; }
+html[data-vibe="boring"] .boring-bugs-subs { display: flex; flex-direction: column; gap: 1px; }
+html[data-vibe="boring"] .boring-lane-mini { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 6px; overflow: hidden; background: var(--surface-sunken); transition: box-shadow 0.9s ease, filter 0.9s ease; }
+html[data-vibe="boring"] .boring-lane-mini.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+html[data-vibe="boring"] .boring-lane-mini.idle { filter: grayscale(0.85) brightness(0.8); }
+html[data-vibe="boring"] .boring-lane-mini.attn { box-shadow: 0 0 0 1.5px var(--st-attn); }
+html[data-vibe="boring"] .boring-lane-mini.err { box-shadow: 0 0 0 1.5px var(--st-err); }
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit { box-shadow: 0 0 0 1.5px var(--living-warm); }
+html[data-vibe="boring"] [data-squad-state="idle"] .boring-lane-mini.lit { filter: grayscale(0.85) brightness(0.8); }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-mate-av, html[data-vibe="boring"] .boring-lane-mini { transition: none; } }
+
+/* ---- B13d: chat "Working now" focal card, message avatars + name line, right-aligned own bubbles, warm permission card (mockup 2-living). Normal only; Psycho never matches. ---- */
+html[data-vibe="boring"] .boring-now { display: flex; align-items: center; gap: 18px; margin: 16px auto 0; width: calc(100% - 48px); max-width: var(--measure-col); box-sizing: border-box; padding: 16px 20px; border-radius: 16px; background: color-mix(in srgb, var(--surface-1) 85%, transparent); border: 1px solid color-mix(in srgb, var(--text-1) 8%, transparent); color: var(--text-1); transition: border-color 1.2s cubic-bezier(.2,.7,.2,1), box-shadow 1.2s cubic-bezier(.2,.7,.2,1); }
+html[data-vibe="boring"] .boring-now[data-state="busy"] { border-color: color-mix(in srgb, var(--living-warm) 40%, transparent); box-shadow: 0 10px 40px -18px var(--living-warm); }
+html[data-vibe="boring"] .boring-now[data-state="needs-you"] { border-color: color-mix(in srgb, var(--st-attn) 45%, transparent); box-shadow: 0 10px 40px -18px var(--st-attn); }
+html[data-vibe="boring"] .boring-now-big { flex: none; display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 18px; overflow: hidden; background: var(--surface-3); cursor: pointer; transition: box-shadow 1.2s cubic-bezier(.2,.7,.2,1), filter 1.2s; }
+html[data-vibe="boring"] .boring-now-big:disabled { cursor: default; }
+html[data-vibe="boring"] .boring-now-big:focus-visible,
+html[data-vibe="boring"] .boring-now-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+html[data-vibe="boring"] .boring-now[data-state="busy"] .boring-now-big { box-shadow: 0 0 0 2px var(--living-warm), 0 0 30px -4px color-mix(in srgb, var(--living-warm) 67%, transparent); }
+html[data-vibe="boring"] .boring-now[data-state="needs-you"] .boring-now-big { box-shadow: 0 0 0 2px var(--st-attn); }
+html[data-vibe="boring"] .boring-now[data-state="idle"] .boring-now-big { filter: grayscale(0.8) brightness(0.85); }
+html[data-vibe="boring"] .boring-now-text { min-width: 0; flex: 1 1 auto; }
+html[data-vibe="boring"] .boring-now-t { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); }
+html[data-vibe="boring"] .boring-now[data-state="busy"] .boring-now-t { color: var(--living-warm); }
+html[data-vibe="boring"] .boring-now[data-state="needs-you"] .boring-now-t { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-now-h { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
+html[data-vibe="boring"] .boring-now-s2 { margin-top: 2px; font-size: 13px; color: var(--text-2); }
+html[data-vibe="boring"] .boring-now-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; max-width: 40%; }
+html[data-vibe="boring"] .boring-now-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 2px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+html[data-vibe="boring"] .boring-now-chip:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-now-chip img { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 1.5px var(--living-warm); }
+/* m6: centre the Working-now strip + permission card on the timeline column (which sits left of the context panel),
+   not the whole drawer. Constrain their width to the timeline column and centre on it (like the message column);
+   no translateX, so nothing clips at narrow widths (M1). */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) { --ctx-panel-w: 460px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-panel-w: 36px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) .boring-now,
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
+  --timeline-col: min(var(--measure-col), calc(100% - var(--ctx-panel-w, 0px) - 48px));
+  width: var(--timeline-col);
+  margin-left: calc(50% - var(--timeline-col) / 2 - var(--ctx-panel-w, 0px) / 2);
+  margin-right: calc(50% - var(--timeline-col) / 2 + var(--ctx-panel-w, 0px) / 2);
+}
+/* the permission card is prose-measure (narrower than the Working-now card): centre it at its own width */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
+  --timeline-col: min(var(--measure-prose), calc(100% - var(--ctx-panel-w, 0px) - 48px));
+}
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
+
+/* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */
+html[data-vibe="boring"] .boring-drawer .tl-assistant,
+html[data-vibe="boring"] .boring-drawer .timeline .tl-assistant { position: relative; padding: 30px 0 12px 58px; min-height: 56px; }
+html[data-vibe="boring"] .boring-drawer .tl-assistant::before { content: ""; position: absolute; left: 0; top: 12px; width: 44px; height: 44px; border-radius: 12px; background: var(--surface-3) var(--boring-bust, none) center / 42px 42px no-repeat; image-rendering: pixelated; }
+html[data-vibe="boring"] .boring-drawer .tl-assistant::after { content: var(--boring-who, "") "  ·  " var(--boring-role, ""); position: absolute; left: 58px; top: 10px; font-size: 14px; font-weight: 700; line-height: 20px; color: var(--text-1); white-space: pre; }
+html[data-vibe="boring"][data-theme="light"] .boring-drawer .tl-assistant::before { background-image: var(--boring-bust-light, var(--boring-bust, none)); }
+/* Your messages: right-aligned bubble, no avatar (mockup .me .bub). */
+html[data-vibe="boring"] .boring-drawer .tl-user,
+html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-left: auto; margin-right: max(0px, calc((100% - var(--measure-col)) / 2)); max-width: min(640px, 85%); width: fit-content; box-sizing: border-box; padding: 10px 16px; border: 0; border-left: 0; border-radius: 16px 16px 4px 16px; background: var(--surface-3); }
+
+/* Warm permission card: dark card, amber-tinted border, amber header band ("Needs your OK"), mono "$ cmd", Allow in the living amber. */
+html[data-vibe="boring"] .perm-card { overflow: hidden; padding: 0 16px 14px; background: var(--surface-1); border: 1px solid color-mix(in srgb, var(--st-attn) 33%, transparent); border-left: 1px solid color-mix(in srgb, var(--st-attn) 33%, transparent); border-radius: 14px; }
+html[data-vibe="boring"] .perm-card .perm-head { margin: 0 -16px 12px; padding: 10px 16px; background: color-mix(in srgb, var(--st-attn) 8%, var(--surface-1)); }
+html[data-vibe="boring"] .perm-card .perm-head-main > b { font-size: 13px; font-weight: 700; color: var(--st-attn); }
+html[data-vibe="boring"] .perm-card .perm-head-main > b::before { content: "● Needs your OK · "; }
+html[data-vibe="boring"] .perm-card .perm-preview-cmd { margin: 0; padding: 4px 0; background: transparent; font-family: var(--mono); font-size: 16px; color: var(--text-1); white-space: pre-wrap; }
+html[data-vibe="boring"] .perm-card .perm-preview-cmd::before { content: "$ "; color: var(--text-3); }
+html[data-vibe="boring"] .perm-card .perm-preview-diff,
+html[data-vibe="boring"] .perm-card .perm-preview-input { border-radius: 8px; font-family: var(--mono); }
+html[data-vibe="boring"] .perm-card .btn { border-radius: 9px; font-weight: 700; }
+html[data-vibe="boring"] .perm-card .btn.perm-allow,
+html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }
+
+/* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
+/* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { --d4-panel-w: 36px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer { position: relative; border-top-color: transparent; background-color: transparent; background-image: linear-gradient(to right, var(--bg) calc(100% - var(--d4-panel-w)), var(--panel) calc(100% - var(--d4-panel-w))); }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::before { content: ""; position: absolute; top: -1px; left: 0; right: var(--d4-panel-w); border-top: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::after { content: ""; position: absolute; top: -1px; bottom: 0; right: var(--d4-panel-w); border-left: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .boring-ctx-tabs { min-height: 36px; box-sizing: border-box; padding: 0 8px; gap: 2px; align-items: stretch; }
+html[data-vibe="boring"] .boring-ctx-tab { height: 36px; padding: 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+html[data-vibe="boring"] .boring-ctx-tab.on { background: transparent; border-bottom-color: var(--accent); }
+html[data-vibe="boring"] .boring-ctx-collapse { align-self: center; }
+html[data-vibe="boring"] .boring-ctx-idle-toggle { align-self: flex-start; background: transparent; border: 0; padding: 6px 8px; cursor: pointer; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-3); }
+html[data-vibe="boring"] .boring-ctx-idle-toggle:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-ctx-no-agent-action { display: block; margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--accent); font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer; }
+html[data-vibe="boring"] .boring-ctx-no-agent-action:hover:not(:disabled) { border-color: var(--accent); }
+html[data-vibe="boring"] .boring-ctx-no-agent-action:disabled { opacity: 0.5; cursor: default; }
+html[data-vibe="boring"] .boring-ctx-worker.idle { opacity: 0.75; }
+html[data-vibe="boring"] .boring-ctx-rail-btn { position: relative; padding-top: 28px; }
+html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); writing-mode: horizontal-tb; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; font: 600 11px/18px var(--font-sans, inherit); text-align: center; color: #ffffff; background: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
+/* Plan tab open: the in-timeline pinned todo bar duplicates it. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
