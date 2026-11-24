@@ -95,3 +95,27 @@ Rebuilt with `npx vite build`, served statically. Passes: 3200×1800 @ 1.2 and 1
 - **n3 (nit, folded into m4's gap):** the open agent's own Needs-you row has no selected marker, so a user can't see that the highlighted tree row and the top-list row are the same agent.
 
 No critical or major finding is open in the B13 area at `b9adedff`.
+
+---
+
+# R16c spot-check: `f321e404` (B13f r5)
+
+Rebuilt with `npx vite build`, served statically. Pass matrix: 1280×720, 1440×900, 1600×900, 1920×1080 and 3200×1800 @ 1.2, dark and light, `?demo=1&team=vibesquad&agent=demo-aud` (permission pending), with the context panel open and closed at every width (the panel is collapsed by default at 1280/1440 and open at ≥1600, so each state was reached by clicking `boring-context-toggle`). Rects measured with `getBoundingClientRect`. Screenshots: `artifacts/ux-r16/r16c-*` (untracked). No horizontal scroll and no clipped strip content (children inside the strip's box) in any of the 20 cells.
+
+**Verdict: PASS 0/0/7** (critical/major/minor open): 4 carried (m3, m5 queued to @bug; n1, n2 from R16b) plus 3 new minors (n4, n5, n6).
+
+| Item | Status | Evidence |
+|---|---|---|
+| **m6** alignment after the `translateX` removal | **fixed, all cells** | Strip, first assistant message and card are aligned and centred on the timeline in every combo. Panel closed: 1920 → strip 656-1536, messages 656-1536, composer 656-1536, card 716-1476 (centre 1096 on all three). 1280 → strip 314-796 = messages 314-796 = card 314-796. Panel open ≥1600: 1920 strip 444-1324 = messages (centre 884), 3200 strip 1120-2000 = messages. 1600 open 314-1116, closed 487-1367. The strip never overlaps the panel (right edge ≤ panel left − 24) |
+| No clipping | **fixed** | `hs=false` and `clip=false` for all 20 cells. At 1280 with the panel open the column is 482px wide; strip, card and messages all fit, but it is tight (see n6) |
+| Light warm permission card | **fixed** | Light `.perm-card` now has the warm amber header band and orange border with a legible `Allow` (white on amber-brown) and `Deny…` (red outline) (`r16c-light-1920-ctxclosed.png`, `r16c-light-1280-ctxclosed.png`). The body surface is white (`rgb(255,255,255)`), the card is warm at the header and edge only. That reads fine |
+| Desk tile aria/title | **fixed** | Tiles are `<button>` with `aria-label` ("★ Overlord working now", "RiffBot idle 12m", "Bugs no agent") and `title` ("Lead · Overlord", "Brainstorm · RiffBot", "Bugs") |
+| Needs-you sub-line hidden | **fixed** | The strip's "1 sub-agent call" line is gone in the needs-you state (`r16c-light-1920-ctxclosed.png`) |
+
+## New minor findings
+
+- **n4 · "working now" caption truncates at 1280 and 1440 (regression of m1 at narrow widths).** Sidebar is 290px there. `scrollWidth > clientWidth` is true for the Overlord caption, so it renders "working n…" (`r16c-light-1280-ctxclosed.png`, top of the Desk tiles). The R16b check only covered ≥1920. The `aria-label` and `title` are fine, so only the visible text is clipped. Fix: use "working" without "now", or "working 1m". Files: caption string in `src/BoringAde.tsx` (near line 805), `src/boring.css:1329`. Effort: XS.
+- **n5 · The permission card is 120px narrower than the strip and the messages when the column is wide.** Card 716-1476 against strip/messages 656-1536 at 1920 (and 760 against 880 at every width ≥1600). The centres agree but the left edges don't, so the two stacked cards look misaligned (`r16c-light-1920-ctxclosed.png`). At ≤1440 they're equal. Fix: give `.perm-card` the same `--timeline-col` width as `.boring-now`, or inset both. Effort: XS.
+- **n6 · With a pending permission, the context panel is pushed down and squeezed.** The panel starts at y=402 at every width (below the strip and card) and is only 221px tall at 1280×720 (401px at 1440×900), with the top-right area above it empty (`r16c-light-1280-ctxclosed.png`). B13's strip adds about 105px on top of the existing card push. The Workers list scrolls, but the user can't see what is running while resolving the permission. Fix: lay the strip and card inside the chat column, not as full-width siblings of the panel row, so the panel keeps its full height. Files: `src/AgentDrawer.tsx:654-657`, layout in `src/boring.css:1374-1381`. Effort: S.
+
+No critical or major finding is open in the B13 area at `f321e404`.
