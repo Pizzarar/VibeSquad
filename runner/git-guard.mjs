@@ -7,8 +7,10 @@
 // paths / `checkout .` / checkout -f, switch -f, clean (not -n), stash push/pop/apply/drop/clear/branch, restore) in a
 // repo's MAIN checkout: the first `.git` found walking up from the target dir is a directory, not a gitfile. Inside a
 // linked worktree (`.git` is a file) or outside any repo it passes. The target dir follows the hook's cwd through
-// `cd`/`pushd`/Set-Location, `( )` subshells, `git -C` (cumulative), `--work-tree`/`--git-dir`, `bash -c`/`sh -c`/eval
-// bodies and $(...) substitutions. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
+// `cd`/`pushd`/Set-Location, `( )` subshells, `git -C` (cumulative), `--work-tree`/`--git-dir` (and GIT_WORK_TREE /
+// GIT_DIR prefixes or exports), `env -C`/`sudo -D`, `bash -c`/`sh -c`/eval/`env -S` bodies and $(...) substitutions
+// (checked in the dir the shell is in at that point). Compound-command keywords (if/then/do/while/{ ...) and wrappers
+// (env/sudo/nice/time/timeout/exec/command, with their option arguments) are stripped before the command is read. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
 // closed. Read-only git, `--help`, `checkout -b`/branch switches and `clean -n`/`stash list|show` always pass.
 // Known gaps: git aliases, scripts that run git themselves, and ACP providers (no PreToolUse hook: adapters/acp.mjs).
 import { statSync } from 'node:fs';
@@ -16,7 +18,24 @@ import os from 'node:os';
 import path from 'node:path';
 
 const OPS = ['&&', '||', ';;', ';', '|&', '|', '&', '\n', '(', ')'];
-const WRAPPERS = new Set(['command', 'builtin', 'exec', 'time', 'nohup', 'sudo', 'env', 'nice', '!']);
+// Leading reserved words of compound commands: `if x; then git ...; fi`, `for ...; do git ...; done`, `{ git ...; }`.
+// They are words, not tokenizer operators, so `find -exec {} \;` and `--format={x}` keep their braces.
+const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', 'fi', 'done', 'esac', '{', '}', '!']);
+// Command wrappers: `short` = short flags that take a value, `long` = long options that take one (also `--x=v`),
+// `chdir` = flags that move the wrapped command's dir, `split` = flags whose value is itself a command line,
+// `positional` = leading operands before the command (timeout's DURATION).
+const WRAPPERS = {
+  env: { short: 'uCS', long: ['unset', 'chdir', 'split-string'], chdir: ['-C', '--chdir'], split: ['-S', '--split-string'] },
+  sudo: { short: 'ugCDhprtUTR', long: ['user', 'group', 'close-from', 'chdir', 'host', 'prompt', 'role', 'type', 'other-user', 'command-timeout', 'chroot'], chdir: ['-D', '--chdir'] },
+  nice: { short: 'n', long: ['adjustment'] },
+  time: { short: 'fo', long: ['format', 'output'] },
+  timeout: { short: 'sk', long: ['signal', 'kill-after'], positional: 1 },
+  exec: { short: 'a', long: [] },
+  nohup: {},
+  command: {},
+  builtin: {},
+};
+const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const CD = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const UNKNOWN = Symbol('unknown-dir');
@@ -41,22 +60,23 @@ function readBalanced(s, i, open, close) {
 
 /**
  * Split a command line into words and operators. Words: { text, dynamic } (dynamic = holds a substitution or an
- * unresolvable variable). `subs` collects $(...) / `...` bodies so they are checked as commands too.
+ * unresolvable variable). Each word's `subs` holds its $(...) / `...` bodies, checked as commands in the dir the shell is
+ * in when that word is expanded; the top-level `subs` lists them all.
  */
 export function tokenize(src, { env = process.env, vars = {}, powershell = false } = {}) {
   const s = String(src ?? '');
   const out = [];
   const subs = [];
   let word = null;
-  const start = () => { if (!word) word = { text: '', dynamic: false, quoted: false }; };
+  const start = () => { if (!word) word = { text: '', dynamic: false, quoted: false, subs: [] }; };
+  const addSub = (body) => { start(); subs.push(body); word.subs.push(body); word.dynamic = true; };
   const flush = () => { if (word) out.push({ type: 'word', ...word }); word = null; };
   const lookup = (name) => (Object.hasOwn(vars, name) ? vars[name] : env?.[name]);
   const expandVar = (i) => {
     // s[i] === '$'; returns index after the reference
     if (s[i + 1] === '(') {
       const [inner, next] = readBalanced(s, i + 2, '(', ')');
-      subs.push(inner);
-      start(); word.dynamic = true;
+      addSub(inner);
       return next;
     }
     if (s[i + 1] === '{') {
@@ -108,8 +128,7 @@ export function tokenize(src, { env = process.env, vars = {}, powershell = false
         if (s[i] === '$') { i = expandVar(i); continue; }
         if (s[i] === '`' && !powershell) {
           const end = s.indexOf('`', i + 1);
-          subs.push(s.slice(i + 1, end < 0 ? s.length : end));
-          word.dynamic = true;
+          addSub(s.slice(i + 1, end < 0 ? s.length : end));
           i = end < 0 ? s.length : end + 1;
           continue;
         }
@@ -124,8 +143,7 @@ export function tokenize(src, { env = process.env, vars = {}, powershell = false
     }
     if (c === '`' && !powershell) {
       const end = s.indexOf('`', i + 1);
-      subs.push(s.slice(i + 1, end < 0 ? s.length : end));
-      start(); word.dynamic = true;
+      addSub(s.slice(i + 1, end < 0 ? s.length : end));
       i = end < 0 ? s.length : end + 1;
       continue;
     }
@@ -223,10 +241,10 @@ export function destructiveGit(sub, args, dir) {
 }
 
 /** Parse `git [global opts] <sub> <args>` from argv (without the leading `git`). */
-export function parseGitArgv(argv, cwd) {
+export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: envGitDir = null } = {}) {
   let dir = cwd;
-  let workTree = null;
-  let gitDir = null;
+  let workTree = envWorkTree; // GIT_WORK_TREE / GIT_DIR from the command's env; --work-tree / --git-dir override them
+  let gitDir = envGitDir;
   const resolveFrom = (base, p) => (base === UNKNOWN || p === UNKNOWN ? (path.isAbsolute(String(p)) ? path.resolve(p) : UNKNOWN) : path.resolve(base, p));
   let k = 0;
   for (; k < argv.length; k++) {
@@ -278,11 +296,7 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
     for (const t of tokenize(src, { env, powershell }).tokens) { if (t.type === 'op') take(); else stmt.push(t); }
     take();
   }
-  const { tokens, subs } = tokenize(src, { env, vars, powershell });
-  for (const sub of subs) {
-    const v = findViolation(sub, { cwd, env, powershell, depth: depth + 1 });
-    if (v) return v;
-  }
+  const { tokens } = tokenize(src, { env, vars, powershell });
   // split into segments
   const segs = [];
   let cur = [];
@@ -292,22 +306,76 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
   segs.push({ words: cur, op: null });
 
   let dir = cwd ? path.resolve(cwd) : UNKNOWN;
+  const resolveDir = (base, w) => {
+    if (!w || w === UNKNOWN || w.dynamic) return UNKNOWN;
+    if (path.isAbsolute(w.text)) return path.resolve(w.text);
+    return base === UNKNOWN ? UNKNOWN : path.resolve(base, w.text);
+  };
+  const exported = {}; // `export GIT_DIR=...` reaches every later git in this command line
   const scopes = [];
   const dirStack = [];
   let prevOp = null;
   for (const { words, op } of segs) {
     const piped = prevOp === '|' || prevOp === '|&' || op === '|' || op === '|&' || op === '&';
     prevOp = op;
-    let ws = words;
-    // leading NAME=value assignments (a bare assignment segment sets a shell variable)
-    let n = 0;
-    while (n < ws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[n].text)) n++;
-    ws = ws.slice(n);
-    while (ws.length && WRAPPERS.has(ws[0].text.toLowerCase())) {
-      ws = ws.slice(1);
-      while (ws.length && (ws[0].text.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(ws[0].text))) ws = ws.slice(1);
+    // $(...) / `...` in any word run first, in the dir the shell is in now (before this segment's cd takes effect)
+    for (const w of words) {
+      for (const body of w.subs ?? []) {
+        const v = findViolation(body, { cwd: dir === UNKNOWN ? null : dir, env, powershell, depth: depth + 1 });
+        if (v) return v;
+      }
     }
     if (op === '(') scopes.push(dir);
+    let ws = words;
+    let segDir = dir; // env -C / sudo -D move only the wrapped command
+    const segEnv = { ...exported };
+    // Strip leading NAME=value prefixes, compound-command keywords and wrappers (with their option values), in any order.
+    for (let guard = 0; ws.length && guard < 64; guard++) {
+      const w0 = ws[0];
+      if (ASSIGN.test(w0.text)) {
+        const eq = w0.text.indexOf('=');
+        segEnv[w0.text.slice(0, eq)] = w0.dynamic ? UNKNOWN : w0.text.slice(eq + 1);
+        ws = ws.slice(1);
+        continue;
+      }
+      if (!w0.quoted && KEYWORDS.has(w0.text)) { ws = ws.slice(1); continue; }
+      const spec = !w0.quoted && Object.hasOwn(WRAPPERS, w0.text.toLowerCase()) ? WRAPPERS[w0.text.toLowerCase()] : null;
+      if (!spec) break;
+      ws = ws.slice(1);
+      const apply = (flag, value) => {
+        if (spec.chdir?.includes(flag)) segDir = resolveDir(segDir, value);
+        else if (spec.split?.includes(flag) && value && value !== UNKNOWN) {
+          ws = [...tokenize(value.text, { env, vars, powershell }).tokens.filter((t) => t.type === 'word'), ...ws];
+        }
+      };
+      while (ws.length) {
+        const a = ws[0].text;
+        if (a === '--') { ws = ws.slice(1); break; }
+        if (!a.startsWith('-') || a === '-') break;
+        const flagWord = ws[0];
+        ws = ws.slice(1);
+        if (a.startsWith('--')) {
+          const eq = a.indexOf('=');
+          const name = eq < 0 ? a.slice(2) : a.slice(2, eq);
+          if (!(spec.long ?? []).includes(name)) continue;
+          let value;
+          if (eq >= 0) value = { text: a.slice(eq + 1), dynamic: flagWord.dynamic };
+          else { value = ws[0] ?? UNKNOWN; ws = ws.slice(1); }
+          apply(`--${name}`, value);
+          continue;
+        }
+        for (let j = 1; j < a.length; j++) {
+          if (!(spec.short ?? '').includes(a[j])) continue;
+          const rest = a.slice(j + 1);
+          let value;
+          if (rest) value = { text: rest, dynamic: flagWord.dynamic };
+          else { value = ws[0] ?? UNKNOWN; ws = ws.slice(1); }
+          apply(`-${a[j]}`, value);
+          break;
+        }
+      }
+      ws = ws.slice(spec.positional ?? 0);
+    }
     if (!ws.length) {
       if (op === ')' && scopes.length) dir = scopes.pop();
       continue;
@@ -315,29 +383,34 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
     const cmd = ws[0].text;
     const base = path.basename(cmd).toLowerCase().replace(/\.exe$/, '');
     if (CD.has(cmd.toLowerCase())) {
-      const argsW = ws.slice(1).filter((w) => !/^-(L|P|e|@|Path|LiteralPath)$/i.test(w.text));
-      let next;
-      const t = argsW[0];
-      if (!t) next = env?.HOME || os.homedir();
-      else if (t.dynamic || t.text === '-') next = UNKNOWN;
-      else next = dir === UNKNOWN && !path.isAbsolute(t.text) ? UNKNOWN : path.resolve(dir === UNKNOWN ? '/' : dir, t.text);
+      const t = ws.slice(1).filter((w) => !/^-(L|P|e|@|Path|LiteralPath)$/i.test(w.text))[0];
+      const next = !t ? env?.HOME || os.homedir() : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
       if (!piped) {
         if (cmd.toLowerCase() === 'pushd' || cmd.toLowerCase() === 'push-location') dirStack.push(dir);
         dir = next;
       }
     } else if (base === 'popd' || base === 'pop-location') {
       if (!piped) dir = dirStack.length ? dirStack.pop() : UNKNOWN;
+    } else if (base === 'export') {
+      for (const w of ws.slice(1)) {
+        if (!ASSIGN.test(w.text)) continue;
+        const eq = w.text.indexOf('=');
+        if (!piped) exported[w.text.slice(0, eq)] = w.dynamic ? UNKNOWN : w.text.slice(eq + 1);
+      }
     } else if (SHELLS.has(base)) {
       const ci = ws.findIndex((w, i) => i > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text));
       if (ci > 0 && ws[ci + 1]) {
-        const v = findViolation(ws[ci + 1].text, { cwd: dir === UNKNOWN ? null : dir, env, depth: depth + 1 });
+        const v = findViolation(ws[ci + 1].text, { cwd: segDir === UNKNOWN ? null : segDir, env, depth: depth + 1 });
         if (v) return v;
       }
     } else if (base === 'eval') {
-      const v = findViolation(ws.slice(1).map((w) => w.text).join(' '), { cwd: dir === UNKNOWN ? null : dir, env, powershell, depth: depth + 1 });
+      const v = findViolation(ws.slice(1).map((w) => w.text).join(' '), { cwd: segDir === UNKNOWN ? null : segDir, env, powershell, depth: depth + 1 });
       if (v) return v;
     } else if (base === 'git') {
-      const g = parseGitArgv(ws.slice(1), dir);
+      const g = parseGitArgv(ws.slice(1), segDir, {
+        workTree: Object.hasOwn(segEnv, 'GIT_WORK_TREE') ? segEnv.GIT_WORK_TREE : null,
+        gitDir: Object.hasOwn(segEnv, 'GIT_DIR') ? segEnv.GIT_DIR : null,
+      });
       const label = destructiveGit(g.sub, g.args, g.dir);
       if (label) {
         if (g.forced) {

@@ -124,6 +124,93 @@ test('an unresolvable directory fails closed for destructive git only', () => {
   ok('cd $NOPE && ls', WT);
 });
 
+// ---- review rn-95cd6f6c055e regressions ----
+
+test('review #1: compound-command keywords and { } groups do not hide destructive git', () => {
+  for (const cmd of [
+    'if true; then git reset --hard; fi',
+    'if git diff --quiet; then echo clean; else git stash; fi',
+    'if false; then :; elif true; then git clean -fd; fi',
+    'for x in 1; do git reset --hard; done',
+    'while true; do git reset --hard; break; done',
+    'until false; do git restore .; done',
+    '{ git reset --hard; }',
+    '{ echo hi; git checkout -- .; }',
+    '! git reset --hard',
+    'f() { git reset --hard; }; f',
+    'case x in x) git stash;; esac',
+    'if true\nthen\n  git reset --hard\nfi',
+  ]) {
+    bad(cmd);
+    ok(cmd, WT); // the same lines inside a linked worktree still pass
+  }
+  ok('if git diff --quiet; then echo clean; fi');
+  ok('for f in a b; do git log -1 -- $f; done');
+  ok('find . -name "*.ts" -exec git log -1 {} \;');
+  ok('git log --format={%h} -1');
+  ok('{ git status; git diff; }');
+});
+
+test('review #2: $(...) and backtick bodies run in the dir the shell is in at that point', () => {
+  // bypass: the substitution runs after cd into the main checkout
+  bad(`cd ${MAIN} && echo $(git reset --hard)`, WT);
+  bad(`cd ${MAIN} && echo \`git clean -fd\``, WT);
+  bad(`cd ${MAIN}; X="$(git stash)"`, WT);
+  // false refusal: the substitution runs after cd into the worktree
+  ok(`cd ${WT} && echo $(git stash)`);
+  ok(`cd ${WT} && echo \`git reset --hard\``);
+  ok(`cd ${WT} && R="$(git checkout -- .)"`);
+  // a substitution inside a cd target runs before that cd
+  assert.equal(bad(`cd "$(git stash; echo ${WT})" && ls`).root, MAIN, 'the body runs in the main checkout, before the cd');
+  ok(`cd "$(git stash; echo ${WT})" && ls`, WT);
+  // a cd to a substitution is still unresolvable, so a destructive git after it fails closed (not the body's fault)
+  assert.equal(bad(`cd "$(git status >/dev/null; echo ${WT})" && git reset --hard`).unresolved, true);
+});
+
+test('review #3: wrapper options that take a value are skipped; env -C / sudo -D move the target dir', () => {
+  for (const cmd of [
+    'env -u FOO git reset --hard', 'env --unset FOO git reset --hard', 'env --unset=FOO git stash', 'env -i PATH=/usr/bin git clean -fd',
+    'sudo -u someone git reset --hard', 'sudo -u someone -g grp git restore .', 'sudo --user=x git reset --hard',
+    'nice -n 5 git reset --hard', 'nice --adjustment 5 git stash', 'nice -10 git clean -fd',
+    'timeout 30 git reset --hard', 'timeout -s KILL -k 5 30 git reset --hard', 'time -p git clean -fd', 'time git stash',
+    'exec -a name git reset --hard', 'command git reset --hard', 'nohup git reset --hard',
+    'env -S "git reset --hard"', 'env --split-string="GIT_TRACE=1 git stash"', 'env -- git reset --hard',
+  ]) {
+    bad(cmd);
+    ok(cmd, WT);
+  }
+  bad(`env -C ${MAIN} git reset --hard`, WT);
+  bad(`env --chdir=${MAIN} git stash`, WT);
+  bad(`env -C ../../repo git clean -fd`, WT);
+  bad(`sudo -D ${MAIN} git reset --hard`, WT);
+  ok(`env -C ${WT} git reset --hard`);
+  ok(`sudo --chdir ${WT} git checkout -- .`);
+  bad(`env -C ${WT} true && git reset --hard`, MAIN, env); // env -C moves only the wrapped command
+  bad('env -C "$(pwd)" git reset --hard', WT).unresolved === true || assert.fail('dynamic env -C fails closed');
+});
+
+test('review #4: GIT_WORK_TREE / GIT_DIR prefixes and exports point git at the main checkout', () => {
+  bad(`GIT_WORK_TREE=${MAIN} GIT_DIR=${MAIN}/.git git checkout -- .`, WT);
+  bad(`GIT_DIR=${MAIN}/.git git stash`, WT);
+  bad(`env GIT_WORK_TREE=${MAIN} git reset --hard`, WT);
+  bad(`export GIT_WORK_TREE=${MAIN}; git reset --hard`, WT);
+  bad(`export GIT_DIR=${MAIN}/.git && git clean -fd`, WT);
+  bad(`GIT_WORK_TREE="$NOPE" git reset --hard`, WT); // unresolvable: fails closed
+  ok(`GIT_DIR=${WT}/.git git reset --hard`); // a linked worktree's gitfile
+  ok(`GIT_WORK_TREE=${MAIN} git status`, WT);
+  ok(`GIT_DIR=${MAIN}/.git true; git reset --hard`, WT); // a prefix on another command does not reach git
+  ok(`GIT_WORK_TREE=${MAIN} git --work-tree=${WT} --git-dir=${WT}/.git reset --hard`, WT); // flags override the env
+});
+
+test('review #5: git -c k=v does not hide the subcommand', () => {
+  bad('git -c core.pager=cat reset --hard');
+  bad('git -c user.name=x -c user.email=y stash');
+  bad(`git -c core.quotepath=off -C ${MAIN} clean -fd`, WT);
+  ok(`git -c core.pager=cat -C ${WT} reset --hard`);
+  ok('git -c core.pager=cat log -1');
+  ok('git -c reset.hard=1 status');
+});
+
 test('tokenize: quotes, escapes, redirections and comments', () => {
   const words = (s) => tokenize(s, { env }).tokens.filter((t) => t.type === 'word').map((t) => t.text);
   assert.deepEqual(words(`git commit -m "a && b" 2>&1`), ['git', 'commit', '-m', 'a && b', '2>&1']);
