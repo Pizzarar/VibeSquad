@@ -62,7 +62,7 @@ import {
   routeTierOf,
 } from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
-import { createWatchEngine, finalsTextFor } from "../watch-sets.mjs";
+import { createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent, VERDICT_PREFIX_SRC } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
@@ -3884,7 +3884,10 @@ ${detail}` : text, refs: [d.setId] };
         const thinkingOptionId = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
         const featureValues = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
         const prompt = [
-          `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, PASS/FAIL verdict, commit hash and pass/fail count. Drop nothing that matters.`,
+          // idea-883: verdicts are never the merge worker's call. A Flash merge once read "3/3 pass" off a truncated FAIL review and
+          // wrote PASS (w-d81540c8); the code-read verdict block is prepended below and any verdict word the worker writes is masked.
+          `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, commit hash and the key finding of each item. Drop nothing that matters.`,
+          `Do NOT write PASS, FAIL or any verdict word, and do not judge whether an item passed: the verdicts are read from each agent's own verdict line in code and printed above your digest.`,
           `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
           ``,
           `--- watch ${d.setId} report ---`,
@@ -3912,7 +3915,8 @@ ${detail}` : text, refs: [d.setId] };
           log(`watch ${d.setId}: merge worker produced no digest`);
           return false;
         }
-        await deliverWatchPing({ ...d, text: merged });
+        const vb = verdictBlock(d.set);
+        await deliverWatchPing({ ...d, text: `${vb ? `${vb}\n` : ""}${maskVerdictWords(merged)}` });
         return true;
       } catch (err) {
         log(`watch ${d.setId} merge spawn failed: ${err}`);

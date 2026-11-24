@@ -212,3 +212,91 @@ export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
   }
   return out(GATE_EXIT.pass, `PASS on ${branch || "branch"} tip ${t.slice(0, 12)}`, pass.line);
 }
+
+// ---- idea-883: the recorded verdict gates merging / pushing a unit commit (fail closed) ----
+// A unit merge's tip (the merged branch head) needs a recorded verdict: a team-log `done` entry whose verdict line (the digest
+// copies it byte-for-byte from the reviewer's final, see digestVerdictText) names a hash that prefixes the tip. The latest such
+// entry decides; FAIL or none refuses. Enforced by .githooks/pre-merge-commit + pre-commit (git merge into master/main) and
+// .githooks/pre-push (server/push-guard.mjs). Owner/lead override: `git -c vs.verdictOverride=<sha> merge|push` or
+// VS_VERDICT_OVERRIDE=<sha>[,<sha>] (the merge or tip sha).
+
+/** A unit merge subject: `Merge unit-…` / `Merge branch 'unit-…'` (unit branches are `unit-<lane>-<idea>…`, made with `vs worktree create`; the
+ * lead's `Merge unit-<x>: … (@<lane> …)` subject is the one server/push-guard.mjs reads the lane tag from). */
+// Also git's default for `git merge origin/unit-x`: Merge remote-tracking branch 'origin/unit-x'. Never `Merge master into unit-x`.
+export const UNIT_MERGE_RE = /^Merge (?:(?:remote-tracking )?branch ['"](?:[\w.-]+\/)?)?unit-/;
+export function isUnitMergeSubject(subject) {
+  return UNIT_MERGE_RE.test(String(subject ?? "").trim());
+}
+
+/** An orphan-sweep entry ("UNVERIFIED (digest failed): <final>") still records the final's verdict line. */
+const UNVERIFIED_PREFIX_RE = /^\s*UNVERIFIED\b[^:\n]*:\s*/;
+
+/** The verdict a team-log entry records: { verdict, hash, line } for a `done` entry carrying a verdict line, else null. */
+export function entryVerdict(entry) {
+  if (!entry || entry.type !== "done") return null;
+  const line = extractVerdictLine(String(entry.text ?? "").replace(UNVERIFIED_PREFIX_RE, ""));
+  const v = line ? parseVerdictLine(line) : null;
+  return v ? { verdict: v.verdict, hash: v.hash.toLowerCase(), line, v } : null;
+}
+
+/**
+ * The latest recorded verdict for `tip` (a full sha) among team-log `entries` (append order): the last `done` entry whose
+ * verdict hash (7+ hex) prefixes the tip. Docs targets never match a commit. Returns { verdict, line, ts, agent } or null.
+ */
+export function latestRecordedVerdict(entries, tip) {
+  const t = String(tip ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(t)) return null;
+  let best = null;
+  for (const e of entries ?? []) {
+    const r = entryVerdict(e);
+    if (!r || isDocsTarget(r.hash) || !t.startsWith(r.hash)) continue;
+    best = { verdict: r.verdict, line: r.line, ts: e.ts ?? null, agent: e.agent ?? null };
+  }
+  return best;
+}
+
+/**
+ * Decide a batch of unit merges. merges: [{ sha, subject, tip }] (tip = the merged branch head); recorded(tip) -> the latest
+ * recorded verdict or null; overrides: sha prefixes (merge or tip). Non-unit merges are skipped. Pure.
+ * Returns { ok, passed: [], overridden: [], refused: [{ sha, subject, tip, reason: "fail"|"no-verdict", line }] }.
+ */
+export function evaluateMergeVerdicts({ merges = [], recorded = () => null, overrides = [] } = {}) {
+  const passed = [];
+  const overridden = [];
+  const refused = [];
+  const ov = (overrides ?? []).map((s) => String(s).toLowerCase()).filter(Boolean);
+  for (const m of merges) {
+    if (!isUnitMergeSubject(m.subject)) continue;
+    const sha = String(m.sha ?? "").toLowerCase();
+    const tip = String(m.tip ?? "").toLowerCase();
+    const entry = { sha, subject: m.subject, tip };
+    if (ov.some((p) => (sha && sha.startsWith(p)) || (tip && tip.startsWith(p)))) {
+      overridden.push(entry);
+      continue;
+    }
+    const r = tip ? recorded(tip) : null;
+    if (r?.verdict === "PASS") passed.push({ ...entry, line: r.line });
+    else refused.push({ ...entry, reason: r ? "fail" : "no-verdict", line: r?.line ?? "" });
+  }
+  return { ok: refused.length === 0, passed, overridden, refused };
+}
+
+/** Human-readable refusal for stderr; "" when every unit merge has a recorded PASS (or is overridden). */
+export function formatVerdictRefusal(result, { action = "push" } = {}) {
+  if (result.ok) return "";
+  const short = (s) => String(s ?? "").slice(0, 8);
+  const lines = [`vs verdict gate: refusing to ${action}: a unit commit's latest recorded verdict is FAIL or missing (idea-883, fail closed).`];
+  for (const r of result.refused) {
+    const head = r.sha ? `${short(r.sha)} ${String(r.subject ?? "").slice(0, 80)}` : String(r.subject ?? "").slice(0, 80);
+    lines.push(`  ${head}`);
+    lines.push(
+      r.reason === "fail"
+        ? `           tip ${short(r.tip)}: latest recorded verdict is ${r.line.slice(0, 100)}`
+        : `           tip ${short(r.tip)}: no recorded verdict (no reviewer digest \`PASS|FAIL H/M/L <hash>\` line names this tip)`,
+    );
+  }
+  lines.push("Get a review PASS on the exact tip (vs verdict <reviewer> --branch <unit> exits 0), then retry.");
+  const shas = result.refused.map((r) => short(r.tip || r.sha)).join(",");
+  lines.push(`Owner/lead override only (say why in the merge subject): git -c vs.verdictOverride=${shas} ${action} ... (or VS_VERDICT_OVERRIDE=${shas}).`);
+  return `${lines.join("\n")}\n`;
+}
