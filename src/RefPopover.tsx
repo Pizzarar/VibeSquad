@@ -50,9 +50,8 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
   const suppressFocusOpen = useRef(false);
   const pendingFocusAction = useRef(false);
   const pendingJump = useRef(false);
+  const focusOpenedAt = useRef(0);
   const coarse = useMemo(coarsePointer, []);
-  const phone = useMemo(phoneShell, []);
-  const boring = useMemo(boringMode, []);
 
   const cancelTimer = useCallback(() => {
     if (hoverTimer.current != null) {
@@ -73,6 +72,16 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
     cancelTimer();
     setOpen(true);
   }, [cancelTimer]);
+
+  // Close and, if focus was inside the popover, hand it back to the trigger (R14-3: scroll-close, Esc, Open in Inbox).
+  const closeReturnFocus = useCallback(() => {
+    const active = document.activeElement;
+    if (active && pop.current && pop.current.contains(active)) {
+      suppressFocusOpen.current = true;
+      trigger.current?.focus();
+    }
+    close();
+  }, [close]);
 
   // Place the popover anchored under the token, clamped into the viewport (flip above when short);
   // re-place on window resize (L2).
@@ -114,12 +123,14 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
     const esc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        if (trigger.current !== document.activeElement) suppressFocusOpen.current = true;
-        close();
-        trigger.current?.focus();
+        closeReturnFocus();
       }
     };
-    const scrollClose = () => close();
+    // Ignore the focus-open's own scroll adjustment (R14-3), then close and return focus.
+    const scrollClose = () => {
+      if (Date.now() - focusOpenedAt.current < 100) return;
+      closeReturnFocus();
+    };
     window.addEventListener("pointerdown", away);
     window.addEventListener("keydown", esc);
     window.addEventListener("scroll", scrollClose, true);
@@ -128,7 +139,7 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
       window.removeEventListener("keydown", esc);
       window.removeEventListener("scroll", scrollClose, true);
     };
-  }, [open, close]);
+  }, [open, close, closeReturnFocus]);
 
   // Enter/Space from a closed trigger opens then moves focus into the popover (M2 / R13-4).
   useEffect(() => {
@@ -149,11 +160,13 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, citing, agentId, ref]);
 
+  // L1: on unmount, cancel the hover timer and the flash-clear timeout.
   useEffect(
     () => () => {
+      cancelTimer();
       if (flashTimer.current != null) clearTimeout(flashTimer.current);
     },
-    [],
+    [cancelTimer],
   );
 
   const scheduleClose = () => {
@@ -199,6 +212,7 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
       suppressFocusOpen.current = false;
       return;
     }
+    focusOpenedAt.current = Date.now();
     openNow();
   };
   const onTriggerBlur = (e: React.FocusEvent) => {
@@ -234,6 +248,9 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
     el.classList.add("tl-flash");
     if (flashTimer.current != null) clearTimeout(flashTimer.current); // R13-7: never stack stale flash clears
     flashTimer.current = setTimeout(() => el.classList.remove("tl-flash"), FLASH_MS);
+    // R14-3: move keyboard focus to the target message (without another scroll).
+    el.setAttribute("tabindex", "-1");
+    (el as HTMLElement).focus({ preventScroll: true });
   };
 
   const loadOlder = () => {
@@ -244,9 +261,24 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
   };
 
   const openInbox = (cardId: string) => {
-    close();
-    if (boring) focusInboxCard(cardId);
-    else openAndScrollToInbox();
+    closeReturnFocus();
+    if (boringMode()) {
+      // R14-2: flip to the Overview without pushing a history entry — rewrite the chat's ?agent= URL
+      // (matching App's serializeUrlState) so Back never restores a chat URL over the Overview screen.
+      try {
+        const p = new URLSearchParams(location.search);
+        const team = p.get("team");
+        p.delete("team");
+        p.delete("agent");
+        p.delete("view");
+        if (team) p.set("team", team);
+        const s = p.toString();
+        history.replaceState(null, "", `${location.pathname}${s ? `?${s}` : ""}${location.hash}`);
+      } catch {}
+      focusInboxCard(cardId);
+    } else {
+      openAndScrollToInbox();
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -302,12 +334,12 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
             onBlur={onPopBlur}
           >
             <PopoverBody
-              ref={ref}
+              ctxRef={ref}
               agentId={agentId}
               entries={entries}
               citing={citing}
               hasMore={hasMore}
-              phone={phone}
+              phone={phoneShell()}
               onJump={jumpToEntry}
               onLoadOlder={loadOlder}
               onOpenInbox={openInbox}
@@ -320,7 +352,7 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
 }
 
 type PopoverBodyProps = {
-  ref: ContextRef;
+  ctxRef: ContextRef;
   agentId?: string;
   entries?: RefEntry[];
   citing?: RefEntry;
@@ -332,9 +364,9 @@ type PopoverBodyProps = {
 };
 
 /** Resolves the ref (msg inline, idea via the inbox store) — only ever mounted while the popover is open (M3/H1). */
-function PopoverBody({ ref, agentId, entries, citing, hasMore, phone, onJump, onLoadOlder, onOpenInbox }: PopoverBodyProps) {
-  if (ref.kind === "msg") {
-    const r = resolveMsgRef(entries ?? [], citing ?? ({} as RefEntry), ref.n, agentId);
+function PopoverBody({ ctxRef, agentId, entries, citing, hasMore, phone, onJump, onLoadOlder, onOpenInbox }: PopoverBodyProps) {
+  if (ctxRef.kind === "msg") {
+    const r = resolveMsgRef(entries ?? [], citing ?? ({} as RefEntry), ctxRef.n, agentId);
     if (r.status === "ok") {
       return (
         <>
@@ -364,17 +396,17 @@ function PopoverBody({ ref, agentId, entries, citing, hasMore, phone, onJump, on
       </div>
     );
   }
-  return <IdeaBody ref={ref} phone={phone} onOpenInbox={onOpenInbox} />;
+  return <IdeaBody ctxRef={ctxRef} phone={phone} onOpenInbox={onOpenInbox} />;
 }
 
 /** Idea ref body: subscribes to the inbox store only while open; fetches once (deduped) if never loaded. */
-function IdeaBody({ ref, phone, onOpenInbox }: { ref: IdeaRef; phone: boolean; onOpenInbox: (cardId: string) => void }) {
+function IdeaBody({ ctxRef, phone, onOpenInbox }: { ctxRef: IdeaRef; phone: boolean; onOpenInbox: (cardId: string) => void }) {
   const inboxCards = useInboxCards();
   useEffect(() => {
     if (inboxCards.length === 0 && !isInboxLoadedOnce()) void refreshInboxCards();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const card = inboxCards.find((c) => c.id === ref.id) ?? null;
+  const card = inboxCards.find((c) => c.id === ctxRef.id) ?? null;
   if (!card) {
     return (
       <div className="ref-popover-body">

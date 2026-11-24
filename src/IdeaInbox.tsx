@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
@@ -14,6 +14,15 @@ export function isTouchMobileLayout(): boolean {
   return (
     window.matchMedia("(max-width: 600px)").matches ||
     (window.matchMedia("(pointer: coarse)").matches && window.innerWidth <= 900)
+  );
+}
+
+/** R14-1: inbox card reveal scroll should be instant under reduced motion. */
+export function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -341,18 +350,30 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
 
   // R13-1: a ref popover's "Open in Inbox" (Normal mode) asks to reveal + flash one card.
   const focusedCard = useFocusedInboxCard();
+  // R14-1/Code-M1: the highlight timer lives in a ref, so clearFocusedInboxCard (which re-runs this effect
+  // and would run its cleanup) can't cancel the very timer that clears the highlight.
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!focusedCard) return;
     setInboxOpen(true);
     setHighlightId(focusedCard);
     const id = focusedCard;
-    const t = setTimeout(() => setHighlightId(null), 2000);
+    if (highlightTimer.current != null) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightId(null), 2000);
     requestAnimationFrame(() => {
-      document.getElementById(`inbox-card-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      document.getElementById(`inbox-card-${id}`)?.scrollIntoView({
+        block: "center",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
     });
     clearFocusedInboxCard();
-    return () => clearTimeout(t);
   }, [focusedCard]);
+  useEffect(
+    () => () => {
+      if (highlightTimer.current != null) clearTimeout(highlightTimer.current);
+    },
+    [],
+  );
 
   const openAuditChat = (pin: Pin) => {
     setError("");

@@ -101,3 +101,20 @@ test("R13-3/R13-6/R13-2 wiring: hasMore wording, Normal skin tokens, dotted unde
   const t = src("Timeline.tsx");
   assert.match(t, /hasMore=\{hasMore\}/);
 });
+
+test("round-3 wiring: ctxRef rename, highlight timer in a ref, replaceState, focus-return, Normal highlight", () => {
+  const r = src("RefPopover.tsx");
+  assert.match(r, /ctxRef/);                                    // L2 rename
+  assert.doesNotMatch(r, /<PopoverBody\s+ref=/);                // no `ref` prop on PopoverBody
+  assert.match(r, /history\.replaceState/);                     // R14-2 no history push
+  assert.match(r, /focus\(\{ preventScroll: true \}\)/);        // R14-3 focus target message
+  assert.match(r, /setAttribute\("tabindex", "-1"\)/);          // R14-3 make message focusable
+  assert.match(r, /closeReturnFocus/);                          // R14-3 return focus to trigger
+  assert.match(r, /Date\.now\(\) - focusOpenedAt\.current < 100/); // R14-3 ignore focus-open scroll
+  const inbox = src("IdeaInbox.tsx");
+  assert.match(inbox, /highlightTimer = useRef/);               // Code M1 timer held in a ref
+  assert.match(inbox, /if \(highlightTimer\.current != null\) clearTimeout\(highlightTimer\.current\)/);
+  assert.match(inbox, /prefersReducedMotion\(\) \? "auto" : "smooth"/); // R14-1 reduced-motion scroll
+  const css = src("styles.css");
+  assert.match(css, /html\[data-vibe="boring"\] \.inbox-card\.highlighted/); // R14-1 Normal highlight
+});

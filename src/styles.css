@@ -4160,6 +4160,11 @@ html[data-vibe="boring"] .ref-popover {
   box-shadow: 0 8px 24px #0006;
 }
 html[data-vibe="boring"] .ref-popover-title { color: var(--text-1); }
+/* R14-1: the Normal (Boring) inbox card highlight needs higher specificity than boring.css's base .inbox-card rule. */
+html[data-vibe="boring"] .inbox-card.highlighted {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .ref-popover-body { min-width: 0; }
 .ref-popover-title {
   color: var(--cyan-t);
