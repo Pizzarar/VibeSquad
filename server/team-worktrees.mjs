@@ -4,7 +4,7 @@
 // with git's reason so the dialog can say why.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, linkSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, linkSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -393,17 +393,39 @@ export function detectDefaultBranch(repoRoot, { git = defaultGit, preferred, fet
 }
 
 const FETCH_THROTTLE_MS = 3_600_000;
-const lastFetchAt = new Map(); // repoRoot -> ms of the last attempt (success or not)
+const lastFetchMem = new Map(); // fallback when the state file cannot be read or written
+const fetchStateFile = () => join(process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "sweep-fetch.json");
+const readFetchState = (file) => {
+  try {
+    const o = JSON.parse(readFileSync(file, "utf8"));
+    return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+};
 
 /**
- * `git fetch origin` for the repo, at most once per hour per repo (attempts count, so a dead remote is not retried every
- * tick). Any failure is swallowed: the sweep then reads the refs it already has, as before. Returns true when it fetched.
+ * `git fetch origin` for the repo, at most once per hour per repo across processes (CLI runs, auto-sweep worker threads):
+ * the last attempt time lives in <VIBESQUAD_HOME|~/.vibesquad>/sweep-fetch.json, keyed by the real path, and is written
+ * (atomically) BEFORE the fetch, so success and failure both count and a dead remote is not retried every tick. Any
+ * failure is swallowed: the sweep then reads the refs it already has, as before. Returns true when it fetched.
  */
 export function refreshOriginRefs(repoRoot, { git = defaultGit, now = Date.now(), minIntervalMs = FETCH_THROTTLE_MS } = {}) {
-  const key = resolve(repoRoot);
-  const last = lastFetchAt.get(key);
-  if (last !== undefined && now - last < minIntervalMs) return false;
-  lastFetchAt.set(key, now);
+  const key = normPath(repoRoot) ?? lexKey(repoRoot);
+  const file = fetchStateFile();
+  const state = readFetchState(file);
+  const stamps = [Number(state[key]), lastFetchMem.get(key)].filter((n) => Number.isFinite(n));
+  if (stamps.length && now - Math.max(...stamps) < minIntervalMs) return false;
+  lastFetchMem.set(key, now);
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const next = { ...readFetchState(file), [key]: now };
+    const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+    writeFileSync(tmp, JSON.stringify(next));
+    renameSync(tmp, file);
+  } catch {
+    /* unwritable state: the in-memory stamp still throttles this process */
+  }
   return tryGit(git, ["fetch", "--quiet", "--no-tags", "origin"], repoRoot, { env: { GIT_TERMINAL_PROMPT: "0" } }) !== null;
 }
 
@@ -414,7 +436,7 @@ export function refreshOriginRefs(repoRoot, { git = defaultGit, now = Date.now()
  * never a local ref someone can move) are accepted; unknown or malformed names add nothing (fail closed).
  */
 function extraBaseRefs(repoRoot, git, have) {
-  const out = tryGit(git, ["config", "--get-all", "vibesquad.sweepBases"], repoRoot) ?? "";
+  const out = tryGit(git, ["config", "--local", "--get-all", "vibesquad.sweepBases"], repoRoot) ?? "";
   const refs = [];
   for (const raw of out.split(/\r?\n/)) {
     const name = raw.trim().replace(/^origin\//, "");
