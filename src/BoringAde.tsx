@@ -722,7 +722,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     );
   const suffix = (v: TeamView, base: string) => (v.team.id === activeTeamId ? base : `${base}-${v.team.id}`);
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
-    <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
+    <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} aria-current={isOn(v, "worker:" + w.agent.id) ? "true" : undefined} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
       <span className={`boring-dot ${w.agent.status} ${glyphCls(glyphStatusOf(w.agent, now), w.attention?.tone)}`} />
       <span className="boring-row-label" title={w.agent.title ?? w.agent.id.slice(0, 8)}>{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
@@ -805,7 +805,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   /** B13c: one Desk mascot tile (bust + label + state caption); state rings come from CSS classes, never opacity. */
   const deskTile = (v: TeamView, testid: string, key: string, role: BustRole, label: string, short: string, status: string, needsYou: number, err: boolean, age: string, onClick: () => void, extraOn = false) => {
     const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
-    const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working · ${age}` : status === "none" ? "no agent" : `idle${age ? ` · ${age}` : ""}`;
+    // m1: keep the tile caption short so the age survives the 3-col grid at 1920 ("idle 12m", not "idle · 12m ago").
+    const shortAge = age === "just now" ? "now" : age.replace(/ ago$/, "");
+    const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working ${shortAge}` : status === "none" ? "no agent" : `idle${age ? ` ${shortAge}` : ""}`;
     return (
       <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} aria-label={label}>
         <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>

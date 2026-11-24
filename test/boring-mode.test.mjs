@@ -2284,6 +2284,18 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
   assert.match(busy, /src="\/ui\/busts\/lead\.png"/);
   assert.match(busy, /data-testid="boring-working-now-w1"/);
   assert.match(busy, /1 sub-agent call</);
+  // M1: a pending permission / needs-you beats "working" (running agent + sub-agents): data-state="needs-you",
+  // label "Needs you", headline "<Name> needs your OK" — never "Working now" / "is running …".
+  const blocked = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: lead, members: [{ agent: w1 }], subs: 1, attention: { tone: "permission", reason: "1 permission request(s)" } }));
+  assert.match(blocked, /data-state="needs-you"/);
+  assert.match(blocked, />Needs you</);
+  assert.match(blocked, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(blocked, /Working now/);
+  assert.doesNotMatch(blocked, /is running Edit/);
+  const blockedLabel = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, labels: { role: "lead", lane: "boring-mode", "needs-you": "pick" } }, members: [], subs: 0, attention: { tone: "needs-you", reason: "pick" } }));
+  assert.match(blockedLabel, /data-state="needs-you"/);
+  assert.match(blockedLabel, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(blockedLabel, /is thinking/);
   const v = boringChatVars(lead);
   assert.equal(v["--boring-bust"], 'url("/ui/busts/lead.png")');
   assert.equal(v["--boring-who"], '"★ Bor13"');
@@ -2295,7 +2307,7 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
-  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} \/>\}/);
+  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>\}/);
   assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
   assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
   const i = css.indexOf("/* ---- B13d:");

@@ -651,7 +651,7 @@ ${draft}`);
       />
       )}
 
-      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} />}
+      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />}
 
       {agent.pendingPermissions?.map((p) => (
         <PermissionCard

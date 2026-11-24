@@ -4,7 +4,7 @@
 // Idle: the card stays, greyed, and says what this agent is waiting on. Data comes from the same selector as the C3 chip.
 import { openAgent } from "./panes";
 import type { PaseoAgent } from "./agentTypes";
-import type { Member } from "./teams";
+import type { Attention, Member } from "./teams";
 import { isHubLaneId } from "./teams";
 import { agentDisplayName } from "./identity";
 import { bustRoleForAgent, bustUrl } from "./boringBusts";
@@ -34,13 +34,17 @@ const hhmm = (iso: string | null | undefined): string => {
 
 const nameOf = (a: PaseoAgent): string => agentDisplayName(a, { isHubLaneId }) || a.title || a.id.slice(0, 8);
 
-export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; members: Member[]; subs: number }) {
+export function BoringWorkingNow({ agent, members, subs, attention }: { agent: PaseoAgent; members: Member[]; subs: number; attention?: Attention }) {
   const theme = useTheme();
   const rows: PaseoAgent[] = members.map((m) => m.agent);
   if (agent.status === "running" && !rows.some((r) => r.id === agent.id)) rows.push(agent);
-  const busy = rows.length > 0 || subs > 0;
-  const focal = rows[0] ?? agent;
-  const others = rows.slice(1);
+  // M1 (B13 regression): a pending permission / needs-you beats "working" (running or sub-agents) — the strip must
+  // never claim the agent is working while it is blocked on the owner.
+  const needsYou = attention?.tone === "permission" || attention?.tone === "needs-you";
+  const busy = !needsYou && (rows.length > 0 || subs > 0);
+  const state = needsYou ? "needs-you" : busy ? "busy" : "idle";
+  const focal = needsYou ? agent : rows[0] ?? agent;
+  const others = needsYou ? [] : rows.slice(1);
   const chips = others.slice(0, MAX_CHIPS);
   const started = busy ? hhmm(focal.activeTurn?.startedAt) : "";
   const sub = [
@@ -49,8 +53,11 @@ export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; 
     subs > 0 ? `${subs} sub-agent call${subs === 1 ? "" : "s"}` : "",
   ].filter(Boolean);
   const canOpen = focal.id !== agent.id;
+  const headline = needsYou
+    ? `${nameOf(agent)} needs your OK`
+    : `${nameOf(focal)} ${busy ? (rows.length ? `is ${workingActivity(focal)}` : "is running sub-agents") : idleActivity(agent)}`;
   return (
-    <div className="boring-now" data-testid="boring-working-now" data-state={busy ? "busy" : "idle"} role="status" aria-live="polite">
+    <div className="boring-now" data-testid="boring-working-now" data-state={state} role="status" aria-live="polite">
       <button
         type="button"
         className="boring-now-big"
@@ -61,10 +68,8 @@ export function BoringWorkingNow({ agent, members, subs }: { agent: PaseoAgent; 
         <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(focal), theme)} alt="" width={68} height={68} />
       </button>
       <div className="boring-now-text">
-        <div className="boring-now-t">{busy ? "Working now" : "Idle"}</div>
-        <div className="boring-now-h">
-          {nameOf(focal)} {busy ? (rows.length ? `is ${workingActivity(focal)}` : "is running sub-agents") : idleActivity(agent)}
-        </div>
+        <div className="boring-now-t">{needsYou ? "Needs you" : busy ? "Working now" : "Idle"}</div>
+        <div className="boring-now-h">{headline}</div>
         {sub.length > 0 && <div className="boring-now-s2">{sub.join(" · ")}</div>}
       </div>
       {chips.length > 0 && (
