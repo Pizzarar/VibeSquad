@@ -14,7 +14,7 @@ delete process.env.VIBESQUAD_TEAMS_FILE;
 const fake = makeFakeRepo();
 after(() => { fake.cleanup(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const { buildSnapshot, buildSnapshotDetailed, clearStorybookCache, resolveProject, summaryLine } = await import("../server/storybook/api.mjs");
+const { buildSnapshot, buildSnapshotDetailed, clearStorybookCache, probeProject, resolveProject, summaryLine } = await import("../server/storybook/api.mjs");
 const { validateSnapshot } = await import("../server/storybook/schema.mjs");
 const { commandStorybook } = await import("../cli/vs.mjs");
 const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
@@ -129,7 +129,8 @@ test("summaryLine + CLI: line format, --json shape, usage exit 2, report-only ex
 const ROOT = path.join(tmp, "root");
 fs.mkdirSync(ROOT);
 fs.writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Sq", paths: [], lanes: [] }] }));
-const mw = createVibesquadMiddleware(ROOT, { storybook: deps({ fetchOpts: { home: path.join(tmp, "http-home") } }) }); // L3: routes live inside the middleware
+const httpChecks = mkChecks(FIND);
+const mw = createVibesquadMiddleware(ROOT, { storybook: deps({ runChecks: httpChecks, fetchOpts: { home: path.join(tmp, "http-home") } }) }); // L3: routes live inside the middleware
 const srv = http.createServer((req, res) => mw(req, res, () => { res.statusCode = 404; res.end("no"); }));
 const port = await new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
 after(() => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }));
@@ -164,13 +165,30 @@ test("HTTP POST refresh -> snapshot + {fetched,nextFetchAt}; wrong method 405", 
 
 test("HEAD probe: 200 for a real project, 404 unknown/adapter-less, no snapshot built, no host path", async () => {
   clearStorybookCache();
+  const before = httpChecks.calls;
   const ok = await call("HEAD", "/api/storybook/efi");
   assert.equal(ok.status, 200);
   assert.equal(ok.body, "");
   assert.equal((await call("HEAD", "/api/storybook/nope")).status, 404);
   assert.equal((await call("HEAD", "/api/storybook/other")).status, 404);
-  const g = await call("GET", "/api/storybook/efi"); // probe built nothing: the first GET still builds (checks run once)
+  assert.equal(httpChecks.calls, before, "probe must not build a snapshot or run checks");
+  const g = await call("GET", "/api/storybook/efi"); // the first real GET builds (checks run once)
   assert.equal(g.status, 200);
+  assert.equal(httpChecks.calls, before + 1);
+  // unresolvable ref: 404 with no host path, still no build
+  const bare = fs.mkdtempSync(path.join(tmp, "bare-probe-"));
+  git(bare, "init", "-q");
+  const checks = mkChecks([]);
+  const w = console.warn; console.warn = () => {};
+  try {
+    await assert.rejects(probeProject("efi", { teams, resolvePath: () => bare, runChecks: checks }), (e) => {
+      assert.equal(e.status, 404);
+      assert.doesNotMatch(e.message, /\//);
+      assert.doesNotMatch(e.message, new RegExp(bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      return true;
+    });
+  } finally { console.warn = w; }
+  assert.equal(checks.calls, 0);
   assert.equal((await call("HEAD", "/api/storybook/efi/refresh", localTokenHeaders())).status, 405);
 });
 

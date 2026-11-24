@@ -27,6 +27,13 @@ const withSb = (projectId: string | null): string => {
   return `${location.pathname}${q ? `?${q}` : ""}${location.hash}`;
 };
 let pushed = false;
+let replaceUntil = 0;
+/** After a forward-nav close ("replace"), the next URL sync should replaceState (the stripped entry is reused, so history has no duplicate). */
+export function takeStorybookReplace(): boolean {
+  const r = Date.now() < replaceUntil;
+  replaceUntil = 0;
+  return r;
+}
 export function openStorybook(projectId: string, name?: string): void {
   target = { projectId, name: name || projectId };
   history.pushState({ sb: projectId }, "", withSb(projectId));
@@ -39,12 +46,14 @@ export function openStorybook(projectId: string, name?: string): void {
  * in place, synchronously, never history.back() (it is async and would land after, and undo, the navigation).
  * Re-entry safe: target/pushed are cleared before anything async, so a second call (double Esc / double click) is a no-op.
  */
-export function closeStorybook(mode: "back" | "replace" = "back"): void {
+export function closeStorybook(mode?: unknown): void {
   if (!target) return;
+  const replace = mode === "replace"; // anything else (a click event handed in as a handler, undefined) means user Back
   const mine = pushed && Boolean(urlProject()) && history.state?.sb === target.projectId;
   target = null;
   pushed = false;
-  if (mine && mode === "back") history.back(); // popstate finds no ?sb= and target already null: nothing more to do
+  if (replace) replaceUntil = Date.now() + 1000;
+  if (mine && !replace) history.back(); // popstate finds no ?sb= and target already null: nothing more to do
   else if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
   emit();
 }
@@ -430,7 +439,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   return (
     <div className="sb-root" data-testid="storybook-view">
       <header className="sb-head">
-        <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={onClose}>← Back</button>
+        <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={() => onClose()}>← Back</button>
         <div className="sb-title">
           <span className="sb-eye" aria-hidden="true">◉</span>
           <h2>Storybook <span className="sb-proj">· {name}</span></h2>
@@ -473,5 +482,5 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
 export function StorybookHost({ needsYou, onNeedsYou, projectName }: { needsYou?: number; onNeedsYou?: () => void; projectName?: (id: string) => string | undefined }) {
   const t = useStorybookTarget();
   if (!t) return null;
-  return <StorybookView key={t.projectId} projectId={t.projectId} name={projectName?.(t.projectId) ?? t.name} onClose={closeStorybook} needsYou={needsYou} onNeedsYou={onNeedsYou} />;
+  return <StorybookView key={t.projectId} projectId={t.projectId} name={projectName?.(t.projectId) ?? t.name} onClose={() => closeStorybook()} needsYou={needsYou} onNeedsYou={onNeedsYou} />;
 }

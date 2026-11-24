@@ -51,7 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
-import { StorybookHost, closeStorybook, probeStorybook, useStorybookTarget } from "./StorybookView";
+import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
@@ -1844,17 +1844,18 @@ export function App() {
   // R5-4: Normal's ?agent= is the agent BoringApp has on screen (none on Overview / usage); the active tab only until it reports.
   const boringShown = useBoringShownAgent();
   const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
-  useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
-  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
+  // Declared BEFORE the URL sync so the close (which strips ?sb= in place) happens first and the sync can replace that same entry.
   const sbNav = useRef(`${activeTeamId}|${urlAgentId}`);
   useEffect(() => {
     const k = `${activeTeamId}|${urlAgentId}`;
     if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
   }, [activeTeamId, urlAgentId]);
+  useEffect(() => {
+    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
+    if (next !== (location.search || "")) history[takeStorybookReplace() ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
+  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
     if (!pinLayout) return;
