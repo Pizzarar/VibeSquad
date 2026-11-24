@@ -602,3 +602,14 @@ test("laneRoleRows (usa-52): sorted by loop $ desc, squad-filtered, missing -> n
   assert.equal(laneRoleRows(undefined, null), null);
   assert.equal(laneRoleRows({ threshold: 40, pooled: {}, byLaneRole: [] }, null), null);
 });
+
+test("burstCellText / planStatusLabel / shortLead (usa-53)", async () => {
+  const { burstCellText, planStatusLabel, shortLead, pctText: pt } = await import("../src/usageHelpers.ts");
+  assert.equal(burstCellText({ insufficient: true }, null, pt, 5), "n<5");
+  assert.equal(burstCellText({ insufficient: false }, null, pt), "—");
+  assert.equal(burstCellText({ insufficient: false }, 2.5, (n) => n.toFixed(1)), "2.5");
+  assert.equal(planStatusLabel("stale"), "stale (7d+)");
+  assert.equal(planStatusLabel("done"), "done");
+  assert.equal(shortLead("rn-64cf71d9a16d"), "9a16d".length === 5 ? "d9a16d".slice(-6) : "1d9a16d".slice(-6));
+  assert.equal(shortLead(null), "—");
+});

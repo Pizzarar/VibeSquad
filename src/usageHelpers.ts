@@ -125,6 +125,7 @@ export type UsageData = {
   squads?: string[];
   autonomy?: Autonomy;
   planScores?: PlanScores;
+  burstCohorts?: BurstCohorts;
   readyTime?: ReadyTime | null;
   compaction?: CompactionStats | null;
 };
@@ -994,7 +995,35 @@ export type PlanScoreRow = {
   buddy: { handedOff: number; reachedDone: number; score: number | null };
 };
 export type PlanLeadRow = { lead: string; lane: string | null; started: number; done: number };
-export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; minN: number };
+/** usa-51 per-plan drilldown row (server buildPlanScores plans[]). */
+export type PlanRow = {
+  path: string; team: string | null; lane: string | null; buddy: string | null; currentLead: string | null;
+  startedAt: number; doneAt: number | null; status: "open" | "done" | "stale"; cycleMs: number | null;
+};
+export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; plans?: PlanRow[]; minN: number };
+
+/** usa-51 burst cohort bucket (server buildBurstCohorts). Metrics are null while insufficient (units < minN). */
+export type BurstBucket = {
+  key: string; label: string; units: number; insufficient: boolean;
+  firstTryPassRate: number | null; avgReviewRounds: number | null; fixAfterMergeRate: number | null; costPerUnit: number | null;
+};
+export type BurstCohorts = { buckets: BurstBucket[]; unjoined: number; minN: number };
+
+/** Burst cell text: `n<5` for an insufficient bucket, `—` for a missing metric, else the formatted value. */
+export function burstCellText(b: Pick<BurstBucket, "insufficient">, v: number | null | undefined, fmt: (n: number) => string, minN = 5): string {
+  if (b.insufficient) return `n<${minN}`;
+  return v === null || v === undefined ? "—" : fmt(v);
+}
+
+/** Plan status badge text. */
+export function planStatusLabel(s: PlanRow["status"]): string {
+  return s === "done" ? "done" : s === "stale" ? "stale (7d+)" : "open";
+}
+
+/** Short lead id for the plan table (last 6 chars). */
+export function shortLead(id: string | null | undefined): string {
+  return id ? id.slice(-6) : "—";
+}
 
 /** `73%`, or `n<5 plans` while fewer than minN plans are old enough to score. */
 export function planScoreText(r: Pick<PlanScoreRow, "score" | "insufficient">, minN = 5): string {
