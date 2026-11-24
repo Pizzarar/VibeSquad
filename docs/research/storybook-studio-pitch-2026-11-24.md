@@ -84,3 +84,8 @@ We don't build all of these at once:
 1. **Lock the foundation early:** Build the **Shared Entity Registry** and the **4-Part Audit Contract** right after Storybook so every future workspace plugs into the same backbone.
 2. **Ship Art & Visuals + Hub next:** Delivering placeholder-to-human-art tracking alongside the transition from top tabs to the Studio Hub gives immediate production value.
 3. **Add remaining lanes on demand:** Expand into Balance, World, Audio, and UI only as each becomes a real bottleneck for creators shipping complete games.
+
+---
+
+## Owner addendum (2026-11-24)
+Track more than dialogue as Storybook input, the same way dialogue is tracked today: quests, character names, locations. Link them all together so content can be checked for staying true to its area, making sense, and being on-theme. (This pulls the Shared Entity Registry + Cohesion signal forward into Storybook v1 rather than after it.)
