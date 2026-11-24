@@ -1659,6 +1659,8 @@ export function App() {
 
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
+  // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
+  const [navGen, setNavGen] = useState(0);
   useEffect(() => {
     const onPop = () => {
       const u = parseUrlState(location.search);
@@ -1667,6 +1669,7 @@ export function App() {
       if (act === "agent" && u.agent) openAgent(u.agent);
       else if (act === "squads-home") enterSquadsHome();
       else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
+      setNavGen((g) => g + 1);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -2176,6 +2179,7 @@ export function App() {
         onSettings={openSettings}
         onSuccessor={paneSuccessor}
         banners={topBanners}
+        navGen={navGen}
       >
         {overlays}
       </BoringApp>
