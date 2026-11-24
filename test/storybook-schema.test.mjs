@@ -58,6 +58,8 @@ test("validateFinding shape", () => {
   assert.equal(validateFinding({ ...ok, check: "#13" }).ok, false);
   assert.equal(validateFinding({ ...ok, severity: "fatal" }).ok, false);
   assert.equal(validateFinding({ ...ok, msg: "" }).ok, false);
+  assert.equal(validateFinding({ ...ok, entityRef: { kind: "item", id: "" } }).ok, false);
+  assert.equal(validateFinding({ ...ok, entityRef: { kind: "", id: "x" } }).ok, false);
 });
 
 test("validateSnapshot: good, duplicate (kind,id), bad finding, bad version", () => {

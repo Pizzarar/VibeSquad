@@ -109,7 +109,7 @@ Global bans, plus: no panic.
 The game's own voice. No pronoun.
 
 ### Never says
-Global bans, plus: no contractions, no "please".
+Global bans, plus: no contractions, no "please", no addressing the player as anything but "you".
 `,
   "docs/PLAN_MAP_VIBES.md": `# PLAN_MAP_VIBES
 

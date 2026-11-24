@@ -43,6 +43,7 @@ export const NEVER_SAYS_OVERRIDES = {
 /** Global bans (VOICE_BIBLE "How to use"): paranormal, modern-meme slang, "adventurer". Expansions are ours, the prose is theirs. */
 export const GLOBAL_BAN_TERMS = ["paranormal", "supernatural", "ghost", "magic", "spell", "wizard", "adventurer", "adventurers", "lol", "lmao", "yeet", "no cap"];
 
+const EXCEPTION_CLAUSE = /\b(?:anything but|except|other than|only)\b/i;
 const STORY_TODO = /^STORY-TODO:\s*/;
 const clean = (s) => String(s ?? "").replace(STORY_TODO, "").trim();
 const isTodo = (s) => STORY_TODO.test(String(s ?? ""));
@@ -138,7 +139,9 @@ function parseVoiceBible(text, warnings, traderIds, squadIds, relRivals) {
     const callsPlayer = calls ? [...calls[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
     const samples = [...(/\*\*Samples:\*\*([\s\S]*)$/.exec(talk)?.[1] ?? "").matchAll(/^\s*-\s*"(.+)"\s*$/gm)].map((m) => m[1]);
     const prose = sectText("Never says").replace(/^Global bans, plus:\s*/i, "");
-    const extracted = [...prose.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    // quoted terms inside an exception clause ("no addressing the player as anything but "you"") are allowed words, not bans
+    const clauses = prose.split(/[;,](?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    const extracted = clauses.filter((c) => !EXCEPTION_CLAUSE.test(c)).flatMap((c) => [...c.matchAll(/"([^"]+)"/g)].map((m) => m[1]));
     const override = NEVER_SAYS_OVERRIDES[cid] ?? [];
     if (!(cid in NEVER_SAYS_OVERRIDES) && !extracted.length && prose) warnings.push(`VOICE_BIBLE card ${cid}: "Never says" has no extractable terms and no override (prose only)`);
     const neverSays = [...new Set([...extracted, ...override])];
@@ -416,7 +419,8 @@ async function load(reader, sha) {
     return m;
   };
   if (csvText != null) {
-    const { records } = parseCsvObjects(csvText);
+    const { header, records } = parseCsvObjects(csvText);
+    if (!header.includes("current_text")) warnings.push(`${P.csv}: no current_text column, ${records.length} rows imported with empty text`);
     const spk = speakerLookup();
     const seen = new Map();
     for (const { row, line } of records) {
@@ -426,9 +430,9 @@ async function load(reader, sha) {
       const cands = row.speaker ? (spk.get(row.speaker.trim().toLowerCase()) ?? []) : [];
       if (cands.length === 1) L("spoken_by", cands[0].kind, cands[0].id);
       E({
-        id: n === 1 ? base : `${base}#${n}`, kind: "line", display: row.current_text.replace(/\s+/g, " ").slice(0, 60),
+        id: n === 1 ? base : `${base}#${n}`, kind: "line", display: (row.current_text ?? "").replace(/\s+/g, " ").slice(0, 60),
         source: src(row.file || P.csv, Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : null), links: L.links, production: csvProduction(row.status),
-        data: { ...row, text: row.current_text, origin: "csv", csv_line: line },
+        data: { ...row, text: row.current_text ?? "", origin: "csv", csv_line: line },
       });
     }
   }

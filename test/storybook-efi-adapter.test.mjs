@@ -129,6 +129,8 @@ test("voice cards: pronoun, player word, global bans, neverSays extraction + ove
   assert.ok(s.links.some((l) => l.kind === "squad" && l.id === "doc"), "heading id `doc` -> squad doc");
   const sys = reg.get("voice_card", "system");
   assert.ok(sys.data.neverSays.includes("please"));
+  assert.ok(!sys.data.neverSays.includes("you"), "quoted word in an 'anything but' exception clause is not a ban");
+  assert.deepEqual(sys.data.neverSaysExtracted, ["please"]);
   assert.ok(sys.data.neverSays.some((t) => t.startsWith("re:")), "contractions regex from the override map");
   assert.ok(NEVER_SAYS_OVERRIDES.system.length >= 3);
 });
@@ -158,6 +160,14 @@ test("hooks: spawnWindow + killTargetLocations from data", () => {
   assert.deepEqual(killTargetLocations(reg, "boss_dockmaster"), ["harbor_district"]);
   assert.deepEqual(killTargetLocations(reg, "exo_trooper"), ["sealed_vault"]);
   assert.deepEqual(killTargetLocations(reg, "nope"), []);
+});
+
+test("CSV without a current_text column warns instead of throwing", async () => {
+  const reader = { sha: "abcdef12", exists: async () => false, listTree: async () => [], readFile: async (p) => (p === "docs/review/text_review.csv" ? "group,file,line\nG,a.gd,3\n" : null) };
+  const r = await efiAdapter.load(reader, reader.sha);
+  assert.ok(r.warnings.some((w) => /no current_text column/.test(w)));
+  const row = r.entities.find((e) => e.data.origin === "csv");
+  assert.equal(row.data.text, "");
 });
 
 test("missing files become warnings, not throws", async () => {

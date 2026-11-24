@@ -66,7 +66,7 @@ export function validateFinding(f) {
   if (!isObj(f)) return { ok: false, errors: ["finding is not an object"] };
   if (!CHECK_IDS.includes(f.check)) errors.push(`check must be one of #1..#12`);
   if (!SEVERITIES.includes(f.severity)) errors.push(`severity must be ${SEVERITIES.join("|")}`);
-  if (f.entityRef !== null && !(isObj(f.entityRef) && ALL_KINDS.includes(f.entityRef.kind) && isStr(f.entityRef.id))) errors.push("entityRef must be {kind,id} or null");
+  if (f.entityRef !== null && !(isObj(f.entityRef) && ALL_KINDS.includes(f.entityRef.kind) && isStr(f.entityRef.id) && f.entityRef.id !== "")) errors.push("entityRef must be {kind,id} or null");
   if (!isStr(f.msg) || !f.msg) errors.push("msg must be a non-empty string");
   if (f.source !== null && !isSource(f.source)) errors.push("source must be {path,line} or null");
   return { ok: errors.length === 0, errors };

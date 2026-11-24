@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": "efi",
   "ref": "origin/main",
-  "sha": "184c9f3a6de6973241d05d5f092a65bc89d7e637",
+  "sha": "bd533e734a48b602b82e977c65baaac74f04d4cf",
   "generatedAt": "2026-01-01T00:00:00.000Z",
   "entities": [
     {
@@ -1414,7 +1414,7 @@
           "haha",
           "re:\\b(?:sorry|oops|whoops)\\b"
         ],
-        "neverSaysProse": "no contractions, no \"please\".",
+        "neverSaysProse": "no contractions, no \"please\", no addressing the player as anything but \"you\".",
         "neverSaysExtracted": [
           "please"
         ],
