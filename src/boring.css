@@ -1,8 +1,3 @@
-/* B13a: self-hosted fonts (SIL OFL 1.1; licences in public/fonts/). Plus Jakarta Sans (Tokotype) is one variable latin file; IBM Plex Mono (IBM). */
-@font-face { font-family: "Plus Jakarta Sans"; font-style: normal; font-weight: 400 800; font-display: swap; src: url("/fonts/plus-jakarta-sans-latin.woff2") format("woff2"); }
-@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/ibm-plex-mono-400.woff2") format("woff2"); }
-@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/ibm-plex-mono-500.woff2") format("woff2"); }
-
 /* Boring Mode (@bor B1): corporate ADE skin. Standalone: every rule is scoped under html[data-vibe="boring"],
    so data-vibe="fun" (the default) applies nothing. Never edit styles.css for this; it lives here. */
 
@@ -1190,30 +1185,6 @@ html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: v
 /* U3 survivor: light-mode badge text is white; beats the styles.css `:is(.badge, ...)` on-pastel colour (boring-badge also carries .badge). */
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { color: #ffffff !important; }
 
-/* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
-/* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { --d4-panel-w: 36px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer { position: relative; border-top-color: transparent; background-color: transparent; background-image: linear-gradient(to right, var(--bg) calc(100% - var(--d4-panel-w)), var(--panel) calc(100% - var(--d4-panel-w))); }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::before { content: ""; position: absolute; top: -1px; left: 0; right: var(--d4-panel-w); border-top: 1px solid var(--border); pointer-events: none; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::after { content: ""; position: absolute; top: -1px; bottom: 0; right: var(--d4-panel-w); border-left: 1px solid var(--border); pointer-events: none; }
-html[data-vibe="boring"] .boring-ctx-tabs { min-height: 36px; box-sizing: border-box; padding: 0 8px; gap: 2px; align-items: stretch; }
-html[data-vibe="boring"] .boring-ctx-tab { height: 36px; padding: 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-html[data-vibe="boring"] .boring-ctx-tab.on { background: transparent; border-bottom-color: var(--accent); }
-html[data-vibe="boring"] .boring-ctx-collapse { align-self: center; }
-html[data-vibe="boring"] .boring-ctx-idle-toggle { align-self: flex-start; background: transparent; border: 0; padding: 6px 8px; cursor: pointer; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-3); }
-html[data-vibe="boring"] .boring-ctx-idle-toggle:hover { color: var(--text-1); }
-html[data-vibe="boring"] .boring-ctx-no-agent-action { display: block; margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--accent); font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer; }
-html[data-vibe="boring"] .boring-ctx-no-agent-action:hover:not(:disabled) { border-color: var(--accent); }
-html[data-vibe="boring"] .boring-ctx-no-agent-action:disabled { opacity: 0.5; cursor: default; }
-html[data-vibe="boring"] .boring-ctx-worker.idle { opacity: 0.75; }
-html[data-vibe="boring"] .boring-ctx-rail-btn { position: relative; padding-top: 28px; }
-html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); writing-mode: horizontal-tb; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; font: 600 11px/18px var(--font-sans, inherit); text-align: center; color: #ffffff; background: var(--st-attn); }
-html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
-/* Plan tab open: the in-timeline pinned todo bar duplicates it. */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
-
-
 /* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
 html[data-vibe="boring"] .boring-needs-item { position: relative; }
 html[data-vibe="boring"] .boring-needs-item.attn-stalled { background: var(--st-attn-bg); border-left-color: var(--st-attn); }
@@ -1417,3 +1388,26 @@ html[data-vibe="boring"] .perm-card .perm-preview-input { border-radius: 8px; fo
 html[data-vibe="boring"] .perm-card .btn { border-radius: 9px; font-weight: 700; }
 html[data-vibe="boring"] .perm-card .btn.perm-allow,
 html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }
+
+/* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
+/* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { --d4-panel-w: 36px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer { position: relative; border-top-color: transparent; background-color: transparent; background-image: linear-gradient(to right, var(--bg) calc(100% - var(--d4-panel-w)), var(--panel) calc(100% - var(--d4-panel-w))); }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::before { content: ""; position: absolute; top: -1px; left: 0; right: var(--d4-panel-w); border-top: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::after { content: ""; position: absolute; top: -1px; bottom: 0; right: var(--d4-panel-w); border-left: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .boring-ctx-tabs { min-height: 36px; box-sizing: border-box; padding: 0 8px; gap: 2px; align-items: stretch; }
+html[data-vibe="boring"] .boring-ctx-tab { height: 36px; padding: 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+html[data-vibe="boring"] .boring-ctx-tab.on { background: transparent; border-bottom-color: var(--accent); }
+html[data-vibe="boring"] .boring-ctx-collapse { align-self: center; }
+html[data-vibe="boring"] .boring-ctx-idle-toggle { align-self: flex-start; background: transparent; border: 0; padding: 6px 8px; cursor: pointer; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-3); }
+html[data-vibe="boring"] .boring-ctx-idle-toggle:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-ctx-no-agent-action { display: block; margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--accent); font-size: 12px; line-height: 16px; font-weight: 600; cursor: pointer; }
+html[data-vibe="boring"] .boring-ctx-no-agent-action:hover:not(:disabled) { border-color: var(--accent); }
+html[data-vibe="boring"] .boring-ctx-no-agent-action:disabled { opacity: 0.5; cursor: default; }
+html[data-vibe="boring"] .boring-ctx-worker.idle { opacity: 0.75; }
+html[data-vibe="boring"] .boring-ctx-rail-btn { position: relative; padding-top: 28px; }
+html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); writing-mode: horizontal-tb; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; font: 600 11px/18px var(--font-sans, inherit); text-align: center; color: #ffffff; background: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
+/* Plan tab open: the in-timeline pinned todo bar duplicates it. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }

@@ -11,6 +11,7 @@ import { RemotePairScreen } from "./RemotePairScreen";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";
 import "./boring.css";
+import "./boring-fonts.css";
 
 // ?cast=1 shows the whole cast for art review; it needs no daemon.
 // ?five-leads=1 shows the five project leads at sidebar size (no labels on the top row).

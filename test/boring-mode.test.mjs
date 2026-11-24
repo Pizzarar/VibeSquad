@@ -2201,10 +2201,11 @@ test("B10: expanded project is a container card (.open, --surface-1, 14px); coll
 test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky", async () => {
   const { readFileSync, existsSync } = await import("node:fs");
   const css = readFileSync("src/boring.css", "utf8");
+  const fontsCss = readFileSync("src/boring-fonts.css", "utf8");
   const ade = readFileSync("src/BoringAde.tsx", "utf8");
   for (const f of ["plus-jakarta-sans-latin.woff2", "ibm-plex-mono-400.woff2", "ibm-plex-mono-500.woff2", "OFL-Plus-Jakarta-Sans.txt", "OFL-IBM-Plex-Mono.txt"]) assert.ok(existsSync("public/fonts/" + f), f);
-  assert.match(css, /@font-face[^}]*url\("\/fonts\/plus-jakarta-sans-latin\.woff2"\)/);
-  assert.match(css, /@font-face[^}]*url\("\/fonts\/ibm-plex-mono-500\.woff2"\)/);
+  assert.match(fontsCss, /@font-face[^}]*url\("\/fonts\/plus-jakarta-sans-latin\.woff2"\)/);
+  assert.match(fontsCss, /@font-face[^}]*url\("\/fonts\/ibm-plex-mono-500\.woff2"\)/);
   assert.match(css, /--sans: "Plus Jakarta Sans"/);
   assert.match(css, /--surface-0: #121218/);
   assert.ok(!/fonts\.googleapis|fonts\.gstatic/.test(css + readFileSync("index.html", "utf8")));
