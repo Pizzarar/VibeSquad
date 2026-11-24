@@ -877,11 +877,8 @@ html[data-vibe="boring"] .drawer-head .btn.on {
   border: 1px solid var(--border-strong); font-weight: 500;
 }
 
-/* Plan / Tasks bar and permission card sit on the centred conversation column. */
+/* Plan / Tasks bar sits on the centred conversation column. */
 html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
-/* n5: the permission card matches the message column width (--measure-col), not the narrower prose measure, so its
-   left edge lines up with the strip and messages at every width (24px gutter, like the strip). */
-html[data-vibe="boring"] .perm-card { width: calc(100% - 48px); max-width: var(--measure-col); margin-inline: auto; box-sizing: border-box; }
 
 /* Sidebar: default text-2/400, selected text-1/500; row pitch exactly --row-h. */
 html[data-vibe="boring"] .boring-project-name { font-weight: 500; }
@@ -1374,9 +1371,13 @@ html[data-vibe="boring"] .drawer-shell > .boring-convo-col {
 }
 /* The timeline-col is now one level deeper, so re-apply the chat counter-zoom that .drawer-shell > .timeline-col got in styles.css. */
 html[data-vibe="boring"] .boring-convo-col > .timeline-col { zoom: var(--chat-zoom, 1); --u3-px: var(--u3-px-chat, 2px); }
-/* strip + card are fixed-height at the top of the column; the timeline below scrolls. */
+/* strip + perm-card stack are fixed-height at the top of the column; the timeline below scrolls. */
 html[data-vibe="boring"] .boring-convo-col > .boring-now,
-html[data-vibe="boring"] .boring-convo-col > .perm-card { flex: none; }
+html[data-vibe="boring"] .boring-convo-col > .boring-perm-stack { flex: none; }
+/* n7 (idea-751): cap the pending-permission stack so 2-3 cards at 1280x720 never crush the timeline to 0px or clip Allow/Deny. */
+html[data-vibe="boring"] .boring-convo-col > .boring-perm-stack { min-height: 0; max-height: 55%; overflow-y: auto; }
+/* n8 (UX R17): a permission card below already says "needs your OK"; collapse the redundant amber strip. */
+html[data-vibe="boring"] .boring-now[data-has-perm] { display: none; }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
 
 /* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */

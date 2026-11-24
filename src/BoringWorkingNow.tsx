@@ -38,10 +38,15 @@ export function BoringWorkingNow({ agent, members, subs, attention }: { agent: P
   const theme = useTheme();
   const rows: PaseoAgent[] = members.map((m) => m.agent);
   if (agent.status === "running" && !rows.some((r) => r.id === agent.id)) rows.push(agent);
+  // n8 (UX R17): when a permission card renders directly below, the amber "needs your OK" strip repeats what the
+  // card already says. The strip still renders (data-state stays "needs-you" for the L5 invariant) but boring.css
+  // collapses it via the data-has-perm hook. Non-permission needs-you states (error / finished / a needs-you tone
+  // with no card) keep the strip.
+  const hasPerm = Boolean(agent.pendingPermissions?.length);
   // M1 (B13 regression): a pending permission / needs-you beats "working" (running or sub-agents) — the strip must
   // never claim the agent is working while it is blocked on the owner. Check the attention tone AND the raw agent fields
   // (pendingPermissions / attentionReason) so the blocked state holds even before attention is computed (L5).
-  const needsYou = attention?.tone === "permission" || attention?.tone === "needs-you" || Boolean(agent.pendingPermissions?.length) || agent.attentionReason === "permission";
+  const needsYou = attention?.tone === "permission" || attention?.tone === "needs-you" || hasPerm || agent.attentionReason === "permission";
   const busy = !needsYou && (rows.length > 0 || subs > 0);
   const state = needsYou ? "needs-you" : busy ? "busy" : "idle";
   const focal = needsYou ? agent : rows[0] ?? agent;
@@ -58,7 +63,7 @@ export function BoringWorkingNow({ agent, members, subs, attention }: { agent: P
     ? `${nameOf(agent)} needs your OK`
     : `${nameOf(focal)} ${busy ? (rows.length ? `is ${workingActivity(focal)}` : "is running sub-agents") : idleActivity(agent)}`;
   return (
-    <div className="boring-now" data-testid="boring-working-now" data-state={state} role="status" aria-live="polite">
+    <div className="boring-now" data-testid="boring-working-now" data-state={state} data-has-perm={hasPerm ? "true" : undefined} role="status" aria-live="polite">
       <button
         type="button"
         className="boring-now-big"

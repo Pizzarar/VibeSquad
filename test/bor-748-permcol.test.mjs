@@ -13,28 +13,32 @@ const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const drawer = read("src", "AgentDrawer.tsx");
 const css = read("src", "boring.css");
 
-test("Bor19 n6: boring mode wraps strip + perm cards + timeline in .boring-convo-col; psycho keeps cards above the shell", () => {
+test("Bor19 n6: boring mode wraps strip + perm stack + timeline in .boring-convo-col; psycho keeps cards above the shell", () => {
   assert.match(drawer, /\{boringChat \? \(\s*<div className="boring-convo-col">/);
+  // The strip, perm-card stack and timeline live inside the column, in that order. <BoringWorkingNow>'s props are
+  // intentionally not pinned to an order (a prop reorder must not break this test).
   assert.match(
     drawer,
-    /<div className="boring-convo-col">[\s\S]*?<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>[\s\S]*?\{permCards\}[\s\S]*?\{timelineEl\}[\s\S]*?<\/div>[\s\S]*?\) : \(\s*timelineEl/,
+    /<div className="boring-convo-col">[\s\S]*?<BoringWorkingNow[^>]*\/>[\s\S]*?boring-perm-stack[\s\S]*?\{timelineEl\}[\s\S]*?<\/div>[\s\S]*?\) : \(\s*timelineEl/,
   );
   assert.match(drawer, /\{!boringChat && permCards\}/);
   assert.match(drawer, /const timelineEl = \(\s*<TimelineErrorBoundary fallbackLabel="timeline">/);
   assert.match(drawer, /const permCards = agent\.pendingPermissions\?\.map/);
 });
 
-test("Bor19 n6 CSS: .boring-convo-col is the flex row's left child; strip+card fixed at top; timeline scrolls below", () => {
+test("Bor19 n6 CSS: .boring-convo-col is the flex row's left child; strip + perm stack fixed at top; timeline scrolls below", () => {
   assert.match(
     css,
     /\.drawer-shell > \.boring-convo-col \{\s*display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden;/,
   );
   assert.match(css, /\.boring-convo-col > \.timeline-col \{ zoom: var\(--chat-zoom, 1\); --u3-px: var\(--u3-px-chat, 2px\); \}/);
-  assert.match(css, /\.boring-convo-col > \.boring-now,[\s\S]*?\.boring-convo-col > \.perm-card \{ flex: none; \}/);
+  assert.match(css, /\.boring-convo-col > \.boring-now,[\s\S]*?\.boring-convo-col > \.boring-perm-stack \{ flex: none; \}/);
 });
 
-test("Bor19 n5 CSS: perm card width = message column; the ctx-panel width hack is gone", () => {
-  assert.match(css, /\.perm-card \{ width: calc\(100% - 48px\); max-width: var\(--measure-col\); margin-inline: auto; box-sizing: border-box; \}/);
+test("Bor19 n5 CSS: perm card width = message column (single rule); the ctx-panel width hack is gone", () => {
+  // The width/max-width live on the primary .perm-card rule (1.7); the old duplicate width rule is removed.
+  assert.match(css, /html\[data-vibe="boring"\] \.perm-card \{ margin: 12px auto 0; width: calc\(100% - 48px\); max-width: var\(--measure-col\);/);
+  assert.doesNotMatch(css, /\.perm-card \{ width: calc\(100% - 48px\); max-width: var\(--measure-col\); margin-inline: auto; box-sizing: border-box; \}/);
   assert.doesNotMatch(css, /\.drawer:has\(\.boring-context-panel\) \.perm-card/);
   assert.doesNotMatch(css, /--ctx-panel-w/);
   assert.doesNotMatch(css, /--timeline-col: min\(/);

@@ -688,7 +688,7 @@ ${draft}`);
         {boringChat ? (
           <div className="boring-convo-col">
             <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />
-            {permCards}
+            {permCards?.length ? <div className="boring-perm-stack">{permCards}</div> : null}
             {timelineEl}
           </div>
         ) : (
