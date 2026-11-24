@@ -11,6 +11,7 @@ import { performBrainstormRestart, resetBrainstormRestartState } from "../server
 import { resolveLeadProfile } from "../server/lead-handoff.mjs";
 import { LEGACY_PROFILE_ALIASES, legacyProfileRole } from "../server/profiles.mjs";
 import { ROLE_TABLE } from "../server/role-route.mjs";
+import { saveRoles } from "../server/roles-api.mjs";
 import {
   cappedFamilies,
   legacyRouteMeta,
@@ -26,6 +27,13 @@ import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, today } from "./helpers/route
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
+// P5d: live spawns read stored v2 roles from profiles.json, so tests outside withEnv must never see the host's
+// ~/.vibesquad. Point the home and profiles path at a temp dir that does not exist (= v1 defaults, nothing capped).
+const ISOLATED_HOME = join(tmpdir(), `vs-spawn-route-missing-${process.pid}-${Date.now()}`);
+process.env.VIBESQUAD_HOME = ISOLATED_HOME;
+process.env.VIBESQUAD_PROFILES_PATH = join(ISOLATED_HOME, "profiles.json");
+process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH = join(ISOLATED_HOME, "capped-providers.json");
+delete process.env.VIBESQUAD_TEAMS_FILE;
 
 const CWD = "/projects/VibeSquad/.worktrees/spawn-route-test";
 const ENV_KEYS = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_PROFILES_PATH", "VIBESQUAD_CAPPED_PROVIDERS_PATH"];
@@ -586,6 +594,46 @@ test(
       assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
       assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement$/);
       assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "P5d C1: a saved v2 role changes where an Implement spawn lands (tier + provider order); the old name keeps today()",
+  withEnv(async ({ profilesPath }) => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      const before = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
+      assert.deepEqual(landed(before), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      // Owner saves Implement as a top-tier role that prefers Gemini first, with a cleared Gemini effort.
+      const impl = structuredClone(ROLE_TABLE.implement);
+      saveRoles(
+        {
+          implement: {
+            ...impl,
+            tier: "top",
+            providers: [A, C, O],
+            modes: { ...impl.modes, [A]: { modeId: "accept-edits", effort: null } },
+          },
+        },
+        profilesPath,
+      );
+      const after = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
+      assert.equal(after.config.provider, A, JSON.stringify(landed(after)));
+      assert.equal(after.config.modeId, "accept-edits");
+      assert.equal(after.labels.tier, "top");
+      assert.match(String(after.labels[ROUTE_LABEL]), /tier=top role=implement/);
+      // A cap on the first provider walks the saved order, not the shipped one.
+      const capped = harness({ cappedProviders: capMap([A]) });
+      try {
+        const walked = await capped.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
+        assert.equal(walked.config.provider, C);
+        assert.equal(walked.config.model, "claude-opus-5-5");
+      } finally {
+        capped.stop?.();
+      }
     } finally {
       h.stop?.();
     }

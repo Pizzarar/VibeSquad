@@ -41,7 +41,8 @@ export type RoleKey =
 /** Per-provider settings of a role. `prompt`/`mcpExtras` only when they differ from the role's; `from` = v1 source profile. */
 export type RoleMode = {
   modeId: string;
-  effort?: string;
+  /** Used only when the ladder rung has no effort. null = explicitly cleared (provider default); omitted = shipped value. */
+  effort?: string | null;
   featureValues?: Record<string, unknown>;
   prompt?: string;
   mcpExtras?: string[];
@@ -108,6 +109,8 @@ export type ProfilesState = {
 export type LadderRung = { model?: string; effort?: string };
 export type Ladder = Record<string, Partial<Record<Tier, LadderRung>>>;
 export const TIERS: Tier[] = ["top", "mid", "cheap"];
+/** Effort values the roles API accepts (server/roles-api.mjs EFFORT_VALUES). */
+export const EFFORTS = ["default", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const BRIEF = (extra = "") => `Goal: \nFile scope: \nDone-check: \n${extra}`.trimEnd() + "\n";
 const LEAD_BRIEF = "You are the lane lead. Read the handoff doc, then:\nGoal: \nLane scope: \nDone-check: \n";
@@ -773,7 +776,13 @@ export async function saveProfile(profile: Profile): Promise<{ ok: boolean; prof
     body: JSON.stringify({ profile: hydrated }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `save profile failed (${res.status})`);
+  if (!res.ok) {
+    // Roll back the optimistic row; a 409 means profiles.json was migrated (role saved), so reload roles too: the legacy
+    // editor turns read-only.
+    await fetchProfiles();
+    if (res.status === 409) await fetchRoles();
+    throw new Error(body.error ?? `save profile failed (${res.status})`);
+  }
   await fetchProfiles();
   return { ok: true, profiles: state.profiles };
 }
@@ -811,7 +820,10 @@ export async function seedDefaultPack(): Promise<{ ok: boolean; profiles: Profil
     body: JSON.stringify({ mode: "default" }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `seed default pack failed (${res.status})`);
+  if (!res.ok) {
+    if (res.status === 409) await fetchRoles();
+    throw new Error(body.error ?? `seed default pack failed (${res.status})`);
+  }
   state = { ...state, setupDismissed: true, needsSetup: false };
   await fetchProfiles();
   return { ok: true, profiles: state.profiles };

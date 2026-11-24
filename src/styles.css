@@ -6703,10 +6703,13 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   font-family: var(--mono);
   font-size: 11px;
   padding: 1px 7px;
-  color: var(--fg, inherit);
+  color: var(--text);
   background: linear-gradient(90deg, color-mix(in srgb, var(--violet-t, #b69cff) 16%, var(--well)), var(--well));
   border: 1px dotted color-mix(in srgb, var(--violet-t, #b69cff) 70%, var(--line));
   white-space: nowrap;
+  /* shrinks before the agent name in single-row headers (title shows the full text) */
+  min-width: 0;
+  flex: 0 1 auto;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6721,12 +6724,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   padding: 4px 10px; background: var(--well); border: 1px solid var(--line);
 }
 .re-role-tab.on { background: var(--cyan-dim); border-color: var(--cyan); font-weight: 600; }
+.re-role-tab:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.re-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber, #e5a50a); flex: 0 0 auto; }
 .re-tier-pip {
   font-family: var(--arcade); font-size: 9px; letter-spacing: 0.8px; text-transform: uppercase;
   padding: 0 5px; border: 1px dotted var(--violet-t, #b69cff); color: var(--violet-t, #b69cff);
 }
 .re-tier-pip[data-tier="top"] { border-style: solid; }
-.re-tier-pip[data-tier="cheap"] { opacity: 0.8; }
+.re-tier-pip[data-tier="cheap"] { color: var(--muted); border-color: var(--muted); }
 .re-body { display: flex; flex-direction: column; gap: 8px; }
 .re-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .re-table th { text-align: left; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: bottom; }
@@ -6736,7 +6741,11 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .re-actions { white-space: nowrap; width: 1%; }
 .re-actions .btn { padding: 1px 6px; }
 .re-ladder { table-layout: fixed; }
+.re-ladder th { vertical-align: top; }
 .re-ladder td { min-width: 0; }
+.re-ladder .re-ladder-prov { width: 112px; }
+.re-ladder-effort { width: 100%; box-sizing: border-box; margin-top: 4px; }
+.re-reset { margin-top: 4px; }
 .re-roles-of { font-weight: 400; max-width: 26ch; }
 .re-effort-row { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
 .re-changed { background: color-mix(in srgb, var(--violet-t, #b69cff) 10%, transparent); }
@@ -6744,3 +6753,16 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .re-save { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .re-ok { color: var(--ok, #3fb950); }
 .re-bad { color: var(--bad, #e5484d); }
+/* P5d C2: legacy profiles after migration: collapsed, read-only reference under the role + ladder editors. */
+.re-legacy > summary { cursor: pointer; display: list-item; }
+.re-legacy > summary .field-label { display: inline; }
+.re-legacy-copy { display: block; margin: 2px 0 0 16px; }
+.re-legacy[open] > summary { margin-bottom: 10px; }
+.re-legacy-form { border: 0; padding: 0; margin: 0; min-width: 0; }
+.re-legacy-ro .re-legacy-form:disabled :is(input, select, textarea) { color: var(--muted); background: transparent; cursor: not-allowed; }
+/* Normal mode (UX r2): rounded chip capped in the one-row header, quiet disabled Save and row arrows (dimmed by colour per
+   idea-165). Not boring.css. */
+html[data-vibe="boring"] .role-model-chip { border-radius: 6px; }
+html[data-vibe="boring"] .boring-agent-header .role-model-chip { max-width: 28ch; }
+html[data-vibe="boring"] .re-save .btn.ok:disabled { background: color-mix(in srgb, var(--cyan) 22%, var(--panel)); color: var(--muted); cursor: not-allowed; }
+html[data-vibe="boring"] .re-actions .btn:disabled { border: 1px solid transparent; background: transparent; color: color-mix(in srgb, var(--muted) 55%, transparent); cursor: not-allowed; }

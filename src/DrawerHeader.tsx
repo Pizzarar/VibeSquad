@@ -713,7 +713,13 @@ export function DrawerHeader({
   const modelName = shortModel(staged?.model ?? agent.model);
   const roleModel = roleName && modelName ? `${roleName} · ${modelName}` : roleName || modelName || "";
   const roleModelChip = roleModel ? (
-    <span className="role-model-chip" data-testid="drawer-role-model" title={`Role · model${staged ? " (staged switch)" : ""}`}>{roleModel}</span>
+    <span
+      className="role-model-chip"
+      data-testid="drawer-role-model"
+      title={`${roleName ? `${roleName} · ` : ""}${staged?.model ?? agent.model ?? modelName}${staged ? " (staged switch)" : ""}`}
+    >
+      {roleModel}
+    </span>
   ) : null;
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);
