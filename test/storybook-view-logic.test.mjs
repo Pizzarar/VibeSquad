@@ -69,13 +69,24 @@ describe("storybookLogic", () => {
     const popper = chains.find((c) => c.traderId === "popper");
     assert.deepEqual(popper.steps.map((s) => s.id), ["popper_1", "popper_2"]);
     const g = L.chainToMermaid(popper, idx);
-    assert.match(g.code, /^flowchart LR/);
+    assert.match(g.code, /^flowchart (LR|TD)/);
     assert.match(g.code, /n0 --> n2|n0 --> n1/);
     const names = Object.values(g.nodes).map((e) => `${e.kind}:${e.id}`);
     for (const n of ["quest_step:popper_1", "quest_step:popper_2", "item:scrap_metal", "enemy:scav", "location:harbor_district"]) assert.ok(names.includes(n), n);
     const parsed = parseMermaid(g.code);
     assert.equal(parsed.ok, true);
     assert.ok(!g.code.includes("STORY-TODO"));
+  });
+
+  test("mermaid: index/rel sanitized, long chains lay out top-down", () => {
+    const evil = { ...idx.get("quest_step", "popper_2"), data: { ...idx.get("quest_step", "popper_2").data, index: '1"]; n88["X' } };
+    const chain = { traderId: "popper", trader: null, steps: [evil] };
+    const g = L.chainToMermaid(chain, idx);
+    assert.doesNotMatch(g.code, /n88\[/);
+    assert.equal(g.code.split("\n").filter((l) => /^  n\d+\[/.test(l)).length, 1);
+    assert.equal(L.mermaidLabel("a%%b"), "a b");
+    const many = Array.from({ length: L.LONG_CHAIN + 1 }, (_, i) => ({ ...evil, id: "s" + i, data: { index: i + 1 }, links: [] }));
+    assert.match(L.chainToMermaid({ traderId: "p", trader: null, steps: many }, idx).code, /^flowchart TD/);
   });
 
   test("mermaid labels are sanitized", () => {
@@ -119,10 +130,13 @@ describe("storybookLogic", () => {
     assert.equal(L.interpretLoad(404, { error: "x" }).kind, "none");
     assert.equal(L.interpretLoad(200, snap).kind, "ok");
     assert.equal(L.interpretLoad(500, { error: "boom" }).message, "boom");
-    const r = L.interpretRefresh(200, { fetched: false, skipped: "rate-limited", nextAllowedAt: Date.now() + 3600e3, snapshot: snap });
-    assert.match(r.notice, /one fetch per hour/);
+    const r = L.interpretRefresh(200, { fetched: false, skipped: "rate-limited", nextFetchAt: new Date(Date.now() + 3600e3).toISOString(), ...snap });
+    assert.match(r.notice, /one fetch per hour; showing the pinned sha\. Next fetch allowed after/);
+    assert.match(r.status, /^Checked .* next fetch /);
     assert.ok(r.snap);
-    assert.equal(L.interpretRefresh(200, { fetched: true, snapshot: snap }).notice, null);
+    assert.equal(L.interpretRefresh(200, { fetched: true, nextFetchAt: null, ...snap }).notice, null);
+    assert.match(L.interpretRefresh(200, { fetched: true, ...snap }).status, /^Up to date · checked /);
+    assert.equal(L.interpretLoad(200, { entities: [] }).kind, "error"); // no sha: malformed payload
     assert.equal(L.interpretRefresh(404, {}).error, L.NO_STORYBOOK);
   });
 });

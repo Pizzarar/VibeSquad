@@ -7,7 +7,7 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  buildListItems, chainToMermaid, characterViews, countByCategory, entityCard, filterItems, fmtSource, fmtWindow,
+  SB_CATEGORY_HELP, buildListItems, chainToMermaid, checkLabel, plainText, characterViews, countByCategory, entityCard, filterItems, fmtSource, fmtWindow,
   indexEntities, interpretLoad, interpretRefresh, locationView, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
@@ -18,16 +18,49 @@ type Target = { projectId: string; name: string } | null;
 let target: Target = null;
 const subs = new Set<() => void>();
 const emit = () => subs.forEach((f) => f());
+// The open Storybook is mirrored in the URL (?sb=<project>) so reload / a shared link / Back+Forward keep it (UX R18 m8).
+const urlProject = (): string | null => (typeof location === "undefined" ? null : new URLSearchParams(location.search).get("sb") || null);
+const withSb = (projectId: string | null): string => {
+  const p = new URLSearchParams(location.search);
+  if (projectId) p.set("sb", projectId); else p.delete("sb");
+  const q = p.toString();
+  return `${location.pathname}${q ? `?${q}` : ""}${location.hash}`;
+};
+let pushed = false;
 export function openStorybook(projectId: string, name?: string): void {
   target = { projectId, name: name || projectId };
+  history.pushState({ sb: projectId }, "", withSb(projectId));
+  pushed = true;
   emit();
 }
 export function closeStorybook(): void {
+  if (!target) return;
+  if (pushed && urlProject()) { history.back(); return; } // undo our own push; the popstate handler below closes the store
   target = null;
+  if (urlProject()) history.replaceState(history.state, "", withSb(null));
   emit();
+}
+if (typeof window !== "undefined") {
+  const id0 = urlProject();
+  target = id0 ? { projectId: id0, name: id0 } : null; // reload / shared link
+  window.addEventListener("popstate", () => {
+    const id = urlProject();
+    if (!id) { if (target) { target = null; pushed = false; emit(); } }
+    else if (target?.projectId !== id) { target = { projectId: id, name: id }; emit(); }
+  });
 }
 export function useStorybookTarget(): Target {
   return useSyncExternalStore((cb) => { subs.add(cb); return () => { subs.delete(cb); }; }, () => target, () => null);
+}
+
+/** Known-missing probe for the ⋯ menu (UX R18 m6): true once a project is known to have no Storybook (404), so the item can hide. */
+const missing = new Map<string, boolean>();
+export function probeStorybook(projectId: string): boolean {
+  if (!missing.has(projectId)) {
+    missing.set(projectId, false);
+    void fetch(api(projectId)).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
+  }
+  return missing.get(projectId) === true;
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────────
@@ -107,10 +140,11 @@ type CardApi = ReturnType<typeof useCard>;
 /** Entity chip: hover/focus (desktop) or tap (touch) opens the card. */
 function Chip({ e, card, onGo, label }: { e: SbEntity; card: CardApi; onGo?: () => void; label?: string }) {
   return (
-    <button type="button" className={`sb-chip sb-k-${e.kind}`} data-sb-card-trigger data-testid={`sb-chip-${e.kind}-${e.id}`}
+    <button type="button" className={`sb-chip sb-k-${e.kind}`} data-sb-card-trigger data-sb-chip={`${e.kind}\u0000${e.id}`} data-testid={`sb-chip-${e.kind}-${e.id}`}
       onMouseEnter={(ev) => { if (!coarse()) card.show(e, ev.currentTarget, 250); }}
       onMouseLeave={() => { if (!coarse()) card.cancel(); }}
       onFocus={(ev) => { if (!coarse()) card.show(e, ev.currentTarget); }}
+      onBlur={(ev) => { if (!coarse() && !(ev.relatedTarget as Element | null)?.closest?.(".sb-card")) card.hide(); }}
       onClick={(ev) => { ev.stopPropagation(); if (onGo && !coarse()) onGo(); else card.show(e, ev.currentTarget); }}>
       {label ?? cleanTodo(e.display)}
     </button>
@@ -149,7 +183,7 @@ function QuestWeb({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardApi;
         {chain.steps.map((s) => (
           <li key={s.id} className="sb-step">
             <Chip e={s} card={card} label={`${s.data?.index ?? ""}. ${cleanTodo(s.display)}`} />
-            {s.links.filter((l) => l.rel !== "trader").map((l) => { const t = idx.get(l.kind, l.id); return t ? <span key={l.rel + l.id} className="sb-rel"><span className="sb-rel-name">{l.rel.replace(/_/g, " ")}</span><Chip e={t} card={card} /></span> : null; })}
+            {s.links.filter((l) => l.rel !== "trader").map((l) => { const t = idx.get(l.kind, l.id); return t ? <span key={`${l.rel}\u0000${l.kind}\u0000${l.id}`} className="sb-rel"><span className="sb-rel-name">{l.rel.replace(/_/g, " ")}</span><Chip e={t} card={card} /></span> : null; })}
           </li>
         ))}
       </ol>
@@ -168,10 +202,10 @@ function Locations({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardApi
         {locs.map((l) => <button key={l.id} type="button" role="tab" aria-selected={l.id === loc.id} className="sb-seg-btn" onClick={() => setSel(l.id)}>{l.display}</button>)}
       </div>
       <p className="sb-sub"><Chip e={loc} card={card} label="Location card" /> <span className="sb-mono">{fmtSource(loc.source)}</span></p>
-      <Section title="Quests" n={v.quests.length}>{v.quests.map((q) => <li key={q.id}><Chip e={q} card={card} label={`${q.data?.trader ?? ""} #${q.data?.index ?? ""} ${cleanTodo(q.display)}`} /></li>)}</Section>
+      <Section title="Quests" n={v.quests.length}>{v.quests.map((q) => <li key={q.id}><Chip e={q} card={card} label={`${idx.get("trader", String(q.data?.trader ?? ""))?.display ?? q.data?.trader ?? ""} #${q.data?.index ?? ""} ${cleanTodo(q.display)}`} /></li>)}</Section>
       <Section title="Enemies & spawn windows" n={v.enemies.length}>
-        {v.enemies.map((en) => (
-          <li key={en.id + (en.boss ? "b" : "")}>
+        {v.enemies.map((en, i) => (
+          <li key={`${i}:${en.id}${en.boss ? "b" : ""}`}>
             {en.entity ? <Chip e={en.entity} card={card} /> : <span className="sb-dangling">{en.id} (no such enemy)</span>}
             <span className="sb-win">{en.boss ? `boss at ${en.minS ?? "?"}s` : fmtWindow(en.minS, en.maxS)}</span>
           </li>
@@ -179,7 +213,7 @@ function Locations({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardApi
       </Section>
       <Section title="Contracts" n={v.contracts.length}>{v.contracts.map((c) => <li key={c.id}><Chip e={c} card={card} /></li>)}</Section>
       <Section title="Lore" n={v.lore.length + v.lines.length}>
-        {v.lore.map((l) => <li key={l.id}><Chip e={l} card={card} /><p className="sb-quote">{String(l.data?.text ?? "")}</p></li>)}
+        {v.lore.map((l) => <li key={l.id}><Chip e={l} card={card} /><p className="sb-quote">{plainText(String(l.data?.text ?? ""))}</p></li>)}
         {v.lines.map((l) => <li key={l.id}><Chip e={l} card={card} label="Line" /><p className="sb-quote">{String(l.data?.text ?? l.display)}</p></li>)}
       </Section>
     </div>
@@ -203,18 +237,18 @@ function Characters({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardAp
   return (
     <div>
       <div className="sb-seg" role="tablist" aria-label="Characters">
-        {chars.map((c) => <button key={c.id} type="button" role="tab" aria-selected={c.id === ch.id} className="sb-seg-btn" onClick={() => setSel(c.id)}>{c.speaker} <span className="sb-count">{c.lines.length}</span></button>)}
+        {chars.map((c) => <button key={c.id} type="button" role="tab" aria-selected={c.id === ch.id} className="sb-seg-btn" onClick={() => setSel(c.id)}>{c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}</button>)}
       </div>
       {ch.card ? (
         <section className="sb-voice" data-testid="sb-voice-card">
           <h3 className="sb-h">Voice card <span className="sb-mono">{fmtSource(ch.card.source)}</span></h3>
           <dl className="sb-card-meta">
-            {d.who && <><dt>Who</dt><dd>{String(d.who)}</dd></>}
+            {d.who && <><dt>Who</dt><dd>{plainText(String(d.who))}</dd></>}
             {d.pronoun && <><dt>Pronoun</dt><dd>{String(d.pronoun)}</dd></>}
             {d.playerWord && <><dt>Calls player</dt><dd>{[d.playerWord, ...(d.callsPlayer ?? [])].join(", ")}</dd></>}
             {Array.isArray(d.neverSays) && d.neverSays.length > 0 && <><dt>Never says</dt><dd>{d.neverSays.join(", ")}</dd></>}
             {Array.isArray(d.rivals) && d.rivals.length > 0 && <><dt>Rivals</dt><dd>{d.rivals.join(", ")}</dd></>}
-            {Array.isArray(d.samples) && d.samples.length > 0 && <><dt>Samples</dt><dd>{d.samples.join(" / ")}</dd></>}
+            {Array.isArray(d.samples) && d.samples.length > 0 && <><dt>Samples</dt><dd>{d.samples.map((x: unknown) => plainText(String(x))).join(" / ")}</dd></>}
           </dl>
         </section>
       ) : <p className="sb-empty">No voice card for {ch.speaker}.</p>}
@@ -238,12 +272,15 @@ function Findings({ items, idx, card, active, setActive, goTo }: { items: ListIt
     <div>
       <div className="sb-filter" role="group" aria-label="Filter findings" data-testid="sb-filter">
         {SB_CATEGORIES.map((c) => (
-          <button key={c} type="button" className="sb-fbtn" aria-pressed={active.has(c)} data-testid={`sb-filter-${c}`} onClick={() => setActive(toggleCategory(active, c))}>
+          <button key={c} type="button" className="sb-fbtn" aria-pressed={active.has(c)} data-testid={`sb-filter-${c}`} title={SB_CATEGORY_HELP[c]} onClick={() => setActive(toggleCategory(active, c))}>
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
         {active.size > 0 && <button type="button" className="sb-fbtn sb-fclear" onClick={() => setActive(new Set())}>Clear</button>}
       </div>
+      <dl className="sb-legend" data-testid="sb-legend">
+        {SB_CATEGORIES.map((c) => <div key={c}><dt>{SB_CATEGORY_LABEL[c]}</dt><dd>{SB_CATEGORY_HELP[c]}</dd></div>)}
+      </dl>
       {shown.length === 0 ? <p className="sb-empty">{items.length === 0 ? "No findings." : "No findings match this filter."}</p> : (
         <ul className="sb-findings" data-testid="sb-findings">
           {shown.map((it) => {
@@ -252,14 +289,14 @@ function Findings({ items, idx, card, active, setActive, goTo }: { items: ListIt
               <li key={it.key} className={`sb-finding sb-sev-${it.severity}`}>
                 <div className="sb-finding-top">
                   <span className={`sb-tag sb-cat-${it.category}`}>{SB_CATEGORY_LABEL[it.category]}</span>
-                  {it.check && <span className="sb-tag sb-check">{it.check}</span>}
+                  {it.check && <span className="sb-tag sb-check" title={`Check ${it.check}`}>{checkLabel(it.check)}</span>}
                   <span className="sb-tag">{it.severity}</span>
                 </div>
                 <p className="sb-finding-msg">{it.msg}</p>
                 <div className="sb-finding-foot">
                   {ent ? <button type="button" className="sb-link" data-testid="sb-finding-entity" onClick={() => goTo(ent)}>→ {ent.kind.replace(/_/g, " ")}: {cleanTodo(ent.display)}</button>
                     : it.entityRef ? <span className="sb-dangling">{it.entityRef.kind}:{it.entityRef.id} (not in snapshot)</span> : null}
-                  {ent && <Chip e={ent} card={card} label="Card" />}
+                  {ent && <Chip e={ent} card={card} label="Open card" />}
                   {it.source && <span className="sb-mono">{fmtSource(it.source)}</span>}
                 </div>
               </li>
@@ -272,21 +309,29 @@ function Findings({ items, idx, card, active, setActive, goTo }: { items: ListIt
 }
 
 // ── the view ─────────────────────────────────────────────────────────────────────
-export function StorybookView({ projectId, name, onClose, initial }: { projectId: string; name: string; onClose: () => void; initial?: SbSnapshot }) {
+export function StorybookView({ projectId, name, onClose, initial, needsYou = 0, onNeedsYou }: { projectId: string; name: string; onClose: () => void; initial?: SbSnapshot; needsYou?: number; onNeedsYou?: () => void }) {
   const [state, setState] = useState<LoadState>(initial ? { kind: "ok", snap: initial } : { kind: "loading" });
   const [notice, setNotice] = useState<string | null>(null);
+  const [checked, setChecked] = useState<string | null>(null);
+  const [jump, setJump] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("quests");
   const [sel, setSelAll] = useState<Record<Tab, string | null>>({ quests: null, locations: null, characters: null, findings: null });
   const [active, setActive] = useState<Set<SbCategory>>(new Set());
 
+  // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
+  // change (or unmount) invalidates everything in flight.
+  const seq = useRef(0);
   useEffect(() => {
-    if (initial) return;
-    let dead = false;
+    if (initial) { setState({ kind: "ok", snap: initial }); return; }
+    const my = ++seq.current;
+    setState({ kind: "loading" });
+    setNotice(null);
+    setChecked(null);
     call(api(projectId))
-      .then((r) => { if (!dead) setState(interpretLoad(r.status, r.body)); })
-      .catch((e) => { if (!dead) setState({ kind: "error", message: e instanceof Error ? e.message : String(e) }); });
-    return () => { dead = true; };
+      .then((r) => { if (seq.current === my) setState(interpretLoad(r.status, r.body)); })
+      .catch((e) => { if (seq.current === my) setState({ kind: "error", message: e instanceof Error ? e.message : String(e) }); });
+    return () => { seq.current++; };
   }, [projectId, initial]);
 
   const snap = state.kind === "ok" ? state.snap : null;
@@ -295,21 +340,28 @@ export function StorybookView({ projectId, name, onClose, initial }: { projectId
   const card = useCard(idx);
 
   const refresh = async () => {
+    const my = ++seq.current;
     setBusy(true);
     setNotice(null);
     try {
       const r = await call(`${api(projectId)}/refresh`, { method: "POST" });
+      if (seq.current !== my) return;
       const out = interpretRefresh(r.status, r.body);
       if (out.error) setNotice(out.error);
       else {
         if (out.snap) setState({ kind: "ok", snap: out.snap });
-        else { const g = await call(api(projectId)); setState(interpretLoad(g.status, g.body)); }
+        else {
+          const g = await call(api(projectId));
+          if (seq.current !== my) return;
+          setState(interpretLoad(g.status, g.body));
+        }
         setNotice(out.notice);
+        setChecked(out.status);
       }
     } catch (e) {
-      setNotice(`Refresh failed: ${e instanceof Error ? e.message : String(e)}`);
+      if (seq.current === my) setNotice(`Refresh failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setBusy(false);
+      if (seq.current === my) setBusy(false);
     }
   };
 
@@ -317,15 +369,27 @@ export function StorybookView({ projectId, name, onClose, initial }: { projectId
   // Finding → its entity: open the view that shows it; kinds with no dedicated view get the card.
   const goTo = (e: SbEntity) => {
     if (e.kind === "location") { pick("locations")(e.id); setTab("locations"); }
-    else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); }
+    else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); setJump(`${e.kind}\u0000${e.id}`); }
     else if (e.kind === "line" || e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
       const sp = e.kind === "line" ? (e.links.find((l) => l.rel === "spoken_by")?.id ?? String(e.data?.speaker ?? "")) : e.id;
       pick("characters")(sp.toLowerCase()); setTab("characters");
     } else {
-      const el = document.querySelector(`[data-testid="sb-chip-${e.kind}-${e.id}"]`);
+      const el = [...document.querySelectorAll("[data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === `${e.kind}\u0000${e.id}`); // attribute compare, not a selector built from the id
       if (el) card.show(e, el);
     }
   };
+
+  // Finding → quest step: scroll to the step's chip, focus it (which opens its card) and flash it (UX R18 m9).
+  useEffect(() => {
+    if (!jump || tab !== "quests") return;
+    const el = [...document.querySelectorAll<HTMLElement>(".sb-step [data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === jump);
+    setJump(null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.focus({ preventScroll: true });
+    el.classList.add("sb-flash");
+    setTimeout(() => el.classList.remove("sb-flash"), 1800);
+  }, [jump, tab, sel.quests]);
 
   return (
     <div className="sb-root" data-testid="storybook-view">
@@ -336,13 +400,15 @@ export function StorybookView({ projectId, name, onClose, initial }: { projectId
           <h2>Storybook <span className="sb-proj">· {name}</span></h2>
         </div>
         <div className="sb-head-right">
+          {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
-          <button type="button" className="sb-btn" data-testid="sb-refresh" onClick={() => void refresh()} disabled={busy}>{busy ? "Refreshing…" : "Refresh"}</button>
+          {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
+          <button type="button" className="sb-btn" data-testid="sb-refresh" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}>{busy ? "Refreshing…" : "Refresh"}</button>
         </div>
       </header>
       {notice && <div className="sb-notice" role="status" data-testid="sb-notice">{notice}</div>}
       {state.kind === "loading" && <p className="sb-empty">Loading Storybook…</p>}
-      {state.kind === "none" && <p className="sb-empty" data-testid="sb-none">{NO_STORYBOOK}</p>}
+      {state.kind === "none" && <p className="sb-empty" data-testid="sb-none">{NO_STORYBOOK}. Storybook needs a registered adapter for the project’s repo; ask the squad lead to add one.</p>}
       {state.kind === "error" && <p className="sb-empty sb-err" role="alert">Couldn’t load Storybook: {state.message}</p>}
       {snap && (
         <>
@@ -368,8 +434,8 @@ export function StorybookView({ projectId, name, onClose, initial }: { projectId
 }
 
 /** Mounted by App when a project's Storybook is open. */
-export function StorybookHost() {
+export function StorybookHost({ needsYou, onNeedsYou }: { needsYou?: number; onNeedsYou?: () => void }) {
   const t = useStorybookTarget();
   if (!t) return null;
-  return <StorybookView key={t.projectId} projectId={t.projectId} name={t.name} onClose={closeStorybook} />;
+  return <StorybookView key={t.projectId} projectId={t.projectId} name={t.name} onClose={closeStorybook} needsYou={needsYou} onNeedsYou={onNeedsYou} />;
 }

@@ -167,8 +167,11 @@ const NODE_SHAPE: Record<string, (label: string) => string> = {
 
 /** Mermaid-safe label: no quotes/brackets/pipes/newlines, bounded length. */
 export function mermaidLabel(s: string, max = 38): string {
-  return truncate(s.replace(/["'`<>[\]{}()|#;&\\]/g, " "), max) || "?";
+  return truncate(s.replace(/["'`<>[\]{}()|#;&%\\\r\n]/g, " "), max) || "?";
 }
+
+/** Chains longer than this lay out top-down so the web stays readable (a 16-step LR strip fits to ~40px tall). */
+export const LONG_CHAIN = 5;
 
 export type ChainGraph = { code: string; nodes: Record<string, SbEntity>; empty: boolean };
 
@@ -190,7 +193,7 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
       idOf.set(k, n);
       nodes[n] = e;
       const shape = NODE_SHAPE[e.kind] ?? NODE_SHAPE.item;
-      const label = e.kind === "quest_step" ? `${e.data?.index ?? ""}. ${mermaidLabel(cleanTodo(e.display))}` : mermaidLabel(e.display);
+      const label = e.kind === "quest_step" ? `${mermaidLabel(String(e.data?.index ?? ""), 8)}. ${mermaidLabel(cleanTodo(e.display))}` : mermaidLabel(e.display);
       decl.push(`  ${n}${shape(label)}`);
     }
     return n;
@@ -204,10 +207,10 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
       if (l.rel === "trader") continue;
       const t = idx.get(l.kind, l.id);
       if (!t) continue;
-      edges.push(`  ${sn} -.->|${l.rel.replace(/_/g, " ")}| ${nodeFor(t)}`);
+      edges.push(`  ${sn} -.->|${mermaidLabel(l.rel.replace(/_/g, " "), 24)}| ${nodeFor(t)}`);
     }
   }
-  return { code: ["flowchart LR", ...decl, ...edges].join("\n"), nodes, empty: chain.steps.length === 0 };
+  return { code: [chain.steps.length > LONG_CHAIN ? "flowchart TD" : "flowchart LR", ...decl, ...edges].join("\n"), nodes, empty: chain.steps.length === 0 };
 }
 
 export const cleanTodo = (s: string): string => s.replace(/^\s*STORY-TODO:\s*/i, "");
@@ -272,7 +275,7 @@ export function characterViews(idx: EntityIndex): CharacterView[] {
     .map(([id, lines]) => {
       const card = idx.get("voice_card", id) ?? idx.byKind("voice_card").find((c) => c.id.toLowerCase() === id) ?? null;
       const entity = idx.get("trader", id) ?? idx.get("squad", id) ?? idx.get("enemy", id);
-      return { id, speaker: entity?.display ?? card?.display ?? id, card, entity, lines };
+      return { id, speaker: entity?.display ?? card?.display ?? titleCase(id), card, entity, lines };
     })
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
 }
@@ -341,32 +344,62 @@ export const NO_STORYBOOK = "No Storybook for this project yet";
 /** Interpret a GET /api/storybook/:project response (status + parsed body). */
 export function interpretLoad(status: number, body: any): LoadState {
   if (status === 404) return { kind: "none" };
-  if (status >= 200 && status < 300 && body && Array.isArray(body.entities)) {
+  if (status >= 200 && status < 300 && body && Array.isArray(body.entities) && typeof body.sha === "string") {
     const snap: SbSnapshot = { ...body, findings: Array.isArray(body.findings) ? body.findings : [], warnings: Array.isArray(body.warnings) ? body.warnings : [] };
     return { kind: "ok", snap };
   }
   return { kind: "error", message: String(body?.error ?? `HTTP ${status}`) };
 }
 
-/** Interpret POST refresh. fetched=false → the hourly rate limit held the fetch back; show the server's message. */
-export function interpretRefresh(status: number, body: any): { snap: SbSnapshot | null; notice: string | null; error: string | null } {
-  if (status === 404) return { snap: null, notice: null, error: NO_STORYBOOK };
-  if (status < 200 || status >= 300) return { snap: null, notice: null, error: String(body?.error ?? `HTTP ${status}`) };
-  const snapRaw = body?.snapshot ?? (Array.isArray(body?.entities) ? body : null);
-  const loaded = snapRaw ? interpretLoad(200, snapRaw) : null;
-  const snap = loaded && loaded.kind === "ok" ? loaded.snap : null;
+/**
+ * Interpret POST /api/storybook/:project/refresh (SB4 contract): the snapshot fields come FLAT, plus `fetched` (bool) and
+ * `nextFetchAt` (ISO string | null). fetched=false → the hourly limit held the fetch back; show the notice. `status` is a short
+ * line for the header ("Up to date · checked 9:14 AM") so a refresh that changes nothing still shows a result.
+ */
+export type RefreshOutcome = { snap: SbSnapshot | null; notice: string | null; status: string | null; error: string | null };
+export function interpretRefresh(status: number, body: any, now: number = Date.now()): RefreshOutcome {
+  if (status === 404) return { snap: null, notice: null, status: null, error: NO_STORYBOOK };
+  if (status < 200 || status >= 300) return { snap: null, notice: null, status: null, error: String(body?.error ?? `HTTP ${status}`) };
+  const loaded = interpretLoad(200, body);
+  const snap = loaded.kind === "ok" ? loaded.snap : null;
   const notice = body?.fetched === false ? rateLimitNotice(body) : null;
-  return { snap, notice, error: null };
+  const t = fmtClock(now);
+  return { snap, notice, status: body?.fetched === false ? `Checked ${t} · next fetch ${fmtClock(body?.nextFetchAt) || "later"}` : `Up to date · checked ${t}`, error: null };
 }
 
-export const shortSha = (sha: string): string => sha.slice(0, 8);
+const fmtClock = (v: unknown): string => {
+  const ms = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) ? new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+};
 
-/** Message for fetched=false: server message if it sent one, else the hourly limit (+ next allowed time when given). */
+export const shortSha = (sha: unknown): string => (typeof sha === "string" ? sha.slice(0, 8) : "");
+
+/** Message for fetched=false: server message if it sent one, else the hourly limit (+ the next fetch time from `nextFetchAt`). */
 export function rateLimitNotice(body: any): string {
   if (typeof body?.message === "string" && body.message) return body.message;
   const base = body?.skipped === "rate-limited" || !body?.skipped ? "Refresh is limited to one fetch per hour; showing the pinned sha." : `Fetch skipped (${String(body.skipped)}); showing the pinned sha.`;
-  const next = Number(body?.nextAllowedAt);
-  if (!Number.isFinite(next) || next <= 0) return base;
-  const t = new Date(next).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return `${base} Next fetch allowed after ${t}.`;
+  const t = fmtClock(body?.nextFetchAt);
+  return t ? `${base} Next fetch allowed after ${t}.` : base;
 }
+
+// ── Plain-language labels (UX R18 m1) ─────────────────────────────────────────
+
+export const SB_CATEGORY_HELP: Record<SbCategory, string> = {
+  broken: "A reference points at something that does not exist, or a required link is missing.",
+  inconsistent: "Two places disagree: order, ownership, values or wording do not line up.",
+  missing: "Something that should exist is not there yet.",
+  unreviewed: "A text row from text_review.csv that the owner has not marked OWNER-OK.",
+};
+
+export const CHECK_NAME: Record<string, string> = {
+  "#1": "dangling reference", "#2": "dangling reference", "#5": "dangling reference",
+  "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
+  "#8": "missing piece", "#12": "lore contradiction",
+};
+export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
+
+/** Strip the Markdown noise (**bold**, `code`, # headings, leading list dashes) from lore/vibe text. */
+export const plainText = (s: string): string => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]*)`/g, "$1").replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*[-*]\s+/gm, "• ");
+
+/** Speaker id → readable name when no entity/card names it ("narrator" → "Narrator"). */
+export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, (_m, a, b) => a + b.toUpperCase());
