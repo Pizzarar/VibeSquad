@@ -115,6 +115,21 @@ async function buildOnce(project, { refresh, deps }) {
   return { snapshot: snap, fetch };
 }
 
+/** Cheap existence probe (HEAD): resolves project + adapter + origin ref only; builds no snapshot, fetches nothing. Throws StorybookError(404). */
+export async function probeProject(projectKey, deps = {}) {
+  const project = String(projectKey ?? "").trim().toLowerCase();
+  const proj = await (deps.resolveProject ?? resolveProject)(project, deps);
+  if (!proj) throw new StorybookError(404, `unknown storybook project: ${project}`);
+  assertAdapter(proj.adapter);
+  try {
+    await resolveRef(proj.repoPath, `origin/${await defaultBranch(proj.repoPath)}`);
+  } catch (e) {
+    console.warn(`[storybook] ${project}: probe cannot resolve origin default branch: ${String(e?.message ?? e).slice(0, 300)}`);
+    throw new StorybookError(404, `storybook unavailable for ${project}: ref not resolvable`);
+  }
+  return true;
+}
+
 /** Like buildSnapshot but also returns the fetch outcome: {snapshot, fetch:{fetched,nextFetchAt,skipped}|null}. */
 export async function buildSnapshotDetailed(projectKey, { refresh = false, ...deps } = {}) {
   const project = String(projectKey ?? "").trim().toLowerCase();
@@ -162,7 +177,15 @@ export function handleStorybookRoute(req, res, deps = {}) {
     res.end(JSON.stringify(body));
   };
   const isRefresh = Boolean(m[2]);
-  if (req.method !== (isRefresh ? "POST" : "GET")) { res.setHeader("allow", isRefresh ? "POST" : "GET"); send(405, { error: "method not allowed" }); return true; }
+  if (req.method === "HEAD" && !isRefresh) { // probe: status only (Node drops the body for HEAD)
+    probeProject(m[1], deps).then(() => send(200, {}), (e) => {
+      if (e instanceof StorybookError) return send(e.status, { error: e.message });
+      console.warn(`[storybook] ${m[1]}: ${e?.message ?? e}`);
+      send(500, { error: "storybook probe failed; see the server log" });
+    });
+    return true;
+  }
+  if (req.method !== (isRefresh ? "POST" : "GET")) { res.setHeader("allow", isRefresh ? "POST" : "GET, HEAD"); send(405, { error: "method not allowed" }); return true; }
   buildSnapshotDetailed(m[1], { refresh: isRefresh, ...deps }).then(
     ({ snapshot, fetch }) => send(200, isRefresh ? { ...snapshot, fetched: fetch?.fetched ?? false, nextFetchAt: fetch?.nextFetchAt ?? null } : snapshot),
     (e) => {

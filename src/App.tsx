@@ -51,6 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
+import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
@@ -59,7 +60,7 @@ import { FocusRail } from "./FocusRail";
 import { topNeedsYouId } from "./needsYouTop";
 import { nowTickValue, useNowTick } from "./useNowTick";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
-import { attentionItems, needsYouCount } from "./attentionItems";
+import { attentionItems, needsYouCount, needsYouTotal } from "./attentionItems";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
@@ -1386,6 +1387,7 @@ function openTopNeedsYou() {
   // Row 0 of the SAME list that renders boring-needs-you-count (R6-2), in Normal and in the Psycho sidebar spine; empty = no-op.
   const id = topNeedsYouId(filterAwakeViews(derived().views, getFolders()), nowTickValue()); // R11-1: asleep projects are not in the visible Needs-you list
   if (!id) return;
+  closeStorybook("replace"); // a Storybook takeover must not swallow the jump
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
   const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
   if (!handled) openAgent(id);
@@ -1537,6 +1539,7 @@ export function App() {
   );
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [screen, setScreen] = useState<"teams">("teams");
+  const storybookOpen = useStorybookTarget() != null;
   const [query, setQuery] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
@@ -1672,6 +1675,7 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
+    closeStorybook("replace"); // a palette/sidebar pick must leave a Storybook takeover (no-op otherwise)
     setFullView(false);
     setFocus(false);
     exitSquadsHome();
@@ -1743,6 +1747,7 @@ export function App() {
   );
 
   const onAgent = useCallback((tid: string, aid: string) => {
+    closeStorybook("replace");
     setTeamId(tid);
     selectAgent(aid);
     setScreen("teams");
@@ -1839,10 +1844,18 @@ export function App() {
   // R5-4: Normal's ?agent= is the agent BoringApp has on screen (none on Overview / usage); the active tab only until it reports.
   const boringShown = useBoringShownAgent();
   const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
+  // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
+  // Declared BEFORE the URL sync so the close (which strips ?sb= in place) happens first and the sync can replace that same entry.
+  const sbNav = useRef(`${activeTeamId}|${urlAgentId}`);
+  useEffect(() => {
+    const k = `${activeTeamId}|${urlAgentId}`;
+    if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
+  }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
+    if (next !== (location.search || "")) history[takeStorybookReplace() ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
+  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
     if (!pinLayout) return;
@@ -1998,6 +2011,9 @@ export function App() {
       )}
     </>
   );
+
+  // Storybook (SB5): read-only per-project view, opened from the project ⋯ menu; replaces the cockpit until Back.
+  if (storybookOpen && deviceRole !== "bug-tester") return (<><StorybookHost needsYou={needsYouTotal(filterAwakeViews(views, getFolders()), nowTickValue())} onNeedsYou={openTopNeedsYou} projectName={(id) => views.find((v) => v.team.id === id)?.team.name} />{overlays}</>);
 
   // E6b: a scoped bug-tester device gets the Alpha Tester Desk on desktop AND phone: no IDE chrome, owner menus or pairing modals.
   if (deviceRole === "bug-tester") {

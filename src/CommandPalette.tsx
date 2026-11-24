@@ -1,4 +1,5 @@
 import { clampCtxMenu, rootZoom } from "./pinMenuPlace";
+import { openStorybook, probeStorybook } from "./StorybookView";
 import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
@@ -323,6 +324,7 @@ export function teamCtxItems(view: TeamView, opts?: { folders?: FolderDef[] }): 
       },
     },
   ];
+  if (!probeStorybook(view.team.id)) items.push({ label: "Open Storybook", separatorBefore: true, run: () => openStorybook(view.team.id, view.team.name) });
   if (opts?.folders) {
     // B11b: folder actions (Normal sidebar). Current folder is shown checked and inert.
     const fail = (r: { ok: boolean; error?: string }) => { if (!r.ok) window.alert(`Folder change failed: ${r.error ?? "unknown error"}`); };
