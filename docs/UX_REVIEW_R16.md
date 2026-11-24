@@ -3,7 +3,7 @@
 Date: 2026-11-24 · Build: `unit-bor-b13-living` @ `d8fb4554`, `npx vite build`, `dist/` served statically on `:4291` (live `:4180` runs master).
 Passes: 3200×1800 @ dsf 1.2 (owner 4K@120%) and 1920×1080, dark and light, `?demo=1`, `&riff=1`, `&idle=1`, `&crowd=1` (30 alerts). Driven with playwright-core + snap Chromium (script in `/tmp/pwtool`, not committed). Screenshots in `artifacts/ux-r16/` (untracked). 0 page errors in every pass. Reviewed by the UX Reviewer role from `docs/UX_REVIEW_PROCESS.md` §A, with no code edits.
 
-**Verdict at `d8fb4554`: FAIL 0/1/4 (critical/major/minor).** One major, a B13 regression: the "Working now" strip claims an agent is working while it is blocked on a permission.
+**Verdict at `d8fb4554`: FAIL 0/1/6 (critical/major/minor).** One major, a B13 regression: the "Working now" strip claims an agent is working while it is blocked on a permission.
 
 ## Status vs R15
 
