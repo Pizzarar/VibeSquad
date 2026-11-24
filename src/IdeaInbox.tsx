@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
@@ -14,6 +14,15 @@ export function isTouchMobileLayout(): boolean {
   return (
     window.matchMedia("(max-width: 600px)").matches ||
     (window.matchMedia("(pointer: coarse)").matches && window.innerWidth <= 900)
+  );
+}
+
+/** R14-1: inbox card reveal scroll should be instant under reduced motion. */
+export function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -57,6 +66,21 @@ export function laneColor(laneId: string): string {
 
 const DEMO_INBOX_KEY = "vibesquad.demo.inbox";
 const INBOX_OPEN_KEY = "vibesquad.inbox.open";
+
+// Seeded the first time the demo inbox is read so `` `idea-N` `` refs (PLAN_CONTEXT_REFS R1) can resolve in ?demo.
+const DEMO_INBOX_SEED: InboxCard[] = [
+  {
+    id: "idea-729",
+    text: "Context refs in chat: when an agent reply says \"my last message\" or points at an earlier turn or card, render it as a link (msg:-N / idea-N); hover/tap shows a compact popover with that message or card.",
+    title: "Context refs in chat",
+    teamId: "vibesquad",
+    laneId: "ui-bois",
+    scope: "UI",
+    status: "parked",
+    createdAt: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+    updatedAt: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+  },
+];
 
 let cardsState: InboxCard[] = [];
 let inboxOpenState: boolean = (() => {
@@ -140,24 +164,67 @@ export function flashInboxNotice(msg: string) {
   }, 5000);
 }
 
+// A ref popover "Open in Inbox" (Normal mode) asks to open + highlight one card; the store carries the id
+// to BoringAde (which flips to the overview's Idea Inbox tab) and to the IdeaInbox list (which flashes it).
+let focusedCardId: string | null = null;
+const focusListeners = new Set<() => void>();
+function emitFocus() {
+  focusListeners.forEach((l) => l());
+}
+export function focusInboxCard(id: string) {
+  focusedCardId = id;
+  emitFocus();
+}
+export function clearFocusedInboxCard() {
+  focusedCardId = null;
+  emitFocus();
+}
+export function subscribeFocusInboxCard(l: () => void): () => void {
+  focusListeners.add(l);
+  return () => void focusListeners.delete(l);
+}
+export const getFocusedInboxCardSnapshot = (): string | null => focusedCardId;
+export function useFocusedInboxCard(): string | null {
+  return useSyncExternalStore(subscribeFocusInboxCard, getFocusedInboxCardSnapshot);
+}
+
+// Fetch dedup: concurrent callers share one in-flight promise; `loadedOnce` lets a ref popover fetch once.
+let inboxLoadedOnce = false;
+let inboxFetch: Promise<InboxCard[]> | null = null;
+export const isInboxLoadedOnce = () => inboxLoadedOnce;
+
 export async function refreshInboxCards(): Promise<InboxCard[]> {
   if (DEMO) {
     try {
-      const raw = localStorage.getItem(DEMO_INBOX_KEY);
+      let raw = localStorage.getItem(DEMO_INBOX_KEY);
+      if (!raw) {
+        raw = JSON.stringify(DEMO_INBOX_SEED);
+        localStorage.setItem(DEMO_INBOX_KEY, raw);
+      }
       cardsState = raw ? JSON.parse(raw) : [];
+      inboxLoadedOnce = true;
       emitInbox();
     } catch {}
     return cardsState;
   }
-  try {
-    const res = await fetch("/__vibesquad/inbox");
-    const body = await res.json().catch(() => ({}));
-    if (res.ok && Array.isArray(body.cards)) {
-      cardsState = body.cards;
-      emitInbox();
+  if (inboxFetch) return inboxFetch; // one in-flight fetch shared by every caller
+  inboxFetch = (async () => {
+    try {
+      const res = await fetch("/__vibesquad/inbox");
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && Array.isArray(body.cards)) {
+        cardsState = body.cards;
+        inboxLoadedOnce = true;
+        emitInbox();
+      }
+    } catch {
+      /* keep the last known cards; loadedOnce stays false so the next open retries */
+    } finally {
+      inboxFetch = null;
     }
-  } catch {}
-  return cardsState;
+    return cardsState;
+  })();
+  return inboxFetch;
 }
 
 export async function parkIdeasInInbox(opts: {
@@ -280,6 +347,33 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  // R13-1: a ref popover's "Open in Inbox" (Normal mode) asks to reveal + flash one card.
+  const focusedCard = useFocusedInboxCard();
+  // R14-1/Code-M1: the highlight timer lives in a ref, so clearFocusedInboxCard (which re-runs this effect
+  // and would run its cleanup) can't cancel the very timer that clears the highlight.
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!focusedCard) return;
+    setInboxOpen(true);
+    setHighlightId(focusedCard);
+    const id = focusedCard;
+    if (highlightTimer.current != null) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlightId(null), 2000);
+    requestAnimationFrame(() => {
+      document.getElementById(`inbox-card-${id}`)?.scrollIntoView({
+        block: "center",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+    });
+    clearFocusedInboxCard();
+  }, [focusedCard]);
+  useEffect(
+    () => () => {
+      if (highlightTimer.current != null) clearTimeout(highlightTimer.current);
+    },
+    [],
+  );
 
   const openAuditChat = (pin: Pin) => {
     setError("");

@@ -226,6 +226,11 @@ export function demoTimeline(agentId: string): { item: unknown; seqStart: number
     { type: "tool_call", name: "Agent", status: "running", detail: { type: "sub_agent", subAgentType: "Explore", description: "check handoff budget numbers" } },
     { type: "todo", items: [{ text: "Duet builds", status: "in_progress" }, { text: "Cross-critique", status: "pending" }, { text: "Show user 2 options", status: "pending" }] },
     { type: "tool_call", name: "Bash", status: "running", detail: { type: "shell", command: "vs who lead" } },
+    // Context-ref fixtures (PLAN_CONTEXT_REFS R1): msg:-1 resolves to the dispatch line above, msg:-20
+    // is older than the loaded history, idea-729 is a parked card, idea-999 is unknown.
+    { type: "assistant_message", text: "Rechecking `msg:-1` above." },
+    { type: "assistant_message", text: "That's `idea-729`; `idea-999` is gone." },
+    { type: "assistant_message", text: "`msg:-20` predates the loaded history." },
   ];
   return agentId ? items.map((item, i) => ({ item, seqStart: i, timestamp: new Date(Date.now() - (items.length - i) * 7 * 60_000).toISOString() })) : [];
 }
