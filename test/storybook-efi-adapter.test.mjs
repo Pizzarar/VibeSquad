@@ -24,7 +24,8 @@ after(() => fake.cleanup());
 test("adapter satisfies the interface", () => {
   assertAdapter(efiAdapter);
   assert.equal(efiAdapter.id, "efi");
-  assert.throws(() => assertAdapter({ id: "x" }), /defaultRepoPath/);
+  assert.equal(efiAdapter.defaultRepoPath, null);
+  assert.throws(() => assertAdapter({ id: "x", defaultRepoPath: 5 }), /defaultRepoPath/);
 });
 
 test("snapshot is valid and covers every v1 kind", () => {
