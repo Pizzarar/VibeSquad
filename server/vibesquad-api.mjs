@@ -14,7 +14,7 @@ import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
-import { handleRolesApi } from "./roles-api.mjs";
+import { assertLegacyProfilesWritable, handleRolesApi } from "./roles-api.mjs";
 import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -28,7 +28,7 @@ import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { foldersOf, isTeamAsleep, patchTeamsRegistryAsync, readTeamsConfig, resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateFoldersBody, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
-import { isServerSideFsError } from "./file-lock.mjs";
+import { isServerSideFsError, withFileLock } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
@@ -1541,7 +1541,8 @@ async function handleProfiles(req, res) {
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
-      const saved = saveProfiles(body);
+      // P5d: same lock as the roles editor's profiles.json writes; once migrated a write that changes a role is a 409.
+      const saved = await withFileLock(getProfilesPath(), () => saveProfiles(body, undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(saved.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1553,6 +1554,7 @@ async function handleProfiles(req, res) {
     return res.end();
   } catch (e) {
     if (sendServerFsError(res, e, "profiles")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1565,7 +1567,7 @@ async function handleProfilesImport(req, res) {
   try {
     const body = await readCleanBody(req);
     if (body.mode === "default") {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(seeded.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1597,7 +1599,7 @@ async function handleProfilesImport(req, res) {
       finalProfiles = existing;
     }
     if (!finalProfiles.length) {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         mode: "default",
@@ -1606,7 +1608,7 @@ async function handleProfilesImport(req, res) {
         warningsByProfile: {},
       });
     }
-    const saved = saveProfiles({ profiles: finalProfiles });
+    const saved = await withFileLock(getProfilesPath(), () => saveProfiles({ profiles: finalProfiles }, undefined, { beforeWrite: assertLegacyProfilesWritable }));
     return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
       ok: true,
       mode: "paseo",
@@ -1616,6 +1618,7 @@ async function handleProfilesImport(req, res) {
     });
   } catch (e) {
     if (sendServerFsError(res, e, "profiles import")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -2660,7 +2663,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/profiles":
         return handleProfiles(req, res);
       case "/__vibesquad/roles":
-        return handleRolesApi(req, res, { sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir), readBody: readCleanBody });
+        return handleRolesApi(req, res, {
+          sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir),
+          readBody: readCleanBody,
+          serverError: (r, e) => sendServerFsError(r, e, "roles") || sendServerError(r, e, "roles"),
+        });
       case "/__vibesquad/profiles/import":
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":

@@ -7,9 +7,11 @@
 //   resolveProfileWithFailover over the live stored profiles) and the old stakes ladder stay the authority, so they route
 //   exactly as before even when the owner edited a profile. resolveRoute runs alongside for the tier/role stamp, the
 //   `reason=…legacy-name` metric and a shadow check (legacyShadowMismatch).
-// - Roles are built LIVE from the v1 profiles list (profiles-v2.mjs buildRolesFromProfiles). Stored v2 `roles` are NOT
-//   preferred until P5d's role editor ships (P5b review M: they go stale when a legacy profile is edited).
-import { buildRolesFromProfiles } from "./profiles-v2.mjs";
+// - Roles (P5d): once profiles.json is migrated (schemaVersion 2 with a `roles` block, written by the Settings role
+//   editor) the stored roles are the truth (profiles-v2.mjs loadRoles). Before that (v1) they are built LIVE from the
+//   caller's v1 profiles list (buildRolesFromProfiles), exactly as P5c did. After migration the legacy profile editor is
+//   read-only and the server refuses legacy writes that would change a role (roles-api.mjs legacyProfilesConflict).
+import { buildRolesFromProfiles, loadRoles } from "./profiles-v2.mjs";
 import { legacyProfileRole } from "./profiles.mjs";
 import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failover.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
@@ -20,8 +22,15 @@ export const ROUTE_STAMP_LABELS = Object.freeze(["provider", "model", "tier", "s
 
 const ROUTE_FAMILIES = ["claude", "antigravity-cli", "opencode"];
 
-/** Roles built live from a v1 profile list (empty list = the shipped pack). Never the stored v2 block (until P5d). */
-export function liveRoles(profiles) {
+/**
+ * Roles a spawn routes by. Migrated profiles.json (v2 roles block, P5d role editor) = the stored roles (loadRoles).
+ * v1 / missing / unreadable = built live from `profiles` (empty list = the shipped pack), byte-identical to P5c.
+ * @param {any[]} [profiles] the caller's v1 profiles list
+ * @param {string} [profilesPath] profiles.json to check for stored roles (default getProfilesPath())
+ */
+export function liveRoles(profiles, profilesPath) {
+  const stored = loadRoles(profilesPath);
+  if (stored.source === "v2") return stored.roles;
   return buildRolesFromProfiles(Array.isArray(profiles) ? profiles : []).roles;
 }
 
@@ -107,12 +116,13 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
  * Opt-in MCP extras (e.g. playwright) for a ROLE-name spawn on `provider`: the role's per-provider tools, else its own.
  * null = not a role name (callers keep profiles.mjs profileMcpExtras, which only knows profile names).
  * @param {string} name
- * @param {any[]} [profiles] stored v1 profiles (roles are built live from them)
+ * @param {any[]} [profiles] stored v1 profiles (roles are built live from them until profiles.json is migrated)
  * @param {string} [provider]
+ * @param {string} [profilesPath]
  * @returns {string[] | null}
  */
-export function roleMcpExtras(name, profiles, provider) {
-  const found = roleNameHit(name, liveRoles(profiles));
+export function roleMcpExtras(name, profiles, provider, profilesPath) {
+  const found = roleNameHit(name, liveRoles(profiles, profilesPath));
   if (!found) return null;
   const fam = routeProviderFamily(provider);
   const modeExtras = fam ? found.role.modes?.[fam]?.mcpExtras : undefined;
@@ -190,8 +200,8 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
  * spawns from the role route, threading its model + thinkingOptionId (effort) into the create call, so the hook sees
  * the same values it would pick. null = not a role name (callers keep their profile path).
  */
-export function roleSpawnConfig(name, { profiles, stakes, usageList = [] } = {}) {
-  const roles = liveRoles(profiles);
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [] } = {}) {
+  const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
   const hit = roleSpawnProfile(name, { stakes, caps, roles });

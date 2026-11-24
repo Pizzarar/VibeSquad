@@ -830,7 +830,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
           : rawProfileName.toLowerCase() === "brainstorm - gemini"
             ? "Brainstorm - Gemini"
             : // P5c: the brainstorm ROLE ("brainstorm", any case but the old alias "Brainstorm") respawns as the role.
-              roleNameHit(rawProfileName, liveRoles(profiles))?.key === "brainstorm"
+              roleNameHit(rawProfileName, liveRoles(profiles, body.profilesPath))?.key === "brainstorm"
               ? "brainstorm"
               : undefined)
       : undefined;
@@ -851,6 +851,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       ? null
       : roleSpawnConfig(desiredProfileKey, {
           profiles,
+          profilesPath: body.profilesPath,
           usageList: body.forceProvider
             ? []
             : [
