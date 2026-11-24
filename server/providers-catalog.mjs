@@ -2043,6 +2043,39 @@ function computeSpawnStorms(agents) {
   return merged;
 }
 
+/** usa-50 (idea-788): index agents by (team, lane), sorted by createdAt, so each merged unit's implementer can look up its
+ * dispatch burst by binary search (no O(n^2) over all agents). */
+function buildDispatchBurstIndex(agents) {
+  const groups = new Map();
+  for (const a of agents) {
+    if (a.createdAt === null || a.createdAt === undefined) continue;
+    if (a.jobKind === "lead" || a.jobKind === "brainstorm") continue; // workers only
+    getOrSet(groups, `${a.team ?? ""}|${a.lane ?? ""}`, () => []).push(a);
+  }
+  for (const g of groups.values()) g.sort((x, y) => x.createdAt - y.createdAt);
+  return groups;
+}
+
+/** Burst sizes for one implementer agent: `size` = same-lane implementers (no respawnOf) created within +-SPAWN_BURST_WINDOW_MS
+ * of it, itself included (solo = 1); `all` = same rule over any worker jobKind. Both null when the implementer isn't on disk. */
+function dispatchBurstFor(index, implementer) {
+  if (!implementer || implementer.createdAt === null || implementer.createdAt === undefined) return { size: null, all: null };
+  const g = index.get(`${implementer.team ?? ""}|${implementer.lane ?? ""}`) ?? [];
+  const lo = implementer.createdAt - SPAWN_BURST_WINDOW_MS, hi = implementer.createdAt + SPAWN_BURST_WINDOW_MS;
+  let a = 0, b = g.length; // first index with createdAt >= lo
+  while (a < b) { const m = (a + b) >> 1; if (g[m].createdAt < lo) a = m + 1; else b = m; }
+  let size = 0, all = 0, selfSeen = false;
+  for (let i = a; i < g.length && g[i].createdAt <= hi; i++) {
+    const x = g[i];
+    if (x === implementer) selfSeen = true;
+    if (x.respawnOf && x !== implementer) continue;
+    all += 1;
+    if (x.jobKind === "implementer") size += 1;
+  }
+  if (!selfSeen) { size += 1; all += 1; }
+  return { size, all };
+}
+
 // ---------------------------------------------------------------- benchmark ledger, A/B workflow, savings, cohorts, floor (usa-10)
 
 const WF_TAG_RE = /\[wf:([^\]]+)\]/i;
@@ -2404,6 +2437,8 @@ function buildLedgerSnapshot(merged, rows) {
     outputTokens: u.outputTokens ?? 0,
     turns: u.turns ?? 0,
     cycleMs: u.unitCycleMs ?? null,
+    dispatchBurstSize: u.dispatchBurstSize ?? null,
+    dispatchBurstAll: u.dispatchBurstAll ?? null,
     locAdded: u.locAdded ?? 0,
     locDeleted: u.locDeleted ?? 0,
     filesChanged: u.filesChanged ?? 0,
@@ -3209,6 +3244,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
+  const dispatchIndex = buildDispatchBurstIndex(agents);
   const merged = [];
   for (const u of mergedRaw) {
     if (merged.length % 200 === 199) yield;
@@ -3227,8 +3263,10 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (isFixUnit && u.lane && mergedAtMs !== null) {
       fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
     }
+    const burst = dispatchBurstFor(dispatchIndex, implementer);
     return {
       ...u, mergedAtMs,
+      dispatchBurstSize: burst.size, dispatchBurstAll: burst.all,
       implementerProfile: implementer ? implementer.profile : null,
       implementerProvider: implementer ? implementer.provider : null,
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
@@ -3400,6 +3438,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
+      dispatchBurstSize: r.dispatchBurstSize ?? null, dispatchBurstAll: r.dispatchBurstAll ?? null,
       fromLedger: true,
     });
   }
