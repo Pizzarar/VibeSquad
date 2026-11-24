@@ -1,0 +1,1608 @@
+{
+  "schemaVersion": 1,
+  "project": "efi",
+  "ref": "origin/main",
+  "sha": "184c9f3a6de6973241d05d5f092a65bc89d7e637",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "entities": [
+    {
+      "id": "popper",
+      "kind": "trader",
+      "display": "Popper",
+      "aliases": [],
+      "source": {
+        "path": "data/traders.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "rival",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "sells",
+          "kind": "item",
+          "id": "pistol_9mm"
+        }
+      ],
+      "production": null,
+      "data": {
+        "description": "A flea-market gun seller.",
+        "level_0": true,
+        "sell_ratio": 0.5,
+        "rivals": [
+          "doc"
+        ]
+      }
+    },
+    {
+      "id": "doc",
+      "kind": "trader",
+      "display": "Doc",
+      "aliases": [],
+      "source": {
+        "path": "data/traders.json",
+        "line": 17
+      },
+      "links": [
+        {
+          "rel": "rival",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "sells",
+          "kind": "item",
+          "id": "bandage"
+        }
+      ],
+      "production": null,
+      "data": {
+        "description": "Back-alley medic.",
+        "level_0": false,
+        "sell_ratio": null,
+        "rivals": [
+          "popper"
+        ]
+      }
+    },
+    {
+      "id": "doc",
+      "kind": "squad",
+      "display": "Saint",
+      "aliases": [
+        "Reyes"
+      ],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "synergy_at",
+          "kind": "location",
+          "id": "sealed_vault"
+        }
+      ],
+      "production": "placeholder",
+      "data": {
+        "callsign": "Saint",
+        "name": "STORY-TODO: Reyes",
+        "bio": "STORY-TODO: A former paramedic.",
+        "trait_text": "Medic: meds heal 10% more",
+        "key": "medicine_effectiveness",
+        "size": 0.1,
+        "unlock": "",
+        "flaw": {
+          "key": "search_speed",
+          "size": -0.1,
+          "text": "Hauls a trauma kit"
+        },
+        "synergy": {
+          "text": "Below ground, meds heal more",
+          "key": "medicine_effectiveness",
+          "size": 0.1,
+          "locations": [
+            "sealed_vault"
+          ]
+        }
+      }
+    },
+    {
+      "id": "scav",
+      "kind": "enemy",
+      "display": "Scav",
+      "aliases": [],
+      "source": {
+        "path": "data/enemies.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "drops",
+          "kind": "item",
+          "id": "scrap_metal"
+        }
+      ],
+      "production": null,
+      "data": {
+        "boss": false,
+        "boss_of": null,
+        "hp": 60,
+        "attack": 8,
+        "defense": 2,
+        "xp": 40,
+        "group": null,
+        "loot": {
+          "scrap_metal": 1
+        }
+      }
+    },
+    {
+      "id": "armored_scav",
+      "kind": "enemy",
+      "display": "Armored Scav",
+      "aliases": [],
+      "source": {
+        "path": "data/enemies.json",
+        "line": 14
+      },
+      "links": [
+        {
+          "rel": "drops",
+          "kind": "item",
+          "id": "scrap_metal"
+        }
+      ],
+      "production": null,
+      "data": {
+        "boss": false,
+        "boss_of": null,
+        "hp": 110,
+        "attack": 14,
+        "defense": 8,
+        "xp": 70,
+        "group": null,
+        "loot": {
+          "scrap_metal": 2
+        }
+      }
+    },
+    {
+      "id": "exo_trooper",
+      "kind": "enemy",
+      "display": "Heavy Trooper",
+      "aliases": [],
+      "source": {
+        "path": "data/enemies.json",
+        "line": 24
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "boss": false,
+        "boss_of": null,
+        "hp": 200,
+        "attack": 20,
+        "defense": 10,
+        "xp": 90,
+        "group": null,
+        "loot": {}
+      }
+    },
+    {
+      "id": "boss_dockmaster",
+      "kind": "enemy",
+      "display": "The Dockmaster",
+      "aliases": [],
+      "source": {
+        "path": "data/enemies.json",
+        "line": 32
+      },
+      "links": [
+        {
+          "rel": "boss_of",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": null,
+      "data": {
+        "boss": true,
+        "boss_of": "harbor_district",
+        "hp": 1640,
+        "attack": 36,
+        "defense": 25,
+        "xp": 960,
+        "group": null,
+        "loot": {}
+      }
+    },
+    {
+      "id": "harbor_district",
+      "kind": "location",
+      "display": "Harbor District",
+      "aliases": [],
+      "source": {
+        "path": "data/locations.json",
+        "line": 3
+      },
+      "links": [
+        {
+          "rel": "spawns",
+          "kind": "enemy",
+          "id": "scav"
+        },
+        {
+          "rel": "spawns",
+          "kind": "enemy",
+          "id": "armored_scav"
+        },
+        {
+          "rel": "boss",
+          "kind": "enemy",
+          "id": "boss_dockmaster"
+        },
+        {
+          "rel": "first_clear_unique",
+          "kind": "item",
+          "id": "pistol_9mm"
+        },
+        {
+          "rel": "long_haul_loot",
+          "kind": "item",
+          "id": "scrap_metal"
+        }
+      ],
+      "production": null,
+      "data": {
+        "unlock_order": null,
+        "threat_tier": "low",
+        "danger_rating": "",
+        "default_raid_seconds": 600,
+        "max_raid_seconds": null,
+        "enemy_pool": [
+          {
+            "id": "scav",
+            "tier": 1,
+            "min_time_seconds": 0,
+            "max_time_seconds": 900,
+            "weight": 1
+          },
+          {
+            "id": "armored_scav",
+            "tier": 2,
+            "min_time_seconds": 600,
+            "max_time_seconds": 1800,
+            "weight": 1
+          }
+        ],
+        "boss": {
+          "enemy_id": "boss_dockmaster",
+          "at_seconds": 240,
+          "min_hunt_seconds": 600,
+          "max_fight_seconds": null
+        },
+        "long_haul_text": "A supply drop came down nearby. The squad reached it.",
+        "first_clear_unique": "pistol_9mm"
+      }
+    },
+    {
+      "id": "long_haul:harbor_district",
+      "kind": "line",
+      "display": "A supply drop came down nearby. The squad reached it.",
+      "aliases": [],
+      "source": {
+        "path": "data/locations.json",
+        "line": 8
+      },
+      "links": [
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "A supply drop came down nearby. The squad reached it.",
+        "origin": "long_haul",
+        "speaker": "narrator",
+        "at_s": 1800,
+        "kind": null
+      }
+    },
+    {
+      "id": "sealed_vault",
+      "kind": "location",
+      "display": "Sealed Vault",
+      "aliases": [],
+      "source": {
+        "path": "data/locations.json",
+        "line": 41
+      },
+      "links": [
+        {
+          "rel": "spawns",
+          "kind": "enemy",
+          "id": "exo_trooper"
+        }
+      ],
+      "production": null,
+      "data": {
+        "unlock_order": null,
+        "threat_tier": "high",
+        "danger_rating": "",
+        "default_raid_seconds": 1200,
+        "max_raid_seconds": null,
+        "enemy_pool": [
+          {
+            "id": "exo_trooper",
+            "tier": 2,
+            "min_time_seconds": 0,
+            "max_time_seconds": 2400,
+            "weight": 1
+          }
+        ],
+        "boss": null,
+        "long_haul_text": "",
+        "first_clear_unique": null
+      }
+    },
+    {
+      "id": "bedroom",
+      "kind": "room",
+      "display": "Barracks",
+      "aliases": [
+        "Cot"
+      ],
+      "source": {
+        "path": "data/rooms.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "upgrade_material",
+          "kind": "item",
+          "id": "cloth"
+        }
+      ],
+      "production": null,
+      "data": {
+        "starter_display_name": "Cot",
+        "tiers": 1
+      }
+    },
+    {
+      "id": "workshop",
+      "kind": "room",
+      "display": "Workshop",
+      "aliases": [],
+      "source": {
+        "path": "data/rooms.json",
+        "line": 17
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "starter_display_name": null,
+        "tiers": 0
+      }
+    },
+    {
+      "id": "scrap_metal",
+      "kind": "item",
+      "display": "Scrap Metal",
+      "aliases": [],
+      "source": {
+        "path": "data/items.json",
+        "line": 5
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "category": "material",
+        "tier": 1,
+        "weight": 0.5,
+        "base_value": 4,
+        "description": ""
+      }
+    },
+    {
+      "id": "pistol_9mm",
+      "kind": "item",
+      "display": "9mm Pistol",
+      "aliases": [],
+      "source": {
+        "path": "data/items.json",
+        "line": 13
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "category": "weapon",
+        "tier": 1,
+        "weight": 1,
+        "base_value": 100,
+        "description": "Basic."
+      }
+    },
+    {
+      "id": "bandage",
+      "kind": "item",
+      "display": "Bandage",
+      "aliases": [],
+      "source": {
+        "path": "data/items.json",
+        "line": 22
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "category": "medical",
+        "tier": 1,
+        "weight": 0.1,
+        "base_value": 6,
+        "description": ""
+      }
+    },
+    {
+      "id": "cloth",
+      "kind": "item",
+      "display": "Cloth",
+      "aliases": [],
+      "source": {
+        "path": "data/items.json",
+        "line": 30
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "category": "material",
+        "tier": 1,
+        "weight": 0.1,
+        "base_value": 2,
+        "description": ""
+      }
+    },
+    {
+      "id": "combat",
+      "kind": "skill",
+      "display": "Combat",
+      "aliases": [],
+      "source": {
+        "path": "data/skills.json",
+        "line": 4
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "defined_in": "data/skills.json"
+      }
+    },
+    {
+      "id": "medicine",
+      "kind": "skill",
+      "display": "Medicine",
+      "aliases": [],
+      "source": {
+        "path": "data/skills.json",
+        "line": 7
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "defined_in": "data/skills.json"
+      }
+    },
+    {
+      "id": "scavenging",
+      "kind": "skill",
+      "display": "Scavenging",
+      "aliases": [],
+      "source": {
+        "path": "systems/ScavengingSystem.gd",
+        "line": 3
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "defined_in": "systems/ScavengingSystem.gd",
+        "merged_from": "systems/ScavengingSystem.gd",
+        "note": "scavenging lives in ScavengingSystem.gd, not skills.json; merged so skill refs resolve"
+      }
+    },
+    {
+      "id": "d_popper_scrap_metal",
+      "kind": "contract",
+      "display": "d_popper_scrap_metal",
+      "aliases": [],
+      "source": {
+        "path": "data/contracts.json",
+        "line": 5
+      },
+      "links": [
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "item",
+          "kind": "item",
+          "id": "scrap_metal"
+        },
+        {
+          "rel": "requires_skill",
+          "kind": "skill",
+          "id": "scavenging"
+        }
+      ],
+      "production": null,
+      "data": {
+        "type": "deliver",
+        "trader": "popper",
+        "item": "scrap_metal",
+        "requires": {
+          "skill": "scavenging",
+          "level": 1
+        },
+        "qty_min": 68,
+        "qty_max": 135
+      }
+    },
+    {
+      "id": "k_popper_scav",
+      "kind": "contract",
+      "display": "k_popper_scav",
+      "aliases": [],
+      "source": {
+        "path": "data/contracts.json",
+        "line": 17
+      },
+      "links": [
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "enemy",
+          "kind": "enemy",
+          "id": "scav"
+        }
+      ],
+      "production": null,
+      "data": {
+        "type": "kill",
+        "trader": "popper",
+        "enemy": "scav",
+        "qty_min": 10,
+        "qty_max": 20
+      }
+    },
+    {
+      "id": "bandage",
+      "kind": "recipe",
+      "display": "Bandage",
+      "aliases": [],
+      "source": {
+        "path": "data/recipes.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "produces",
+          "kind": "item",
+          "id": "bandage"
+        },
+        {
+          "rel": "ingredient",
+          "kind": "item",
+          "id": "cloth"
+        },
+        {
+          "rel": "requires_skill",
+          "kind": "skill",
+          "id": "medicine"
+        },
+        {
+          "rel": "workshop",
+          "kind": "room",
+          "id": "workshop"
+        }
+      ],
+      "production": null,
+      "data": {
+        "result_id": "bandage",
+        "result_qty": 1,
+        "ingredients": {
+          "cloth": 2
+        },
+        "description": "Wrap a wound.",
+        "skill_req": "medicine",
+        "level_req": 1,
+        "required_workshop": "workshop"
+      }
+    },
+    {
+      "id": "popper_1",
+      "kind": "quest_step",
+      "display": "Spent Brass",
+      "aliases": [],
+      "source": {
+        "path": "data/questlines.json",
+        "line": 7
+      },
+      "links": [
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "wants_item",
+          "kind": "item",
+          "id": "scrap_metal"
+        }
+      ],
+      "production": "placeholder",
+      "data": {
+        "trader": "popper",
+        "index": 1,
+        "title": "STORY-TODO: Spent Brass",
+        "story": "STORY-TODO: Bring thirty casings.",
+        "task": {
+          "type": "deliver",
+          "item_id": "scrap_metal",
+          "qty": 30
+        },
+        "rep": 0.05
+      }
+    },
+    {
+      "id": "popper_2",
+      "kind": "quest_step",
+      "display": "Dock Runs",
+      "aliases": [],
+      "source": {
+        "path": "data/questlines.json",
+        "line": 18
+      },
+      "links": [
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "targets_enemy",
+          "kind": "enemy",
+          "id": "scav"
+        },
+        {
+          "rel": "at_location",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": null,
+      "data": {
+        "trader": "popper",
+        "index": 2,
+        "title": "Dock Runs",
+        "story": "Clear the harbor.",
+        "task": {
+          "type": "kill",
+          "enemy_id": "scav",
+          "location": "harbor_district",
+          "qty": 10
+        },
+        "rep": 0.05
+      }
+    },
+    {
+      "id": "doc_1",
+      "kind": "quest_step",
+      "display": "Somewhere to Work",
+      "aliases": [],
+      "source": {
+        "path": "data/questlines.json",
+        "line": 34
+      },
+      "links": [
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "needs_room",
+          "kind": "room",
+          "id": "workshop"
+        }
+      ],
+      "production": null,
+      "data": {
+        "trader": "doc",
+        "index": 1,
+        "title": "Somewhere to Work",
+        "story": "Build a bench.",
+        "task": {
+          "type": "reach",
+          "room": "workshop",
+          "level": 1
+        },
+        "rep": 0.05
+      }
+    },
+    {
+      "id": "rel:popper:wary",
+      "kind": "line",
+      "display": "Popper doesn't look up from his press.",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 9
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Popper doesn't look up from his press.",
+        "origin": "trader_relations",
+        "speaker": "popper",
+        "band": "wary"
+      }
+    },
+    {
+      "id": "rel:popper:word",
+      "kind": "line",
+      "display": "Word gets around: Popper heard about that.",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 10
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Word gets around: Popper heard about that.",
+        "origin": "trader_relations",
+        "speaker": "popper",
+        "band": "word"
+      }
+    },
+    {
+      "id": "enc:popper:0",
+      "kind": "line",
+      "display": "Restock — 'I'm out. {qty}.'",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 12
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "wants_item",
+          "kind": "item",
+          "id": "scrap_metal"
+        },
+        {
+          "rel": "requires_skill",
+          "kind": "skill",
+          "id": "scavenging"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Restock: 'I'm out. {qty}.'",
+        "title": "Restock",
+        "story": "'I'm out. {qty}.'",
+        "origin": "encouragement",
+        "speaker": "popper",
+        "item_id": "scrap_metal",
+        "qty": 100,
+        "requires": [
+          {
+            "skill": "scavenging",
+            "level": 30
+          }
+        ]
+      }
+    },
+    {
+      "id": "rel:doc:wary",
+      "kind": "line",
+      "display": "Doc frowns.",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 32
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Doc frowns.",
+        "origin": "trader_relations",
+        "speaker": "doc",
+        "band": "wary"
+      }
+    },
+    {
+      "id": "rel:doc:word",
+      "kind": "line",
+      "display": "Word gets around: Doc heard about that.",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 33
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Word gets around: Doc heard about that.",
+        "origin": "trader_relations",
+        "speaker": "doc",
+        "band": "word"
+      }
+    },
+    {
+      "id": "squad:doc:name",
+      "kind": "line",
+      "display": "Reyes",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "placeholder",
+      "data": {
+        "text": "STORY-TODO: Reyes",
+        "origin": "squad",
+        "speaker": "doc",
+        "field": "name"
+      }
+    },
+    {
+      "id": "squad:doc:bio",
+      "kind": "line",
+      "display": "A former paramedic.",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "placeholder",
+      "data": {
+        "text": "STORY-TODO: A former paramedic.",
+        "origin": "squad",
+        "speaker": "doc",
+        "field": "bio"
+      }
+    },
+    {
+      "id": "squad:doc:trait_text",
+      "kind": "line",
+      "display": "Medic: meds heal 10% more",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Medic: meds heal 10% more",
+        "origin": "squad",
+        "speaker": "doc",
+        "field": "trait_text"
+      }
+    },
+    {
+      "id": "squad:doc:flaw",
+      "kind": "line",
+      "display": "Hauls a trauma kit",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Hauls a trauma kit",
+        "origin": "squad",
+        "speaker": "doc",
+        "field": "flaw"
+      }
+    },
+    {
+      "id": "squad:doc:synergy",
+      "kind": "line",
+      "display": "Below ground, meds heal more",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "Below ground, meds heal more",
+        "origin": "squad",
+        "speaker": "doc",
+        "field": "synergy"
+      }
+    },
+    {
+      "id": "raid_story:1",
+      "kind": "line",
+      "display": "%s slip into %s.",
+      "aliases": [],
+      "source": {
+        "path": "scenes/raids/corridor/raid_story.gd",
+        "line": 4
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "text": "%s slip into %s.",
+        "origin": "raid_story",
+        "speaker": "squad"
+      }
+    },
+    {
+      "id": "raid_story:2",
+      "kind": "line",
+      "display": "%s checks the %s. Nothing worth taking.",
+      "aliases": [],
+      "source": {
+        "path": "scenes/raids/corridor/raid_story.gd",
+        "line": 5
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "text": "%s checks the %s. Nothing worth taking.",
+        "origin": "raid_story",
+        "speaker": "actor"
+      }
+    },
+    {
+      "id": "raid_story:3",
+      "kind": "line",
+      "display": "Tripwire! -%d.",
+      "aliases": [],
+      "source": {
+        "path": "scenes/raids/corridor/raid_story.gd",
+        "line": 6
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "text": "Tripwire! -%d.",
+        "origin": "raid_story",
+        "speaker": "narrator"
+      }
+    },
+    {
+      "id": "raid_story:4",
+      "kind": "line",
+      "display": "...and the raid went on.",
+      "aliases": [],
+      "source": {
+        "path": "scenes/raids/corridor/raid_story.gd",
+        "line": 7
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "text": "...and the raid went on.",
+        "origin": "raid_story",
+        "speaker": "narrator"
+      }
+    },
+    {
+      "id": "csv:scenes/armory/armory_view.gd:14:",
+      "kind": "line",
+      "display": "Build the Armory (Hideout)",
+      "aliases": [],
+      "source": {
+        "path": "scenes/armory/armory_view.gd",
+        "line": 14
+      },
+      "links": [],
+      "production": "placeholder",
+      "data": {
+        "group": "Screen: Armory",
+        "source": "gd",
+        "file": "scenes/armory/armory_view.gd",
+        "line": "14",
+        "data_path": "",
+        "id": "",
+        "current_text": "Build the Armory (Hideout)",
+        "where_seen": "armory page",
+        "length_budget": "none",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "STORY-TODO",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "Build the Armory (Hideout)",
+        "origin": "csv",
+        "csv_line": 2
+      }
+    },
+    {
+      "id": "csv:data/questlines.json:12:questlines.popper.steps[0].story",
+      "kind": "line",
+      "display": "Bring thirty casings, and \"he'll\" know you.",
+      "aliases": [],
+      "source": {
+        "path": "data/questlines.json",
+        "line": 12
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Trader questlines",
+        "source": "data",
+        "file": "data/questlines.json",
+        "line": "12",
+        "data_path": "questlines.popper.steps[0].story",
+        "id": "popper_1",
+        "current_text": "Bring thirty casings,\nand \"he'll\" know you.",
+        "where_seen": "quests",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "Bring me thirty clean casings.",
+        "status": "DRAFT",
+        "speaker": "Popper",
+        "owner_note": "keep it short",
+        "reviewed_hash": "",
+        "text": "Bring thirty casings,\nand \"he'll\" know you.",
+        "origin": "csv",
+        "csv_line": 3
+      }
+    },
+    {
+      "id": "csv:data/trader_relations.json:5:traders.doc.lines.wary",
+      "kind": "line",
+      "display": "Doc frowns.",
+      "aliases": [],
+      "source": {
+        "path": "data/trader_relations.json",
+        "line": 5
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "final",
+      "data": {
+        "group": "Trader relations",
+        "source": "data",
+        "file": "data/trader_relations.json",
+        "line": "5",
+        "data_path": "traders.doc.lines.wary",
+        "id": "",
+        "current_text": "Doc frowns.",
+        "where_seen": "relations",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "OWNER-OK",
+        "speaker": "Saint",
+        "owner_note": "",
+        "reviewed_hash": "abc123",
+        "text": "Doc frowns.",
+        "origin": "csv",
+        "csv_line": 5
+      }
+    },
+    {
+      "id": "popper",
+      "kind": "voice_card",
+      "display": "Popper",
+      "aliases": [],
+      "source": {
+        "path": "docs/narrative/VOICE_BIBLE.md",
+        "line": 10
+      },
+      "links": [
+        {
+          "rel": "speaker",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "rival",
+          "kind": "trader",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "pronoun": "he",
+        "pronounRaw": "he",
+        "playerWord": "runner",
+        "callsPlayer": [
+          "kid",
+          "you"
+        ],
+        "globalBans": [
+          "paranormal",
+          "supernatural",
+          "ghost",
+          "magic",
+          "spell",
+          "wizard",
+          "adventurer",
+          "adventurers",
+          "lol",
+          "lmao",
+          "yeet",
+          "no cap"
+        ],
+        "globalBansProse": "no paranormal; no modern-meme slang; no exposition dumps; never call the player \"adventurer\".",
+        "neverSays": [
+          "good enough",
+          "ballistics",
+          "muzzle velocity",
+          "ballistic coefficient"
+        ],
+        "neverSaysProse": "no ballistics or spec talk (that is the Mechanic's register); never says \"good enough\".",
+        "neverSaysExtracted": [
+          "good enough"
+        ],
+        "neverSaysOverride": [
+          "ballistics",
+          "muzzle velocity",
+          "ballistic coefficient"
+        ],
+        "rivals": [
+          "doc"
+        ],
+        "who": "Flea-market gun seller. Pronoun: he.",
+        "wants": "",
+        "distinctFrom": "",
+        "samples": [
+          "Thirty casings. Clean, not crushed."
+        ]
+      }
+    },
+    {
+      "id": "doc",
+      "kind": "voice_card",
+      "display": "Doc",
+      "aliases": [],
+      "source": {
+        "path": "docs/narrative/VOICE_BIBLE.md",
+        "line": 23
+      },
+      "links": [
+        {
+          "rel": "speaker",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "rival",
+          "kind": "trader",
+          "id": "popper"
+        }
+      ],
+      "production": null,
+      "data": {
+        "speakerKind": "trader",
+        "speakerId": "doc",
+        "pronoun": "she",
+        "pronounRaw": "she",
+        "playerWord": "runner",
+        "callsPlayer": [],
+        "globalBans": [
+          "paranormal",
+          "supernatural",
+          "ghost",
+          "magic",
+          "spell",
+          "wizard",
+          "adventurer",
+          "adventurers",
+          "lol",
+          "lmao",
+          "yeet",
+          "no cap"
+        ],
+        "globalBansProse": "no paranormal; no modern-meme slang; no exposition dumps; never call the player \"adventurer\".",
+        "neverSays": [
+          "sterile",
+          "protocol",
+          "re:\\b(?:contraindicat|prophylaxis|etiology)\\w*"
+        ],
+        "neverSaysProse": "no clinical Latin, no sterile-inventory counts.\n\n## Squad",
+        "neverSaysExtracted": [],
+        "neverSaysOverride": [
+          "sterile",
+          "protocol",
+          "re:\\b(?:contraindicat|prophylaxis|etiology)\\w*"
+        ],
+        "rivals": [
+          "popper"
+        ],
+        "who": "Back-alley medic. Pronoun: she.",
+        "wants": "",
+        "distinctFrom": "",
+        "samples": []
+      }
+    },
+    {
+      "id": "squad-saint",
+      "kind": "voice_card",
+      "display": "Saint",
+      "aliases": [
+        "doc"
+      ],
+      "source": {
+        "path": "docs/narrative/VOICE_BIBLE.md",
+        "line": 33
+      },
+      "links": [
+        {
+          "rel": "speaker",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": null,
+      "data": {
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "pronoun": null,
+        "pronounRaw": "not set in data",
+        "playerWord": "runner",
+        "callsPlayer": [],
+        "globalBans": [
+          "paranormal",
+          "supernatural",
+          "ghost",
+          "magic",
+          "spell",
+          "wizard",
+          "adventurer",
+          "adventurers",
+          "lol",
+          "lmao",
+          "yeet",
+          "no cap"
+        ],
+        "globalBansProse": "no paranormal; no modern-meme slang; no exposition dumps; never call the player \"adventurer\".",
+        "neverSays": [
+          "panic",
+          "re:\\bhospital[- ]ward\\b"
+        ],
+        "neverSaysProse": "no panic.",
+        "neverSaysExtracted": [],
+        "neverSaysOverride": [
+          "panic",
+          "re:\\bhospital[- ]ward\\b"
+        ],
+        "rivals": [],
+        "who": "Squad medic. Pronoun: not set in data.",
+        "wants": "",
+        "distinctFrom": "",
+        "samples": []
+      }
+    },
+    {
+      "id": "system",
+      "kind": "voice_card",
+      "display": "System",
+      "aliases": [],
+      "source": {
+        "path": "docs/narrative/VOICE_BIBLE.md",
+        "line": 41
+      },
+      "links": [],
+      "production": null,
+      "data": {
+        "speakerKind": "system",
+        "speakerId": "system",
+        "pronoun": null,
+        "pronounRaw": "",
+        "playerWord": "runner",
+        "callsPlayer": [],
+        "globalBans": [
+          "paranormal",
+          "supernatural",
+          "ghost",
+          "magic",
+          "spell",
+          "wizard",
+          "adventurer",
+          "adventurers",
+          "lol",
+          "lmao",
+          "yeet",
+          "no cap"
+        ],
+        "globalBansProse": "no paranormal; no modern-meme slang; no exposition dumps; never call the player \"adventurer\".",
+        "neverSays": [
+          "please",
+          "re:\\b(?:\\w+n't|I'm|I'll|I've|it's|we're|you're|you'll|that's|there's|let's)\\b",
+          "lol",
+          "haha",
+          "re:\\b(?:sorry|oops|whoops)\\b"
+        ],
+        "neverSaysProse": "no contractions, no \"please\".",
+        "neverSaysExtracted": [
+          "please"
+        ],
+        "neverSaysOverride": [
+          "please",
+          "re:\\b(?:\\w+n't|I'm|I'll|I've|it's|we're|you're|you'll|that's|there's|let's)\\b",
+          "lol",
+          "haha",
+          "re:\\b(?:sorry|oops|whoops)\\b"
+        ],
+        "rivals": [],
+        "who": "The game's own voice. No pronoun.",
+        "wants": "",
+        "distinctFrom": "",
+        "samples": []
+      }
+    },
+    {
+      "id": "map:harbor_district",
+      "kind": "lore",
+      "display": "Harbor District (vibe)",
+      "aliases": [],
+      "source": {
+        "path": "docs/PLAN_MAP_VIBES.md",
+        "line": 5
+      },
+      "links": [
+        {
+          "rel": "describes",
+          "kind": "location",
+          "id": "harbor_district"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "scav"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "armored_scav"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "boss_dockmaster"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "- **Setting:** a dead container port at dusk; cranes, wet concrete.\n- **Palette / light:** olive-drab, khaki-tan.\n- **Roster:** `scav` (hooded scavenger), `armored_scav` (slate plate). **Boss** `boss_dockmaster`: greatcoat.",
+        "fields": {
+          "setting": "a dead container port at dusk; cranes, wet concrete.",
+          "palette_light": "olive-drab, khaki-tan.",
+          "roster": "`scav` (hooded scavenger), `armored_scav` (slate plate). **Boss** `boss_dockmaster`: greatcoat."
+        },
+        "lore_kind": "map_vibe"
+      }
+    },
+    {
+      "id": "map:sealed_vault",
+      "kind": "lore",
+      "display": "Sealed Vault (vibe)",
+      "aliases": [],
+      "source": {
+        "path": "docs/PLAN_MAP_VIBES.md",
+        "line": 10
+      },
+      "links": [
+        {
+          "rel": "describes",
+          "kind": "location",
+          "id": "sealed_vault"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "- **Setting:** the sealed records vault; steel shelving.",
+        "fields": {
+          "setting": "the sealed records vault; steel shelving."
+        },
+        "lore_kind": "map_vibe"
+      }
+    },
+    {
+      "id": "band:A",
+      "kind": "lore",
+      "display": "Sublevels band A (vibe)",
+      "aliases": [],
+      "source": {
+        "path": "docs/PLAN_MAP_VIBES.md",
+        "line": 16
+      },
+      "links": [
+        {
+          "rel": "describes",
+          "kind": "location",
+          "id": "deep_1"
+        },
+        {
+          "rel": "describes",
+          "kind": "location",
+          "id": "deep_2"
+        },
+        {
+          "rel": "describes",
+          "kind": "location",
+          "id": "deep_3"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "| A | 1-3 | Service levels | concrete grey | `shaft_runner`: a fast scavenger |",
+        "fields": {
+          "floors": "1-3",
+          "setting": "Service levels",
+          "palette_light": "concrete grey",
+          "signature_enemy": "`shaft_runner`: a fast scavenger"
+        },
+        "lore_kind": "band_vibe"
+      }
+    },
+    {
+      "id": "look:plant_heavy",
+      "kind": "lore",
+      "display": "Plant Heavy (look)",
+      "aliases": [],
+      "source": {
+        "path": "docs/CONTENT_BREADTH_SPEC.md",
+        "line": 7
+      },
+      "links": [
+        {
+          "rel": "parent",
+          "kind": "enemy",
+          "id": "exo_trooper"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "a maintenance heavy in a padded suit",
+        "lore_kind": "enemy_look",
+        "where": "A 1-3",
+        "parent": "exo_trooper"
+      }
+    },
+    {
+      "id": "look:ghost_enemy",
+      "kind": "lore",
+      "display": "Not Landed (look)",
+      "aliases": [],
+      "source": {
+        "path": "docs/CONTENT_BREADTH_SPEC.md",
+        "line": 8
+      },
+      "links": [
+        {
+          "rel": "parent",
+          "kind": "enemy",
+          "id": "scav"
+        }
+      ],
+      "production": null,
+      "data": {
+        "text": "a look for an enemy not in data",
+        "lore_kind": "enemy_look",
+        "where": "A 1-3",
+        "parent": "scav"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "check": "#2",
+      "severity": "error",
+      "entityRef": {
+        "kind": "quest_step",
+        "id": "popper_2"
+      },
+      "msg": "kill target scav does not spawn in harbor_district (sample finding, hand-made)",
+      "source": {
+        "path": "data/questlines.json",
+        "line": 12
+      }
+    }
+  ],
+  "warnings": [
+    "CONTENT_BREADTH_SPEC look row for plant_heavy (Plant Heavy): no such enemy at this sha, link skipped",
+    "CONTENT_BREADTH_SPEC look row for ghost_enemy (Not Landed): no such enemy at this sha, link skipped"
+  ]
+}
