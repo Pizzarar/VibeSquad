@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
-import { createCompactor, COMPACTED_AT_LABEL, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { createCompactor, compactLanding, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
 import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../server/lead-handoff.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
@@ -302,4 +302,199 @@ test("compact-step without a readable log omits costUsd/tokens instead of guessi
   assert.equal(res.outcome, "ok");
   assert.equal(res.costUsd, undefined);
   assert.doesNotMatch(lines[0], /costUsd=|tokens=/);
+});
+
+// ---- K2a (docs/lanes/perfection/K2A.md): per-cause guards ----
+
+/**
+ * Scripted runner for one agent. onSend(n, emit) runs on the n-th send and returns the runner's answer ({ queued }); emit pushes a
+ * backend event for the agent (turn_started / turn_ended / timeline compacted). fresh(fetchCount) is the runner's status now.
+ */
+function scripted(agent, { onSend = () => ({ ok: true, queued: false }), fresh, events = () => [], opts = {} } = {}) {
+  const listeners = new Set();
+  const sends = [];
+  const labelWrites = [];
+  let fetches = 0;
+  const emit = (ev) => { for (const l of listeners) l({ agentId: agent.id, ...ev }); };
+  const later = (ms, ev) => setTimeout(() => emit(ev), ms);
+  const runner = {
+    subscribeEvents(l) { listeners.add(l); return () => listeners.delete(l); },
+    async updateAgent(_id, { labels }) { labelWrites.push(labels); agent.labels = { ...labels }; },
+    async sendAgentPrompt(_id, text) { sends.push({ text, at: Date.now() }); return onSend(sends.length, later); },
+    async fetchAgent() { fetches++; return { agent: fresh ? { ...agent, ...fresh(fetches, emit) } : agent }; },
+  };
+  const lines = [];
+  const c = createCompactor({
+    runner, timeoutMs: 150, queueTimeoutMs: 600, settleMs: 20, idlePollMs: 10, lateBoundaryMs: 150,
+    log: (e) => lines.push(e.text), readEvents: () => events(), ...opts,
+  });
+  return { c, sends, labelWrites, lines, emit };
+}
+const K = (id) => ({ id, provider: "claude", status: "idle", labels: {}, usedTokens: 150_000 });
+const ENDED = { kind: "turn_ended", outcome: { kind: "completed" } };
+const STARTED = { kind: "turn_started" };
+const COMPACTED = { kind: "timeline", type: "compacted" };
+const DIRECT_LOG = () => [ev("status", { status: "idle" }), ev("input", { text: "/compact x" }), ev("status", { status: "running" })];
+const STEERED_LOG = () => [ev("status", { status: "idle" }), ev("input", { text: "New team log event" }), ev("status", { status: "running" }), ev("input", { text: "/compact x" }), ev("status", { status: "running" })];
+
+test("K2a defaults: 240s per-attempt timeout", () => {
+  assert.equal(COMPACT_TIMEOUT_MS, 240_000);
+});
+
+test("K2a C1: snapshot idle but the runner says running (or queued) -> skipped busy, no label, no send, retried at the next idle", async () => {
+  for (const now of [{ status: "running" }, { status: "initializing", queued: { ahead: 2 } }, { status: "idle", queued: { ahead: 0 } }]) {
+    const a = K("rn-c1");
+    let state = now;
+    const { c, sends, labelWrites, lines } = scripted(a, { fresh: () => state, onSend: (_n, later) => { later(5, COMPACTED); return { ok: true, queued: false }; }, events: DIRECT_LOG });
+    const res = await c.run(a, { focus: "x", cap: 200_000 });
+    assert.deepEqual(res, { outcome: "skipped", reason: "busy" }, JSON.stringify(now));
+    assert.equal(sends.length, 0);
+    assert.equal(labelWrites.length, 0);
+    assert.equal(a.labels[COMPACTED_AT_LABEL], undefined);
+    assert.equal(c.tried.has(a.id), false);
+    assert.equal(lines.length, 0);
+    state = { status: "idle" }; // the next idle re-evaluates and compacts
+    assert.equal((await c.run(a, { focus: "x", cap: 200_000 })).outcome, "ok");
+    assert.equal(sends.length, 1);
+  }
+});
+
+test("K2a C2: queued /compact -> a turn end before its turn starts (park) is ignored; the later start + boundary is ok", async () => {
+  const a = K("rn-c2");
+  const { c, sends, lines } = scripted(a, {
+    onSend: (_n, later) => { later(10, ENDED); later(40, STARTED); later(70, COMPACTED); return { ok: true, queued: true, ahead: 2 }; },
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.attempts, 1);
+  assert.equal(sends.length, 1);
+  assert.match(lines[0], /outcome=ok .* attempts=1$/);
+});
+
+test("K2a C2: a queued /compact that never starts -> timeout reason=queue (bounded, no hang)", async () => {
+  const a = K("rn-c2q");
+  const { c, lines } = scripted(a, { onSend: (_n, later) => { later(10, ENDED); return { ok: true, queued: true }; }, events: DIRECT_LOG, opts: { queueTimeoutMs: 120 } });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "timeout");
+  assert.equal(res.reason, "queue");
+  assert.match(lines[0], /outcome=timeout .* reason=queue attempts=1 -> falling through to handoff/);
+});
+
+test("K2a C3/C4: first attempt ends without a boundary -> re-sent alone once idle -> ok, attempts=2, one label write", async () => {
+  const a = K("rn-c3");
+  const { c, sends, labelWrites, lines } = scripted(a, {
+    onSend: (n, later) => { later(10, n === 1 ? ENDED : COMPACTED); return { ok: true, queued: false }; },
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.attempts, 2);
+  assert.deepEqual(sends.map((s) => s.text), ["/compact x", "/compact x"]);
+  assert.equal(labelWrites.length, 1);
+  assert.match(lines[0], /outcome=ok before=150000 after=\S+ cap=200000 ms=\d+ attempts=2$/);
+});
+
+test("K2a: every attempt ends without a boundary -> failed reason=no-boundary after maxAttempts sends (no hang)", async () => {
+  const a = K("rn-nb");
+  const { c, sends, lines } = scripted(a, { onSend: (_n, later) => { later(10, ENDED); return { ok: true, queued: false }; }, events: DIRECT_LOG });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "failed");
+  assert.equal(res.reason, "no-boundary");
+  assert.equal(res.attempts, 3);
+  assert.equal(sends.length, 3);
+  assert.match(lines[0], /outcome=failed .* reason=no-boundary attempts=3 -> falling through to handoff/);
+  assert.equal((await c.run(a, { focus: "x" })).reason, "already-compacted"); // one run per crossing
+  assert.equal(sends.length, 3);
+});
+
+test("K2a C5: the per-attempt clock starts at turn start, not at send", async () => {
+  const a = K("rn-c5");
+  // Queued 120ms, then a 100ms compaction: 220ms after the send, past the 150ms budget only if it counted from the send.
+  const { c } = scripted(a, { onSend: (_n, later) => { later(120, STARTED); later(220, COMPACTED); return { ok: true, queued: true }; }, events: DIRECT_LOG });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "ok");
+  // A turn that runs past the budget from its start still times out (reason=turn).
+  const b = K("rn-c5b");
+  const s2 = scripted(b, { onSend: (_n, later) => { later(10, STARTED); later(400, COMPACTED); return { ok: true, queued: true }; }, events: DIRECT_LOG });
+  const r2 = await s2.c.run(b, { focus: "x", cap: 200_000 });
+  assert.equal(r2.outcome, "timeout");
+  assert.equal(r2.reason, "turn");
+  assert.match(s2.lines[0], /reason=turn attempts=1/);
+});
+
+test("K2a: a wake turn that ran between attempts is not read as the retry's turn", async () => {
+  const a = K("rn-wake");
+  let sentCount = 0;
+  const { c, sends } = scripted(a, {
+    onSend: (n, later) => { sentCount = n; if (n === 1) later(10, ENDED); else later(40, COMPACTED); return { ok: true, queued: false }; },
+    // fetch 1 = the gate (idle). After the no-boundary end: running twice (a wake turn), then idle -- the wake's start/end land
+    // right before the idle read, still unconsumed when the retry is sent.
+    fresh: (n, emit) => {
+      if (sentCount === 0 || n === 1) return { status: "idle" };
+      if (n < 4) return { status: "running" };
+      if (n === 4) { emit(STARTED); emit(ENDED); }
+      return { status: "idle" };
+    },
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.attempts, 2);
+  assert.equal(sends.length, 2);
+});
+
+test("K2a C1 late boundary: a /compact steered into a live turn waits for the CLI's own /compact turn (no second send)", async () => {
+  const a = K("rn-late");
+  const { c, sends } = scripted(a, { onSend: (_n, later) => { later(10, ENDED); later(80, COMPACTED); return { ok: true, queued: false }; }, events: STEERED_LOG, opts: { lateBoundaryMs: 1_000 } });
+  const res = await c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.attempts, 1);
+  assert.equal(sends.length, 1);
+});
+
+test("K2a C1 late boundary: none within the window -> re-sent; a park after the steer stops the wait early", async () => {
+  const a = K("rn-late2");
+  const s1 = scripted(a, { onSend: (n, later) => { later(10, n === 1 ? ENDED : COMPACTED); return { ok: true, queued: false }; }, events: STEERED_LOG, opts: { lateBoundaryMs: 60 } });
+  const r1 = await s1.c.run(a, { focus: "x", cap: 200_000 });
+  assert.equal(r1.outcome, "ok");
+  assert.equal(r1.attempts, 2);
+  assert.ok(s1.sends[1].at - s1.sends[0].at >= 60, "the re-send waited for the late window");
+
+  const b = K("rn-late3");
+  const parked = () => [...STEERED_LOG(), ev("turn_done", {}), ev("status", { status: "idle" }), ev("parked", {}), ev("status", { status: "parked" })];
+  const s2 = scripted(b, { onSend: (n, later) => { later(10, n === 1 ? ENDED : COMPACTED); return { ok: true, queued: false }; }, events: parked, opts: { lateBoundaryMs: 5_000 } });
+  const t0 = Date.now();
+  const r2 = await s2.c.run(b, { focus: "x", cap: 200_000 });
+  assert.equal(r2.outcome, "ok");
+  assert.equal(r2.attempts, 2);
+  assert.ok(Date.now() - t0 < 2_000, "parked: no 5s late wait");
+});
+
+test("K2a compactLanding: steered / direct / gone from the runner log", () => {
+  assert.equal(compactLanding(STEERED_LOG()), "steered");
+  assert.equal(compactLanding(DIRECT_LOG()), "direct");
+  assert.equal(compactLanding([ev("status", { status: "idle" }), ev("input", { text: "/compact" }), ev("status", { status: "queued" })]), "direct");
+  assert.equal(compactLanding([...STEERED_LOG(), ev("exit", { code: 0 })]), "gone");
+  assert.equal(compactLanding([]), "direct");
+});
+
+test("K2a: a failed send -> failed reason=send, label written once, no retry", async () => {
+  const a = K("rn-send");
+  const listeners = new Set();
+  let sends = 0;
+  const runner = {
+    subscribeEvents(l) { listeners.add(l); return () => listeners.delete(l); },
+    async updateAgent(_id, { labels }) { a.labels = labels; },
+    async sendAgentPrompt() { sends++; throw new Error("runner down"); },
+    async fetchAgent() { return { agent: a }; },
+  };
+  const lines = [];
+  const res = await createCompactor({ runner, timeoutMs: 100, log: (e) => lines.push(e.text) }).run(a, { focus: "x" });
+  assert.equal(res.outcome, "failed");
+  assert.equal(res.reason, "send");
+  assert.equal(sends, 1);
+  assert.ok(a.labels[COMPACTED_AT_LABEL]);
+  assert.equal(listeners.size, 0, "the event subscription is released");
+  assert.match(lines[0], /reason=send attempts=1 -> falling through to handoff/);
 });
