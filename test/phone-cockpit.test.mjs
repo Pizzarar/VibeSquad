@@ -108,6 +108,19 @@ test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onS
   assert.ok(/state === "none"\) onSpinUp\(r\.pin(?:,\s*[^)]+)?\);\s*openBuddy\(r\.laneId\)/.test(s));
 });
 
+test("idea-838: phone shell has a Storybook entry gated by probeStorybook, opens via openStorybook, Back returns to cockpit", () => {
+  const c = src("PhoneCockpit.tsx");
+  assert.ok(c.includes('import { openStorybook, probeStorybook } from "./StorybookView";'), "imports openStorybook + probeStorybook");
+  assert.ok(c.includes("phone-storybook-btn"), "entry present");
+  assert.match(c, /!probeStorybook\(view\.team\.id\)/, "entry hidden when probe reports no Storybook");
+  assert.match(c, /openStorybook\(view\.team\.id, view\.team\.name\)/, "entry opens the current project's Storybook");
+  // Storybook takeover must precede the phone-shell gate so a phone user actually sees the view (and its ← Back closes it).
+  const app = src("App.tsx");
+  const sbGate = app.indexOf("storybookOpen && deviceRole");
+  const phoneGate = app.indexOf("if (phoneShell)");
+  assert.ok(sbGate > 0 && sbGate < phoneGate, "StorybookHost branch precedes the phone shell, so Back returns to the cockpit");
+});
+
 test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher & corpo settings search", () => {
   const app = src("App.tsx");
   const gate = app.indexOf("if (phoneShell)");

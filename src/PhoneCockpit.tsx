@@ -21,6 +21,7 @@ import {
 } from "./phoneCockpitLogic";
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
+import { openStorybook, probeStorybook } from "./StorybookView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -271,6 +272,19 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
           </div>
+          {view && !probeStorybook(view.team.id) && (
+            <button
+              type="button"
+              className="btn ghost phone-storybook-btn"
+              data-testid="phone-storybook-btn"
+              onClick={() => {
+                setMenu(false);
+                openStorybook(view.team.id, view.team.name);
+              }}
+            >
+              ◉ Storybook
+            </button>
+          )}
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
             <span className="phone-lanes-head">PROVIDER</span>
             <div className="phone-seg-row">
