@@ -313,7 +313,7 @@ func _input(event: InputEvent) -> void:
 	if not enabled or not (event is InputEventKey):
 		return
 	var k := event as InputEventKey
-	if not k.pressed or k.echo:
+	if not k.pressed or k.echo or k.get_modifiers_mask() != 0:
 		return
 	if k.keycode == _hotkey_dock:
 		get_viewport().set_input_as_handled()
