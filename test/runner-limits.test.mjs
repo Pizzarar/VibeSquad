@@ -1,12 +1,12 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
-import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, runAgyUsage } from '../runner/limits.mjs';
+import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, runAgyUsage, runAgyUsageIsolated, makeAgyIsolatedHome } from '../runner/limits.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { Runner } from '../runner/runner.mjs';
 import { until } from './helpers/load-budget.mjs';
@@ -267,4 +267,31 @@ test('usa-45: readLimits survives a bogus numeric sidecar value and never report
   writeFileSync(sc, '[]');
   s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0 + 1000);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(sc, 'utf8'))), ['claude|weekly'], 'array sidecar replaced by an object');
+});
+
+test('idea-701: makeAgyIsolatedHome copies only the sign-in files into a scratch HOME; none when signed out', () => {
+  const real = tmp(); const base = tmp();
+  assert.equal(makeAgyIsolatedHome({ realHome: real, tmpBase: base }), null);
+  const st = path.join(real, '.gemini', 'antigravity-cli');
+  mkdirSync(path.join(st, 'conversations'), { recursive: true });
+  writeFileSync(path.join(st, 'antigravity-oauth-token'), 'tok'); writeFileSync(path.join(st, 'settings.json'), '{}'); writeFileSync(path.join(st, 'jetski_state.pbtxt'), 'live');
+  const iso = makeAgyIsolatedHome({ realHome: real, tmpBase: base });
+  const dst = path.join(iso.home, '.gemini', 'antigravity-cli');
+  assert.equal(readFileSync(path.join(dst, 'antigravity-oauth-token'), 'utf8'), 'tok');
+  assert.equal(existsSync(path.join(dst, 'jetski_state.pbtxt')), false, 'live session state is not shared');
+  assert.equal(iso.env.HOME, iso.home); assert.ok(iso.env.XDG_CONFIG_HOME.startsWith(iso.home));
+  iso.cleanup(); assert.equal(existsSync(iso.home), false);
+});
+
+test('idea-701: runAgyUsageIsolated spawns agy with the scratch HOME, removes it afterwards, and refuses the real agy under a test runner', async () => {
+  const real = tmp(); const base = tmp();
+  const st = path.join(real, '.gemini', 'antigravity-cli'); mkdirSync(st, { recursive: true }); writeFileSync(path.join(st, 'antigravity-oauth-token'), 't');
+  const fake = fakeAgy({ onSpawn: (c) => setImmediate(() => { c.stdout.write(fx('agy-usage.txt')); c.emit('exit', 0); }) });
+  const out = await runAgyUsageIsolated({ spawnImpl: fake.spawnImpl, makeHome: () => makeAgyIsolatedHome({ realHome: real, tmpBase: base }) });
+  assert.match(out, /Weekly Limit/);
+  const env = fake.calls[0].opts.env;
+  assert.notEqual(env.HOME, os.homedir()); assert.ok(env.HOME.startsWith(base));
+  assert.equal(existsSync(env.HOME), false, 'scratch home removed');
+  await assert.rejects(runAgyUsageIsolated(), /refusing to spawn the real agy/);
+  assert.deepEqual(await createAgyUsagePoller({ store: new LimitStore(path.join(tmp(), 'l.jsonl')) })('x'), [], 'default poller swallows the refusal');
 });

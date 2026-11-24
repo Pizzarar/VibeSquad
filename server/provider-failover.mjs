@@ -254,7 +254,18 @@ export function readLiveCapDoc(opts = {}) {
   return { capped: readDiskCaps(opts) };
 }
 
+/** idea-705: a `vs cap set deepseek` key is the same cap as provider `opencode` (every opencode profile is DeepSeek). Read-side only; stored keys stay as written. */
+const CAP_KIN = { opencode: ["opencode", "deepseek"], deepseek: ["deepseek", "opencode"] };
+const capKin = (family) => CAP_KIN[family] ?? [family];
+
 function isFamilyCapped(caps, targetFamily) {
+  if (!caps) return false;
+  const kin = capKin(targetFamily);
+  if (kin.length > 1) return kin.some((f) => isFamilyCappedExact(caps, f));
+  return isFamilyCappedExact(caps, targetFamily);
+}
+
+function isFamilyCappedExact(caps, targetFamily) {
   if (!caps) return false;
   if (Array.isArray(caps)) {
     return caps.some((id) => normalizeProviderFamily(id) === targetFamily);
@@ -372,7 +383,7 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
   // and only when the path env var is set or disk caps are explicitly enabled.
   if (!entry && opts.ignoreDiskCaps !== true) {
     const readDisk = opts.useDiskCaps === true || !!process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
-    if (readDisk && readCappedProviders(opts)[targetFamily]) {
+    if (readDisk && (() => { const c = readCappedProviders(opts); return capKin(targetFamily).some((f) => c[f]); })()) {
       return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100 };
     }
   }

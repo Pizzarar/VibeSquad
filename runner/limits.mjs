@@ -4,7 +4,8 @@
 //    so the runner polls it after turns (see createAgyUsagePoller).
 // Records land in <runner home>/limits.jsonl, append-only, one line each:
 //   { at, provider, window: "5h"|"weekly", usedPct (0-100), resetsAt (ISO), source: "provider"|"estimate", agentId }
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnNoShell, killTree } from './spawn.mjs';
 import { isForbiddenRealHome, underTestRunner } from '../server/test-guard.mjs';
@@ -89,12 +90,12 @@ export class LimitStore {
 
 // Runs `agy -p /usage` and resolves to stdout. Refuses to spawn the real agy under a test runner (no spawnImpl injected).
 // onChild gets the live child so the owner can kill it on shutdown; the timeout kills the whole tree (win32 leaks otherwise).
-export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild } = {}) {
+export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
     if (!spawnImpl && underTestRunner()) return reject(new Error('refusing to spawn the real agy under a test runner'));
     let child;
     try {
-      child = spawnNoShell('agy', ['-p', '/usage'], { env: process.env, ...(spawnImpl ? { resolved: { file: 'agy', args: [] } } : {}) }, spawnImpl);
+      child = spawnNoShell('agy', ['-p', '/usage'], { env, ...(spawnImpl ? { resolved: { file: 'agy', args: [] } } : {}) }, spawnImpl);
     } catch (e) { return reject(e); }
     onChild?.(child);
     let out = '';
@@ -109,15 +110,42 @@ export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild } = {}) {
   });
 }
 
+// idea-701 spike: `agy -p /usage` under its own HOME/XDG dirs starts its own backend (own ports, own ~/.gemini/antigravity-cli state)
+// and leaves live agy sessions alone (verified: live agy pids, listening ports and state-file hashes unchanged), so it needs no
+// "no agy agent mid-turn" guard. Only the sign-in files are copied in (fresh each poll); the scratch home is removed afterwards.
+const AGY_STATE_REL = path.join('.gemini', 'antigravity-cli');
+const AGY_AUTH_FILES = ['antigravity-oauth-token', 'settings.json', 'installation_id'];
+export function makeAgyIsolatedHome({ realHome = os.homedir(), tmpBase = os.tmpdir() } = {}) {
+  const src = path.join(realHome, AGY_STATE_REL);
+  if (!existsSync(path.join(src, AGY_AUTH_FILES[0]))) return null; // not signed in: nothing to poll
+  const home = mkdtempSync(path.join(tmpBase, 'vs-agy-usage-'));
+  const dst = path.join(home, AGY_STATE_REL);
+  mkdirSync(dst, { recursive: true });
+  for (const f of AGY_AUTH_FILES) { try { copyFileSync(path.join(src, f), path.join(dst, f)); } catch { /* optional file */ } }
+  return {
+    home,
+    env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache') },
+    cleanup: () => { try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ } },
+  };
+}
+
+// runAgyUsage in an isolated home. Under a test runner without spawnImpl it refuses BEFORE touching the real home.
+export async function runAgyUsageIsolated({ spawnImpl, makeHome = makeAgyIsolatedHome, ...opts } = {}) {
+  if (!spawnImpl && underTestRunner()) throw new Error('refusing to spawn the real agy under a test runner');
+  const iso = makeHome();
+  if (!iso) throw new Error('agy not signed in: no antigravity-oauth-token to poll with');
+  try { return await runAgyUsage({ ...opts, spawnImpl, env: iso.env }); } finally { iso.cleanup(); }
+}
+
 // Polls at most once per minIntervalMs, one in flight (concurrent calls return []). poll.shutdown() kills an in-flight agy.
-export function createAgyUsagePoller({ store, run = runAgyUsage, minIntervalMs = 5 * 60_000, now = Date.now, canRun = () => true } = {}) {
+export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minIntervalMs = 30 * 60_000, now = Date.now, canRun = () => true } = {}) {
   let busy = false;
   let lastAt = 0;
   let current = null;
   let stopped = false;
   const poll = async function poll(agentId) {
     if (busy || stopped || now() - lastAt < minIntervalMs) return [];
-    // idea-349: a spawned `agy` makes the shared agy backend announce "subagents and background tasks stopped due to server restart"
+    // idea-349 (canRun, off by default since idea-701: the default run is isolated): a spawned `agy` on the shared backend announces "subagents and background tasks stopped due to server restart"
     // to live agy sessions. Skip (without spending the interval) while any agy agent is mid-turn or holding background work.
     try { if (!canRun(agentId)) return []; } catch { return []; }
     busy = true;

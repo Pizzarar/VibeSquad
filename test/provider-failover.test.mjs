@@ -371,3 +371,18 @@ test("11. multi-process race: concurrent server setProviderCapped and vs cap CLI
   }
   assert.equal(existsSync(`${cappedProvidersPath}.lock`), false);
 });
+
+test("idea-705: a deepseek-keyed cap stops provider opencode (and the reverse), in memory and on disk", async () => {
+  const { isProviderOverQuota } = await import("../server/provider-failover.mjs");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  assert.equal(isProviderOverQuota("opencode", [], 90, { cappedProviders: ["deepseek"] }).overQuota, true);
+  assert.equal(isProviderOverQuota("opencode/deepseek-v4-pro", [], 90, { cappedProviders: { deepseek: true } }).overQuota, true);
+  assert.equal(isProviderOverQuota("deepseek", [], 90, { cappedProviders: ["opencode"] }).overQuota, true);
+  assert.equal(isProviderOverQuota("claude", [], 90, { cappedProviders: ["deepseek"] }).overQuota, false);
+  const dir = mkdtempSync(join(tmpdir(), "cap705-"));
+  const path = join(dir, "capped-providers.json");
+  writeFileSync(path, JSON.stringify({ capped: { deepseek: { reason: "Insufficient Balance", updatedAt: new Date().toISOString() } } }));
+  assert.equal(isProviderOverQuota("opencode", [], 90, { useDiskCaps: true, cappedProvidersPath: path }).overQuota, true);
+});
