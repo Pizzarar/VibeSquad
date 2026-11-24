@@ -701,19 +701,26 @@ function applyRolesBody(body: Record<string, unknown>): void {
 }
 
 /** P5d: load the v2 roles + tier ladder (GET /__vibesquad/roles). Failure keeps what we have. */
-export async function fetchRoles(): Promise<ProfilesState> {
+// Concurrent callers (module load + both Settings sections mounting) share one in-flight GET.
+let rolesInflight: Promise<ProfilesState> | null = null;
+export function fetchRoles(): Promise<ProfilesState> {
   if (DEMO) {
     if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2" });
+    return Promise.resolve(state);
+  }
+  rolesInflight ??= (async () => {
+    try {
+      const res = await fetch("/__vibesquad/roles");
+      if (!res.ok) throw new Error(`roles fetch failed (${res.status})`);
+      applyRolesBody(await res.json());
+    } catch (err) {
+      console.warn("fetchRoles failed", err);
+    } finally {
+      rolesInflight = null;
+    }
     return state;
-  }
-  try {
-    const res = await fetch("/__vibesquad/roles");
-    if (!res.ok) throw new Error(`roles fetch failed (${res.status})`);
-    applyRolesBody(await res.json());
-  } catch (err) {
-    console.warn("fetchRoles failed", err);
-  }
-  return state;
+  })();
+  return rolesInflight;
 }
 
 async function putRoles(payload: { roles?: RolesMap; ladder?: Ladder }): Promise<void> {

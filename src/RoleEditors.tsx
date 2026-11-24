@@ -1,8 +1,8 @@
 // P5d (docs/PLAN_PROFILES_ROLE_ONLY.md): Settings role editor (prompt / tools / modes per role) and the tier ladder
 // editor (provider rows x top|mid|cheap). Both write through /__vibesquad/roles (server/roles-api.mjs); the legacy
 // profile editor below them keeps old names working until P5f (read-only once a role is saved).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, RefObject, TextareaHTMLAttributes } from "react";
 import { Field } from "./TeamActions";
 import { EFFORTS, TIERS, fetchRoles, saveLadderRungs, saveRole, useProfiles } from "./profiles";
 import type { Ladder, LadderRung, RoleDef, RoleMode, Tier } from "./profiles";
@@ -48,18 +48,73 @@ function useFocusAfterRender(root: RefObject<HTMLElement | null>) {
   return (...selectors: string[]) => setTarget(selectors);
 }
 
+/**
+ * One-line text field that wraps instead of clipping (UX r3 M-B): a long model ID stays fully readable in a narrow ladder
+ * cell. Newlines are dropped; the height follows the text (or the placeholder when empty) and the cell width.
+ */
+function WrapField({ value, onValue, ...rest }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & { value: string; onValue: (v: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      const shown = el.value;
+      if (!shown && el.placeholder) el.value = el.placeholder; // measure the placeholder too, then restore
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+      el.value = shown;
+    };
+    fit();
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    ro?.observe(el.parentElement ?? el);
+    return () => ro?.disconnect();
+  }, [value, rest.placeholder]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      spellCheck={false}
+      autoCapitalize="off"
+      autoCorrect="off"
+      className="re-wrap"
+      value={value}
+      {...rest}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.preventDefault();
+      }}
+      onChange={(e) => onValue(e.target.value.replace(/[\r\n]+/g, ""))}
+    />
+  );
+}
+
 type RoleDraft = { role: RoleDef; toolsText: string };
 const draftOf = (r: RoleDef): RoleDraft => ({ role: structuredClone(r), toolsText: (r.mcpExtras ?? []).join(", ") });
 const roleNorm = (r: RoleDef) => JSON.stringify({ ...r, mcpExtras: r.mcpExtras?.length ? r.mcpExtras : undefined });
 const draftDirty = (saved: RoleDef | undefined, d: RoleDraft | undefined) =>
   Boolean(saved && d && roleNorm(saved) !== roleNorm({ ...d.role, mcpExtras: splitTools(d.toolsText) }));
 
+/** Unsaved ladder edits: only the {provider, tier} cells the user touched (a refreshed ladder never re-saves the rest). */
+type LadderEdits = Record<string, Partial<Record<Tier, LadderRung>>>;
+
+// Module-level drafts: closing Settings or switching sections keeps unsaved role and ladder edits (a reload drops them).
+const draftStore: { roles: Record<string, RoleDraft>; ladder: LadderEdits } = { roles: {}, ladder: {} };
+type Updater<T> = T | ((prev: T) => T);
+function useStoredDraft<K extends keyof typeof draftStore>(k: K) {
+  const [value, setValue] = useState(draftStore[k]);
+  const set = (next: Updater<(typeof draftStore)[K]>) => {
+    const v = typeof next === "function" ? (next as (prev: (typeof draftStore)[K]) => (typeof draftStore)[K])(draftStore[k]) : next;
+    draftStore[k] = v;
+    setValue(v);
+  };
+  return [value, set] as const;
+}
+
 export function RoleEditorSection() {
   const { roles, rolesSource } = useProfiles();
   const keys = useMemo(() => Object.keys(roles ?? {}), [roles]);
   const [picked, setKey] = useState("");
   // One unsaved draft per role: switching tabs keeps it (dot on the tab); Save or Discard drops it so the saved role shows.
-  const [drafts, setDrafts] = useState<Record<string, RoleDraft>>({});
+  const [drafts, setDrafts] = useStoredDraft("roles");
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const rootRef = useRef<HTMLElement | null>(null);
@@ -84,7 +139,7 @@ export function RoleEditorSection() {
   const tools = splitTools(cur.toolsText);
   const dirty = draftDirty(saved, drafts[key]);
   const put = (next: RoleDraft) => {
-    setDrafts({ ...drafts, [key]: next });
+    setDrafts((all) => ({ ...all, [key]: next }));
     setStatus(null);
   };
   const upd = (patch: Partial<RoleDef>) => put({ ...cur, role: { ...draft, ...patch } });
@@ -126,18 +181,21 @@ export function RoleEditorSection() {
     select(to);
     focusAfter(`#role-tab-${CSS.escape(to)}`);
   };
+  const unsavedNames = keys.filter((k) => draftDirty(roles[k], drafts[k])).map((k) => roles[k].name);
   const addable = KNOWN_PROVIDERS.filter((p) => !draft.providers.includes(p));
   const onDiscard = () => {
-    const { [key]: _drop, ...rest } = drafts;
-    setDrafts(rest);
+    setDrafts((all) => {
+      const { [key]: _drop, ...rest } = all;
+      return rest;
+    });
     setStatus(null);
   };
   const onSave = async () => {
     setBusy(true);
     try {
       const out: RoleDef = { ...draft, modes: Object.fromEntries(draft.providers.map((p) => [p, draft.modes[p] ?? { modeId: "auto" }])) };
-      if (tools.length) out.mcpExtras = tools;
-      else delete out.mcpExtras;
+      // Always sent ([] clears): the server merges a PUT over the stored role, so an omitted field would keep old tools.
+      out.mcpExtras = tools;
       await saveRole(key, out);
       // Drop the draft: the tab now shows the saved (server-normalized) role, so dirty clears and tools text is tidy.
       setDrafts((all) => {
@@ -301,7 +359,11 @@ export function RoleEditorSection() {
               Discard
             </button>
           )}
-          {dirty && <span className="muted small">unsaved changes</span>}
+          {unsavedNames.length > 0 && (
+            <span className="muted small" data-testid="role-unsaved-count">
+              {unsavedNames.length} {unsavedNames.length === 1 ? "role" : "roles"} unsaved: {unsavedNames.join(", ")}
+            </span>
+          )}
           {status && (
             <span className={`small ${status.ok ? "re-ok" : "re-bad"}`} role={status.ok ? "status" : "alert"} data-testid="role-save-status">
               {status.text}
@@ -326,8 +388,8 @@ const sameRung = (a: LadderRung, b: LadderRung) => (a.model ?? "") === (b.model 
 
 export function LadderEditorSection() {
   const { ladder, ladderDefaults, roles } = useProfiles();
-  // null = no unsaved edits: show the saved ladder (so a role save that refreshes `ladder` never wipes edits in progress).
-  const [draft, setDraft] = useState<Ladder | null>(null);
+  // Only touched cells are kept, over the live ladder: a refresh (role save, other tab) never wipes or re-saves the rest.
+  const [edits, setEdits] = useStoredDraft("ladder");
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const rootRef = useRef<HTMLElement | null>(null);
@@ -345,20 +407,21 @@ export function LadderEditorSection() {
       </section>
     );
   }
-  const view = draft ?? ladder;
-  const provs = Object.keys(view);
+  const provs = Object.keys(ladder);
+  const cellOf = (fam: string, tier: Tier): LadderRung => edits[fam]?.[tier] ?? ladder[fam]?.[tier] ?? {};
   const usedBy = (tier: Tier) =>
     Object.values(roles ?? {}).filter((r) => r.tier === tier).map((r) => r.name).join(", ");
   const defOf = (fam: string, tier: Tier) => ladderDefaults?.[fam]?.[tier] ?? {};
   const cellChanged = (fam: string, tier: Tier) =>
-    !sameRung(effectiveRung(view[fam]?.[tier], defOf(fam, tier)), effectiveRung(ladder[fam]?.[tier], defOf(fam, tier)));
-  const dirty = draft !== null && provs.some((fam) => TIERS.some((tier) => cellChanged(fam, tier)));
-  const set = (fam: string, tier: Tier, field: "model" | "effort", value: string) => {
-    const base = draft ?? structuredClone(ladder);
-    const rung = { ...(base[fam]?.[tier] ?? {}), [field]: value };
-    setDraft({ ...base, [fam]: { ...base[fam], [tier]: rung } });
+    edits[fam]?.[tier] !== undefined &&
+    !sameRung(effectiveRung(edits[fam]?.[tier], defOf(fam, tier)), effectiveRung(ladder[fam]?.[tier], defOf(fam, tier)));
+  const dirty = provs.some((fam) => TIERS.some((tier) => cellChanged(fam, tier)));
+  const editCell = (fam: string, tier: Tier, rung: LadderRung) => {
+    setEdits((all) => ({ ...all, [fam]: { ...all[fam], [tier]: rung } }));
     setStatus(null);
   };
+  const set = (fam: string, tier: Tier, field: "model" | "effort", value: string) =>
+    editCell(fam, tier, { ...cellOf(fam, tier), [field]: value });
   const onSave = async () => {
     setBusy(true);
     try {
@@ -367,7 +430,7 @@ export function LadderEditorSection() {
         for (const tier of TIERS) {
           if (!cellChanged(fam, tier)) continue;
           const def = defOf(fam, tier);
-          const eff = effectiveRung(view[fam]?.[tier], def);
+          const eff = effectiveRung(edits[fam]?.[tier], def);
           // Equal to the shipped rung = delete the override ({}); otherwise store only the fields that differ.
           const rung: LadderRung = {};
           if ((eff.model ?? "") !== (def.model ?? "")) rung.model = eff.model;
@@ -376,7 +439,7 @@ export function LadderEditorSection() {
         }
       }
       await saveLadderRungs(patch);
-      setDraft(null);
+      setEdits({});
       setStatus({ ok: true, text: "Ladder saved." });
     } catch (e) {
       setStatus({ ok: false, text: errText(e) });
@@ -385,9 +448,7 @@ export function LadderEditorSection() {
     }
   };
   const resetCell = (fam: string, tier: Tier) => {
-    const base = draft ?? structuredClone(ladder);
-    setDraft({ ...base, [fam]: { ...base[fam], [tier]: { ...defOf(fam, tier) } } });
-    setStatus(null);
+    editCell(fam, tier, { ...defOf(fam, tier) });
     focusAfter(`[data-testid="ladder-model-${fam}-${tier}"]`);
   };
 
@@ -402,7 +463,6 @@ export function LadderEditorSection() {
       <table className="re-table re-ladder" data-testid="ladder-table">
         <thead>
           <tr>
-            <th className="re-ladder-prov">Provider</th>
             {TIERS.map((t) => (
               <th key={t}>
                 <span className="re-tier-pip" data-tier={t}>{t}</span>
@@ -413,52 +473,58 @@ export function LadderEditorSection() {
         </thead>
         <tbody>
           {provs.map((fam) => (
-            <tr key={fam} data-testid={`ladder-row-${fam}`}>
-              <td className="re-ladder-prov"><b>{provLabel(fam)}</b><div className="muted small">{fam}</div></td>
-              {TIERS.map((tier) => {
-                const r = view[fam]?.[tier] ?? {};
-                const def = defOf(fam, tier);
-                const changed = !sameRung(effectiveRung(r, def), def);
-                const effort = r.effort ?? "";
-                const fable = /fable/i.test(r.model ?? "");
-                return (
-                  <td key={tier} className={changed ? "re-changed" : undefined}>
-                    <input
-                      value={r.model ?? ""}
-                      title={r.model || def.model || undefined}
-                      aria-label={`${provLabel(fam)} ${tier} model`}
-                      placeholder={def.model ?? "(provider model)"}
-                      data-testid={`ladder-model-${fam}-${tier}`}
-                      onChange={(e) => set(fam, tier, "model", e.target.value)}
-                    />
-                    <select
-                      className="re-ladder-effort"
-                      value={effort}
-                      aria-label={`${provLabel(fam)} ${tier} effort`}
-                      data-testid={`ladder-effort-${fam}-${tier}`}
-                      onChange={(e) => set(fam, tier, "effort", e.target.value)}
-                    >
-                      <EffortOptions value={effort} blank={def.effort ? `default (${def.effort})` : "role's effort"} />
-                    </select>
-                    {fable && (
-                      <div className="small re-bad" role="alert">Fable is picked per spawn only; it can&apos;t be a ladder rung.</div>
-                    )}
-                    {changed && (
-                      <button
-                        type="button"
-                        className="btn ghost small re-reset"
-                        data-testid={`ladder-reset-${fam}-${tier}`}
-                        aria-label={`Reset ${provLabel(fam)} ${tier} to default (${def.model ?? "provider model"}${def.effort ? `, ${def.effort}` : ""})`}
-                        title={`Default: ${def.model ?? "provider model"}${def.effort ? ` · ${def.effort}` : ""}`}
-                        onClick={() => resetCell(fam, tier)}
+            <Fragment key={fam}>
+              {/* UX r3 M-B: the provider is a full-width row, so the three tier cells share the whole table width and model IDs fit. */}
+              <tr className="re-ladder-provrow">
+                <th colSpan={TIERS.length} scope="colgroup" id={`ladder-prov-${fam}`}>
+                  <b>{provLabel(fam)}</b> <span className="muted small">{fam}</span>
+                </th>
+              </tr>
+              <tr data-testid={`ladder-row-${fam}`}>
+                {TIERS.map((tier) => {
+                  const r = cellOf(fam, tier);
+                  const def = defOf(fam, tier);
+                  const changed = !sameRung(effectiveRung(r, def), def);
+                  const effort = r.effort ?? "";
+                  const fable = /fable/i.test(r.model ?? "");
+                  return (
+                    <td key={tier} className={changed ? "re-changed" : undefined}>
+                      <WrapField
+                        value={r.model ?? ""}
+                        aria-label={`${provLabel(fam)} ${tier} model`}
+                        placeholder={def.model ?? "(provider model)"}
+                        data-testid={`ladder-model-${fam}-${tier}`}
+                        onValue={(v) => set(fam, tier, "model", v)}
+                      />
+                      <select
+                        className="re-ladder-effort"
+                        value={effort}
+                        aria-label={`${provLabel(fam)} ${tier} effort`}
+                        data-testid={`ladder-effort-${fam}-${tier}`}
+                        onChange={(e) => set(fam, tier, "effort", e.target.value)}
                       >
-                        ↺ default
-                      </button>
-                    )}
-                  </td>
-                );
-              })}
-            </tr>
+                        <EffortOptions value={effort} blank={def.effort ? `default (${def.effort})` : "role's effort"} />
+                      </select>
+                      {fable && (
+                        <div className="small re-bad" role="alert">Fable is picked per spawn only; it can&apos;t be a ladder rung.</div>
+                      )}
+                      {changed && (
+                        <button
+                          type="button"
+                          className="btn ghost small re-reset"
+                          data-testid={`ladder-reset-${fam}-${tier}`}
+                          aria-label={`Reset ${provLabel(fam)} ${tier} to default (${def.model ?? "provider model"}${def.effort ? `, ${def.effort}` : ""})`}
+                          title={`Default: ${def.model ?? "provider model"}${def.effort ? ` · ${def.effort}` : ""}`}
+                          onClick={() => resetCell(fam, tier)}
+                        >
+                          ↺ default
+                        </button>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -473,7 +539,7 @@ export function LadderEditorSection() {
             data-testid="discard-ladder-btn"
             disabled={busy}
             onClick={() => {
-              setDraft(null);
+              setEdits({});
               setStatus(null);
             }}
           >

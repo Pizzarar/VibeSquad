@@ -102,11 +102,12 @@ export function saveRoles(patch, profilesPath) {
   for (const [rawKey, raw] of Object.entries(patch)) {
     const key = roleKeyOf(rawKey);
     if (!ROLE_KEY_RE.test(key) || RESERVED_KEYS.has(key)) throw bad(`Role key "${rawKey}" is not allowed (a-z, 0-9 and -)`);
-    validateRole(rawKey, raw, Object.hasOwn(ROLE_TABLE, key) ? ROLE_TABLE[key] : Object.hasOwn(current, key) ? current[key] : null);
+    validateRole(rawKey, raw, Object.hasOwn(current, key) ? current[key] : Object.hasOwn(ROLE_TABLE, key) ? ROLE_TABLE[key] : null);
   }
   if (!existsSync(path)) loadProfiles(path, { autoSeed: true });
   const mig = migrateProfilesFile(path);
   if (!mig.ok) {
+    console.warn(`[vibesquad] profiles.json migration failed: ${mig.error}`);
     throw httpError(500, /invalid JSON|newer than/.test(String(mig.error)) ? `refusing to save: profiles.json ${mig.error}. Fix or restore it first.` : "profiles.json migration failed; see the server log");
   }
   const parsed = readJson(path);
@@ -114,9 +115,12 @@ export function saveRoles(patch, profilesPath) {
   for (const [rawKey, raw] of Object.entries(patch)) {
     const key = roleKeyOf(rawKey);
     if (!ROLE_KEY_RE.test(key) || RESERVED_KEYS.has(key)) throw bad(`Role key "${rawKey}" is not allowed (a-z, 0-9 and -)`);
-    const fallback = Object.hasOwn(ROLE_TABLE, key) ? ROLE_TABLE[key] : Object.hasOwn(next, key) ? next[key] : null;
-    validateRole(rawKey, raw, fallback);
-    const role = normalizeRole(raw, fallback);
+    const stored = Object.hasOwn(next, key) ? next[key] : null;
+    const shipped = Object.hasOwn(ROLE_TABLE, key) ? ROLE_TABLE[key] : null;
+    validateRole(rawKey, raw, stored ?? shipped);
+    // A PUT is a merge over the stored role: omitted fields (prompt, mcpExtras, modes...) keep their stored value, so a
+    // partial API call never wipes a custom prompt. Send mcpExtras: [] / prompt: "" to clear them.
+    const role = normalizeRole(stored ? { ...stored, ...raw } : raw, shipped ?? stored);
     if (!role) throw bad(`Role "${rawKey}" needs a name, a tier and at least one provider`);
     next[key] = role;
   }
@@ -138,10 +142,9 @@ function readLadderForSave(ladderPath) {
   return raw;
 }
 
-/** Merge ladder rungs into stakes-ladder.json. A blank rung deletes that tier override. Returns the effective ladder. */
-export function saveLadder(patch, ladderPath = stakesLadderPath()) {
+/** Validate a ladder patch (400 on any bad field) and return [family, tier, cleanRung] steps. Reads/writes nothing. */
+export function planLadderPatch(patch) {
   if (!isObj(patch) || !Object.keys(patch).length) throw bad("Expected { ladder: { <provider>: { <tier>: {model, effort} } } }");
-  // Validate the whole patch before reading or writing anything.
   const plan = [];
   for (const [prov, rungs] of Object.entries(patch)) {
     const fam = knownFamily(prov);
@@ -156,6 +159,12 @@ export function saveLadder(patch, ladderPath = stakesLadderPath()) {
       plan.push([fam, tier, cleanRung(rung)]);
     }
   }
+  return plan;
+}
+
+/** Merge ladder rungs into stakes-ladder.json. A blank rung deletes that tier override. Returns the effective ladder. */
+export function saveLadder(patch, ladderPath = stakesLadderPath()) {
+  const plan = planLadderPatch(patch);
   const raw = readLadderForSave(ladderPath);
   const hadWrapper = isObj(raw.ladder);
   const src = hadWrapper ? raw.ladder : raw;
@@ -208,6 +217,8 @@ export async function handleRolesApi(req, res, { sendJson, readBody, serverError
       if (!isObj(body) || (!isObj(body.roles) && !isObj(body.ladder))) {
         return sendJson(res, 400, { ok: false, error: "Expected { roles } and/or { ladder }" });
       }
+      // Validate the ladder before writing roles, so a { roles, ladder } PUT with a bad ladder writes nothing.
+      if (isObj(body.ladder)) planLadderPatch(body.ladder);
       if (isObj(body.roles)) await withFileLock(getProfilesPath(profilesPath), () => saveRoles(body.roles, profilesPath));
       if (isObj(body.ladder)) {
         const lp = ladderPath ?? stakesLadderPath();

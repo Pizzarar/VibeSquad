@@ -359,3 +359,41 @@ test("C1: a saved role and ladder change the live spawn config; a v1 home routes
     t.done();
   }
 });
+
+// ---- P5d fix round 3 ----
+
+test("r3: a partial role PUT merges over the stored role (prompt, tools, modes kept); [] and \"\" clear them", () => {
+  const t = setup();
+  try {
+    const role = loadRoles(t.profiles).roles.review;
+    saveRoles({ review: { ...role, prompt: "MY CUSTOM PROMPT", providers: ["claude"], mcpExtras: ["playwright"] } }, t.profiles);
+    saveRoles({ review: { tier: "top" } }, t.profiles);
+    const kept = loadRoles(t.profiles).roles.review;
+    assert.equal(kept.tier, "top");
+    assert.equal(kept.prompt, "MY CUSTOM PROMPT");
+    assert.deepEqual(kept.providers, ["claude"]);
+    assert.deepEqual(kept.mcpExtras, ["playwright"]);
+    saveRoles({ review: { mcpExtras: [], prompt: "" } }, t.profiles);
+    const cleared = loadRoles(t.profiles).roles.review;
+    assert.equal(cleared.prompt, "");
+    assert.equal(cleared.mcpExtras, undefined);
+    assert.equal(cleared.tier, "top");
+  } finally {
+    t.done();
+  }
+});
+
+test("r3: a { roles, ladder } PUT with a bad ladder is a 400 and writes neither file", async () => {
+  const t = setup();
+  try {
+    const before = readFileSync(t.profiles, "utf8");
+    const role = loadRoles(t.profiles).roles.review;
+    const out = await put(t, { roles: { review: { ...role, prompt: "changed" } }, ladder: { claude: { top: { effort: "warp" } } } });
+    assert.equal(out.status, 400);
+    assert.equal(readFileSync(t.profiles, "utf8"), before, "profiles.json untouched");
+    assert.ok(!existsSync(`${t.profiles}.bak-p5`), "no migration ran");
+    assert.ok(!existsSync(t.ladder), "ladder untouched");
+  } finally {
+    t.done();
+  }
+});

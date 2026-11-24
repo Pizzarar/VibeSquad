@@ -822,7 +822,7 @@ export function TeamSettingsModal({
                 />
               </Field>
             </div>
-            <Field label="NOTES (PROJECT-NEUTRAL SYSTEM PROMPT LAYER)">
+            <Field label="NOTES (added to the prompt, shared across projects)">
               <textarea
                 rows={4}
                 value={draftProfile.notes}
