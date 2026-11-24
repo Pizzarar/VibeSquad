@@ -254,9 +254,9 @@ export const FRESH_GRACE_MS = 2 * 60 * 60_000;
 /** Commits of the default branch scanned for a tree match (squash merges). */
 const TREE_SCAN_MAX = 50_000;
 
-const tryGit = (git, args, cwd) => {
+const tryGit = (git, args, cwd, opts) => {
   try {
-    return String(git(args, cwd) ?? "");
+    return String(git(args, cwd, opts) ?? "");
   } catch {
     return null;
   }
@@ -370,11 +370,12 @@ export function worktreeDirt(wtPath, { git = defaultGit } = {}) {
 
 /**
  * The repo's default branch and the refs to test against: origin/HEAD's name when set, else main, else master (or
- * `preferred` alone). `refs` holds the local branch and origin's copy, whichever exist (no fetch: a unit merged upstream but
- * not pulled is still seen through origin/<name>). idea-424: the old sweep tested a hardcoded `master`, which does not exist
+ * `preferred` alone). `refs` holds the local branch and origin's copy, whichever exist (origin is fetched first, throttled), plus the repo's vibesquad.sweepBases. idea-424: the old sweep tested a hardcoded `master`, which does not exist
  * in a main-only repo, so every merge-base call failed and read as unmerged.
  */
-export function detectDefaultBranch(repoRoot, { git = defaultGit, preferred } = {}) {
+export function detectDefaultBranch(repoRoot, { git = defaultGit, preferred, fetch = true, now = Date.now() } = {}) {
+  // idea-795: refresh origin/* first (throttled, failure ignored) so a base merged upstream is not read through a stale ref.
+  if (fetch) refreshOriginRefs(repoRoot, { git, now });
   const has = (ref) => tryGit(git, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoRoot) !== null;
   const names = [];
   if (preferred) names.push(String(preferred));
@@ -386,9 +387,43 @@ export function detectDefaultBranch(repoRoot, { git = defaultGit, preferred } = 
   }
   for (const name of names) {
     const refs = [`refs/heads/${name}`, `refs/remotes/origin/${name}`].filter(has);
-    if (refs.length) return { name, refs };
+    if (refs.length) return { name, refs: [...refs, ...extraBaseRefs(repoRoot, git, refs)] };
   }
   return { name: null, refs: [] };
+}
+
+const FETCH_THROTTLE_MS = 3_600_000;
+const lastFetchAt = new Map(); // repoRoot -> ms of the last attempt (success or not)
+
+/**
+ * `git fetch origin` for the repo, at most once per hour per repo (attempts count, so a dead remote is not retried every
+ * tick). Any failure is swallowed: the sweep then reads the refs it already has, as before. Returns true when it fetched.
+ */
+export function refreshOriginRefs(repoRoot, { git = defaultGit, now = Date.now(), minIntervalMs = FETCH_THROTTLE_MS } = {}) {
+  const key = resolve(repoRoot);
+  const last = lastFetchAt.get(key);
+  if (last !== undefined && now - last < minIntervalMs) return false;
+  lastFetchAt.set(key, now);
+  return tryGit(git, ["fetch", "--quiet", "--no-tags", "origin"], repoRoot, { env: { GIT_TERMINAL_PROMPT: "0" } }) !== null;
+}
+
+/**
+ * Extra merge bases (e.g. an integration branch like efi-showoff) from the repo's own git config, multi-valued key
+ * `vibesquad.sweepBases` (`git config --add vibesquad.sweepBases efi-showoff`). No other per-repo config store exists
+ * (settings.json is global owner display only). Only plain branch names, and only the origin copy (the remote's word,
+ * never a local ref someone can move) are accepted; unknown or malformed names add nothing (fail closed).
+ */
+function extraBaseRefs(repoRoot, git, have) {
+  const out = tryGit(git, ["config", "--get-all", "vibesquad.sweepBases"], repoRoot) ?? "";
+  const refs = [];
+  for (const raw of out.split(/\r?\n/)) {
+    const name = raw.trim().replace(/^origin\//, "");
+    if (!name || !/^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(name) || name.includes("..")) continue;
+    const ref = `refs/remotes/origin/${name}`;
+    if (have.includes(ref) || refs.includes(ref)) continue;
+    if (tryGit(git, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoRoot) !== null) refs.push(ref);
+  }
+  return refs;
 }
 
 /**
