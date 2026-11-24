@@ -371,7 +371,8 @@
       "production": null,
       "data": {
         "starter_display_name": "Cot",
-        "tiers": 1
+        "tiers": 1,
+        "max_level": 20
       }
     },
     {
@@ -387,7 +388,8 @@
       "production": null,
       "data": {
         "starter_display_name": null,
-        "tiers": 0
+        "tiers": 0,
+        "max_level": null
       }
     },
     {
