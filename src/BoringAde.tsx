@@ -208,8 +208,9 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   const pinMembers = (p: Pin | null | undefined): Member[] =>
     p ? view?.lanes?.find((l) => l.lane.id === p.lane.id)?.members ?? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : [];
   const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now);
-  const zoneRow = (label: string, z: typeof zones.overlord) => ({
+  const zoneRow = (label: string, short: string, z: typeof zones.overlord) => ({
     label,
+    short,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
     err: memberErr(z.member),
@@ -225,10 +226,11 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   }
   const core = {
     deskWorkers,
-    overlord: zoneRow("Lead · Overlord", zones.overlord),
-    riffbot: zoneRow("Brainstorm · RiffBot", zones.riffbot),
+    overlord: zoneRow("Lead · Overlord", "★ Overlord", zones.overlord),
+    riffbot: zoneRow("Brainstorm · RiffBot", "RiffBot", zones.riffbot),
     bugs: {
       label: "Bugs",
+      short: "Bugs",
       pin: bugs.pin,
       err: pinErr(bugs.pin),
       agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
@@ -793,13 +795,13 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     );
   };
   /** B13c: one Desk mascot tile (bust + label + state caption); state rings come from CSS classes, never opacity. */
-  const deskTile = (v: TeamView, testid: string, key: string, role: BustRole, label: string, status: string, needsYou: number, err: boolean, age: string, onClick: () => void, extraOn = false) => {
+  const deskTile = (v: TeamView, testid: string, key: string, role: BustRole, label: string, short: string, status: string, needsYou: number, err: boolean, age: string, onClick: () => void, extraOn = false) => {
     const state = err ? "err" : needsYou > 0 ? "attn" : status === "running" ? "run" : "idle";
     const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working · ${age}` : status === "none" ? "no agent" : `idle${age ? ` · ${age}` : ""}`;
     return (
-      <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick}>
+      <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} aria-label={label}>
         <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>
-        <span className="boring-row-label boring-mate-name" title={label}>{label}</span>
+        <span className="boring-row-label boring-mate-name" title={label}>{short}</span>
         <span className="boring-mate-cap">{caption}</span>
         {badge(needsYou, err)}
       </button>
@@ -825,10 +827,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
         <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Desk</span>{badge(m.deskWorkersNeedsYou, m.deskWorkersErr)}</div>
         <div className="boring-desk-grid">
-          {deskTile(v, "boring-core-overlord", "desk:lead", "overlord", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.err, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
-          {deskTile(v, "boring-core-riffbot", "desk:brainstorm", "riffbot", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.err, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id))}
+          {deskTile(v, "boring-core-overlord", "desk:lead", "overlord", m.core.overlord.label, m.core.overlord.short, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.err, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
+          {deskTile(v, "boring-core-riffbot", "desk:brainstorm", "riffbot", m.core.riffbot.label, m.core.riffbot.short, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.err, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id))}
           <div className="boring-desk-cell" data-testid="boring-conv-_bugs" onContextMenu={bugsMenu ? (e) => openContextMenu(e, bugsMenu()) : undefined}>
-            {deskTile(v, "boring-core-bugs", "lane:_bugs", "bugs", b.label, bugsStatus, b.needsYou, b.err, b.age, openBugs, !bugsOpen && bugsSel && sel.rowKey !== null)}
+            {deskTile(v, "boring-core-bugs", "lane:_bugs", "bugs", b.label, b.short, bugsStatus, b.needsYou, b.err, b.age, openBugs, !bugsOpen && bugsSel && sel.rowKey !== null)}
             {bugsMenu && <button type="button" className="boring-row-menu-btn boring-desk-menu" data-testid="boring-lane-menu-_bugs" aria-haspopup="menu" aria-label={`${b.label} lane actions`} title="Lane actions" onClick={(e) => openContextMenu(e, bugsMenu())}>⋯</button>}
           </div>
         </div>
