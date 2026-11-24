@@ -11,6 +11,7 @@ const Export := preload("res://addons/vs_playtest/export_plugin.gd")
 const Transport := preload("res://addons/vs_playtest/transport.gd")
 const LogCapture := preload("res://addons/vs_playtest/log_capture.gd")
 const Dock := preload("res://addons/vs_playtest/dock.gd")
+const Settings := preload("res://addons/vs_playtest/settings.gd")
 
 ## B2b fixtures: never real tokens.
 const DEV_TOKEN := "Tk3n_B2b-test0123456789abcdefGHIJKLmnopqrstu"
@@ -93,6 +94,7 @@ func _initialize() -> void:
 	_test_private_write_failures()
 	_test_pinned_state_single_read()
 	await _test_role_warning()
+	await _test_hotkeys()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -1228,3 +1230,66 @@ func _test_role_warning() -> void:
 		for f in DirAccess.get_files_at(d):
 			DirAccess.remove_absolute(d.path_join(f))
 		DirAccess.remove_absolute(d)
+
+
+func _key_event(code: Key, mods: Dictionary = {}) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.pressed = true
+	e.shift_pressed = mods.get("shift", false)
+	e.ctrl_pressed = mods.get("ctrl", false)
+	e.alt_pressed = mods.get("alt", false)
+	return e
+
+
+func _test_hotkeys() -> void:
+	var saved_dock: Variant = ProjectSettings.get_setting("vs_playtest/hotkey_dock") if ProjectSettings.has_setting("vs_playtest/hotkey_dock") else null
+	var saved_bug: Variant = ProjectSettings.get_setting("vs_playtest/hotkey_bug") if ProjectSettings.has_setting("vs_playtest/hotkey_bug") else null
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", null)
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", null)
+	# (1) defaults
+	check(Settings.get_str(Settings.HOTKEY_DOCK) == "F4" and Settings.get_str(Settings.HOTKEY_BUG) == "F3", "hotkeys: unset settings resolve to F4/F3")
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	check(on._hotkey_dock == KEY_F4 and on._hotkey_bug == KEY_F3, "hotkeys: unset settings -> KEY_F4/KEY_F3")
+	# (3) behaviour with the defaults
+	on.grab_fn = func() -> Image: return null
+	on.register_adapter(FullAdapter.new())
+	on._input(_key_event(KEY_F4))
+	check(on._dock.visible, "hotkeys: F4 opens the dock")
+	on._input(_key_event(KEY_F4))
+	check(not on._dock.visible, "hotkeys: F4 again closes the dock")
+	on._input(_key_event(KEY_F8))
+	on._input(_key_event(KEY_F9))
+	check(not on._dock.visible and not on._capturing, "hotkeys: F8/F9 are ignored by default")
+	# L1: modifiers are not swallowed
+	for m in [{"shift": true}, {"ctrl": true}, {"alt": true}]:
+		on._input(_key_event(KEY_F4, m))
+		on._input(_key_event(KEY_F3, m))
+	check(not on._dock.visible and not on._capturing, "hotkeys: Shift/Ctrl/Alt+F3/F4 are ignored")
+	on._input(_key_event(KEY_F3))
+	await process_frame
+	check(on._capturing, "hotkeys: F3 starts a capture")
+	on._overlay.pick_done.emit(false, Vector2.ZERO)
+	await process_frame
+	check(not on._capturing, "hotkeys: capture cancelled")
+	on.queue_free()
+	# (2) a saved override survives register_all() and is picked up by _ready()
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", "F6")
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", "F7")
+	Settings.register_all()
+	check(Settings.get_str(Settings.HOTKEY_DOCK) == "F6" and Settings.get_str(Settings.HOTKEY_BUG) == "F7", "hotkeys: saved override survives register_all()")
+	var ov: Node = AutoloadScript.new()
+	ov.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(ov)
+	await process_frame
+	check(ov._hotkey_dock == KEY_F6 and ov._hotkey_bug == KEY_F7, "hotkeys: _ready() uses the saved override")
+	ov._input(_key_event(KEY_F6))
+	check(ov._dock.visible, "hotkeys: overridden dock key works")
+	ov._input(_key_event(KEY_F4))
+	check(ov._dock.visible, "hotkeys: default key no longer toggles after override")
+	ov.queue_free()
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", saved_dock)
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", saved_bug)

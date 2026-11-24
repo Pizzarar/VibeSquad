@@ -129,3 +129,8 @@ The `get_scene_tree` and `set_node_properties` tools edit `.tscn` files on disk.
 - If `godot` on this PC is a `.cmd` shim, `GODOT_PATH` must point at the real `.exe`, or the server fails with ENOENT.
 - Leftovers after detach, by design: `.mcp/.gdignore`, screenshots under `.mcp/godot-runtime/`, and a `.mcp/` line in `.gitignore`.
 - Addon install and API: `godot/addons/vs_playtest/README.md`.
+
+## Playtest addon hotkey defaults
+- Dock `F4`, bug capture `F3` (project settings `vs_playtest/hotkey_dock`, `vs_playtest/hotkey_bug`).
+- Reason: the old defaults `F8` and `F9` are Godot 4.7 editor shortcuts (Stop running project, Suspend/Resume embedded game). Plain `F4` is unbound in the editor and `F3` is only "find next" in the script editor.
+- Existing projects keep their saved setting. Only the default changed.
