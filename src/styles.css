@@ -6369,7 +6369,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   font-weight: 600;
 }
 .phone-seg-btn.on { border-color: var(--violet); background: var(--violet-dim); font-weight: 700; }
-.phone-settings-btn, .phone-restart .btn, .phone-pair-slot .btn { min-height: 44px; width: 100%; }
+.phone-settings-btn, .phone-restart .btn, .phone-pair-slot .btn, .phone-storybook-btn { min-height: 44px; width: 100%; }
 .phone-pair-slot:empty { display: none; }
 .phone-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .phone-buddy-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
