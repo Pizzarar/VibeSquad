@@ -62,6 +62,7 @@ import { recordServerStart } from "./sync-runtime.mjs";
 import { runBriefOrphanSweep } from "./brief-orphan-sweep.mjs";
 import { refreshStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
+import { handleStorybookRoute } from "./storybook/api.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const distDir = join(rootDir, "dist");
@@ -337,6 +338,7 @@ const api = createVibesquadMiddleware(rootDir);
 function handle(req, res) {
   // Return the promise so guardHandler sees async rejections and answers 500.
   return api(req, res, () => {
+    if (handleStorybookRoute(req, res, { rootDir })) return; // /api/storybook/*: only reached through `api` above, i.e. behind its auth guard
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.statusCode = 405;
       res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
