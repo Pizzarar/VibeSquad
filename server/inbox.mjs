@@ -11,6 +11,7 @@ import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { thenMaybe, updateJsonFile, updateJsonFileSync } from "./file-lock.mjs";
+import { appendTesterThreadLine, isTesterCard } from "./tester-thread.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -870,6 +871,10 @@ function buildDeliveryText(card, { toOverlord }) {
     `Scope: ${card.scope || "other"}${merged ? ` · merged from ${merged}` : ""}`,
     "",
     defangPromptFences(String(card.text || "").trim()),
+    // PTO v1.2 T: a tester never sees this chat; it reads only its own lines plus replies addressed to its card.
+    ...(!toOverlord && isTesterCard(card)
+      ? ["", `Alpha tester card: the tester cannot see your chat output. Answer them only with \`vs inbox reply ${card.id} "<text>"\` (what they will read; no host paths, owner or lane details).`]
+      : []),
   ].join("\n");
 }
 
@@ -931,6 +936,12 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
       updated = t;
       return current;
     });
+    // PTO v1.2 T: a delivered tester card is that tester's own line in its reply thread (keyed by device id, server-side).
+    if (isTesterCard(updated) && updated.teamId) {
+      await appendTesterThreadLine(updated.testerDeviceId, { role: "user", kind: "report", teamId: updated.teamId, cardId: updated.id, text: String(updated.text ?? "") }, baseHome).catch((e) =>
+        console.warn(`[vibesquad] tester thread: could not record delivered card ${updated.id}: ${e?.code || "error"}`),
+      );
+    }
     return { ok: true, already: false, card: updated, cards: written, agentId: target.id, lane: targetLane };
   } finally {
     delivering.delete(cardId);
