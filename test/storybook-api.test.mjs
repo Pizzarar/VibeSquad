@@ -162,6 +162,18 @@ test("HTTP POST refresh -> snapshot + {fetched,nextFetchAt}; wrong method 405", 
   assert.equal((await call("POST", "/api/storybook/efi", localTokenHeaders())).status, 405);
 });
 
+test("HEAD probe: 200 for a real project, 404 unknown/adapter-less, no snapshot built, no host path", async () => {
+  clearStorybookCache();
+  const ok = await call("HEAD", "/api/storybook/efi");
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body, "");
+  assert.equal((await call("HEAD", "/api/storybook/nope")).status, 404);
+  assert.equal((await call("HEAD", "/api/storybook/other")).status, 404);
+  const g = await call("GET", "/api/storybook/efi"); // probe built nothing: the first GET still builds (checks run once)
+  assert.equal(g.status, 200);
+  assert.equal((await call("HEAD", "/api/storybook/efi/refresh", localTokenHeaders())).status, 405);
+});
+
 test("auth: refresh (a write) needs the owner; a trusted non-owner gets the read-only refusal", async () => {
   const r = await call("POST", "/api/storybook/efi/refresh");
   assert.equal(r.status, 403);

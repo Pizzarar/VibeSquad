@@ -1387,7 +1387,7 @@ function openTopNeedsYou() {
   // Row 0 of the SAME list that renders boring-needs-you-count (R6-2), in Normal and in the Psycho sidebar spine; empty = no-op.
   const id = topNeedsYouId(filterAwakeViews(derived().views, getFolders()), nowTickValue()); // R11-1: asleep projects are not in the visible Needs-you list
   if (!id) return;
-  closeStorybook(); // a Storybook takeover must not swallow the jump
+  closeStorybook("replace"); // a Storybook takeover must not swallow the jump
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
   const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
   if (!handled) openAgent(id);
@@ -1675,7 +1675,7 @@ export function App() {
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
   // Switching teams never touches open tabs.
   const onTeam = useCallback((id: string) => {
-    closeStorybook(); // a palette/sidebar pick must leave a Storybook takeover (no-op otherwise)
+    closeStorybook("replace"); // a palette/sidebar pick must leave a Storybook takeover (no-op otherwise)
     setFullView(false);
     setFocus(false);
     exitSquadsHome();
@@ -1747,7 +1747,7 @@ export function App() {
   );
 
   const onAgent = useCallback((tid: string, aid: string) => {
-    closeStorybook();
+    closeStorybook("replace");
     setTeamId(tid);
     selectAgent(aid);
     setScreen("teams");
@@ -1849,11 +1849,11 @@ export function App() {
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
-  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.length]); // menu hides "Open Storybook" correctly on first open (R19 m6)
+  useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   const sbNav = useRef(`${activeTeamId}|${urlAgentId}`);
   useEffect(() => {
     const k = `${activeTeamId}|${urlAgentId}`;
-    if (sbNav.current !== k) { sbNav.current = k; closeStorybook(); }
+    if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
   }, [activeTeamId, urlAgentId]);
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {

@@ -33,14 +33,19 @@ export function openStorybook(projectId: string, name?: string): void {
   pushed = true;
   emit();
 }
-export function closeStorybook(): void {
+/**
+ * mode "back" (user Back/Esc): undo our own pushed entry with history.back() while it is still the current entry.
+ * mode "replace" (forward navigation: palette/sidebar/Ctrl+J, which push their own entry next): strip ?sb= and our entry state
+ * in place, synchronously, never history.back() (it is async and would land after, and undo, the navigation).
+ * Re-entry safe: target/pushed are cleared before anything async, so a second call (double Esc / double click) is a no-op.
+ */
+export function closeStorybook(mode: "back" | "replace" = "back"): void {
   if (!target) return;
-  // Undo our own push only while it is still the current entry; if anything else pushed since (R19 M3), back() would land on
-  // Storybook's own entry and the popstate handler would keep it open, so strip ?sb= in place instead.
-  if (pushed && urlProject() && history.state?.sb === target.projectId) { history.back(); return; } // popstate handler closes the store
+  const mine = pushed && Boolean(urlProject()) && history.state?.sb === target.projectId;
   target = null;
   pushed = false;
-  if (urlProject()) history.replaceState(history.state, "", withSb(null));
+  if (mine && mode === "back") history.back(); // popstate finds no ?sb= and target already null: nothing more to do
+  else if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
   emit();
 }
 if (typeof window !== "undefined") {
@@ -61,7 +66,8 @@ const missing = new Map<string, boolean>();
 export function probeStorybook(projectId: string): boolean {
   if (!missing.has(projectId)) {
     missing.set(projectId, false);
-    void fetch(api(projectId)).then((r) => { if (r.status === 404) missing.set(projectId, true); }).catch(() => {});
+    // Only a definite 404 means "no Storybook"; network errors / 5xx are forgotten so the next menu build retries.
+    void fetch(api(projectId), { method: "HEAD" }).then((r) => { if (r.status === 404) missing.set(projectId, true); else if (!r.ok) missing.delete(projectId); }).catch(() => { missing.delete(projectId); });
   }
   return missing.get(projectId) === true;
 }
@@ -84,8 +90,16 @@ function useCard(idx: EntityIndex) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clear = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   const hide = useCallback(() => { clear(); setCard(null); }, []);
+  // After a programmatic jump the pointer may sit over whatever lands beneath it: drop any armed hover timer and ignore hover until
+  // the pointer really moves (synthetic post-scroll mouse events carry no movement), with a 3s safety release.
   const quietUntil = useRef(0);
-  const quiet = useCallback((ms: number) => { quietUntil.current = Date.now() + ms; }, []);
+  const quiet = useCallback(() => {
+    clear();
+    quietUntil.current = Date.now() + 3000;
+    const release = (e: PointerEvent) => { if (e.movementX || e.movementY) { quietUntil.current = 0; window.removeEventListener("pointermove", release); } };
+    window.addEventListener("pointermove", release);
+    setTimeout(() => window.removeEventListener("pointermove", release), 3100);
+  }, []);
   const show = useCallback((entity: SbEntity, el: Element, delay = 0) => {
     clear();
     if (delay && Date.now() < quietUntil.current) return; // hover left under the pointer after a jump must not open a wrong card
@@ -374,7 +388,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const pick = (t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s }));
   // Finding → its entity: open the view that shows it; kinds with no dedicated view get the card.
   const goTo = (e: SbEntity) => {
-    card.quiet(900);
+    card.quiet();
     if (e.kind === "location") { pick("locations")(e.id); setTab("locations"); }
     else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); setJump(`${e.kind}\u0000${e.id}`); }
     else if (e.kind === "line" || e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
