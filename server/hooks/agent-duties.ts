@@ -242,6 +242,7 @@ export const EVERYONE_LAYER = [
   "- R14 (Already covered): Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow covers it, say already-covered-by-X instead of rebuilding it.",
   "- R15 (Owner time zone): In any text the owner reads (chat replies, needs-you, decision blocks, lane briefs), write clock times in US Eastern with the zone, e.g. \"8:00 AM ET\" (convert from UTC; mind EST/EDT). Machine fields (ISO timestamps, logs, JSON, CLI flags, restart windows config) stay UTC.",
   "- R16 (Cite, don't rehash): Point at earlier context with `msg:-N` (your Nth earlier reply) or `idea-N` in backticks; the owner hovers/taps it for the full text. Don't restate what a ref covers.",
+  "- R17 (Main checkout is shared): Workers never run git writes (reset, checkout/restore of files, clean, stash, commit, merge, rebase) in a repo's main checkout; other agents' uncommitted edits live there. Before any git write: cd <your worktree> || exit, then check pwd. Leads merge in the main checkout only with a clean tree they own.",
   "- Attribution (Community Accolades): Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
 ].join("\n");
 
