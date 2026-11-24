@@ -31,9 +31,10 @@ export const vsScriptLogs = (cwd: string, name: string) => call<{ text: string }
 export const vsScriptLogsUrl = (cwd: string, name: string) => `${S}/logs?stream=1&cwd=${encodeURIComponent(cwd)}&name=${encodeURIComponent(name)}`;
 
 /** Reads a server-sent-event stream (output arrives as `{d}`, an `exit` event ends it). Returns a function that stops it. */
-export function vsStream(url: string, onData: (d: string) => void, onExit?: (code: number | null) => void): () => void {
+export function vsStream(url: string, onData: (d: string) => void, onExit?: (code: number | null, reason?: string) => void, onLost?: () => void): () => void {
   const ctl = new AbortController();
   void (async () => {
+    let sawExit = false;
     try {
       const res = await fetch(url, { signal: ctl.signal });
       if (!res.ok || !res.body) return;
@@ -50,14 +51,16 @@ export function vsStream(url: string, onData: (d: string) => void, onExit?: (cod
           const event = /^event: (.*)$/m.exec(block)?.[1];
           const data = /^data: (.*)$/m.exec(block)?.[1];
           if (!data) continue;
-          const parsed = JSON.parse(data) as { d?: string; code?: number | null };
-          if (event === "exit") onExit?.(parsed.code ?? null);
+          const parsed = JSON.parse(data) as { d?: string; code?: number | null; reason?: string };
+          if (event === "exit") { sawExit = true; onExit?.(parsed.code ?? null, parsed.reason); }
           else if (typeof parsed.d === "string") onData(parsed.d);
         }
       }
     } catch {
       /* aborted or the server went away */
     }
+    // The stream ended with no exit event and we didn't close it: the server went away (a restart kills its terminals).
+    if (!sawExit && !ctl.signal.aborted) onLost?.();
   })();
   return () => ctl.abort();
 }
