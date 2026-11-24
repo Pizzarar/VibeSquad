@@ -5,6 +5,7 @@
 // Contract (SB2's checks/index.mjs collects these): `checks = [{id, title, run(ctx) -> Finding[]}]`,
 // ctx = { snapshot, registry (makeRegistry), adapter, hooks }. Findings follow schema.mjs (never changed here).
 //
+// Severity note: #11 is lexical only, so every #11 finding is info (low confidence); it never warns.
 // Ownership notes (so two checks never report the same hit):
 //  - Global tone bans (paranormal / magic / meme / "adventurer" / fourth wall) are enforced by #10 over ALL player-facing text.
 //    #4 enforces only what is speaker-specific: the card's "Never says" terms and the player word.
@@ -387,7 +388,7 @@ export function runTone(ctx) {
 // #11 title <-> task coherence
 // ---------------------------------------------------------------------------------------------------------------------
 function targetWords(reg, task) {
-  const names = (kind, id) => { const e = id ? reg.get(kind, id) : null; return e ? contentWords(`${e.display} ${e.id.replace(/_/g, " ")}`) : contentWords(String(id ?? "").replace(/_/g, " ")); };
+  const names = (kind, id) => { const e = id ? reg.get(kind, id) : null; return e ? contentWords(`${e.display} ${e.id.replace(/_/g, " ")} ${(e.aliases ?? []).join(" ")} ${kind === "item" ? String(e.data?.category ?? "").replace(/_/g, " ") : ""}`) : contentWords(String(id ?? "").replace(/_/g, " ")); };
   const w = [];
   if (task.item_id) w.push(...names("item", task.item_id));
   if (task.enemy_id) w.push(...names("enemy", task.enemy_id));
@@ -414,11 +415,11 @@ export function runTitleTask(ctx) {
     const tRow = csvById.get(`${s.id}.title`);
     const sRow = csvById.get(`${s.id}.story`);
     const rewrite = clean(tRow?.data.owner_rewrite);
-    if (!rewrite) { out.push(finding("#11", "warn", s, `${desc}; no OWNER-OK/DRAFT rewrite exists`)); continue; }
+    if (!rewrite) { out.push(finding("#11", "info", s, `${desc}; no OWNER-OK/DRAFT rewrite exists (lexical check only, low confidence)`)); continue; }
     const status = String(tRow.data.status ?? "").trim() || "unset";
     const story2 = clean(sRow?.data.owner_rewrite) || story;
     if (coherent(rewrite, story2, tw)) out.push(finding("#11", "info", s, `${desc}; fixed by the ${status} rewrite "${rewrite}" (csv row ${tRow.data.csv_line ? `line ${tRow.data.csv_line}` : tRow.id}), not yet applied to data when status is not OWNER-OK`));
-    else out.push(finding("#11", "warn", s, `${desc}; the ${status} rewrite "${rewrite}" does not fix it either`));
+    else out.push(finding("#11", "info", s, `${desc}; the ${status} rewrite "${rewrite}" does not fix it either (lexical check only, low confidence)`));
   }
   return out;
 }
@@ -519,6 +520,9 @@ function citeDrift(reg, doc, idx) {
       for (const frag of q[1].split(/…|\.\.\./).map((s) => norm(s).replace(/[.,;:!?]+$/, "").trim()).filter((s) => s.split(" ").length >= 3)) {
         const fr = dehyphen(frag);
         if (corpus.includes(fr)) continue;
+        // significant-word containment: a quote of a line that dropped a modifier ("gun bench" vs "the bench") is not drift
+        const fw = contentWords(fr);
+        if (fw.length && fw.every((w) => contentWords(corpus).some((c) => sameStem(w, c)))) continue;
         const elsewhere = idx.all.find((r) => r.text.includes(fr));
         out.push(finding("#3", "warn", null, `${doc.display.replace(" (doc)", "")} quotes "${clip(frag, 60)}" at ${citeLabel}, ${elsewhere ? `but it is now at ${elsewhere.path}:${elsewhere.line}` : "which no longer contains it (not found anywhere in the data)"}`, src));
       }
@@ -535,7 +539,9 @@ function citeDrift(reg, doc, idx) {
     for (const label of missing) {
       const near = (idx.get(file) ?? []).find((r) => Math.abs(r.line - a) <= 3 && !cited.includes(r) && names.find((n) => n.label === label).re.test(r.text));
       names.find((n) => n.label === label).re.lastIndex = 0;
-      out.push(finding("#3", "warn", null, `${doc.display.replace(" (doc)", "")} says "${label}" at ${citeLabel}, but the cited data no longer mentions it${near ? ` (it is at ${file}:${near.line}, the cite looks stale)` : ""}: "${clip(clause.trim(), 100)}"`, src));
+      const head = label.split(" ").slice(-1)[0];
+      const partial = label.includes(" ") && new RegExp(`\\b${esc(head)}`, "i").test(dehyphen(corpus)); // "gun bench" vs "the bench": head noun survives -> info
+      out.push(finding("#3", partial ? "info" : "warn", null, `${doc.display.replace(" (doc)", "")} says "${label}" at ${citeLabel}, but the cited data no longer mentions it${near ? ` (it is at ${file}:${near.line}, the cite looks stale)` : ""}: "${clip(clause.trim(), 100)}"`, src));
     }
   }
   return out;
