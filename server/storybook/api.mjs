@@ -21,7 +21,7 @@ export class StorybookError extends Error {
 const CACHE_PER_PROJECT = 4;
 const cache = new Map();    // `${project}\0${sha}` -> snapshot
 const order = new Map();    // project -> [sha...] oldest first
-const inflight = new Map(); // project -> Promise<{snapshot, fetch}>
+const inflight = new Map(); // project -> {promise: Promise<{snapshot, fetch}>, refresh}
 
 export function clearStorybookCache() { cache.clear(); order.clear(); inflight.clear(); }
 
@@ -91,7 +91,8 @@ async function buildOnce(project, { refresh, deps }) {
     ref = `origin/${await defaultBranch(repoPath)}`;
     sha = await resolveRef(repoPath, ref);
   } catch (e) {
-    throw new StorybookError(404, `storybook: cannot read ${project} repo at origin default branch (${String(e.message).slice(0, 160)})`);
+    console.warn(`[storybook] ${project}: cannot resolve origin default branch: ${String(e?.message ?? e).slice(0, 300)}`); // detail stays server-side (host path hygiene)
+    throw new StorybookError(404, `storybook unavailable for ${project}: ref not resolvable`);
   }
   const hit = cache.get(`${project}\0${sha}`);
   if (hit) return { snapshot: hit, fetch };
@@ -102,7 +103,7 @@ async function buildOnce(project, { refresh, deps }) {
   if (warning) snap.warnings.push(warning);
   if (runChecks) {
     try {
-      const res = await runChecks(snap, { adapter, reader });
+      const res = await runChecks(snap, adapter, { reader });
       const findings = Array.isArray(res) ? res : res?.findings;
       snap.findings = Array.isArray(findings) ? findings : [];
     } catch (e) {
@@ -117,16 +118,17 @@ async function buildOnce(project, { refresh, deps }) {
 /** Like buildSnapshot but also returns the fetch outcome: {snapshot, fetch:{fetched,nextFetchAt,skipped}|null}. */
 export async function buildSnapshotDetailed(projectKey, { refresh = false, ...deps } = {}) {
   const project = String(projectKey ?? "").trim().toLowerCase();
-  const running = inflight.get(project);
-  if (running && !refresh) return running; // coalesced: one build per project at a time
-  if (running) {
-    await running.catch(() => {}); // a refresh waits for the running build, then runs its own (fetch is rate-limited)
-    const again = inflight.get(project);
-    if (again) return again; // another caller already started the follow-up build
+  for (;;) {
+    const running = inflight.get(project);
+    if (!running) break;
+    // A plain read joins any running build. A refresh joins only another refresh (its fetch already ran); otherwise it waits
+    // for the plain build to settle and re-checks, so it always ends up running (or joining) a fetchRepo.
+    if (!refresh || running.refresh) return running.promise;
+    await running.promise.catch(() => {});
   }
-  const p = buildOnce(project, { refresh, deps }).finally(() => { if (inflight.get(project) === p) inflight.delete(project); });
-  inflight.set(project, p);
-  return p;
+  const promise = buildOnce(project, { refresh, deps }).finally(() => { if (inflight.get(project)?.promise === promise) inflight.delete(project); });
+  inflight.set(project, { promise, refresh });
+  return promise;
 }
 
 /** The SB1 snapshot at origin/<default> with findings filled. refresh=true runs the rate-limited fetch first. */

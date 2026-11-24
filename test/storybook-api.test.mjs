@@ -14,7 +14,7 @@ delete process.env.VIBESQUAD_TEAMS_FILE;
 const fake = makeFakeRepo();
 after(() => { fake.cleanup(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const { buildSnapshot, buildSnapshotDetailed, clearStorybookCache, handleStorybookRoute, resolveProject, summaryLine } = await import("../server/storybook/api.mjs");
+const { buildSnapshot, buildSnapshotDetailed, clearStorybookCache, resolveProject, summaryLine } = await import("../server/storybook/api.mjs");
 const { validateSnapshot } = await import("../server/storybook/schema.mjs");
 const { commandStorybook } = await import("../cli/vs.mjs");
 const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
@@ -129,8 +129,8 @@ test("summaryLine + CLI: line format, --json shape, usage exit 2, report-only ex
 const ROOT = path.join(tmp, "root");
 fs.mkdirSync(ROOT);
 fs.writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Sq", paths: [], lanes: [] }] }));
-const mw = createVibesquadMiddleware(ROOT);
-const srv = http.createServer((req, res) => mw(req, res, () => { if (!handleStorybookRoute(req, res, deps({ fetchOpts: { home: path.join(tmp, "http-home") } }))) { res.statusCode = 404; res.end("no"); } }));
+const mw = createVibesquadMiddleware(ROOT, { storybook: deps({ fetchOpts: { home: path.join(tmp, "http-home") } }) }); // L3: routes live inside the middleware
+const srv = http.createServer((req, res) => mw(req, res, () => { res.statusCode = 404; res.end("no"); }));
 const port = await new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
 after(() => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }));
 const call = (method, url, headers = {}) => new Promise((resolve, reject) => {
@@ -175,4 +175,46 @@ test("auth: an untrusted (non-loopback Host) caller is refused on both routes, n
     assert.ok([401, 403].includes(r.status), `${m} ${u} -> ${r.status}`);
     assert.doesNotMatch(r.body, /entities/);
   }
+});
+
+test("REAL checks/index.mjs runs against the fake repo (findings non-empty, signature runChecks(snap, adapter, {reader}))", async () => {
+  clearStorybookCache();
+  const snap = await buildSnapshot("efi", { teams, resolvePath });
+  assert.ok(snap.findings.length > 0, "real runChecks produced findings");
+  assert.ok(!snap.warnings.some((w) => /checks (failed|module)/.test(w)), snap.warnings.join("|"));
+  assert.ok(snap.findings.some((f) => f.check === "#8"), `check ids: ${[...new Set(snap.findings.map((f) => f.check))]}`);
+});
+
+test("M1: a 404 for an unresolvable ref carries no host path", async () => {
+  clearStorybookCache();
+  const bare = fs.mkdtempSync(path.join(tmp, "bare-"));
+  git(bare, "init", "-q");
+  const warns = []; const w = console.warn; console.warn = (m) => warns.push(String(m));
+  try {
+    await assert.rejects(buildSnapshot("efi", { teams, resolvePath: () => bare, runChecks: mkChecks([]) }), (e) => {
+      assert.equal(e.status, 404);
+      assert.doesNotMatch(e.message, /\//);
+      assert.match(e.message, /ref not resolvable/);
+      return true;
+    });
+  } finally { console.warn = w; }
+  assert.ok(warns.some((m) => m.includes(bare) || /cannot resolve/.test(m)), "detail logged server-side");
+});
+
+test("M2: a refresh never skips fetchRepo by joining a plain build that a third caller restarted", async () => {
+  clearStorybookCache();
+  let release; const gate = new Promise((r) => { release = r; });
+  let fetches = 0;
+  const fetchRepo = async () => { fetches++; return { fetched: true, nextAllowedAt: Date.now() + 3600e3 }; };
+  const slow = async () => { await gate; return []; };
+  const d = { teams, resolvePath, runChecks: slow, fetchRepo };
+  const p1 = buildSnapshotDetailed("efi", d); // plain, in flight
+  let p3;
+  p1.then(() => { p3 = buildSnapshotDetailed("efi", { ...d, runChecks: async () => [] }); }); // registered before the refresh waiter: starts a new plain build the instant p1 settles
+  const r = buildSnapshotDetailed("efi", { ...d, refresh: true });
+  release();
+  const [, rr] = await Promise.all([p1, r]);
+  await p3;
+  assert.equal(fetches, 1, "refresh ran fetchRepo exactly once");
+  assert.equal(rr.fetch?.fetched, true);
 });
