@@ -113,6 +113,8 @@ export type RunnerStreamEvent =
   | { kind: "remove"; agentId: string }
   | { kind: "status"; agentId: string; from: string; to: string }
   | { kind: "timeline"; agentId: string; seq: number; type: string }
+  /** L1: bug-tester streams only: a line landed in THIS device's own thread (no agentId/type/text). Refetch mounted timelines. */
+  | { kind: "tester-thread"; seq?: number }
   | { kind: "connected" | "disconnected" | "hb" };
 
 const RECONNECT_MIN_MS = 1000;
@@ -294,6 +296,7 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         }
         if (ev.kind === "hb") return;
         if (ev.kind === "timeline") return notifyTimeline(ev.agentId);
+        if (ev.kind === "tester-thread") return notifyTimeline();
         // Runner unreachable: the server says "disconnected" instead of an (empty) roster, so keep every agent we have.
         if (ev.kind === "disconnected") return onConnection?.(false);
         if (ev.kind === "connected") {
