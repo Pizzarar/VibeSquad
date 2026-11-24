@@ -294,3 +294,96 @@ describe("V1 MermaidView — component & Timeline / BriefEditor wiring", () => {
     assert.match(be, /<MarkdownRenderer\b/);
   });
 });
+
+// Edge-label halo rects (the `<rect>` inside each `<g class="mermaid-edge-label">`).
+function edgeLabelRects(svg) {
+  const out = [];
+  const re = /<g class="mermaid-edge-label">\s*<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"/g;
+  let m;
+  while ((m = re.exec(svg))) out.push({ x: +m[1], y: +m[2], w: +m[3], h: +m[4] });
+  return out;
+}
+
+function anyRectOverlap(rects) {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i];
+      const b = rects[j];
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+      const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      if (ox > 0 && oy > 0) return true;
+    }
+  }
+  return false;
+}
+
+describe("V1 MermaidView — theme palette", () => {
+  test("light theme renders a light canvas, light node fill and ink text; dark is preserved by default", () => {
+    const code = "flowchart TD\n  A[Start] -->|yes| B[End]\n  B --> C{C}";
+    const light = renderMermaidSvg(code, "light");
+    assert.equal(light.ok, true);
+    assert.match(light.svg, /fill="#f6f4f1"/); // light canvas
+    assert.match(light.svg, /fill="#ffffff"/); // light node fill
+    assert.match(light.svg, /fill="#2b1840"/); // light text
+    assert.doesNotMatch(light.svg, /fill="#0c0d1b"/); // no dark canvas
+    assert.doesNotMatch(light.svg, /fill="#181b34"/); // no dark node fill
+    assert.doesNotMatch(light.svg, /fill="#f1f5ff"/); // no dark node text
+
+    const dark = renderMermaidSvg(code);
+    assert.match(dark.svg, /fill="#0c0d1b"/);
+    assert.match(dark.svg, /fill="#181b34"/);
+  });
+
+  test("sequence diagram light theme is light too", () => {
+    const code = "sequenceDiagram\n  A->>B: Ping";
+    const light = renderMermaidSvg(code, "light");
+    assert.equal(light.ok, true);
+    assert.match(light.svg, /fill="#f6f4f1"/);
+    assert.doesNotMatch(light.svg, /fill="#0c0d1b"/);
+  });
+});
+
+describe("V1 MermaidView — edge labels never overlap (idea-843)", () => {
+  test("TD fan-out: one source, three labeled targets", () => {
+    const code = [
+      "flowchart TD",
+      '  A["Quest step"]',
+      "  A -->|involves location| L1([The Old Mines])",
+      "  A -->|involves character| C1((Foreman))",
+      "  A -->|requires item| I1(Key)",
+    ].join("\n");
+    const res = renderMermaidSvg(code);
+    assert.equal(res.ok, true);
+    const rects = edgeLabelRects(res.svg);
+    assert.equal(rects.length, 3);
+    assert.equal(anyRectOverlap(rects), false);
+  });
+
+  test("TD fan-in: three sources, one shared target", () => {
+    const code = [
+      "flowchart TD",
+      '  S1["Source one"] -->|provides item| T[Target]',
+      '  S2["Source two"] -->|provides gold| T',
+      '  S3["Source three"] -->|provides key| T',
+    ].join("\n");
+    const res = renderMermaidSvg(code);
+    assert.equal(res.ok, true);
+    const rects = edgeLabelRects(res.svg);
+    assert.equal(rects.length, 3);
+    assert.equal(anyRectOverlap(rects), false);
+  });
+
+  test("parallel edges between the same two nodes stack cleanly", () => {
+    const code = [
+      "flowchart TD",
+      "  A[Start] -->|first path| B[End]",
+      "  A -->|second path| B",
+      "  A -->|third path| B",
+    ].join("\n");
+    const res = renderMermaidSvg(code);
+    assert.equal(res.ok, true);
+    const rects = edgeLabelRects(res.svg);
+    assert.equal(rects.length, 3);
+    assert.equal(anyRectOverlap(rects), false);
+  });
+});

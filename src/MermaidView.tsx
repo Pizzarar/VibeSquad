@@ -918,6 +918,101 @@ function assignLayers(nodes: MermaidNode[], edges: MermaidEdge[]): Map<string, n
   return layer;
 }
 
+// ── Edge-label geometry & collision resolution (idea-843) ─────────────────────
+
+interface EdgeGeom {
+  e: MermaidEdge;
+  selfLoop: boolean;
+  src: PositionedNode;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  cx1: number;
+  cy1: number;
+  cx2: number;
+  cy2: number;
+}
+
+/** Point on the cubic Bézier the edge `<path>` actually draws (label sits on the curve, not the chord). */
+function bezierPoint(
+  x1: number,
+  y1: number,
+  cx1: number,
+  cy1: number,
+  cx2: number,
+  cy2: number,
+  x2: number,
+  y2: number,
+  t: number,
+): { x: number; y: number } {
+  const mt = 1 - t;
+  const a = mt * mt * mt;
+  const b = 3 * mt * mt * t;
+  const c = 3 * mt * t * t;
+  const d = t * t * t;
+  return { x: a * x1 + b * cx1 + c * cx2 + d * x2, y: a * y1 + b * cy1 + c * cy2 + d * y2 };
+}
+
+interface LabelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function rectsOverlap(a: LabelRect, b: LabelRect, pad: number): boolean {
+  return (
+    a.x - pad < b.x + b.w &&
+    b.x - pad < a.x + a.w &&
+    a.y - pad < b.y + b.h &&
+    b.y - pad < a.y + a.h
+  );
+}
+
+/**
+ * Find a non-colliding centre for one edge label. Baseline is t=0.5 on the
+ * Bézier; when that overlaps an already-placed label, nudge first along the edge
+ * (t) — which separates stacked parallel edges and fan-in/fan-out labels — then
+ * perpendicular to the chord, then combinations. Returns the last-resort baseline
+ * if every candidate collides (the diagram is pathological; still no throw).
+ */
+function resolveLabelAnchor(
+  g: EdgeGeom,
+  lw: number,
+  lh: number,
+  placed: LabelRect[],
+): { x: number; y: number } {
+  const dx = g.x2 - g.x1;
+  const dy = g.y2 - g.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = -dy / len;
+  const py = dx / len;
+
+  const dt = 0.08;
+  const perpStep = 16;
+  const tSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5];
+  const pSteps = [1, -1, 2, -2, 3, -3];
+
+  const candidates: Array<{ t: number; perp: number }> = [{ t: 0.5, perp: 0 }];
+  for (const ts of tSteps) candidates.push({ t: 0.5 + ts * dt, perp: 0 });
+  for (const ps of pSteps) candidates.push({ t: 0.5, perp: ps * perpStep });
+  for (const ts of [1, -1, 2, -2, 3, -3]) {
+    for (const ps of pSteps) candidates.push({ t: 0.5 + ts * dt, perp: ps * perpStep });
+  }
+
+  const base = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, 0.5);
+  for (const cand of candidates) {
+    const tt = Math.min(0.9, Math.max(0.1, cand.t));
+    const pt = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, tt);
+    const x = pt.x + px * cand.perp;
+    const y = pt.y + py * cand.perp;
+    const rect: LabelRect = { x: x - lw / 2, y: y - lh / 2, w: lw, h: lh };
+    if (!placed.some((r) => rectsOverlap(r, rect, 2))) return { x, y };
+  }
+  return base;
+}
+
 function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>, theme: MermaidTheme): string {
   const { nodes, edges, subgraphs, direction } = parsed;
   const p = PALETTES[theme];
@@ -992,61 +1087,24 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     primaryCursor += pSize + layerGap;
   }
 
-  const svgWidth = Math.ceil((isHorizontal ? totalPrimarySpan : maxSecondarySpan) + padX * 2);
-  const svgHeight = Math.ceil((isHorizontal ? maxSecondarySpan : totalPrimarySpan) + padY * 2);
-
-  const parts: string[] = [];
-
-  // Render subgraphs
-  for (const sg of subgraphs) {
-    const members = sg.nodeIds
-      .map((id) => positioned.get(id))
-      .filter((n): n is PositionedNode => Boolean(n));
-    if (members.length === 0) continue;
-    const minX = Math.min(...members.map((m) => m.x - m.w / 2)) - 18;
-    const maxX = Math.max(...members.map((m) => m.x + m.w / 2)) + 18;
-    const minY = Math.min(...members.map((m) => m.y - m.h / 2)) - 28;
-    const maxY = Math.max(...members.map((m) => m.y + m.h / 2)) + 16;
-    parts.push(
-      `<g class="mermaid-subgraph" data-subgraph-id="${escapeXml(sg.id)}">` +
-        `<rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6" ry="6" fill="${p.subgraphFill}" stroke="${p.subgraphStroke}" stroke-opacity="0.45" stroke-dasharray="5,4" stroke-width="1.2" />` +
-        `<text x="${minX + 10}" y="${minY + 16}" fill="${p.subgraphText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(sg.label)}</text>` +
-      `</g>`,
-    );
-  }
-
-  // Render edges
+  // ── Edge geometry (trimmed endpoints + control points), computed once so the
+  // labels can be collision-resolved before the SVG is sized. ──────────────────
+  const edgeGeoms: EdgeGeom[] = [];
   for (const e of edges) {
     const src = positioned.get(e.from);
     const dst = positioned.get(e.to);
     if (!src || !dst) continue;
-
+    if (src.id === dst.id) {
+      edgeGeoms.push({ e, selfLoop: true, src, x1: 0, y1: 0, x2: 0, y2: 0, cx1: 0, cy1: 0, cx2: 0, cy2: 0 });
+      continue;
+    }
     let x1 = src.x;
     let y1 = src.y;
     let x2 = dst.x;
     let y2 = dst.y;
-
     const dx = x2 - x1;
     const dy = y2 - y1;
     const dist = Math.hypot(dx, dy) || 1;
-
-    if (src.id === dst.id) {
-      // Self-loop
-      const rx = src.x + src.w / 2;
-      const ry = src.y;
-      const pathD = `M ${rx} ${ry - 8} C ${rx + 36} ${ry - 28}, ${rx + 36} ${ry + 28}, ${rx} ${ry + 8}`;
-      parts.push(
-        `<path d="${pathD}" fill="none" stroke="${p.edge}" stroke-width="1.6" ${
-          e.arrow ? 'marker-end="url(#mermaid-arrow)"' : ""
-        } />`,
-      );
-      if (e.label) {
-        parts.push(
-          `<text x="${rx + 40}" y="${ry + 4}" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(e.label)}</text>`,
-        );
-      }
-      continue;
-    }
 
     if (isHorizontal) {
       const signX = dx >= 0 ? 1 : -1;
@@ -1075,31 +1133,107 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     const cx2 = isHorizontal ? (x1 + x2) / 2 : x2;
     const cy2 = isHorizontal ? y2 : (y1 + y2) / 2;
 
-    const strokeDash = e.style === "dotted" ? ' stroke-dasharray="5,4"' : "";
-    const strokeWidth = e.style === "thick" ? "2.6" : "1.6";
-    const strokeColor = e.style === "thick" ? p.edgeStrong : p.edge;
-    const markerAttr = e.arrow ? ' marker-end="url(#mermaid-arrow)"' : "";
+    edgeGeoms.push({ e, selfLoop: false, src, x1, y1, x2, y2, cx1, cy1, cx2, cy2 });
+  }
+
+  // ── Place edge labels with AABB collision resolution (idea-843) ─────────────
+  interface PlacedLabel {
+    g: EdgeGeom;
+    lx: number;
+    ly: number;
+    lw: number;
+    lh: number;
+  }
+  const placedLabels: PlacedLabel[] = [];
+  const placedRects: LabelRect[] = [];
+  for (const g of edgeGeoms) {
+    if (g.selfLoop || !g.e.label) continue;
+    const lw = Math.max(32, g.e.label.length * 7 + 18);
+    const lh = 20;
+    const anchor = resolveLabelAnchor(g, lw, lh, placedRects);
+    placedLabels.push({ g, lx: anchor.x, ly: anchor.y, lw, lh });
+    placedRects.push({ x: anchor.x - lw / 2, y: anchor.y - lh / 2, w: lw, h: lh });
+  }
+  const labelByGeom = new Map<EdgeGeom, PlacedLabel>();
+  for (const pl of placedLabels) labelByGeom.set(pl.g, pl);
+
+  // ── Grow / shift the viewBox so nudged labels are never clipped ─────────────
+  let minLabelX = Infinity;
+  let minLabelY = Infinity;
+  let maxLabelX = -Infinity;
+  let maxLabelY = -Infinity;
+  for (const pl of placedLabels) {
+    minLabelX = Math.min(minLabelX, pl.lx - pl.lw / 2);
+    minLabelY = Math.min(minLabelY, pl.ly - pl.lh / 2);
+    maxLabelX = Math.max(maxLabelX, pl.lx + pl.lw / 2);
+    maxLabelY = Math.max(maxLabelY, pl.ly + pl.lh / 2);
+  }
+  const hasLabels = placedLabels.length > 0;
+  const shiftX = hasLabels ? Math.max(0, Math.ceil(padX - minLabelX)) : 0;
+  const shiftY = hasLabels ? Math.max(0, Math.ceil(padY - minLabelY)) : 0;
+  let contentMaxX = (isHorizontal ? totalPrimarySpan : maxSecondarySpan) + padX * 2;
+  let contentMaxY = (isHorizontal ? maxSecondarySpan : totalPrimarySpan) + padY * 2;
+  if (hasLabels) {
+    contentMaxX = Math.max(contentMaxX, maxLabelX + padX);
+    contentMaxY = Math.max(contentMaxY, maxLabelY + padY);
+  }
+  const svgWidth = Math.ceil(contentMaxX + shiftX);
+  const svgHeight = Math.ceil(contentMaxY + shiftY);
+
+  const parts: string[] = [];
+
+  // Render subgraphs
+  for (const sg of subgraphs) {
+    const members = sg.nodeIds
+      .map((id) => positioned.get(id))
+      .filter((n): n is PositionedNode => Boolean(n));
+    if (members.length === 0) continue;
+    const minX = Math.min(...members.map((m) => m.x - m.w / 2)) - 18;
+    const maxX = Math.max(...members.map((m) => m.x + m.w / 2)) + 18;
+    const minY = Math.min(...members.map((m) => m.y - m.h / 2)) - 28;
+    const maxY = Math.max(...members.map((m) => m.y + m.h / 2)) + 16;
+    parts.push(
+      `<g class="mermaid-subgraph" data-subgraph-id="${escapeXml(sg.id)}">` +
+        `<rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6" ry="6" fill="${p.subgraphFill}" stroke="${p.subgraphStroke}" stroke-opacity="0.45" stroke-dasharray="5,4" stroke-width="1.2" />` +
+        `<text x="${minX + 10}" y="${minY + 16}" fill="${p.subgraphText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(sg.label)}</text>` +
+      `</g>`,
+    );
+  }
+
+  // Render edges
+  for (const g of edgeGeoms) {
+    if (g.selfLoop) {
+      const rx = g.src.x + g.src.w / 2;
+      const ry = g.src.y;
+      const pathD = `M ${rx} ${ry - 8} C ${rx + 36} ${ry - 28}, ${rx + 36} ${ry + 28}, ${rx} ${ry + 8}`;
+      parts.push(
+        `<path d="${pathD}" fill="none" stroke="${p.edge}" stroke-width="1.6" ${
+          g.e.arrow ? 'marker-end="url(#mermaid-arrow)"' : ""
+        } />`,
+      );
+      if (g.e.label) {
+        parts.push(
+          `<text x="${rx + 40}" y="${ry + 4}" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(g.e.label)}</text>`,
+        );
+      }
+      continue;
+    }
+
+    const strokeDash = g.e.style === "dotted" ? ' stroke-dasharray="5,4"' : "";
+    const strokeWidth = g.e.style === "thick" ? "2.6" : "1.6";
+    const strokeColor = g.e.style === "thick" ? p.edgeStrong : p.edge;
+    const markerAttr = g.e.arrow ? ' marker-end="url(#mermaid-arrow)"' : "";
 
     parts.push(
-      `<path class="mermaid-edge" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${cx1.toFixed(1)} ${cy1.toFixed(1)}, ${cx2.toFixed(1)} ${cy2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}"${strokeDash}${markerAttr} />`,
+      `<path class="mermaid-edge" d="M ${g.x1.toFixed(1)} ${g.y1.toFixed(1)} C ${g.cx1.toFixed(1)} ${g.cy1.toFixed(1)}, ${g.cx2.toFixed(1)} ${g.cy2.toFixed(1)}, ${g.x2.toFixed(1)} ${g.y2.toFixed(1)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}"${strokeDash}${markerAttr} />`,
     );
 
-    if (e.label) {
-      // Edge-label padding (rank/node spacing above, plus a wider/taller halo).
-      // Place the label a little past the edge midpoint, toward the target, so
-      // labels on edges that share a source diverge instead of stacking on the
-      // exact midpoint (the "top-down labels overlap" symptom, idea-843). The
-      // opaque halo masks the edge line behind the text, so no extra offset is
-      // needed to clear it.
-      const t = 0.62;
-      const lx = x1 + (x2 - x1) * t;
-      const ly = y1 + (y2 - y1) * t;
-      const lw = Math.max(32, e.label.length * 7 + 18);
-      const lh = 20;
+    const pl = labelByGeom.get(g);
+    if (pl) {
       parts.push(
         `<g class="mermaid-edge-label">` +
-          `<rect x="${(lx - lw / 2).toFixed(1)}" y="${(ly - lh / 2).toFixed(1)}" width="${lw}" height="${lh}" rx="3" ry="3" fill="${p.edgeLabelBg}" stroke="${p.edgeLabelStroke}" stroke-width="1" />` +
-          `<text x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="middle" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(e.label)}</text>` +
+          `<rect x="${(pl.lx - pl.lw / 2).toFixed(1)}" y="${(pl.ly - pl.lh / 2).toFixed(1)}" width="${pl.lw}" height="${pl.lh}" rx="3" ry="3" fill="${p.edgeLabelBg}" stroke="${p.edgeLabelStroke}" stroke-width="1" />` +
+          `<text x="${pl.lx.toFixed(1)}" y="${(pl.ly + 4).toFixed(1)}" text-anchor="middle" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(g.e.label)}</text>` +
         `</g>`,
       );
     }
@@ -1158,7 +1292,11 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     );
   }
 
-  return buildSvgEnvelope(svgWidth, svgHeight, parts.join("\n"), theme);
+  const body =
+    shiftX || shiftY
+      ? `<g transform="translate(${shiftX} ${shiftY})">${parts.join("\n")}</g>`
+      : parts.join("\n");
+  return buildSvgEnvelope(svgWidth, svgHeight, body, theme);
 }
 
 // ─── Sequence Diagram SVG Renderer ────────────────────────────────────────────
