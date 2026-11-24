@@ -355,3 +355,59 @@ describe("delivery text tells the intake agent how to answer a tester", () => {
     assert.ok(op && !op.text.includes("vs inbox reply"), op?.text);
   });
 });
+
+describe("L2: inbox merge never folds a foreign card into a tester card", () => {
+  const park = async (token, text) => (await call({ url: "/__vibesquad/inbox", method: "POST", headers: bearer(token), body: { teamId: "efi", text } })).json().cardId;
+  const triage = (body) => call({ url: "/__vibesquad/inbox/triage", method: "POST", local: true, headers: ownerLocal(), body });
+
+  test("attacker: owner card -> tester A card is refused (route + function); nothing changes", async () => {
+    const a = await park(alice, "A-UNDELIVERED one");
+    const owner = inbox.addInboxCards({ ideas: ["OWNER-MERGE-SECRET"], teamId: "efi", laneId: "efi-bugs", source: "ui" }, ROOT).added[0].id;
+    const before = JSON.stringify(cards());
+    const r = await triage({ action: "merge", targetId: a, sourceIds: [owner] });
+    assert.equal(r.status, 400, r.body);
+    assert.match(r.json().error, /alpha-tester card/);
+    assert.throws(() => inbox.triageInboxCards({ action: "merge", targetId: a, sourceIds: [owner] }, ROOT), /same tester's cards/);
+    assert.equal(JSON.stringify(cards()), before, "inbox untouched");
+    const mine = (await call({ url: "/__vibesquad/inbox", headers: bearer(alice) })).json().cards.find((c) => c.id === a);
+    assert.ok(!mine.text.includes("OWNER-MERGE-SECRET"));
+  });
+
+  test("attacker: tester B card -> tester A card is refused (alone or mixed with A's own card)", async () => {
+    const a = await park(alice, "A-UNDELIVERED two");
+    const a2 = await park(alice, "A-UNDELIVERED three");
+    const b = await park(bob, "B-MERGE-SECRET");
+    const before = JSON.stringify(cards());
+    assert.equal((await triage({ action: "merge", targetId: a, sourceIds: [b] })).status, 400);
+    assert.equal((await triage({ action: "merge", targetId: a, sourceIds: [a2, b] })).status, 400);
+    assert.equal(JSON.stringify(cards()), before, "inbox untouched");
+  });
+
+  test("attacker: the same device's card from another Squad is refused", async () => {
+    const a = await park(alice, "A-UNDELIVERED four");
+    const all = cards();
+    inbox.writeInboxCards([...all, { id: "idea-990101", text: "same device other squad", teamId: "oth", laneId: "oth-bugs", status: "parked", source: "alpha-tester", testerDeviceId: deviceId("Alice"), createdAt: "x" }]);
+    assert.throws(() => inbox.triageInboxCards({ action: "merge", targetId: a, sourceIds: ["idea-990101"] }, ROOT), /same Squad/);
+  });
+
+  test("same tester, same Squad: merge is allowed and stays A's card", async () => {
+    const a = await park(alice, "A-MERGE-OK first");
+    const a2 = await park(alice, "A-MERGE-OK second");
+    const r = await triage({ action: "merge", targetId: a, sourceIds: [a2] });
+    assert.equal(r.status, 200, r.body);
+    const t = cardById(a);
+    assert.equal(t.testerDeviceId, deviceId("Alice"));
+    assert.ok(t.text.includes("A-MERGE-OK second"));
+  });
+
+  test("non-tester target: merge is unchanged (owner card takes a tester card and an owner card)", async () => {
+    const owner = inbox.addInboxCards({ ideas: ["owner target"], teamId: "efi", laneId: "efi-bugs", source: "ui" }, ROOT).added[0].id;
+    const other = inbox.addInboxCards({ ideas: ["owner other"], teamId: "efi", laneId: "efi-bugs", source: "ui" }, ROOT).added[0].id;
+    const b = await park(bob, "B into owner");
+    const r = await triage({ action: "merge", targetId: owner, sourceIds: [other, b] });
+    assert.equal(r.status, 200, r.body);
+    const t = cardById(owner);
+    assert.ok(t.text.includes("owner other") && t.text.includes("B into owner"));
+    assert.equal("testerDeviceId" in t, false);
+  });
+});

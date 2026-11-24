@@ -670,6 +670,14 @@ function triageInboxCardsWith(update, body, rootDir) {
       if (!target) throw new Error(`Target card not found: ${targetId}`);
       const sources = sourceIds.map((id) => cards.find((c) => c.id === id)).filter(Boolean);
       if (!sources.length) throw new Error(`Source card(s) not found: ${sourceIds.join(", ")}`);
+      // PTO v1.2 T (L2): a tester card's text becomes that tester's thread line on delivery and is listed back to it, so
+      // only that same tester's own cards on the same Squad may be folded into it (never an owner or another tester's card).
+      if (isTesterCard(target)) {
+        const foreign = sources.find((s) => !isTesterCard(s) || s.testerDeviceId !== target.testerDeviceId || String(s.teamId ?? "").toLowerCase() !== String(target.teamId ?? "").toLowerCase());
+        if (foreign) {
+          throw new Error(`cannot merge ${foreign.id} into alpha-tester card ${targetId}: a tester card only takes the same tester's cards from the same Squad (merge the tester card into the other card instead)`);
+        }
+      }
 
       const bullets = [...toBulletLines(target.text)];
       const mergedFrom = new Set([...(Array.isArray(target.mergedFromIds) ? target.mergedFromIds : [])]);
