@@ -11,6 +11,7 @@ import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { thenMaybe, updateJsonFile, updateJsonFileSync } from "./file-lock.mjs";
+import { appendTesterThreadLine, isTesterCard } from "./tester-thread.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -669,6 +670,14 @@ function triageInboxCardsWith(update, body, rootDir) {
       if (!target) throw new Error(`Target card not found: ${targetId}`);
       const sources = sourceIds.map((id) => cards.find((c) => c.id === id)).filter(Boolean);
       if (!sources.length) throw new Error(`Source card(s) not found: ${sourceIds.join(", ")}`);
+      // PTO v1.2 T (L2): a tester card's text becomes that tester's thread line on delivery and is listed back to it, so
+      // only that same tester's own cards on the same Squad may be folded into it (never an owner or another tester's card).
+      if (isTesterCard(target)) {
+        const foreign = sources.find((s) => !isTesterCard(s) || s.testerDeviceId !== target.testerDeviceId || String(s.teamId ?? "").toLowerCase() !== String(target.teamId ?? "").toLowerCase());
+        if (foreign) {
+          throw new Error(`cannot merge ${foreign.id} into alpha-tester card ${targetId}: a tester card only takes the same tester's cards from the same Squad (merge the tester card into the other card instead)`);
+        }
+      }
 
       const bullets = [...toBulletLines(target.text)];
       const mergedFrom = new Set([...(Array.isArray(target.mergedFromIds) ? target.mergedFromIds : [])]);
@@ -870,6 +879,10 @@ function buildDeliveryText(card, { toOverlord }) {
     `Scope: ${card.scope || "other"}${merged ? ` · merged from ${merged}` : ""}`,
     "",
     defangPromptFences(String(card.text || "").trim()),
+    // PTO v1.2 T: a tester never sees this chat; it reads only its own lines plus replies addressed to its card.
+    ...(!toOverlord && isTesterCard(card)
+      ? ["", `Alpha tester card: the tester cannot see your chat output. Answer them only with \`vs inbox reply ${card.id} "<text>"\` (what they will read; no host paths, owner or lane details).`]
+      : []),
   ].join("\n");
 }
 
@@ -931,6 +944,12 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
       updated = t;
       return current;
     });
+    // PTO v1.2 T: a delivered tester card is that tester's own line in its reply thread (keyed by device id, server-side).
+    if (isTesterCard(updated) && updated.teamId) {
+      await appendTesterThreadLine(updated.testerDeviceId, { role: "user", kind: "report", teamId: updated.teamId, cardId: updated.id, text: String(updated.text ?? "") }, baseHome).catch((e) =>
+        console.warn(`[vibesquad] tester thread: could not record delivered card ${updated.id}: ${e?.code || "error"}`),
+      );
+    }
     return { ok: true, already: false, card: updated, cards: written, agentId: target.id, lane: targetLane };
   } finally {
     delivering.delete(cardId);

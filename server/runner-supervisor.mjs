@@ -11,6 +11,7 @@ import { readDiscovery } from "./backend/runner-client.mjs";
 import { pidAlive, readLock } from "../runner/lock.mjs";
 import { killTree } from "./proc-tree.mjs";
 import { hashRunnerFiles } from "../runner/server.mjs";
+import { RUNNING, heldListFromHealth } from "./restart-request.mjs";
 
 /** The runtime runner/ dir the live runner was started from (same repo root as this server). */
 export const runtimeRunnerDir = () => path.resolve(import.meta.dirname, "..", "runner");
@@ -73,6 +74,46 @@ export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill 
 }
 
 /**
+ * idea-786: the one busy gate for every runner restart that kills the runner (RR1's hash restart, the owner's "Restart runner").
+ * Busy = an open turn on /health (`running`), an idle agent holding background work (`held`), or a live, unarchived agent whose
+ * listed status is running-ish (restart-request RUNNING: running, initializing, starting, working, queued), so a turn /health
+ * does not count yet still counts. No /health body, or neither /health's count nor the agent list answered, is unknown: busy,
+ * never idle. `ids` names the busy agents (listed running + held) for the log and the owner's UI.
+ */
+export function runnerBusy(health, agents) {
+  const okNum = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  const turns = okNum(health?.running) ? health.running : null;
+  const listed = Array.isArray(agents)
+    ? agents.filter((a) => a && !a.archivedAt && RUNNING.has(String(a.status ?? "").toLowerCase())).map((a) => String(a.id))
+    : null;
+  const heldIds = (heldListFromHealth(health)?.ids ?? []).map(String);
+  const held = Math.max(okNum(health?.held) ? health.held : 0, heldIds.length);
+  const unknown = !health || (turns === null && listed === null);
+  const running = Math.max(turns ?? 0, listed?.length ?? 0);
+  return { busy: unknown || running > 0 || held > 0, unknown, running, held, ids: [...new Set([...(listed ?? []), ...heldIds])] };
+}
+
+/** "runner restart pending: <what>, waiting for them to finish" text for a busy gate. */
+export function busyText(gate) {
+  return [gate.unknown ? "running turns unknown" : gate.running > 0 ? `${gate.running} running turn(s)` : null, gate.held > 0 ? `${gate.held} agent(s) holding background work` : null].filter(Boolean).join(", ");
+}
+
+const idleRestarts = new WeakMap(); // owner -> { at }: an owner "Restart runner" armed while agents were busy (idea-786)
+
+/**
+ * idea-786: the owner's "Restart runner" while the runner is busy. Never cancels or kills: it arms a restart that superviseRunner
+ * fires on its first tick where runnerBusy() is idle (the same gate as RR1's hash restart). Returns false if one was already armed.
+ */
+export function restartWhenIdle(owner, at = Date.now()) {
+  if (idleRestarts.has(owner)) return false;
+  idleRestarts.set(owner, { at });
+  return true;
+}
+
+/** The armed owner restart ({ at }) or null. */
+export const pendingIdleRestart = (owner) => idleRestarts.get(owner) ?? null;
+
+/**
  * `owner`: { startOwned(): Promise<boolean>, rc: { healthy(): Promise<boolean>, home } } (a RunnerBackend).
  * Checks every `checkMs`; when the runner is down it starts it, and after a failed start waits longer (backoff, capped).
  * When it is up it also compares the runner's reported code hash against the runtime runner/ dir and restarts it once the
@@ -80,7 +121,9 @@ export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill 
  * CLI left running, which the kill would cut; idea-88). It restarts at most once per distinct disk hash (no restart loop), and it
  * never treats an unknown running count as zero (it waits, or derives it from the agent list). A runner build without the
  * `held` field predates the count and is gated on running turns alone. While the runner reports an active `vs restart` drain the
- * hash restart is deferred: that restart stops the runner gracefully itself (idea-375).
+ * hash restart is deferred: that restart stops the runner gracefully itself (idea-375). The idle check is runnerBusy() (idea-786:
+ * /health turns + held work + every running-ish agent on the list); an owner restart armed by restartWhenIdle() fires through
+ * the same gate, hash or not.
  */
 export function superviseRunner(owner, {
   checkMs = 5000,
@@ -89,7 +132,8 @@ export function superviseRunner(owner, {
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   healthInfo = (o) => o.rc.request("GET", "/health").then((h) => ({ hash: h.hash, running: h.running, held: h.held, drain: h.drain ?? null })).catch(() => null),
-  runningCount = (o) => o.listAgents().then((agents) => agents.filter((a) => a.status === "running").length).catch(() => null),
+  agentList = (o) => Promise.resolve().then(() => o.listAgents()).then((a) => (Array.isArray(a) ? a : null), () => null),
+  runningCount = (o) => agentList(o).then((agents) => (agents ? agents.filter((a) => a.status === "running").length : null)),
   diskHash = () => hashRunnerFiles(runtimeRunnerDir()),
   restart = (o) => restartRunnerNow(o),
   log = logRunnerMetric,
@@ -107,6 +151,7 @@ export function superviseRunner(owner, {
       if (!(await owner.rc.healthy())) {
         pendingLogged = false;
         const up = await owner.startOwned();
+        if (up) idleRestarts.delete(owner); // a fresh start already loads the runtime code: an armed owner restart is done
         if (up) backoff = minBackoffMs;
         else {
           delay = backoff;
@@ -120,18 +165,19 @@ export function superviseRunner(owner, {
         // A runner whose /health has no hash field (old build) is stale; so is a hash that differs from the runtime files.
         const stale = typeof hash !== "string" || hash !== disk;
         if (!health?.drain || health.drain.kind === "request") drainLogged = false;
-        if (!stale) {
+        const wanted = idleRestarts.get(owner) ?? null; // idea-786: the owner's "Restart runner", armed while busy
+        if (!stale && !wanted) {
           pendingLogged = false;
         } else {
-          // Running turns: prefer /health's count. An old build lacks `running`, so derive it from the agent list;
-          // if that also fails the count is unknown and we treat it as busy (never as zero).
-          let running;
-          if (typeof health?.running === "number" && Number.isFinite(health.running) && health.running >= 0) {
-            running = health.running;
-          } else {
-            running = await runningCount(owner); // number | null
+          // Running turns: /health's count, unioned with every running-ish agent on the list (idea-786). An old build lacks
+          // `running`, so derive it; unknown on both sides is busy (never zero).
+          const agents = await agentList(owner);
+          let h = health;
+          if (health && !(typeof health.running === "number" && Number.isFinite(health.running) && health.running >= 0)) {
+            const derived = await runningCount(owner); // number | null
+            if (typeof derived === "number") h = { ...health, running: derived };
           }
-          const held = typeof health?.held === "number" && Number.isFinite(health.held) && health.held > 0 ? health.held : 0;
+          const gate = runnerBusy(h, agents);
           // idea-375: a `vs restart` drain is active (scripts/restart-runtime.mjs sets it before waiting for idle). That restart
           // owns the stop: it sends the graceful token /shutdown the moment the runner is idle, which saves the fold index. The
           // RR1 hard kill raced it (01:22:33.821Z, 2 ms after the restart saw idle): no graceful stop, no shutdown fold-index
@@ -144,15 +190,21 @@ export function superviseRunner(owner, {
               drainLogged = true;
               log(`runner restart deferred: vs restart drain active (${drain.reason || "no reason"}), it stops the runner gracefully`);
             }
-          } else if (running === null || running > 0 || held > 0) {
+          } else if (gate.busy) {
             if (!pendingLogged) {
               pendingLogged = true;
-              const busy = [running === null ? "running turns unknown" : running > 0 ? `${running} running turn(s)` : null, held > 0 ? `${held} agent(s) holding background work` : null].filter(Boolean).join(", ");
-              log(`runner restart pending: ${busy}, waiting for them to finish`);
+              const who = gate.ids.length ? ` (${gate.ids.slice(0, 8).join(", ")}${gate.ids.length > 8 ? ", ..." : ""})` : "";
+              log(`runner restart pending: ${busyText(gate)}, waiting for them to finish${who}${wanted ? " [owner restart armed]" : ""}`);
             }
           } else {
             pendingLogged = false;
-            if (disk === restartedFor) {
+            if (wanted) {
+              idleRestarts.delete(owner);
+              gaveUpLogged = false;
+              log("runner restart: owner restart armed while busy, runner idle now, restarting");
+              await restart(owner);
+              restartedFor = disk;
+            } else if (disk === restartedFor) {
               if (!gaveUpLogged) {
                 gaveUpLogged = true;
                 log("runner restart: restarted for this code but the runner still reports a different hash; giving up until the runtime changes");

@@ -21,6 +21,7 @@ import {
 } from "./phoneCockpitLogic";
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
+import { openStorybook, probeStorybook } from "./StorybookView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -62,8 +63,8 @@ function RestartHost() {
     setS({ phase: "busy" });
     try {
       const r = await fetch("/__vibesquad/restart-runner", { method: "POST" });
-      const j = (await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as { ok: boolean; error?: string; cancelled?: string[] };
-      setS({ phase: "done", msg: j.ok ? `Runner restarted${j.cancelled?.length ? ` · cancelled ${j.cancelled.length} turn(s)` : ""}` : `Failed: ${j.error ?? "unknown"}` });
+      const j = (await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as { ok: boolean; error?: string; deferred?: boolean; busy?: string[] };
+      setS({ phase: "done", msg: !j.ok ? `Failed: ${j.error ?? "unknown"}` : j.deferred ? `Runner restarts once ${j.busy?.length || "the"} busy agent(s) finish` : "Runner restarted" });
     } catch (e) {
       setS({ phase: "done", msg: `Failed: ${String((e as Error)?.message ?? e)}` });
     }
@@ -72,7 +73,7 @@ function RestartHost() {
     <div className="phone-restart" data-testid="phone-restart">
       {s.phase === "confirm" ? (
         <>
-          <p className="muted small">Running turns are cancelled; agents resume on the next message.</p>
+          <p className="muted small">Nothing is cancelled: restarts now if no agent is busy, else once they finish.</p>
           <button type="button" className="btn small" data-testid="phone-restart-confirm" onClick={() => void run()}>Restart now</button>{" "}
           <button type="button" className="btn ghost small" onClick={() => setS({ phase: "idle" })}>Cancel</button>
         </>
@@ -271,6 +272,19 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
           </div>
+          {view && !probeStorybook(view.team.id) && (
+            <button
+              type="button"
+              className="btn ghost phone-storybook-btn"
+              data-testid="phone-storybook-btn"
+              onClick={() => {
+                setMenu(false);
+                openStorybook(view.team.id, view.team.name);
+              }}
+            >
+              ◉ Storybook
+            </button>
+          )}
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
             <span className="phone-lanes-head">PROVIDER</span>
             <div className="phone-seg-row">
