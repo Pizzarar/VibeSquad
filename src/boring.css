@@ -704,10 +704,10 @@ html[data-vibe="boring"][data-theme="dark"] {
 html[data-vibe="boring"][data-theme="light"] {
   --surface-0: #f7f6f3; --surface-1: #ffffff; --surface-2: #f0eeea; --surface-3: #e6e3dd; --surface-sunken: #ebe8e2;
   --border: #dad6ce; --border-strong: #c2bdb2;
-  --text-1: #1d1a24; --text-2: #4a4558; --text-3: #6a6478;
+  --text-1: #1d1a24; --text-2: #4a4558; --text-3: #5e5868;
   --accent: #6d4bc9; --focus: #6d4bc9; --on-accent: #ffffff;
-  --st-run: #16857f; --st-attn: #a86a00; --st-err: #c22a52; --st-done: #3a64c9; --st-ok: #1f7a4c;
-  --living-warm: #c2570f; --living-coral: #c23a3a; --living-prime: #b85a00; --living-on-prime: #ffffff;
+  --st-run: #147a74; --st-attn: #8a5700; --st-err: #c22a52; --st-done: #3a64c9; --st-ok: #1f7a4c;
+  --living-warm: #bd520c; --living-coral: #c23a3a; --living-prime: #b85a00; --living-on-prime: #ffffff;
   --st-run-bg: #16857f1a; --st-attn-bg: #a86a001a; --st-err-bg: #c22a521a; --st-done-bg: #3a64c91a;
 }
 /* Alias the legacy styles.css tokens that the B5/B6 rules use onto the flat semantic ones. */
