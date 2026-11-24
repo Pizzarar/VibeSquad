@@ -893,9 +893,6 @@ html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted):not(.err) { background: #8a5700; color: #ffffff; }
 
-/* Light permission card: amber, not beige-pink. */
-html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00; }
-
 /* Context meter: neutral until it is genuinely high. */
 html[data-vibe="boring"] .brainstorm-ctx-fill,
 html[data-vibe="boring"] .brainstorm-ctx-fill.tone-amber { background: var(--border-strong); }
@@ -1368,11 +1365,21 @@ html[data-vibe="boring"] .boring-now-chip { display: inline-flex; align-items: c
 html[data-vibe="boring"] .boring-now-chip:hover { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-now-chip img { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 1.5px var(--living-warm); }
 /* m6: centre the Working-now strip + permission card on the timeline column (which sits left of the context panel),
-   not the whole drawer. The messages centre on the timeline, so the strip/card shift left by half the panel width. */
+   not the whole drawer. Constrain their width to the timeline column and centre on it (like the message column);
+   no translateX, so nothing clips at narrow widths (M1). */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) { --ctx-panel-w: 460px; }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-panel-w: 36px; }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel) .boring-now,
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card { transform: translateX(calc(var(--ctx-panel-w) / -2)); }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
+  --timeline-col: min(var(--measure-col), calc(100% - var(--ctx-panel-w, 0px) - 48px));
+  width: var(--timeline-col);
+  margin-left: calc(50% - var(--timeline-col) / 2 - var(--ctx-panel-w, 0px) / 2);
+  margin-right: calc(50% - var(--timeline-col) / 2 + var(--ctx-panel-w, 0px) / 2);
+}
+/* the permission card is prose-measure (narrower than the Working-now card): centre it at its own width */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
+  --timeline-col: min(var(--measure-prose), calc(100% - var(--ctx-panel-w, 0px) - 48px));
+}
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
 
 /* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */

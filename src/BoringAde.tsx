@@ -809,9 +809,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const shortAge = age === "just now" ? "now" : age.replace(/ ago$/, "");
     const caption = err ? "error" : needsYou > 0 ? "needs you" : status === "running" ? `working ${shortAge}` : status === "none" ? "no agent" : `idle${age ? ` ${shortAge}` : ""}`;
     return (
-      <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} aria-label={label}>
+      <button key={testid} type="button" className={`boring-mate ${state}${isOn(v, key) || extraOn ? " on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick} title={label} aria-current={isOn(v, key) || extraOn ? "true" : undefined} aria-label={`${short} ${caption}${needsYou > 0 ? ` (${needsYou})` : ""}`}>
         <span className="boring-mate-av" aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={48} height={48} /></span>
-        <span className="boring-row-label boring-mate-name" title={label}>{short}</span>
+        <span className="boring-row-label boring-mate-name">{short}</span>
         <span className="boring-mate-cap">{caption}</span>
         {badge(needsYou, err)}
       </button>
@@ -849,7 +849,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <div className="boring-bugs-subs">
             <button type="button" className="boring-chevron-btn" data-testid="boring-conv-toggle-_bugs" aria-expanded={bugsOpen} aria-label={bugsOpen ? "Collapse lane" : "Expand lane"} onClick={() => setLaneOpen((o) => ({ ...o, [bugsKey]: !bugsOpen }))}>{bugsOpen ? "▾" : "▸"}</button>
             {bugsOpen && bugsLead && (
-              <button type="button" className={workerRowCls(isOn(v, bugsLeadKey), bugsLead)} data-testid="boring-lead-_bugs" onClick={() => pickRoleIn(v, b.pin!, "_bugs", "lead")}>
+              <button type="button" className={workerRowCls(isOn(v, bugsLeadKey), bugsLead)} data-testid="boring-lead-_bugs" title={bugsLead.agent.title ?? bugsLead.agent.id.slice(0, 8)} aria-current={isOn(v, bugsLeadKey) ? "true" : undefined} aria-label={`Lead · ${bugsLead.agent.status}${bugsLead.attention?.tone ? ` · ${bugsLead.attention.tone}` : ""}`} onClick={() => pickRoleIn(v, b.pin!, "_bugs", "lead")}>
                 <span className={`boring-dot ${bugsLead.agent.status} ${glyphCls(bugsLead.agent.status, bugsLead.attention?.tone)}`} />
                 <span className="boring-row-label">Lead</span>
                 <span className="boring-conv-age">{formatTimestamp(bugsLead.agent.updatedAt, "relative")}</span>

@@ -2218,7 +2218,8 @@ test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky"
 });
 
 test("B13c: boringBusts maps agent labels to the six bust roles and urls", async () => {
-  const code = transformSync("boringBusts.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringBusts.ts"), "utf8"), { lang: "ts" }).code;
+  const code = transformSync("boringBusts.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringBusts.ts"), "utf8"), { lang: "ts" }).code
+    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = () => false; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];');
   const f = join(dir, "boringBustsReal.mjs");
   writeFileSync(f, code);
   const { bustUrl, bustRoleForAgent } = await import(pathToFileURL(f).href);
@@ -2228,7 +2229,11 @@ test("B13c: boringBusts maps agent labels to the six bust roles and urls", async
   const r = (role, lane) => bustRoleForAgent({ labels: { role, lane } });
   assert.equal(r("lead", "hub"), "overlord");
   assert.equal(r("brainstorm", "hub"), "riffbot");
+  assert.equal(r("lead", "riffbot"), "overlord"); // demo-hub-overlord
+  assert.equal(r("lead", "_overlord"), "overlord");
+  assert.equal(r("brainstorm", "_riffbot"), "riffbot");
   assert.equal(r("lead", "bug-chaser"), "bugs");
+  assert.equal(r("worker", "bug-runner"), "bugs"); // BUG_LANE_FALLBACK_IDS includes bug-runner
   assert.equal(r("worker", "_bugs"), "bugs");
   assert.equal(r("brainstorm", "ade"), "buddy");
   assert.equal(r("lead", "ade"), "lead");
@@ -2251,7 +2256,8 @@ test("B13c: Desk is a 3-tile mascot grid and lanes carry mini avatars (source + 
 
 test("B13d: Working-now focal card: busy = first running agent + activity, idle = greyed card with this agent's state", async () => {
   const rdSrc = (n) => readFileSync(resolve(import.meta.dirname, "..", "src", n), "utf8");
-  writeFileSync(join(dir, "b13dBusts.mjs"), transformSync("boringBusts.ts", rdSrc("boringBusts.ts"), { lang: "ts" }).code);
+  writeFileSync(join(dir, "b13dBusts.mjs"), transformSync("boringBusts.ts", rdSrc("boringBusts.ts"), { lang: "ts" }).code
+    .replace(/import \{ BUG_LANE_FALLBACK_IDS, isHubLaneId \} from "\.\/teams";/, 'const isHubLaneId = () => false; const BUG_LANE_FALLBACK_IDS = ["bug-runner", "bug-chaser"];'));
   const code = transformSync("BoringWorkingNow.tsx", rdSrc("BoringWorkingNow.tsx"), { lang: "tsx", jsx: { runtime: "classic" } }).code
     .replace(/import \{ openAgent \} from "\.\/panes";/, "const openAgent = () => {};")
     .replace(/import \{ isHubLaneId \} from "\.\/teams";/, "const isHubLaneId = () => false;")
@@ -2296,6 +2302,17 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
   assert.match(blockedLabel, /data-state="needs-you"/);
   assert.match(blockedLabel, /★ Bor13 needs your OK/);
   assert.doesNotMatch(blockedLabel, /is thinking/);
+  // L5: needsYou also triggers on the raw agent fields (pendingPermissions / attentionReason) with no attention prop,
+  // and the "N sub-agent calls" sub-line is hidden in the needs-you state.
+  const permOnly = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, pendingPermissions: [{}] }, members: [], subs: 2 }));
+  assert.match(permOnly, /data-state="needs-you"/);
+  assert.match(permOnly, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(permOnly, /sub-agent call/);
+  const reasonOnly = renderToStaticMarkup(React.createElement(BoringWorkingNow, { agent: { ...lead, attentionReason: "permission" }, members: [{ agent: w1 }], subs: 1 }));
+  assert.match(reasonOnly, /data-state="needs-you"/);
+  assert.match(reasonOnly, /★ Bor13 needs your OK/);
+  assert.doesNotMatch(reasonOnly, /sub-agent call/);
+  assert.doesNotMatch(reasonOnly, /is running Edit/);
   const v = boringChatVars(lead);
   assert.equal(v["--boring-bust"], 'url("/ui/busts/lead.png")');
   assert.equal(v["--boring-who"], '"★ Bor13"');
