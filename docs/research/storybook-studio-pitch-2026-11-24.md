@@ -89,3 +89,7 @@ We don't build all of these at once:
 
 ## Owner addendum (2026-11-24)
 Track more than dialogue as Storybook input, the same way dialogue is tracked today: quests, character names, locations. Link them all together so content can be checked for staying true to its area, making sense, and being on-theme. (This pulls the Shared Entity Registry + Cohesion signal forward into Storybook v1 rather than after it.)
+
+## Owner scope ruling (2026-11-24)
+- **v1 = everything EFI needs.** Any Storybook/registry feature relevant to EFI's content ships in v1 (EFI is the first real project).
+- **Plan beyond EFI too.** Also list the other trackable things and tools future projects will need (other genres/games), and plan for them now (in the registry schema and as later lanes), even if they're built later.
