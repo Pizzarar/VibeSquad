@@ -6,7 +6,7 @@ Status: **PARKED 2026-11-24** (owner: move runners later, not soon; tracked as i
 ## 1. Inventory
 
 ### 1a. Runners today (all in the `gh-runner` Hyper-V VM on the dev pp)
-Repo-level runners: `gh api repos/IdleMinds-Dev/{Escape-From-Idle,SportsBallBattles,Pillbille,ForgeWirk}/actions/runners` → `total_count 0` each.
+Repo-level runners: `gh api repos/IdleMinds-Dev/{<efi-repo>,SportsBallBattles,Pillbille,ForgeWirk}/actions/runners` → `total_count 0` each.
 Org-level list: `gh api orgs/IdleMinds-Dev/actions/runners` → 403 "must be an org admin" (the VS gh token has `gist, read:org, repo, workflow` only,
 and it should stay that way). The runner identities below come from the job API (`.../runs/<id>/jobs` → `runner_name`, `runner_group_name`, `labels`)
 plus `docker inspect` inside the VM.
