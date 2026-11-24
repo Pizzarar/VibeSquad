@@ -137,13 +137,15 @@ test("non-Claude (agy / opencode) agents: no /compact, old ladder untouched", as
   w.stop();
 });
 
-test("second crossing: no second compaction, the handoff runs", async () => {
+test("second crossing without a drop under the re-arm line: no second compaction, the handoff runs", async () => {
   const { r, restarts, watch } = setup("ok");
   r.agents.set("rn-b", buddy("rn-b"));
   const w = watch();
   r.usage("rn-b", 151_000);
   await tick(250);
   assert.equal(restarts.length, 0);
+  r.usage("rn-b", 140_000); // K2c: above 90% of the cap (135k) -> not re-armed
+  await tick(50);
   r.usage("rn-b", 152_000); // grew back over the cap
   await tick(150);
   assert.equal(compacts(r).length, 1);
@@ -204,18 +206,29 @@ test("lead: compacted under the soft flag -> no nudge, no handoff, same id", asy
   w.stop();
 });
 
-test("lead: still over / timeout -> the unchanged ladder runs (hard cap successor)", async () => {
+test("lead: still over / timeout -> the unchanged ladder runs (soft nudge)", async () => {
   for (const mode of ["over", "timeout"]) {
     const { r, watch } = setup(mode);
     r.agents.set("rn-l", lead("rn-l"));
     const w = watch();
-    r.usage("rn-l", LEAD_HARD_CAP_DEFAULT + 1);
+    r.usage("rn-l", LEAD_FLAG_DEFAULT + 5);
     await tick(500);
-    assert.equal(compacts(r).length, 1, mode);
-    assert.equal(r.created.length, 1, mode);
-    assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
+    assert.deepEqual(r.sent.map((s) => s.text), [`/compact ${LEAD_COMPACT_FOCUS}`, SOFT_FLAG_NUDGE], mode);
+    assert.equal(r.created.length, 0, mode);
     w.stop();
   }
+});
+
+test("lead: past the hard cap -> forced handoff at once, no compaction attempt first (K2c)", async () => {
+  const { r, watch } = setup("ok");
+  r.agents.set("rn-l", lead("rn-l"));
+  const w = watch();
+  r.usage("rn-l", LEAD_HARD_CAP_DEFAULT + 1);
+  await tick(300);
+  assert.equal(compacts(r).length, 0);
+  assert.equal(r.created.length, 1);
+  assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
+  w.stop();
 });
 
 test("lead: running lead past the soft flag defers: no nudge, no stamp, compacted on the idle upsert", async () => {

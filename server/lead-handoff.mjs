@@ -28,6 +28,7 @@ import { listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 import { reownWatchesAsync } from "./watch-sets.mjs";
+import { compactBusy, compactNotAttempted, COMPACTED_AT, createCrossingTracker, lifeCapMetric } from "./compact-crossing.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
@@ -637,6 +638,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
   const autoHandedOff250 = new Set();
   const forced300 = new Set();
   const selfHandedOff = new Set();
+  const compactCrossing = deps.compactCrossing ?? createCrossingTracker(); // K2c: one compaction attempt per stage per crossing
   const pendingTakeover = new Map(); // successorId -> takeover record
   const confirmedTakeovers = new Set();
   const deletedHeartbeats = [];
@@ -1410,7 +1412,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
   async function evaluateLead(lead, options = {}) {
     if (!lead || !lead.id) return { stage: "none", triggered: false };
-    const labels = lead.labels ?? {};
+    let labels = lead.labels ?? {}; // K2c: reassigned after a compaction write, so the stage writes below carry it (labels merge)
     if (isRetiredAgent(lead)) {
       return { stage: "retired", triggered: false };
     }
@@ -1430,15 +1432,36 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const rawUsed = leadUsedTokens(lead, options.usedTokens);
     const { flagTokens, autoHandoffTokens, hardCapTokens } = thresholds;
 
-    // K2: before any stage, a Claude lead at the soft threshold is compacted in place once (idle only, tracked by vs.compacted-at).
-    // Anything but a clean "ok" under the soft threshold falls through to the unchanged ladder below.
-    if (typeof deps.compactStep === "function" && used >= flagTokens && !labels["vs.compacted-at"]) {
-      const res = await deps.compactStep(lead, { focus: LEAD_COMPACT_FOCUS, cap: flagTokens, kind: "lead", teamId, laneId }).catch(() => null);
-      if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
-      // Mid-turn: usage upserts arrive with status=running. Wait for the idle upsert instead of nudging or handing off now (no stamp, no
-      // nudge). The hard cap is the exception: past it a running lead still goes to the forced handoff below.
-      if (res?.outcome === "skipped" && res.reason === "busy" && rawUsed < hardCapTokens) {
-        return { stage: "compact-deferred", triggered: false, usedTokens: used };
+    // K2c: compaction is the default path. Before each soft stage (150k nudge, 250k packet) a Claude lead gets one compaction
+    // attempt per crossing (server/compact-crossing.mjs: re-armed once the meter is back under 90% of the soft threshold, at
+    // most COMPACT_LIFE_CAP per life). Busy = defer to the next idle upsert. Anything else but a clean "ok" under the stage
+    // threshold falls through to the unchanged ladder, and that crossing is not tried again. The hard cap (raw meter) is never
+    // delayed by an attempt, and a handoff already under way is not compacted.
+    const handoffUnderway =
+      selfHandedOff.has(lead.id) || autoHandedOff250.has(lead.id) || forced300.has(lead.id) || writePrompted250.has(lead.id) ||
+      labels["handoff-auto-250"] === "1" || labels["handoff-hard-300"] === "1" || labels["handoff-write-prompted"] === "1";
+    if (typeof deps.compactStep === "function" && rawUsed < hardCapTokens && !handoffUnderway) {
+      const plan = compactCrossing.decide(lead, used, [flagTokens, autoHandoffTokens]);
+      if (plan.action === "rearm") {
+        compactCrossing.rearm(lead.id, plan.count);
+        labels = plan.labels;
+        await setLabels(lead.id, labels).catch((e) => console.warn(`[vibesquad] compact re-arm ${lead.id}: ${e?.message ?? e}`));
+      } else if (plan.action === "life-cap") {
+        compactCrossing.record(lead.id, plan.cap, plan.count);
+        try {
+          appendLog(teamId, { lane: laneId, agent: lead.id, type: "metric", text: lifeCapMetric({ kind: "lead", id: lead.id, count: plan.count, cap: plan.cap, used }) });
+        } catch { /* logging never blocks the ladder */ }
+      } else if (plan.action === "compact") {
+        const res = await deps
+          .compactStep({ ...lead, labels: plan.labels }, { focus: LEAD_COMPACT_FOCUS, cap: plan.cap, kind: "lead", teamId, laneId })
+          .catch(() => null);
+        // Mid-turn or queued (K2a: the runner's status decides): wait for the idle upsert, no stamp, no nudge.
+        if (compactBusy(res)) return { stage: "compact-deferred", triggered: false, usedTokens: used };
+        if (!compactNotAttempted(res)) {
+          compactCrossing.record(lead.id, plan.cap, plan.count);
+          labels = { ...plan.labels, [COMPACTED_AT]: new Date().toISOString() };
+        }
+        if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
       }
     }
 
