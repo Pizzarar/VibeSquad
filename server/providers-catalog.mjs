@@ -1755,6 +1755,7 @@ function readLaneTeams(home) {
 export const PLAN_SCORE_MIN_N = 5;
 const PLAN_SCORE_FRESH_MS = 3 * 86400_000;
 const PLAN_SCORE_STALE_MS = 7 * 86400_000;
+const PLAN_ROWS_MAX = 50;
 const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/i;
 const LEAD_TRANSFER_RE = /^lead\s+(rn-[\w-]+)\s*->\s*(rn-[\w-]+)/;
 const isBuddyHandoff = (e, roleByAgent) => e.role === "brainstorm" || roleByAgent?.get(e.agent) === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
@@ -1785,11 +1786,11 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
     const plan = planOf(e);
     if (!plan) continue;
     const key = `${e.squad ?? ""}\u0000${e.lane}\u0000${plan}`;
-    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null }));
+    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null, buddy: null }));
     if (e.type === "handoff") {
       const tr = LEAD_TRANSFER_RE.exec(e.text ?? "");
       if (tr) g.transfers.push({ ts: e.ts, from: tr[1], to: tr[2] });
-      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) g.startedAt = e.ts;
+      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) { g.startedAt = e.ts; g.buddy = e.agent ?? null; }
     } else if (e.pass === true || /\bPASS\b/.test(e.text ?? "")) {
       g.dones.push({ ts: e.ts, agent: e.agent ?? null });
     }
@@ -1803,6 +1804,7 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
       squad: g.squad, lane: g.lane, plan: g.plan, startedAt: g.startedAt, doneAt: d ? d.ts : null,
       startLead: g.transfers[0]?.from ?? d?.agent ?? null,
       doneLead: d ? (tr?.to ?? d.agent ?? null) : null,
+      buddy: g.buddy, currentLead: tr?.to ?? d?.agent ?? null,
     });
   }
   const group = (keyOf) => { const m = new Map(); for (const p of plans) { const k = keyOf(p); if (k !== null) getOrSet(m, k, () => []).push(p); } return m; };
@@ -1816,7 +1818,13 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
     if (p.doneLead) { const l = lead(p.doneLead); l.done += 1; l.lane = p.lane; }
   }
   const byLead = [...leads.values()].sort((a, b) => b.started - a.started || a.lead.localeCompare(b.lead));
-  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, minN: PLAN_SCORE_MIN_N };
+  // usa-51: per-plan drilldown rows, newest first, capped. currentLead = lead holding the plan (last lead->lead transfer, else the done agent).
+  const rows = [...plans].sort((a, b) => b.startedAt - a.startedAt).slice(0, PLAN_ROWS_MAX).map((p) => ({
+    path: p.plan, team: p.squad, lane: p.lane, buddy: p.buddy, currentLead: p.currentLead, startedAt: p.startedAt, doneAt: p.doneAt,
+    status: p.doneAt !== null ? "done" : now - p.startedAt > PLAN_SCORE_STALE_MS ? "stale" : "open",
+    cycleMs: p.doneAt !== null ? Math.max(0, p.doneAt - p.startedAt) : null,
+  }));
+  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, plans: rows, minN: PLAN_SCORE_MIN_N };
 }
 
 // ---------------------------------------------------------------- Autonomy scorecard (usa-24, idea-161)
@@ -2289,6 +2297,26 @@ function cohortOf(units) {
     avgUnitCycleMs: cycCount ? Math.round(cycSum / cycCount) : null,
     fixAfterMergeRate: round2(fix / n),
   };
+}
+
+/** usa-51: merged units bucketed by dispatchBurstSize (1 solo, 2-3, 4+). A null/invalid burst counts toward `unjoined`.
+ * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5). */
+export function buildBurstCohorts(merged) {
+  const defs = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
+  const groups = defs.map(() => []);
+  let unjoined = 0;
+  for (const u of merged) {
+    const n = u.dispatchBurstSize;
+    if (!Number.isFinite(n) || n < 1) { unjoined += 1; continue; }
+    groups[defs.findIndex((d) => d.test(n))].push(u);
+  }
+  const buckets = defs.map((d, i) => {
+    const us = groups[i];
+    const insufficient = us.length < PLAN_SCORE_MIN_N;
+    const c = cohortOf(us);
+    return { key: d.key, label: d.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
+  });
+  return { buckets, unjoined, minN: PLAN_SCORE_MIN_N };
 }
 
 /** Last ≤10 merged units (recent) vs the preceding ≤10 (prior); delta = recent - prior per metric. */
@@ -3137,6 +3165,7 @@ export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
   buildPlanScores,
+  buildBurstCohorts,
   usageSteps,
 };
 
@@ -3453,6 +3482,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const byWorkflow = buildByWorkflow(merged, agentById);
   const savings = buildSavings(merged, totalsFinal, lanes, agents, rows);
   const cohorts = buildCohorts(merged);
+  const burstCohorts = buildBurstCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
   const compactEvents = readCompactStepEvents(home, { squad, laneTeams });
   yield;
@@ -3512,6 +3542,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byWorkflow,
     savings,
     cohorts,
+    burstCohorts,
     floor,
   };
   if (!squad) maybeScheduleUsageReview(result, home, usageReview ?? {}); // the periodic review always audits the full rollup

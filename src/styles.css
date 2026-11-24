@@ -6139,6 +6139,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-delta-good { color: var(--mint-t); font-weight: 700; }
 .usage-delta-bad { color: var(--pink-t); font-weight: 700; }
 .usage-floor { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-lane-role { display: flex; flex-direction: column; gap: 4px; margin-top: var(--sp-2, 8px); }
 .usage-lead-long-turns { display: flex; flex-direction: column; gap: 2px; margin-top: var(--sp-2, 8px); }
 .usage-floor-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-alt); }
 .usage-floor-seg { height: 100%; min-width: 2px; }
