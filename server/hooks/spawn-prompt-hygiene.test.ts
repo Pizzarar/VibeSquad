@@ -23,6 +23,7 @@ const RULE_MARKERS = [
   "- R8 (Worktrees & Lanes)",
   "- R12 (Owner principles)",
   "- R16 (Cite, don't rehash)",
+  "- R17 (Main checkout is shared)",
   "- Attribution (Community Accolades)",
   "Project rules first:",
   "To find your current lead:",

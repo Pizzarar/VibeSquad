@@ -162,7 +162,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
     }
 
     // Verify all 20 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
-    // The Paseo fixture is a historical snapshot; its team-rule lines (R1..R16) drift as the
+    // The Paseo fixture is a historical snapshot; its team-rule lines (R1..R17) drift as the
     // shared prefix changes, so compare the role-specific notes body only.
     const stripRuleLines = (notes) =>
       String(notes)
@@ -791,6 +791,18 @@ test("R16 cite-don't-rehash rule: same text in the shared prefix of all three so
   for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
     const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
     assert.ok(src.includes(RULE), `${rel}: missing R16`);
+  }
+});
+
+test("R17 shared-main-checkout rule: same text in the shared prefix of all three sources, after R16", () => {
+  const RULE = "- R17 (Main checkout is shared): Workers never run git writes (reset, checkout/restore of files, clean, stash, commit, merge, rebase) in a repo's main checkout; other agents' uncommitted edits live there. Before any git write: cd <your worktree> || exit, then check pwd. Leads merge in the main checkout only with a clean tree they own.";
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R17");
+  assert.ok(SHARED_NOTE_PREFIX.indexOf("R16 (Cite, don't rehash)") < SHARED_NOTE_PREFIX.indexOf(RULE));
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R17`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(RULE), `${rel}: missing R17`);
   }
 });
 
