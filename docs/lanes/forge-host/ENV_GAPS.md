@@ -32,6 +32,7 @@ If `lua54` import fails (Debian lupa may build against a different Lua): `python
 - **Not gaps (stay on dev pp by decision 11-21):** dotnet, JDK/Android SDK, Rust/Tauri, signing, Windows exports, Blender, ComfyUI, RedFrontier `tools/*.ps1` server scripts (run on Windows / over SSH).
 - None of the repos uses git-lfs (no `filter=lfs` in .gitattributes) or ffmpeg/ImageMagick in tools.
 - Squadz: docs only, no tooling.
+- **Blender / ComfyUI (idea-761, 2026-11-24)**: not lost. The dev pp `C:\Dev` moved to `%USERPROFILE%\Documents\Dev` on 11-24; Blender 5.2.3 (`Tools\blender-5.2.3-windows-x64`), ComfyUI and all 3 Godot engines are there. Forge has no NVIDIA GPU, so Blender/ComfyUI art stays on the dev pp (decision 11-21). Still dangling on the dev pp: user env `EFI_GODOT`, `GODOT`, PATH entry `C:\Dev\Tools\bin`, plus 11 EFI files with hard-coded `C:/Dev/...` (9 art pipeline scripts, `tools/run_godot.sh`, `tools/playtest_launch.py`). Fix = owner choice: a `mklink /J C:\Dev` junction to the new folder, or update the 3 env values plus the EFI defaults.
 - **git identity**: DONE 2026-11-23. Global `user.name`/`user.email` set on forge to the same GitHub noreply identity the dev pp uses; drop the per-commit `-c` overrides.
 
 ## Godot user-local install (idea-638, 2026-11-23)
