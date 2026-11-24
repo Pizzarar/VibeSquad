@@ -74,7 +74,7 @@ test("cockpit: three surfaces, no escape hatch, slots and restart wiring", () =>
   assert.match(c, /\{bugSlot\}/);
   assert.match(c, /\{pairSlot\}/);
   assert.match(c, /\/__vibesquad\/restart-runner/);
-  assert.match(c, /TODO\(PLAN_V03_STABILIZE R1\)/);
+  assert.doesNotMatch(c, /TODO\(PLAN_V03_STABILIZE R1\)/, "H2 replaced the runner-only stopgap");
   assert.doesNotMatch(c, /Desktop view|setFullView|MobileBar|SidebarTree/);
   assert.doesNotMatch(c, /BugButton/);
 });
@@ -282,4 +282,20 @@ test("H1: PhoneCockpit fetches host status and renders the host block in the dra
   assert.match(t, /\/api\/auth\/status/);
   assert.match(t, /phone-host-block/);
   assert.match(t, /hostHealthLine\(runnerConn, host\?\.hostLabel, restartState\)/);
+});
+
+test("H2: Restart Host (Server & Runner) — two-step confirm, coordinated route, live status and Abort; Restart Runner kept", () => {
+  const t = src("PhoneCockpit.tsx");
+  assert.match(t, /Restart Runner/);
+  assert.match(t, /\/__vibesquad\/restart-runner/);
+  assert.match(t, /Restart Host \(Server & Runner\)/);
+  assert.match(t, /Drains active leads and restarts both server & runner/);
+  assert.match(t, /HOST_RESTART_URL = "\/__vibesquad\/restart-host"/);
+  for (const id of ["phone-restart-host-btn", "phone-restart-host-warn", "phone-restart-host-confirm", "phone-restart-host-cancel", "phone-restart-host-status", "phone-restart-host-abort"]) assert.ok(t.includes(`data-testid="${id}"`), id);
+  // the button only opens the confirm; only Confirm POSTs, only Abort DELETEs
+  assert.match(t, /data-testid="phone-restart-host-btn"[^>]*onClick=\{\(\) => setH\(\{ phase: "confirm" \}\)\}/);
+  assert.match(t, /data-testid="phone-restart-host-confirm" onClick=\{\(\) => void host\("POST"\)\}/);
+  assert.match(t, /data-testid="phone-restart-host-abort"[^>]*onClick=\{\(\) => void host\("DELETE"\)\}/);
+  assert.match(t, /const ABORTABLE = new Set\(\["queued", "requested", "draining", "ready"\]\)/, "no Abort once firing");
+  assert.match(t, /<RestartHost hostRestart=\{host\?\.restartRequest \?\? null\} \/>/, "seeded from H1's host status");
 });
