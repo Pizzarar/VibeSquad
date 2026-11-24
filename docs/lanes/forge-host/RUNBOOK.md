@@ -112,16 +112,16 @@ a Godot console `.exe` in the remote command before `npx`, and `GODOT_MCP_DISABL
 confirmation never blocks the non-interactive stdio pipe:
 
 ```
-ssh devpc 'set "GODOT_PATH=C:\Dev\Engines\Godot_v4.7.2-stable_win64\Godot_v4.7.2-stable_win64_console.exe" && set "GODOT_MCP_DISABLE_ELICITATION=true" && npx -y godot-mcp-runtime@4.0.1'
+ssh devpc 'set "GODOT_PATH=%USERPROFILE%\Documents\Dev\Engines\Godot_v4.7.2-stable_win64\Godot_v4.7.2-stable_win64_console.exe" && set "GODOT_MCP_DISABLE_ELICITATION=true" && npx -y godot-mcp-runtime@4.0.1'
 ```
 
 `GODOT_PATH` is a single executable: godot-mcp-runtime has no per-project version, so the 4.x version is fixed per invocation
 by which console exe you point it at. Always point it at the console `.exe`, never the `.cmd` shim (the server fails with
-ENOENT). Console exes on the dev pp, by engine:
+ENOENT). The dev pp's `C:\Dev` moved to `%USERPROFILE%\Documents\Dev` on 2026-11-24 (`C:\Dev` no longer exists; `%USERPROFILE%\projects` is unchanged). Console exes on the dev pp, by engine:
 
-- 4.7.x (SBB, ForgeWirk): `C:\Dev\Engines\Godot_v4.7.2-stable_win64\Godot_v4.7.2-stable_win64_console.exe`
-- 4.8-dev7 mono (EFI): `C:\Dev\Engines\Godot_v4.8-dev7_mono_win64\Godot_v4.8-dev7_mono_win64_console.exe`
-- 4.8-dev3 mono: `C:\Dev\Engines\Godot_v4.8-dev3_mono_win64\Godot_v4.8-dev3_mono_win64_console.exe`
+- 4.7.x (SBB, ForgeWirk): `%USERPROFILE%\Documents\Dev\Engines\Godot_v4.7.2-stable_win64\Godot_v4.7.2-stable_win64_console.exe`
+- 4.8-dev7 mono (EFI): `%USERPROFILE%\Documents\Dev\Engines\Godot_v4.8-dev7_mono_win64\Godot_v4.8-dev7_mono_win64_console.exe`
+- 4.8-dev3 mono: `%USERPROFILE%\Documents\Dev\Engines\Godot_v4.8-dev3_mono_win64\Godot_v4.8-dev3_mono_win64_console.exe`
 
 Register that command as the stdio MCP server command in the forge agent's MCP config. The same pattern runs Windows-only
 jobs (desktop build/sign, Windows EFI exports by Release Desk): the forge agent executes them on the dev pp over SSH. There is
