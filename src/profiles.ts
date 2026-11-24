@@ -98,7 +98,16 @@ export type ProfilesState = {
   /** Schema v2 (P5b): set once the server sends roles (P5d); absent = v1. */
   schemaVersion?: number;
   roles?: RolesMap;
+  /** P5d: provider -> tier -> rung, the effective ladder (defaults + ~/.vibesquad/stakes-ladder.json). */
+  ladder?: Ladder;
+  ladderDefaults?: Ladder;
+  /** "v2" = stored roles, "v1" = built live from the legacy profiles (nothing saved yet), "default" = shipped table. */
+  rolesSource?: string;
 };
+
+export type LadderRung = { model?: string; effort?: string };
+export type Ladder = Record<string, Partial<Record<Tier, LadderRung>>>;
+export const TIERS: Tier[] = ["top", "mid", "cheap"];
 
 const BRIEF = (extra = "") => `Goal: \nFile scope: \nDone-check: \n${extra}`.trimEnd() + "\n";
 const LEAD_BRIEF = "You are the lane lead. Read the handoff doc, then:\nGoal: \nLane scope: \nDone-check: \n";
@@ -566,6 +575,38 @@ let state: ProfilesState = {
   installedProviders: ["claude", "antigravity-cli", "opencode", "codex", "codewhale"],
 };
 
+/** Shipped role table (mirror of server/role-route.mjs ROLE_TABLE) for the demo build and an offline Settings screen. */
+const DEMO_MODES = {
+  claude: { modeId: "auto", effort: "medium" },
+  "antigravity-cli": { modeId: "accept-edits", effort: "medium" },
+  opencode: { modeId: "build", effort: "high" },
+};
+const demoRole = (name: string, tier: Tier, providers: string[], prompt: string, mcpExtras?: string[]): RoleDef => ({
+  name,
+  tier,
+  providers,
+  prompt,
+  ...(mcpExtras ? { mcpExtras } : {}),
+  modes: Object.fromEntries(providers.map((p) => [p, { ...DEMO_MODES[p as keyof typeof DEMO_MODES] }])),
+});
+const CAO = ["claude", "antigravity-cli", "opencode"];
+const ACO = ["antigravity-cli", "claude", "opencode"];
+export const DEMO_ROLES: RolesMap = {
+  lead: demoRole("Lead", "top", CAO, "You are the lane lead. Plan, delegate, merge. Never implement what a worker can.", ["playwright"]),
+  brainstorm: demoRole("Brainstorm", "top", CAO, "Brainstorm only, no edits. Give a lean, not a survey."),
+  implement: demoRole("Implement", "mid", CAO, "Build the unit on its branch. Run your own tests. Report with evidence.", ["playwright"]),
+  "work-order": demoRole("Work Order", "mid", ["opencode", "claude", "antigravity-cli"], "Clean work order in, small diff out."),
+  review: demoRole("Review", "mid", ACO, "Review the diff only; report findings, do not edit."),
+  "pre-check": demoRole("Pre-check", "cheap", ACO, "Cheap mechanical checks before a human looks."),
+  "art-director": demoRole("Art Director", "mid", ACO, "Palette, references, 1440x900 screenshots.", ["playwright"]),
+  "art-painter": demoRole("Art Painter", "top", CAO, "Paint the approved direction.", ["playwright"]),
+};
+export const DEMO_LADDER: Ladder = {
+  claude: { top: { model: "claude-opus-5-5", effort: "high" }, mid: { model: "claude-sonnet-5-5", effort: "medium" }, cheap: { model: "claude-sonnet-5-5", effort: "low" } },
+  "antigravity-cli": { top: { model: GEMINI_TOP_MODEL, effort: "high" }, mid: { model: GEMINI_TOP_MODEL }, cheap: { model: "gemini-3.8-flash" } },
+  opencode: { top: { model: "deepseek/deepseek-v4-pro", effort: "high" }, mid: { model: "deepseek/deepseek-v4-pro" }, cheap: { model: "deepseek/deepseek-v4-pro" } },
+};
+
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((l) => l());
 
@@ -644,6 +685,80 @@ export async function fetchProfiles(): Promise<ProfilesState> {
   return state;
 }
 
+function applyRolesBody(body: Record<string, unknown>): void {
+  state = {
+    ...state,
+    schemaVersion: Number(body.schemaVersion) || undefined,
+    roles: (body.roles as RolesMap) ?? state.roles,
+    ladder: (body.ladder as Ladder) ?? state.ladder,
+    ladderDefaults: (body.ladderDefaults as Ladder) ?? state.ladderDefaults,
+    rolesSource: String(body.source ?? state.rolesSource ?? ""),
+  };
+  notify();
+}
+
+/** P5d: load the v2 roles + tier ladder (GET /__vibesquad/roles). Failure keeps what we have. */
+export async function fetchRoles(): Promise<ProfilesState> {
+  if (DEMO) {
+    if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2" });
+    return state;
+  }
+  try {
+    const res = await fetch("/__vibesquad/roles");
+    if (!res.ok) throw new Error(`roles fetch failed (${res.status})`);
+    applyRolesBody(await res.json());
+  } catch (err) {
+    console.warn("fetchRoles failed", err);
+  }
+  return state;
+}
+
+async function putRoles(payload: { roles?: RolesMap; ladder?: Ladder }): Promise<void> {
+  if (DEMO) {
+    applyRolesBody({
+      roles: payload.roles ? { ...(state.roles ?? DEMO_ROLES), ...payload.roles } : state.roles,
+      ladder: payload.ladder
+        ? Object.fromEntries(Object.entries({ ...(state.ladder ?? DEMO_LADDER) }).map(([f, r]) => [f, { ...r, ...(payload.ladder?.[f] ?? {}) }]))
+        : state.ladder,
+      source: "v2",
+      schemaVersion: 2,
+    });
+    return;
+  }
+  const res = await fetch("/__vibesquad/roles", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.ok === false) throw new Error(body.error ?? `save roles failed (${res.status})`);
+  applyRolesBody(body);
+}
+
+/** Save one role (the whole RoleDef). The first save migrates profiles.json to schema v2 (backup: profiles.json.bak-p5). */
+export const saveRole = (key: string, role: RoleDef) => putRoles({ roles: { [key]: role } });
+/** Save ladder rungs; a blank rung ({}) goes back to the default. */
+export const saveLadderRungs = (ladder: Ladder) => putRoles({ ladder });
+
+/** Role display name for a profile/role label (key, role name, or a legacy "Implement - Sonnet" style name). */
+export function roleNameFor(label: string | undefined | null, roles: RolesMap | undefined = state.roles ?? DEMO_ROLES): string | null {
+  const raw = String(label ?? "").trim();
+  if (!raw) return null;
+  const k = (x: string) => x.toLowerCase().replace(/[\s_]+/g, "-");
+  const head = raw.split(/\s+-\s+/)[0];
+  for (const cand of [raw, head]) {
+    for (const [key, r] of Object.entries(roles)) {
+      if (k(cand) === key || k(cand) === k((r as RoleDef).name)) return (r as RoleDef).name;
+    }
+  }
+  return null;
+}
+
+/** Model id trimmed for a header chip: provider prefix and date suffix off. */
+export function shortModel(model: string | undefined | null): string {
+  return String(model ?? "").replace(/^[^/]+\//, "").replace(/-\d{8}$/, "");
+}
+
 export async function saveProfile(profile: Profile): Promise<{ ok: boolean; profiles: Profile[] }> {
   const hydrated = hydrateProfile(profile);
   const optimistic = state.profiles.some((p) => p.name === hydrated.name)
@@ -710,4 +825,5 @@ export function dismissSetupPrompt(): void {
 // Kick off initial load in browser environments.
 if (typeof window !== "undefined" && !isRemote()) {
   void fetchProfiles();
+  void fetchRoles();
 }

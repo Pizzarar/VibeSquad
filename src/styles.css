@@ -6697,3 +6697,50 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tester-bug-err { color: #c0123f; }
 .inbox-tester-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text); border: 1px solid var(--line); background: rgba(47, 191, 113, 0.18); padding: 1px 6px; border-radius: 999px; }
 .tester-body > * { flex: 1; min-height: 0; }
+
+/* P5d: drawer header "Role · model" chip + Settings role / ladder editors (docs/lanes/art-direction/SPEC.md: chrome readable first). */
+.role-model-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 7px;
+  color: var(--fg, inherit);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--violet-t, #b69cff) 16%, var(--well)), var(--well));
+  border: 1px dotted color-mix(in srgb, var(--violet-t, #b69cff) 70%, var(--line));
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drawer-head-compact .role-model-chip { font-size: 10px; max-width: 24ch; }
+
+.re-section { border-left-color: var(--violet-t, #b69cff); }
+.re-role-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.re-role-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 13px; color: inherit; cursor: pointer;
+  padding: 4px 10px; background: var(--well); border: 1px solid var(--line);
+}
+.re-role-tab.on { background: var(--cyan-dim); border-color: var(--cyan); font-weight: 600; }
+.re-tier-pip {
+  font-family: var(--arcade); font-size: 9px; letter-spacing: 0.8px; text-transform: uppercase;
+  padding: 0 5px; border: 1px dotted var(--violet-t, #b69cff); color: var(--violet-t, #b69cff);
+}
+.re-tier-pip[data-tier="top"] { border-style: solid; }
+.re-tier-pip[data-tier="cheap"] { opacity: 0.8; }
+.re-body { display: flex; flex-direction: column; gap: 8px; }
+.re-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.re-table th { text-align: left; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: bottom; }
+.re-table td { padding: 5px 8px; border-bottom: 1px dotted var(--line); vertical-align: top; }
+.re-table input { width: 100%; box-sizing: border-box; }
+.re-num { width: 2ch; color: var(--muted, inherit); }
+.re-actions { white-space: nowrap; width: 1%; }
+.re-actions .btn { padding: 1px 6px; }
+.re-ladder { table-layout: fixed; }
+.re-ladder td { min-width: 0; }
+.re-roles-of { font-weight: 400; max-width: 26ch; }
+.re-effort-row { display: flex; gap: 4px; margin-top: 4px; align-items: center; }
+.re-changed { background: color-mix(in srgb, var(--violet-t, #b69cff) 10%, transparent); }
+.re-add { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.re-save { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.re-ok { color: var(--ok, #3fb950); }
+.re-bad { color: var(--bad, #e5484d); }

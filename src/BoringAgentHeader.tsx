@@ -23,6 +23,7 @@ import { openBriefEditor } from "./pinActions";
 import type { Entry } from "./Timeline";
 import { BORING_CTX_WARN_PCT, boringHeaderStrip, boringNeedsYouStall, formatToolMinutes, shortToolName } from "./boringHeaderStrip";
 import { openToolOf } from "./attentionItems";
+import { roleNameFor, shortModel, useProfiles } from "./profiles";
 
 export type BoringAgentHeaderProps = {
   agent: PaseoAgent;
@@ -172,6 +173,10 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   };
   const running = agent.status === "running" && !agent.archivedAt;
   const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane) : ""].filter(Boolean).join(" · ");
+  const { roles: storedRoles } = useProfiles();
+  const roleModelName = roleNameFor(labels.profile, storedRoles) ?? roleNameFor(labels.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
+  const roleModelModel = shortModel(cfg.staged?.model ?? agent.model);
+  const roleModel = roleModelName && roleModelModel ? `${roleModelName} · ${roleModelModel}` : roleModelName || roleModelModel || "";
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
   // R6-2: a closed/retired agent shows no Needs-you banner (it cannot be acted on).
@@ -192,6 +197,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
         <span className="boring-agent-role muted" data-testid="boring-agent-role" title={`${prov.name}${agent.model ? ` · ${agent.model}` : ""}`}>
           {roleLine}
         </span>
+        {roleModel && <span className="role-model-chip" data-testid="drawer-role-model" title="Role · model">{roleModel}</span>}
         {showMeter && (
           <span
             className={`boring-ctx-meter${ctxPct! >= 90 ? " crit" : ""}`}

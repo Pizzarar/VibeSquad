@@ -14,6 +14,7 @@ import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
+import { handleRolesApi } from "./roles-api.mjs";
 import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -2658,6 +2659,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handlePushTest(req, res);
       case "/__vibesquad/profiles":
         return handleProfiles(req, res);
+      case "/__vibesquad/roles":
+        return handleRolesApi(req, res, { sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir), readBody: readCleanBody });
       case "/__vibesquad/profiles/import":
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":

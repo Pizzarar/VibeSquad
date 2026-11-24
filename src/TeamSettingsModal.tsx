@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getUserName, loadDesktopStatus, loadUpdaterStatus, loadUserName, saveLanEnabled, saveRemoteEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useRemoteEnabled, useUpdaterStatus } from "./userName";
 import { RunnerSettingsSection } from "./RunnerSettingsSection";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { LadderEditorSection, RoleEditorSection } from "./RoleEditors";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -586,10 +587,12 @@ export function TeamSettingsModal({
       {show("runner") && embedded && !isHostMode && (
         <div className="muted small" data-testid="runner-settings-remote">Runner settings live on the host machine; this device is connected remotely.</div>
       )}
+      {show("profiles") && <RoleEditorSection />}
+      {show("profiles") && <LadderEditorSection />}
       {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section" data-setting-id="profiles">
         <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
-            <div className="field-label">AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
+            <div className="field-label">LEGACY AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
             <div className="muted small">
               Every spawn path (New Agent, Handoff, Brainstorm restart, Inbox topic, Digest) reads this store.
             </div>
