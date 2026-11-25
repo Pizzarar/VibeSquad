@@ -2490,9 +2490,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // quota/cap. So a caller's claude-sonnet-5-5-medium on antigravity-cli is kept only when the spawn lands on
           // agy-claude, never past an agy-claude cap onto Gemini or direct claude.
           const rawModel = rawCallerModel;
-          const finalFamily = spawnFamily(String(next.provider ?? provider), next.model ?? rawModel);
-          const sameProvider = finalFamily === spawnFamily(provider, rawModel);
           const modelFamily = normalizeProviderFamily(rawModel);
+          const finalFamily = spawnFamily(String(next.provider ?? provider), next.model ?? rawModel);
+          // Bare Claude ids inherited by an antigravity-cli (Gemini) spawn are foreign (dropped below), not agy-claude:
+          // only a suffixed agy-claude id (modelFamily === "agy-claude") marks the caller itself as agy-claude.
+          const callerFamily = modelFamily === AGY_CLAUDE_FAMILY ? spawnFamily(provider, rawModel) : normalizeProviderFamily(provider);
+          const sameProvider = finalFamily === callerFamily;
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
           // An override route also drops any other ladder family's model (deepseek on claude, r2 rn-a5cd265243b5 L1): the
           // route already did, and the config's copy must not bring it back as an explicit caller model.
