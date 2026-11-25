@@ -1032,7 +1032,7 @@ export function acquireSweepLock(root = resolveManagedWorktreeRoot(), { pid = pr
  * A `refreshLiveCwds` for sweepMergedWorktrees: reads the roster with `readAgents()` at most every `intervalMs` and returns
  * liveAgentCwds of it, or null (unknown: nothing removed) when the read throws or comes back empty.
  */
-export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Date.now } = {}) {
+export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Date.now, pick = liveAgentCwds } = {}) {
   let at = -Infinity;
   let cwds = null;
   return () => {
@@ -1040,12 +1040,21 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
     at = clock();
     try {
       const agents = readAgents();
-      cwds = Array.isArray(agents) && agents.length ? liveAgentCwds(agents) : null;
+      cwds = Array.isArray(agents) && agents.length ? pick(agents) : null;
     } catch {
       cwds = null;
     }
     return cwds;
   };
+}
+
+/**
+ * A `refreshHoldCwds` for sweepMergedWorktrees: like throttledLiveCwds but returns holdAgentCwds (live + archived < 24h) of
+ * the roster, so a worker spawned and auto-archived during a long sweep still holds its zero-commit tree. `readAgents` must
+ * include archived records.
+ */
+export function throttledHoldCwds(readAgents, { intervalMs = 30_000, clock = Date.now, holdMs = ZERO_COMMIT_HOLD_MS } = {}) {
+  return throttledLiveCwds(readAgents, { intervalMs, clock, pick: (agents) => holdAgentCwds(agents, { now: clock(), holdMs }) });
 }
 
 /** idea-1059: the per-worktree budget of a sweep (merged check, dirt check, build-output delete). */
@@ -1088,6 +1097,8 @@ function stepGit(git, step) {
  *   sizes          adds `bytes` to each would-remove/removed result.
  *   refreshLiveCwds  optional () => cwds | null, called right before each removal (see throttledLiveCwds); null or a
  *                  throw keeps the worktree ("live-cwd-unknown").
+ *   refreshHoldCwds  optional () => cwds | null (see throttledHoldCwds), called right before removing a worktree with no
+ *                  commit of its own: a hit keeps it ("in-use-no-commits"); null or a throw keeps it ("hold-cwd-unknown").
  *   heartbeat      optional () => bool (the sweep lock's beat): called per worktree; false before a removal keeps it
  *                  ("sweep-lock-lost").
  *   stepTimeoutMs  per-worktree budget (SWEEP_STEP_TIMEOUT_MS); past it the worktree is kept ("step-timeout"). 0 = none.
@@ -1109,6 +1120,7 @@ export function sweepMergedWorktrees(
     freshGraceMs = FRESH_GRACE_MS,
     now = Date.now(),
     refreshLiveCwds = null,
+    refreshHoldCwds = null,
     heartbeat = null,
     stepTimeoutMs = SWEEP_STEP_TIMEOUT_MS,
     onProgress = null,
@@ -1190,6 +1202,18 @@ export function sweepMergedWorktrees(
         }
         if (!Array.isArray(fresh)) return keep("live-cwd-unknown");
         if (cwdHoldsWorktree(wt.path, fresh)) return keep("live-cwd");
+      }
+      if (r.ownCommit === false && refreshHoldCwds) {
+        // idea-1043 (Review-Gemini r1 #2): holdCwds was read before the sweep began. A worker spawned in this tree and
+        // auto-archived since then is in neither snapshot: re-read the hold set (live + archived < 24h) before removing.
+        let fresh;
+        try {
+          fresh = refreshHoldCwds();
+        } catch {
+          fresh = null;
+        }
+        if (!Array.isArray(fresh)) return keep("hold-cwd-unknown");
+        if (cwdHoldsWorktree(wt.path, fresh)) return keep("in-use-no-commits");
       }
       // The removal itself uses plain git (its own timeout): a `git worktree remove` killed half way would leave a half-deleted
       // tree that reads dirty forever. The build-output delete and link walk stop at the step deadline (nothing removed then).

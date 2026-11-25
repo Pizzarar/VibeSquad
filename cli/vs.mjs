@@ -76,6 +76,7 @@ import {
   createManagedWorktree,
   sweepAllRepos,
   throttledLiveCwds,
+  throttledHoldCwds,
   liveAgentCwds,
   holdAgentCwds,
   cleanupProjectsFolder,
@@ -3408,6 +3409,8 @@ function commandWorktree(flags) {
       ...(stepTimeoutMs ? { stepTimeoutMs } : {}),
       // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
       refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
+      // idea-1043: and the hold set (live + archived < 24h) before removing a tree with no commit of its own.
+      refreshHoldCwds: apply ? throttledHoldCwds(() => listRunnerAgentsSync()) : null,
       sizes: Boolean(flags.sizes),
       repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
     });

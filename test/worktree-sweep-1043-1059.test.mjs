@@ -16,6 +16,7 @@ import {
   liveAgentCwds,
   removeSweptWorktree,
   sweepMergedWorktrees,
+  throttledHoldCwds,
   worktreeDirt,
   worktreeHasOwnCommit,
 } from "../server/team-worktrees.mjs";
@@ -330,3 +331,69 @@ test("Review-Gemini 1043 r1 #1: sweep git reads take no optional lock (status ne
     sweepMergedWorktrees(repo, { sanctuaryRoot: sanct, freshGraceMs: 0, targetBranch: "main", targetRefs: ["refs/heads/main"] });
     assert.ok(readFileSync(index).equals(idxBefore), "a dry-run sweep with the real git leaves the worktree index as it was");
   }));
+
+test("Review-Gemini 1043 r1 #2: the hold set is re-read before removing a zero-commit tree (worker spawned + auto-archived during the sweep keeps it)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const meas = addWorktree(repo, sanct, "orm-w4");
+    git(["reset", "-q", "--hard", commitFile(repo, "up.txt", "up\n")], meas); // zero commits, merged by ancestry
+    const done = addWorktree(repo, sanct, "unit-done");
+    commitFile(done, "d.txt", "d\n");
+    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-done'", "unit-done"], repo);
+
+    // Snapshot taken when the sweep began: the MEAS worker did not exist yet. By removal time it was spawned in orm-w4 and
+    // auto-archived (not live, so refreshLiveCwds misses it); only the hold set still names it.
+    const t = Date.now();
+    const roster = [
+      { id: "lead", cwd: repo, status: "running" },
+      { id: "meas", cwd: meas, status: "idle", archivedAt: new Date(t - 60_000).toISOString(), labels: { "vs.auto-archived": "1" } },
+    ];
+    const holdCalls = [];
+    const base = { apply: true, sanctuaryRoot: sanct, freshGraceMs: 0, liveCwds: [repo], holdCwds: [repo], refreshLiveCwds: () => [repo] };
+    const r1 = byBranch(
+      sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: throttledHoldCwds(() => (holdCalls.push(1), roster)), only: (w) => w.branch === "orm-w4" }),
+    );
+    assert.equal(r1["orm-w4"].ownCommit, false);
+    assert.equal(r1["orm-w4"].action, "kept", JSON.stringify(r1["orm-w4"]));
+    assert.equal(r1["orm-w4"].reason, "in-use-no-commits");
+    assert.ok(existsSync(meas));
+    assert.equal(holdCalls.length, 1);
+
+    const r2 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => null, only: (w) => w.branch === "orm-w4" }));
+    assert.equal(r2["orm-w4"].reason, "hold-cwd-unknown", "unreadable roster: kept");
+    const r3 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => { throw new Error("roster"); }, only: (w) => w.branch === "orm-w4" }));
+    assert.equal(r3["orm-w4"].reason, "hold-cwd-unknown", "throwing roster: kept");
+    assert.ok(existsSync(meas));
+
+    // A tree with commits of its own never consults the hold set (the live re-read stays its guard).
+    let asked = 0;
+    const r4 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => (asked++, [done]), only: (w) => w.branch === "unit-done" }));
+    assert.equal(r4["unit-done"].action, "removed", JSON.stringify(r4["unit-done"]));
+    assert.equal(asked, 0);
+
+    // Control: without the re-read the stale snapshot lets the zero-commit tree go (the reviewed race).
+    const r5 = byBranch(sweepMergedWorktrees(repo, { ...base, only: (w) => w.branch === "orm-w4" }));
+    assert.equal(r5["orm-w4"].action, "removed");
+    assert.ok(!existsSync(meas));
+  }));
+
+test("Review-Gemini 1043 r1 #2: throttledHoldCwds = holdAgentCwds of the roster at the clock's now, throttled; empty or throwing roster -> null", () => {
+  let now = Date.parse("2026-11-25T20:00:00Z");
+  let n = 0;
+  const agents = [
+    { id: "live", cwd: "/w/live", status: "running" },
+    { id: "arch", cwd: "/w/arch", archivedAt: now - 60_000 },
+    { id: "old", cwd: "/w/old", archivedAt: now - ZERO_COMMIT_HOLD_MS - 1 },
+  ];
+  const th = throttledHoldCwds(() => (n++, agents), { intervalMs: 1000, clock: () => now });
+  assert.deepEqual(th().sort(), ["/w/arch", "/w/live"]);
+  assert.deepEqual(th().sort(), ["/w/arch", "/w/live"]);
+  assert.equal(n, 1, "one roster read per interval");
+  now += ZERO_COMMIT_HOLD_MS;
+  assert.deepEqual(th(), ["/w/live"], "the archive window is judged at read time");
+  assert.equal(n, 2);
+  assert.equal(throttledHoldCwds(() => [])(), null);
+  assert.equal(throttledHoldCwds(() => { throw new Error("x"); })(), null);
+});
