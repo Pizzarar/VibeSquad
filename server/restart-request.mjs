@@ -302,9 +302,9 @@ function foldInto(cur, { tip, by, team, needs, scope, at }) {
 export function abortRestartRequest(home, { by = "owner", reason = "", now = Date.now() } = {}) {
   return mutateSync(home, (doc) => {
     const cur = doc.current;
-    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart abort: no open restart request."), { code: "NONE" });
+    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart abort: no open restart request."), { code: "NONE", status: 409 });
     // idea-673: the CLI then aborts the fired script if it is still in its idle wait (controlWaitingScript).
-    if (cur.state === "firing") throw Object.assign(new Error(`vs restart abort: ${cur.id} already fired vs restart at ${cur.firedAt}; it cannot be called back.`), { code: "FIRING", req: cur });
+    if (cur.state === "firing") throw Object.assign(new Error(`vs restart abort: ${cur.id} already fired vs restart at ${cur.firedAt}; it cannot be called back.`), { code: "FIRING", status: 409, req: cur });
     abort(cur, iso(now), `aborted by ${by}${reason ? `: ${clean(reason, 200)}` : ""}`);
     return cur;
   });
@@ -322,9 +322,9 @@ export function extendRestartRequest(home, { by = "owner", minutes, now = Date.n
   return mutateSync(home, (doc) => {
     const cur = doc.current;
     const at = iso(now);
-    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart extend: no open restart request."), { code: "NONE" });
-    if (cur.state === "firing") throw Object.assign(new Error(`vs restart extend: ${cur.id} already fired vs restart at ${cur.firedAt}.`), { code: "FIRING" });
-    if (cur.state === "ready") throw Object.assign(new Error(`vs restart extend: ${cur.id} is ready and fires on the next tick; nothing to extend.`), { code: "READY" });
+    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart extend: no open restart request."), { code: "NONE", status: 409 });
+    if (cur.state === "firing") throw Object.assign(new Error(`vs restart extend: ${cur.id} already fired vs restart at ${cur.firedAt}.`), { code: "FIRING", status: 409 });
+    if (cur.state === "ready") throw Object.assign(new Error(`vs restart extend: ${cur.id} is ready and fires on the next tick; nothing to extend.`), { code: "READY", status: 409 });
     if (cur.state === "queued") {
       const before = Number(cur.deadlineMin) || DEFAULT_DEADLINE_MIN;
       cur.deadlineMin = Math.min(MAX_DEADLINE_MIN, before + min);

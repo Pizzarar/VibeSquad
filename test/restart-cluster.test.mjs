@@ -2,6 +2,7 @@
 // idea-870: the owner "Restart runner" / RR1 checked idle on the server and then hard-killed the runner; a turn that started in
 // between was cut. The runner now re-checks idle and closes a restart gate in one synchronous step (POST /restart-gate), and
 // the server only kills a runner whose gate closed.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
