@@ -104,3 +104,32 @@ test('usa-58: a ledger-folded unit (agent id not kept) is unattributed WITH a re
   assert.equal(m.dead2.attributionMiss, 'ledger-archived-unattributed');
   for (const x of u.merged.units) assert.ok(x.implementerAgentId || x.attributionMiss, `unit ${x.sha} has neither an implementer nor a miss reason`);
 });
+
+test('usa-58 R1 H1: a later merge of the secondary unit is a miss, never a lane-guess re-credit at full cost (no decoy lane worker)', () => {
+  const h = home({ 'rn-a': mainRun({ cost: 2, input: 'work order: `vs worktree create unit-first`', tools: [...many('unit-first', 20), ...many('unit-second', 6)] }) });
+  const u = usage(h, [merge('m1', 'unit-first', T0 + 3_600_000), merge('m2', 'unit-second', T0 + 3_700_000), merge('m3', 'unit-second', T0 + 3_800_000)]);
+  const m = unitsOf(u);
+  assert.equal(m.m2.implementerShared, true);
+  assert.equal(m.m3.implementerAgentId, null);
+  assert.equal(m.m3.attributionMiss, 'evidence-claimed-by-other-merge');
+  assert.equal(m.m3.costUsd, null);
+});
+
+test('usa-58 R1 M1: a run with no primary unit (two assigned units) is never credited a secondary unit', () => {
+  const h = home({ 'rn-a': mainRun({ cost: 2, input: 'work order: `vs worktree create unit-a` then `vs worktree create unit-b`', tools: [...many('unit-a', 8), ...many('unit-b', 8), ...many('unit-c', 8)] }), 'rn-z': wtRun('unit-other') });
+  const u = usage(h, [merge('m1', 'unit-c', T0 + 3_600_000)]);
+  assert.equal(unitsOf(u).m1.implementerAgentId, null);
+});
+
+test('usa-58 R1 M1: shared (cost-less) credits stay out of the byWorkflow / cohort cost averages', () => {
+  const h = home({ 'rn-a': mainRun({ cost: 2, input: 'work order: `vs worktree create unit-first`', tools: [...many('unit-first', 20), ...many('unit-second', 6)] }) });
+  const u = usage(h, [merge('m1', 'unit-first', T0 + 3_600_000), merge('m2', 'unit-second', T0 + 3_700_000)]);
+  const g = u.byWorkflow.find((x) => x.units === 2);
+  assert.ok(g, 'both merges in one workflow group');
+  assert.equal(g.costPerUnit, 2); // not 1 (= 2 / 2 units)
+  assert.equal(g.costCoverage, 1);
+  const rows = u.merged.units;
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ ...rows[0], sha: `s${i}`, dispatchBurstSize: 1, implementerShared: i >= 5, costUsd: i >= 5 ? null : 2 }));
+  const solo = usageTestHooks.buildBurstCohorts(mk(10)).buckets.find((b) => b.key === '1');
+  assert.equal(solo.costPerUnit, 2);
+});

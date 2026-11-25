@@ -461,6 +461,7 @@ const SECONDARY_UNIT_CALLS = 5;
 function secondaryUnitRefs(st) {
   if (!st.unitWorked || st.unitWorkedOverflow) return [];
   const primary = primaryUnitRef(st);
+  if (!primary) return []; // no primary unit: the run's cost sits on no merge, so it must not be credited to a secondary one either
   return [...st.unitWorked].filter(([n, c]) => c >= SECONDARY_UNIT_CALLS && n !== primary && /^unit-/.test(n)).map(([n]) => n);
 }
 
@@ -1662,6 +1663,7 @@ function resolveImplementer(unit, agents, index) {
       });
       const picked = pickImplementer(mine);
       if (picked) return { implementer: picked, miss: null, shared: true };
+      return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // like the primary refs path: never fall to the lane guess (full cost, double count)
     }
     if (cwdMatches.length === 1) return hit(cwdMatches[0]); // unchanged legacy behaviour: a lone non-implementer worktree run
     if (cwdMatches.length > 1) return miss("no-implementer-in-worktree");
@@ -2274,13 +2276,14 @@ function buildByWorkflow(merged, agentById) {
       wfSources: new Set(),
       units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
-      fixAfterMergeCount: 0, knownCostUnits: 0,
+      fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
     }));
     g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
     if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
     g.reviewRoundsSum += u.reviewRounds ?? 0;
     const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
     g.costUsd += cost;
     g.inputTokens += u.inputTokens ?? 0;
     g.outputTokens += u.outputTokens ?? 0;
@@ -2300,12 +2303,12 @@ function buildByWorkflow(merged, agentById) {
       firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
       avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
       costUsd: g.costUsd,
-      costPerUnit: g.units ? g.costUsd / g.units : null,
+      costPerUnit: g.costUnits ? g.costUsd / g.costUnits : null,
       costPer100Loc: totalLoc > 0 ? (g.costUsd / totalLoc) * 100 : null,
-      tokensPerUnit: g.units ? Math.round(((g.inputTokens + g.outputTokens) / g.units) * 100) / 100 : 0,
+      tokensPerUnit: g.costUnits ? Math.round(((g.inputTokens + g.outputTokens) / g.costUnits) * 100) / 100 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
       fixAfterMergeRate: g.units ? Math.round((g.fixAfterMergeCount / g.units) * 1000) / 1000 : 0,
-      costCoverage: g.units ? Math.round((g.knownCostUnits / g.units) * 1000) / 1000 : 0,
+      costCoverage: g.costUnits ? Math.round((g.knownCostUnits / g.costUnits) * 1000) / 1000 : 0,
     };
   }).sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
 }
@@ -2391,8 +2394,9 @@ function buildSavings(merged, totals, lanes, agents, rows = []) {
 function cohortOf(units) {
   const n = units.length;
   if (!n) return { units: 0, firstTryPassRate: null, avgReviewRounds: null, costPerUnit: null, tokensPerUnit: null, avgUnitCycleMs: null, fixAfterMergeRate: null };
-  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0;
+  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0, costN = 0;
   for (const u of units) {
+    if (!u.implementerShared) costN += 1; // usa-58: shared credits have no cost: kept out of the cost/token averages
     if ((u.reviewRounds ?? 0) <= 1) firstTry += 1;
     rounds += u.reviewRounds ?? 0;
     cost += Number.isFinite(u.costUsd) ? u.costUsd : 0;
@@ -2404,8 +2408,8 @@ function cohortOf(units) {
     units: n,
     firstTryPassRate: round2(firstTry / n),
     avgReviewRounds: round2(rounds / n),
-    costPerUnit: round2(cost / n),
-    tokensPerUnit: round2(tokens / n),
+    costPerUnit: costN ? round2(cost / costN) : null,
+    tokensPerUnit: costN ? round2(tokens / costN) : null,
     avgUnitCycleMs: cycCount ? Math.round(cycSum / cycCount) : null,
     fixAfterMergeRate: round2(fix / n),
   };
