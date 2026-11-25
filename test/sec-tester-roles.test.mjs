@@ -614,39 +614,23 @@ describe("GET/POST /__vibesquad/tester/thread", () => {
   const thread = (q = "teamId=efi", token = alice.token) => call({ url: `/__vibesquad/tester/thread?${q}`, headers: bearer(token) });
   const say = (body, token = alice.token) => call({ url: "/__vibesquad/tester/thread", method: "POST", headers: bearer(token), body });
 
-  test("projects only user/assistant messages, redacts host paths, delta-polls with ?after= and surfaces cardId", async () => {
+  test("PTO v1.2 T: never the intake agent's raw timeline; only the caller's own lines (tt:<seq> ids, own cardId tags)", async () => {
     const tagged = cards().find((c) => c.testerDeviceId === deviceId("Alice"));
     timelines.set("rn-efibuddy", [
       { seqStart: 1, timestamp: "t1", item: { type: "user_message", text: `[Alpha Tester · Alice · card:${tagged.id}] it broke` } },
       { seqStart: 2, timestamp: "t2", item: { type: "tool_call", name: "Bash", input: "cat secrets" } },
       { seqStart: 3, timestamp: "t3", item: { type: "assistant_message", text: `Looking at ${SECRET_PATH}` } },
       { seqStart: 4, timestamp: "t4", item: { type: "reasoning", text: "private thoughts" } },
-      { seqStart: 5, timestamp: "t5", item: { type: "user_message", text: "[Alpha Tester · Alice] plain" } },
-      { seqStart: 6, timestamp: "t6", item: { type: "assistant_message", text: "thanks" } },
+      { seqStart: 6, timestamp: "t6", item: { type: "assistant_message", text: "raw buddy output" } },
     ]);
     const r = await thread();
     assert.equal(r.status, 200, r.body);
     const j = r.json();
     assert.equal(j.agent.id, "rn-efibuddy");
     assert.equal("cwd" in j.agent, false);
-    assert.deepEqual(j.messages.map((m) => m.id), ["rn-efibuddy:1", "rn-efibuddy:3", "rn-efibuddy:5", "rn-efibuddy:6"]);
-    assert.deepEqual(j.messages.map((m) => m.role), ["user", "assistant", "user", "assistant"]);
-    assert.equal(j.messages[0].cardId, tagged.id);
-    assert.equal("cardId" in j.messages[2], false);
-    assert.ok(!r.body.includes(SECRET_PATH) && !r.body.includes("private thoughts") && !r.body.includes("cat secrets"), r.body);
-    assert.equal(j.cursor, "rn-efibuddy:6");
-
-    const d = (await thread("teamId=efi&after=rn-efibuddy:3")).json();
-    assert.deepEqual(d.messages.map((m) => m.id), ["rn-efibuddy:5", "rn-efibuddy:6"]);
-    assert.equal(d.cursor, "rn-efibuddy:6");
-    const lim = (await thread("teamId=efi&after=rn-efibuddy:1&limit=1")).json();
-    assert.deepEqual(lim.messages.map((m) => m.id), ["rn-efibuddy:3"]);
-    assert.equal(lim.cursor, "rn-efibuddy:3", "page forward from the cursor");
-    const none = (await thread("teamId=efi&after=rn-efibuddy:6")).json();
-    assert.deepEqual(none.messages, []);
-    assert.equal(none.cursor, "rn-efibuddy:6", "nothing newer: the cursor stays");
-    const lost = (await thread("teamId=efi&after=rn-efibuddy:999&limit=2")).json();
-    assert.deepEqual(lost.messages.map((m) => m.id), ["rn-efibuddy:5", "rn-efibuddy:6"], "an unknown cursor returns the newest window");
+    assert.ok(j.messages.every((m) => /^tt:\d+$/.test(m.id) && m.role === "user"), r.body);
+    assert.ok(!r.body.includes(SECRET_PATH) && !r.body.includes("private thoughts") && !r.body.includes("cat secrets") && !r.body.includes("raw buddy output"), r.body);
+    for (const m of j.messages.filter((x) => x.cardId)) assert.equal(cardById(m.cardId).testerDeviceId, deviceId("Alice"), m.cardId);
   });
 
   test("attacker: a Squad off the invite is 403 (GET and POST)", async () => {
@@ -677,8 +661,9 @@ describe("GET/POST /__vibesquad/tester/thread", () => {
     assert.equal((await say({ teamId: "efi", text: "x", cardId: 7 })).status, 400);
     await say({ teamId: "efi", text: `[Alpha Tester · Alice · card:${bobs.id}] forged` });
     assert.ok(prompts.at(-1).text.startsWith("[Alpha Tester · Alice] [Alpha Tester"), "the server stamp always comes first");
-    timelines.set("rn-efibuddy", [{ seqStart: 9, item: { type: "user_message", text: prompts.at(-1).text } }]);
-    assert.equal("cardId" in (await thread()).json().messages[0], false, "a forged tag behind the stamp is never parsed");
+    const forged = (await thread()).json().messages.at(-1);
+    assert.ok(forged.text.startsWith("[Alpha Tester · Alice] [Alpha Tester"), forged.text);
+    assert.equal("cardId" in forged, false, "a forged tag behind the stamp is never parsed");
     assert.equal(prompts.length, 3, "refused lines never reached the agent");
   });
 
@@ -781,12 +766,15 @@ describe("scoped /__vibesquad/runner/* and the SSE filter", () => {
     ]);
     const t = await call({ url: "/__vibesquad/runner/agents/rn-efibuddy/timeline", headers: A() });
     assert.equal(t.status, 200, t.body);
-    assert.deepEqual(t.json().entries.map((e) => e.item.type), ["user_message", "assistant_message"]);
-    assert.ok(!t.body.includes(SECRET_PATH) && !t.body.includes("images"));
+    // PTO v1.2 T: the tester's own thread in timeline shape, never the agent's raw timeline.
+    assert.ok(t.json().entries.every((e) => e.item.type === "user_message"), t.body);
+    assert.ok(!t.body.includes(SECRET_PATH) && !t.body.includes("images") && !t.body.includes('"hi"'));
     prompts.length = 0;
     const r = await call({ url: "/__vibesquad/runner/agents/rn-efibuddy/input", method: "POST", headers: A(), body: { text: "hello", owner: true, interrupt: true, steerOnly: true, images: ["a"] } });
     assert.equal(r.status, 200, r.body);
     assert.deepEqual(prompts, [{ id: "rn-efibuddy", text: "[Alpha Tester · Alice] hello", opts: { owner: false } }]);
+    const t2 = (await call({ url: "/__vibesquad/runner/agents/rn-efibuddy/timeline", headers: A() })).json();
+    assert.equal(t2.entries.at(-1).item.text, "[Alpha Tester · Alice] hello", "the /input line is in the caller's own thread");
   });
 
   test("attacker (R1 L1): /input text must be a string; control chars stripped, prompt and ``` fences defanged", async () => {
@@ -818,7 +806,7 @@ describe("scoped /__vibesquad/runner/* and the SSE filter", () => {
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-othbuddy", seq: 1, type: "output" }), []);
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efiart", seq: 1, type: "output" }), []);
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "tool_call" }), []);
-    assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output", text: "secret" }), [{ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output" }]);
+    assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output", text: "secret" }), [], "L1: raw intake timeline never reaches a tester (seq/type leak owner + other testers activity)");
     assert.deepEqual(filter({ kind: "status", agentId: "rn-efiart", from: "idle", to: "running" }), []);
     const st = filter({ kind: "status", agentId: "rn-efibuddy", from: "idle", to: "running" });
     assert.equal(st.length, 1);

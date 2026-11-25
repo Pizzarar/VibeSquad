@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, rmSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
@@ -95,12 +95,12 @@ test('compact_boundary without metadata still emits compacted (undefined counts)
 });
 
 // K4: lean tool load. Default = vibesquad MCP only + no user settings; extras are opt-in per profile / label.
-function startArgs(t, meta) {
+function startArgs(t, meta, { home, events } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'vs-claude-k4-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const spawnImpl = fakeSpawn();
-  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: true, mcpPath: 'vs-mcp.mjs', promptsDir: path.join(root, 'prompts') });
-  adapter.start({ id: 'rn-k4', cwd: os.tmpdir(), meta, env: {}, emit() {}, onExit() {} });
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: true, mcpPath: 'vs-mcp.mjs', promptsDir: path.join(root, 'prompts'), ...(home ? { home } : {}) });
+  adapter.start({ id: 'rn-k4', cwd: os.tmpdir(), meta, env: {}, emit(k, v) { events?.push([k, v]); }, onExit() {} });
   const { args } = spawnImpl.calls[0];
   return { args, servers: JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers };
 }
@@ -123,6 +123,36 @@ test('K4: Playwright is opt-in via the vs.mcp label and is pre-allowed', (t) => 
   const off = startArgs(t, { labels: { 'vs.mcp': 'other' } });
   assert.deepEqual(Object.keys(off.servers), ['vibesquad']);
   assert.ok(!off.args.includes('mcp__playwright'));
+});
+
+function fakeHome(t, mcpServers) {
+  const h = mkdtempSync(path.join(os.tmpdir(), 'vs-claude-home-'));
+  t.after(() => rmSync(h, { recursive: true, force: true }));
+  if (mcpServers) writeFileSync(path.join(h, '.claude.json'), JSON.stringify({ mcpServers }));
+  return h;
+}
+
+test('godot-runtime extra: reuses the owner config entry, comma list with playwright, pre-allowed', (t) => {
+  const home = fakeHome(t, { 'godot-runtime': { command: 'ssh', args: ['devpc', 'node', 'x.js'], env: { GODOT_PATH: 'C:/g.exe' } } });
+  const r = startArgs(t, { labels: { 'vs.mcp': 'playwright, godot-runtime' } }, { home });
+  assert.deepEqual(Object.keys(r.servers), ['vibesquad', 'playwright', 'godot-runtime']);
+  assert.deepEqual(r.servers['godot-runtime'], { command: 'ssh', args: ['devpc', 'node', 'x.js'], env: { GODOT_PATH: 'C:/g.exe' } });
+  assert.ok(r.args.includes('mcp__godot-runtime') && r.args.includes('mcp__playwright'));
+  const only = startArgs(t, { labels: { 'vs.mcp': 'godot-runtime' } }, { home });
+  assert.deepEqual(Object.keys(only.servers), ['vibesquad', 'godot-runtime']);
+});
+
+test('godot-runtime extra: no owner entry -> not added, one warning on the agent stream, never invented', (t) => {
+  const events = [];
+  const r = startArgs(t, { labels: { 'vs.mcp': 'godot-runtime' } }, { home: fakeHome(t, { playwright: { command: 'x' } }), events });
+  assert.deepEqual(Object.keys(r.servers), ['vibesquad']);
+  assert.ok(!r.args.includes('mcp__godot-runtime'));
+  const w = events.filter(([k, v]) => k === 'stderr' && /godot-runtime/.test(v.line));
+  assert.equal(w.length, 1);
+  assert.match(w[0][1].line, /^warning:/);
+  const none = [];
+  startArgs(t, { labels: { 'vs.mcp': 'playwright' } }, { home: fakeHome(t), events: none });
+  assert.equal(none.length, 0);
 });
 
 test('K4: profiles opt into playwright by mcpExtras field (stored value wins, default pack is the fallback)', async () => {

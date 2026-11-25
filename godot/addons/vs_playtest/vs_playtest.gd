@@ -36,8 +36,8 @@ var _layer: CanvasLayer
 var _layer_overlay: CanvasLayer
 var _timer: Timer
 var _team_id := ""
-var _hotkey_dock: Key = KEY_F8
-var _hotkey_bug: Key = KEY_F9
+var _hotkey_dock: Key = KEY_F4
+var _hotkey_bug: Key = KEY_F3
 var _cursor := ""
 var _seen: Dictionary = {}
 var _first_poll_done := false
@@ -59,8 +59,8 @@ func _ready() -> void:
 		set_process_input(false)
 		return
 	_team_id = Settings.get_str(Settings.TEAM_ID)
-	_hotkey_dock = _key(Settings.get_str(Settings.HOTKEY_DOCK), KEY_F8)
-	_hotkey_bug = _key(Settings.get_str(Settings.HOTKEY_BUG), KEY_F9)
+	_hotkey_dock = _key(Settings.get_str(Settings.HOTKEY_DOCK), KEY_F4)
+	_hotkey_bug = _key(Settings.get_str(Settings.HOTKEY_BUG), KEY_F3)
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	ui_scale = _detect_scale()
 
@@ -313,7 +313,7 @@ func _input(event: InputEvent) -> void:
 	if not enabled or not (event is InputEventKey):
 		return
 	var k := event as InputEventKey
-	if not k.pressed or k.echo:
+	if not k.pressed or k.echo or k.get_modifiers_mask() != 0:
 		return
 	if k.keycode == _hotkey_dock:
 		get_viewport().set_input_as_handled()

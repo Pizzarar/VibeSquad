@@ -1,0 +1,5 @@
+#!/bin/sh
+# VibeSquad verdict gate (idea-883). Installed with the push guard (`vs push-guard install`, core.hooksPath=.githooks).
+# Refuses `git merge` of a unit branch into master/main unless its tip's latest recorded verdict is PASS; see server/push-guard.mjs.
+here=$(cd "$(dirname "$0")" && pwd) || exit 1
+exec node "$here/../server/push-guard.mjs" pre-merge-commit

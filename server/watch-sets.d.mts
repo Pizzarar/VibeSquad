@@ -146,3 +146,9 @@ export interface WatchEngine {
 }
 
 export function createWatchEngine(opts?: WatchEngineOptions): WatchEngine;
+/** idea-883: an agent item's code-read verdict tag (`PASS|FAIL H/M/L <hash>`), or null. */
+export function itemVerdict(item: WatchItem): string | null;
+/** idea-883: the code-built verdict block (one line per finished agent item), "" when none finished. */
+export function verdictBlock(set: WatchSet): string;
+/** idea-883: masks verdict words in an LLM merge digest. */
+export function maskVerdictWords(text: string): string;

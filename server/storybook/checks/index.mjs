@@ -3,10 +3,15 @@
 // ctx = {snapshot, registry, adapter, hooks, reader|null}. `reader` is optional (pinned-sha Reader): checks that read source files
 // (e.g. #8 .gd comments) need it and degrade gracefully without it.
 import { makeRegistry, validateFinding } from "../schema.mjs";
+import { auditFromFinding, coverageFindings, signoffFindings, sortAudit } from "../../registry/audit.mjs";
 import * as structural from "./structural.mjs";
 import * as text from "./text.mjs";
+import * as lore from "./lore.mjs";
 
-export const CHECK_MODULES = [structural, text];
+export const CHECK_MODULES = [structural, text, lore];
+
+/** The lane that emits Storybook's audit findings (the 4-signal F2 contract). */
+export const STORYBOOK_LANE = "storybook";
 
 const num = (id) => Number(String(id).slice(1));
 const refKey = (f) => (f.entityRef ? `${f.entityRef.kind}:${f.entityRef.id}` : "");
@@ -36,4 +41,18 @@ export async function runChecks(snapshot, adapter, { reader = null, modules = CH
     }
   }
   return out.sort(cmp);
+}
+
+/**
+ * F2: the 4-signal audit view of the same checks. Additive — `runChecks` and its finding output are unchanged. This maps
+ * every storybook finding onto a signal and appends the coverage (missing text/lore) and signoff (asset status) findings.
+ * `findings` (already computed) skips a second run of the checks. Returns a deterministically sorted audit finding array.
+ */
+export async function runAudit(snapshot, adapter, { reader = null, findings = null, modules = CHECK_MODULES } = {}) {
+  const found = findings ?? await runChecks(snapshot, adapter, { reader, modules });
+  const out = [];
+  for (const f of found) out.push(auditFromFinding(f, { project: snapshot.project, lane: STORYBOOK_LANE }));
+  out.push(...coverageFindings(snapshot, { lane: STORYBOOK_LANE }));
+  out.push(...signoffFindings(snapshot, { lane: STORYBOOK_LANE }));
+  return sortAudit(out);
 }

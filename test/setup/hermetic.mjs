@@ -1,5 +1,6 @@
-// Preloaded by `npm test` (node --import). Keeps the suite independent of the developer's real ~/.vibesquad and of the shell
-// that started it (scripts/test-child-env.mjs hermeticizeEnv):
+// Preloaded by `npm test` (node --import) and imported directly by env-sensitive test files (`import "./setup/hermetic.mjs"`),
+// so a direct `node --test <file>` run matches `npm test` (idea-667). Keeps the suite independent of the developer's real
+// ~/.vibesquad and of the shell that started it (scripts/test-child-env.mjs hermeticizeEnv):
 //  - every inherited VS_*/VIBESQUAD_*/PASEO_* var is dropped (agent identity: id + token, lane/team/role; the live server's
 //    MESHNET/LAN/PORT config; VIBESQUAD_TEAMS_FILE; VIBESQUAD_START_RUNNER), except the VS_TEST_*/VS_BENCH/VS_ALLOW_REAL_HOME knobs;
 //  - a TMPDIR inside the real ~/.vibesquad (runner shells export ~/.vibesquad/tmp) moves to the OS temp, so temp homes are

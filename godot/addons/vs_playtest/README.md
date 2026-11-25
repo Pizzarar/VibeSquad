@@ -10,14 +10,18 @@ It is owner-only and local-only. It talks to a VibeSquad server on the same mach
 3. Set `vs_playtest/team_id` to the Squad that should receive reports. It is required.
 4. Optional: set `vs_playtest/server_url` (default `http://127.0.0.1:<VIBESQUAD_PORT>`, else port 4180).
 5. Optional: set `vs_playtest/adapter_dir` (default `res://vs_playtest_adapter/`).
-6. Optional: set `vs_playtest/hotkey_dock` (default `F8`) and `vs_playtest/hotkey_bug` (default `F9`).
+6. Optional: set `vs_playtest/hotkey_dock` (default `F4`) and `vs_playtest/hotkey_bug` (default `F3`).
 
 The env var `VS_PLAYTEST_UI_SCALE` sets the dock scale. Without it the addon uses the screen DPI.
 
 ## Use
-- `F8` opens and closes the dock. While it is open, it polls for replies every 3 seconds.
-- `F9` starts a bug capture. Click the node you mean, write a note, and send.
+- `F4` opens and closes the dock. While it is open, it polls for replies every 3 seconds.
+- `F3` starts a bug capture. Click the node you mean, write a note, and send.
 - Reports retry with one `clientReportId`, so a retry never makes a second card.
+
+### Hotkey defaults (changed in v1.2)
+The defaults are `F4` (dock) and `F3` (bug capture). The old defaults clashed with Godot 4.7 editor shortcuts: `F8` is "Stop running project", and `F9` is "Suspend/Resume embedded game" (also "Toggle breakpoint"). Godot's editor run bar uses F5 (run), F6 (run scene), F7 (pause), F8 (stop), and the debugger uses F10-F12. F1 is help and F2 is rename. Plain `F3` only means "find next" inside the script editor, and plain `F4` is unused.
+This changes only the default. A project that already saved `vs_playtest/hotkey_dock` or `vs_playtest/hotkey_bug` keeps its saved value, so set them to `F4` / `F3` by hand if you still have the old keys.
 
 ## Remote VS (owner device pairing)
 For a VS server that is not on this machine, set `vs_playtest/server_url` to `https://<host>:<port>`, then pair:
@@ -67,7 +71,7 @@ Autoload: `VSPlaytest` (only in the editor or `vs_playtest` builds; otherwise `V
   - `describe_node(node: Node) -> String`; the default is `node.get_path()`, goes into `telemetry.cursorNode`
   - `get_cheats() -> Array[Dictionary]`, each `{id, label, args?: Array}`
   - `run_cheat(id: String, args: Array) -> Variant`
-- Project settings: `vs_playtest/team_id` (required), `vs_playtest/server_url`, `vs_playtest/adapter_dir`, `vs_playtest/hotkey_dock` (default F8), `vs_playtest/hotkey_bug` (default F9), `vs_playtest/device_token_path`, `vs_playtest/ca_cert_path` (both below).
+- Project settings: `vs_playtest/team_id` (required), `vs_playtest/server_url`, `vs_playtest/adapter_dir`, `vs_playtest/hotkey_dock` (default F4), `vs_playtest/hotkey_bug` (default F3), `vs_playtest/device_token_path`, `vs_playtest/ca_cert_path` (both below).
 - Signals: `report_sent(card_id)`, `reply_received(message)`.
 - Capture payload: `{teamId, text, screenshotBase64, screenshotMime, clientReportId, telemetry:{clickedPoint, viewport, cursorNode, scene, state, seed, adapter, buildHash, engine, platform, logLines(last 200 lines, each clipped to 300 chars)}}`.
 - Agent helpers on the autoload, reached through the bridge: `VSPlaytest.state()`, `.seed()`, `.cheats()`, `.cheat(id, args)`. They are safe no-ops when disabled or without an adapter.

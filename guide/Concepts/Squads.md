@@ -36,6 +36,10 @@ It shows what changed since you last looked, across every lane in the Squad: dec
 
 A `needs-you` flag means an agent is stuck on something only you can decide. Answer it in that agent's chat and the lane moves again. Do this first when you sit down.
 
+## Project folders (Active / Asleep)
+
+In Normal mode the sidebar can group Squads into folders. Each folder has an **Active** / **Asleep** toggle. Putting a folder **Asleep** pauses automated wake-ups for its projects, mutes their badges, and shows a 💤. Opening an asleep project shows "Asleep · Automated wake-ups paused" with a **Wake project** button that moves just that Squad back to Active; the other projects in the folder stay asleep.
+
 ## One Buddy per topic
 
 Keep each Buddy to one topic. A Buddy that has been riffing on one thing for hours gets slow, expensive and vague.

@@ -15,7 +15,8 @@ import {
 } from "./lead-handoff.mjs";
 import { listWatches } from "./watch-sets.mjs";
 import { appendVsLogEntry, performBrainstormRestart } from "./brainstorm.mjs";
-import { BUDDY_COMPACT_FOCUS, COMPACTED_AT_LABEL, createCompactor, isClaudeAgent, isIdleForCompact } from "./compact-step.mjs";
+import { BUDDY_COMPACT_FOCUS, canCompact, createCompactor, isIdleForCompact } from "./compact-step.mjs";
+import { COMPACTED_AT, compactBusy, compactNotAttempted, createCrossingTracker, isDeadForCompact, lifeCapMetric } from "./compact-crossing.mjs";
 import { createWorkerContextGuard, lastAssistantMessage } from "./worker-context-guard.mjs";
 
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -115,6 +116,10 @@ export function startTokenWatcher({
       runner,
       log: ({ agent, text, teamId, laneId }) => appendVsLogEntry({ teamId, laneId, agent, type: "metric", text }),
     });
+  // K2c: callers only run an ARMED crossing (server/compact-crossing.mjs; that state is the loop guard): they pass armed:true, so
+  // compact-step skips its own once-per-life guards; its in-flight guard (pending) still holds.
+  const runCompact = (agent, opts) => compact.run(agent, opts);
+  const buddyCrossing = createCrossingTracker();
 
   const coord =
     coordinator ??
@@ -133,7 +138,7 @@ export function startTokenWatcher({
           labels: p.labels,
           ...(p.env ? { env: p.env } : {}),
         }),
-      compactStep: (agent, opts) => compact.run(agent, opts),
+      compactStep: runCompact,
       listAgents: async () => [...live.values()],
       getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch((err) => { if (isAgentNotFoundError(err)) return null; throw err; }))?.agent ?? null,
       deleteHeartbeat: (id) => runner.deleteHeartbeat(id),
@@ -169,12 +174,35 @@ export function startTokenWatcher({
   };
 
   async function evaluateBuddy(agent) {
-    const labels = agent.labels ?? {};
+    let labels = agent.labels ?? {};
     if (labels["vs.restarted-into"] || restarted.has(agent.id)) return;
     const used = leadUsedTokens(agent);
     const { warnTokens, restartTokens } = getBuddyThresholds(agent);
+    // K2c: one compaction attempt per crossing of the restart cap (re-armed under min(90%, 75%) = 75% of it, the one stage being
+    // both the lowest and the tried one; at most COMPACT_LIFE_CAP per life).
+    const plan = canCompact(agent) ? buddyCrossing.decide(agent, used, [restartTokens]) : { action: "none" };
+    if (plan.action === "rearm") {
+      // A new crossing: the brief update is asked for again before its compaction (warn state re-armed with the attempt).
+      buddyCrossing.rearm(agent.id, plan.count);
+      warned.delete(agent.id);
+      briefPending.delete(agent.id);
+      const patch = { ...plan.labels, [WARN_LABEL]: "" };
+      labels = { ...labels, ...patch };
+      await runner.updateAgent(agent.id, { labels: patch }).catch((e) => console.warn(`[vibesquad] compact re-arm ${agent.id}: ${e?.message ?? e}`));
+    }
     if (used >= restartTokens) {
-      if (isClaudeAgent(agent) && !labels[COMPACTED_AT_LABEL] && !compact.tried.has(agent.id)) {
+      if (plan.action === "life-cap") {
+        buddyCrossing.record(agent.id, plan.cap, plan.count);
+        labels = { ...labels, ...plan.labels };
+        await runner.updateAgent(agent.id, { labels: plan.labels }).catch((e) => console.warn(`[vibesquad] compact life-cap ${agent.id}: ${e?.message ?? e}`));
+        const { teamId, laneId } = resolveTeamAndLane(agent, rootDir);
+        try {
+          appendVsLogEntry({ teamId, laneId, agent: agent.id, type: "metric", text: lifeCapMetric({ kind: "buddy", id: agent.id, count: plan.count, cap: plan.cap, used }) });
+        } catch { /* logging never blocks the restart */ }
+      } else if (plan.action === "compact" && !isDeadForCompact(agent)) {
+        // An errored / closed / lost Buddy has no turn to compact in: it skips to the restart below (G1: it still restarts, any
+        // provider). A deny-list like the lead path's (lead-handoff evaluateLead): a queued / starting / parked Buddy enters here and
+        // defers at the idle check below (an allow-list let it fall through to the restart and lose its queued turn).
         // The Buddy updates its brief first (the warn nudge); a Buddy that jumped past the warn gets it now and is compacted once idle.
         if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
           await sendBriefNudge(agent, labels);
@@ -185,10 +213,23 @@ export function startTokenWatcher({
         briefPending.delete(agent.id);
         if (!isIdleForCompact(agent)) return; // never compact mid-turn: the idle snapshot re-evaluates
         const { teamId, laneId } = resolveTeamAndLane(agent, rootDir);
-        const res = await compact.run(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId });
-        if (res.outcome === "ok") return; // same id, smaller context: no restart
+        const res = await runCompact(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId, armed: true, labels: plan.labels }).catch(() => null);
+        if (compactBusy(res)) {
+          // K2a: the runner shows it running or queued (or a run is in flight). Defer, never restart: that turn's turn_ended (or an
+          // upsert that landed while this evaluation held `busy`, via recheck) re-evaluates and compacts once idle.
+          restartWaiting.add(agent.id);
+          return;
+        }
+        if (!compactNotAttempted(res)) {
+          buddyCrossing.record(agent.id, plan.cap, plan.count);
+          labels = { ...labels, ...plan.labels, [COMPACTED_AT]: new Date().toISOString() };
+        }
+        if (res?.outcome === "ok") {
+          restartWaiting.delete(agent.id);
+          return; // same id, smaller context: no restart
+        }
       }
-      // G1 (unit-buddy-midturn-restart): never restart a Buddy mid-turn, any provider. The Claude branch above only compacts when
+      // G1 (unit-buddy-midturn-restart): never restart a Buddy mid-turn, any provider. The compaction branch above only compacts when
       // idle; a non-Claude Buddy (agy: 21k->158k in ONE turn) used to fall straight through to here and be killed mid-reply, the
       // owner's message lost. The turn's end (idle upsert / turn_ended) re-evaluates. The snapshot can lag, so the runner's
       // status now decides too; an unreadable status keeps the snapshot's answer.
@@ -198,7 +239,7 @@ export function startTokenWatcher({
         return;
       }
       // G1 R2: a Buddy that jumped past the warn in one turn (agy 21k->158k) updates its brief first, now that it is idle; the restart
-      // follows that brief turn's end (turn_ended), or briefWaitMs if the turn never comes. The Claude branch above already nudged.
+      // follows that brief turn's end (turn_ended), or briefWaitMs if the turn never comes. The compaction branch above already nudged.
       if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
         restartWaiting.add(agent.id);
         await sendBriefNudge(agent, labels);
