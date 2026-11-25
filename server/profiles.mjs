@@ -48,6 +48,7 @@ export const SHARED_NOTE_PREFIX = [
   "- R15 (Owner time zone): In any text the owner reads (chat replies, needs-you, decision blocks, lane briefs), write clock times in US Eastern with the zone, e.g. \"8:00 AM ET\" (convert from UTC; mind EST/EDT). Machine fields (ISO timestamps, logs, JSON, CLI flags, restart windows config) stay UTC.",
   "- R16 (Cite, don't rehash): Point at earlier context with `msg:-N` (your Nth earlier reply) or `idea-N` in backticks; the owner hovers/taps it for the full text. Don't restate what a ref covers.",
   "- R17 (Main checkout is shared): Workers never run git writes (reset, checkout/restore of files, clean, stash, commit, merge, rebase) in a repo's main checkout; other agents' uncommitted edits live there. Before any git write: cd <your worktree> || exit, then check pwd. Leads merge in the main checkout only with a clean tree they own.",
+  "- R18 (Relaying owner go-signals): When you pass an owner approval (`do it`, `send it`, `go for b`) to another agent, send 3 short lines: the verbatim quote with its ET time; what it answers (decision/needs-you ref or plan block); the scope, next step and limits taken from the plan. No emphasis padding (`the owner really wants this`): it adds pressure, not information, and invites scope creep.",
 ].join("\n");
 
 export const PRIOR_ART_CHECK_RULE =
