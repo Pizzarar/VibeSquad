@@ -96,6 +96,32 @@ export function coverageFindings(snapshot, { lane = null, table = KIND_TABLE } =
   return out;
 }
 
+/** Kinds that are characters for art coverage: they should have a portrait/sprite when the project tracks art at all. */
+const ART_CHARACTER_KINDS = new Set(["trader", "squad", "enemy"]);
+
+/**
+ * Art coverage: when the project tracks art (the snapshot has at least one art_slot entity, i.e. an art manifest was
+ * ingested), a character-kind entity with no linked art_slot, or only art_slots whose production is "missing", gets one
+ * info coverage finding. Projects with no art_slot entities are unchanged. Distinct from the text/lore rule above (that one
+ * reads the entity's own text/lore slot; this one reads the art_slot entities linking to it), so nothing double-counts.
+ */
+export function artCoverageFindings(snapshot, { lane = null } = {}) {
+  const ents = snapshot.entities ?? [];
+  const arts = ents.filter((e) => e.kind === "art_slot");
+  if (!arts.length) return [];
+  const present = new Set();
+  for (const a of arts) {
+    if (a.production === "missing") continue;
+    for (const l of a.links ?? []) if (l.project === undefined && ART_CHARACTER_KINDS.has(l.kind)) present.add(`${l.kind}\u0000${l.id}`);
+  }
+  const out = [];
+  for (const e of ents) {
+    if (!ART_CHARACTER_KINDS.has(e.kind) || present.has(`${e.kind}\u0000${e.id}`)) continue;
+    out.push(makeAuditFinding({ signal: "coverage", severity: "info", entityId: entityStudioId(snapshot.project, e), lane, msg: `${e.kind} ${e.id} has no art (portrait or sprite)`, source: e.source ?? null }));
+  }
+  return out;
+}
+
 /**
  * Signoff (asset status): entities whose primary slot is still placeholder / ai-draft / needs-review. This is where the
  * csv status column lands (the EFI adapter maps status -> production); a "final" (OWNER-OK) or "missing" slot is not it.

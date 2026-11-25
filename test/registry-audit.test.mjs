@@ -102,3 +102,30 @@ test("runAudit over the fake repo: additive to runChecks, every finding validate
     fake.cleanup();
   }
 });
+
+test("artCoverageFindings: character with no linked art_slot or only missing art -> one info coverage finding; gated on a manifest", () => {
+  const mk = (id, kind, extra = {}) => entity({ id, kind, source: src, ...extra });
+  const art = (id, production, links) => mk(id, "art_slot", { production, links });
+  const ents = [
+    mk("a", "enemy"), mk("b", "enemy"), mk("c", "trader"), mk("d", "squad"), mk("i", "item"),
+    art("enemy.a", "ai-draft", [{ rel: "portrait", kind: "enemy", id: "a" }]),
+    art("enemy.b", "missing", [{ rel: "portrait", kind: "enemy", id: "b" }]),
+    art("squad.d", null, [{ rel: "portrait", kind: "squad", id: "d" }]),
+  ];
+  const f = audit.artCoverageFindings(makeSnapshot({ project: "efi", entities: ents }), { lane: "storybook" });
+  assert.deepEqual(f.map((x) => x.entityId).sort(), ["efi:enemy:b", "efi:trader:c"]);
+  for (const x of f) { assert.equal(x.signal, "coverage"); assert.equal(x.severity, "info"); assert.equal(x.lane, "storybook"); assert.equal(audit.validateAuditFinding(x).ok, true); }
+  // no art_slot entities at all (project without a manifest): nothing emitted
+  assert.deepEqual(audit.artCoverageFindings(makeSnapshot({ project: "efi", entities: ents.filter((e) => e.kind !== "art_slot") })), []);
+});
+
+test("runAudit over the fake repo: art coverage = armored_scav, exo_trooper, doc(trader); not double-counted with text coverage", async () => {
+  const fake = makeFakeRepo();
+  try {
+    const snap = await loadSnapshot(efiAdapter, makeReader(fake.clone, fake.sha), { ref: "origin/main", generatedAt: "2026-01-01T00:00:00.000Z" });
+    const a = await runAudit(snap, efiAdapter, { reader: makeReader(fake.clone, fake.sha) });
+    const art = a.filter((x) => x.signal === "coverage" && /has no art/.test(x.msg));
+    assert.deepEqual(art.map((x) => x.entityId).sort(), ["efi:enemy:armored_scav", "efi:enemy:exo_trooper", "efi:trader:doc"]);
+    assert.equal(new Set(a.filter((x) => x.signal === "coverage").map((x) => `${x.entityId}|${x.msg}`)).size, a.filter((x) => x.signal === "coverage").length);
+  } finally { fake.cleanup(); }
+});

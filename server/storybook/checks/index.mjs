@@ -3,7 +3,7 @@
 // ctx = {snapshot, registry, adapter, hooks, reader|null}. `reader` is optional (pinned-sha Reader): checks that read source files
 // (e.g. #8 .gd comments) need it and degrade gracefully without it.
 import { makeRegistry, validateFinding } from "../schema.mjs";
-import { auditFromFinding, coverageFindings, signoffFindings, sortAudit } from "../../registry/audit.mjs";
+import { artCoverageFindings, auditFromFinding, coverageFindings, signoffFindings, sortAudit } from "../../registry/audit.mjs";
 import * as structural from "./structural.mjs";
 import * as text from "./text.mjs";
 import * as lore from "./lore.mjs";
@@ -53,6 +53,7 @@ export async function runAudit(snapshot, adapter, { reader = null, findings = nu
   const out = [];
   for (const f of found) out.push(auditFromFinding(f, { project: snapshot.project, lane: STORYBOOK_LANE }));
   out.push(...coverageFindings(snapshot, { lane: STORYBOOK_LANE }));
+  out.push(...artCoverageFindings(snapshot, { lane: STORYBOOK_LANE }));
   out.push(...signoffFindings(snapshot, { lane: STORYBOOK_LANE }));
   return sortAudit(out);
 }

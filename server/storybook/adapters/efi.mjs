@@ -492,50 +492,33 @@ async function load(reader, sha) {
     if (body != null) E({ id: `doc:${docId}`, kind: "lore", display: `${docId} (doc)`, source: src(file, 1), data: { text: body, lore_kind: "doc", path: file } });
   }
 
-  // Art slots (F4): read-only; one art_slot entity per manifest slot, plus coverage findings (info) for enemies/characters
-  // with no art at all. The findings are emitted in the SB1 finding shape {check,severity,entityRef,msg,source} with
-  // check:"coverage" so the F2 audit contract (registry/audit.mjs) can map them onto signal:"coverage".
-  const findings = [];
+  // Art slots (F4): read-only; one art_slot entity per manifest slot carrying its production state, linked to the
+  // character/enemy it depicts only when that entity exists at this sha (reg0.has). The adapter emits no findings: missing
+  // art is reported by the F2 coverage audit (registry/audit.mjs artCoverageFindings) from these entities.
   const artText = await reader.readFile(P.art);
-  if (artText == null) {
-    warnings.push(`missing ${P.art} at ${sha.slice(0, 8)}`);
-  } else {
+  if (artText != null) { // optional file: a project without a manifest is unchanged (no warning, no entities)
     let artJson = null;
     let artF = finder("");
     try { artJson = JSON.parse(artText); artF = finder(artText); } catch (e) {
       warnings.push(`unparsable ${P.art}: ${String(e.message).slice(0, 120)}`);
     }
-    if (artJson && artJson.slots && typeof artJson.slots === "object") {
-      const slots = artJson.slots;
-      const has = (id) => Object.hasOwn(slots, id);
+    const slots = artJson?.slots;
+    if (slots && typeof slots === "object" && !Array.isArray(slots)) {
       for (const [slotId, s] of Object.entries(slots)) {
         const { slot, target } = artTarget(slotId, s?.kind);
         const L = linker();
-        if (target) L(slot === "sprite" ? "sprite" : "portrait", target.kind, target.id);
+        if (target && reg0.has(target.kind, target.id)) L(slot === "sprite" ? "sprite" : "portrait", target.kind, target.id);
         E({
           id: slotId, kind: "art_slot", display: slotId, aliases: [], source: src(P.art, artF.key(slotId)), links: L.links,
           production: artProduction(s?.status),
           data: { artKind: s?.kind ?? null, slot, status: s?.status ?? null, batch: s?.batch ?? null, path: s?.path ?? null, candidates: s?.candidates ?? null, target },
         });
       }
-      for (const [id] of Object.entries(enemies)) {
-        if (!has(`enemy.${id}`) && !has(`sprite.${id}`) && !has(`sprite.${id}.front`)) {
-          findings.push({ check: "coverage", severity: "info", entityRef: { kind: "enemy", id }, msg: `enemy ${id} has no art (portrait or sprite)`, source: src(P.enemies, en.f.key(id)) });
-        }
-      }
-      for (const [id] of Object.entries(traders)) {
-        if (!has(`trader.${id}`)) {
-          findings.push({ check: "coverage", severity: "info", entityRef: { kind: "trader", id }, msg: `trader ${id} has no portrait art`, source: src(P.traders, tr.f.key(id)) });
-        }
-      }
-      for (const m of squadMembers) {
-        if (!has(`squad.${m.id}`)) {
-          findings.push({ check: "coverage", severity: "info", entityRef: { kind: "squad", id: m.id }, msg: `squad member ${m.id} has no portrait art`, source: src(P.squad, sq.f.idRow(m.id)) });
-        }
-      }
+    } else if (artJson) {
+      warnings.push(`${P.art}: no slots object, no art slots imported`);
     }
   }
-  return { entities: ents, warnings, findings };
+  return { entities: ents, warnings };
 }
 
 // ---------- hooks (computed from entity data) ----------
