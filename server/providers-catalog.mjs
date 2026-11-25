@@ -3594,7 +3594,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (u.lane) return { lane: u.lane, laneSource: "subject" };
     const scope = u.scopeTeams?.length ? u.scopeTeams : null; // the unit's repo Squads; null = injected git / unscoped: unique codes only
     const rl = typeof implementer?.lane === "string" ? implementer.lane : "";
-    if (rl && rl.toLowerCase() !== "unknown" && !(scope && implementer.team && !scope.includes(implementer.team))) {
+    if (rl && rl.toLowerCase() !== "unknown" && !(scope && !(implementer.team && scope.includes(implementer.team)))) { // usa-61: with a repo scope the run must carry a team label inside it; no label or another Squad = fall through
       const r = resolveLaneCode(codes, rl, scope);
       if (r.lane) return { lane: r.lane, laneSource: "run" };
       if (!r.ambiguous && !r.elsewhere) return { lane: rl, laneSource: "run" }; // a label no Squad maps: the run's own claim
