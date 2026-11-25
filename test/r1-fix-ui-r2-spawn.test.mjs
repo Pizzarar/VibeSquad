@@ -9,6 +9,7 @@ import { ROUTE_LABEL, createPlugin } from "../server/hooks/agent-duties.ts";
 import { ROLE_TABLE } from "../server/role-route.mjs";
 import { routeOverrideLabel } from "../server/route-override.mjs";
 import { DEFAULT_TIER_LADDER } from "../server/stakes-ladder.mjs";
+import { spawnEnvFor } from "../src/spawn-env.ts";
 import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, overrideValue, parseOverrideValue } from "../src/roleSpawn.ts";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
 
@@ -48,7 +49,14 @@ function harness() {
     const config = { cwd: CWD, provider: req.provider, ...(req.model ? { model: req.model } : {}) };
     return (await before.get("agent.create")({ request: { config, labels } })) ?? { config, labels };
   };
-  return { stop, spawn };
+  // Paseo: the hook gets only {config, env} (no labels). env = spawnEnvFor(labels), exactly what src/paseo.ts sends.
+  const spawnEnvOnly = async (req, base = {}) => {
+    const labels = { team: "vibesquad", lane: "vibesquad", role: "worker", profile: req.profile, ...base, ...req.labels };
+    const config = { cwd: CWD, provider: req.provider, ...(req.model ? { model: req.model } : {}) };
+    const env = { ...spawnEnvFor(labels), VS_LANE: "vibesquad", VS_TEAM: "vibesquad" };
+    return (await before.get("agent.create")({ request: { config, env } })) ?? { config, env };
+  };
+  return { stop, spawn, spawnEnvOnly };
 }
 
 const ROLES = Object.fromEntries(Object.entries(ROLE_TABLE).map(([k, r]) => [k, { name: r.name, tier: r.tier, providers: r.providers ?? [] }]));
@@ -155,3 +163,51 @@ test("src wiring: ROLE/SEAT labels, role key as profile, saved-default-missing n
   assert.ok(ta.includes('data-testid="saved-default-missing"') && ta.includes('data-testid="stakes-select"'));
   assert.ok(ta.includes("roleSpawn ? roleSpawn.profile : profile.name"));
 });
+
+test("spawnEnvFor carries stakes + route override as VS_STAKES / VS_ROUTE_OVERRIDE (same value as the label)", () => {
+  const r = send("review", { stakes: "tierA-security", override: { provider: "claude", model: "claude-opus-5-5" } });
+  const env = spawnEnvFor({ role: "worker", profile: r.profile, ...r.labels });
+  assert.equal(env.VS_STAKES, "tierA-security");
+  assert.equal(env.VS_ROUTE_OVERRIDE, r.labels["vs.route-override"]);
+  assert.equal(env.VS_PROFILE, "review");
+  assert.equal(spawnEnvFor({ role: "worker", profile: "Implement - Sonnet" }).VS_STAKES, undefined);
+  assert.equal(spawnEnvFor({ role: "worker" }).VS_ROUTE_OVERRIDE, undefined);
+});
+
+test("Paseo shape (config + env only, no labels): role, role+stakes, role+override (incl. non-Claude), legacy pick", withEnv(async () => {
+  const h = harness();
+  try {
+    const role = await h.spawnEnvOnly(send("implement"));
+    assert.deepEqual([role.config.provider, role.config.model], ["claude", "claude-sonnet-5-5"]);
+
+    const top = await h.spawnEnvOnly(send("implement", { stakes: "tierA-invariant" }));
+    assert.deepEqual([top.config.provider, top.config.model], ["claude", "claude-opus-5-5"]);
+    const cheap = await h.spawnEnvOnly(send("implement", { stakes: "mechanical" }));
+    assert.equal(cheap.config.model, DEFAULT_TIER_LADDER.claude.cheap.model);
+
+    // Override survives (model, then provider rung under stakes, then non-Claude providers).
+    const opus = await h.spawnEnvOnly(send("implement", { override: { provider: "claude", model: "claude-opus-5-5" } }));
+    assert.deepEqual([opus.config.provider, opus.config.model], ["claude", "claude-opus-5-5"]);
+    for (const [key, role2] of Object.entries(ROLES)) {
+      for (const g of overrideGroups(role2, DEFAULT_TIER_LADDER)) {
+        const m = g.models[0];
+        const out = await h.spawnEnvOnly(send(key, { override: { provider: g.provider, model: m } }), SEAT(key));
+        assert.deepEqual([out.config.provider, out.config.model], [g.provider, m], `${key} ${g.provider}|${m}`);
+        const rung = await h.spawnEnvOnly(send(key, { stakes: "tierA-invariant", override: { provider: g.provider } }), SEAT(key));
+        assert.deepEqual([rung.config.provider, rung.config.model], [g.provider, DEFAULT_TIER_LADDER[g.provider].top.model], `${key} ${g.provider} rung`);
+      }
+    }
+    const gem = await h.spawnEnvOnly(send("review", { override: { provider: "antigravity-cli" } }));
+    assert.equal(gem.config.provider, "antigravity-cli");
+
+    // Legacy saved pick: profile=<old name> + pinned model, no stakes/override env.
+    const legacyReq = { profile: "Implement - Sonnet", provider: "claude", model: "claude-sonnet-5-5", labels: {} };
+    const legacy = await h.spawnEnvOnly(legacyReq);
+    assert.deepEqual([legacy.config.provider, legacy.config.model], ["claude", "claude-sonnet-5-5"]);
+    // The pinned legacy profile still wins over a stakes env a role row would have sent (today's behaviour).
+    const pinned = await h.spawnEnvOnly({ ...legacyReq, labels: { stakes: "tierA-invariant" } });
+    assert.equal(pinned.config.provider, "claude");
+  } finally {
+    h.stop?.();
+  }
+}));
