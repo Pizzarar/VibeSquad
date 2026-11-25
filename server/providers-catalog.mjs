@@ -28,6 +28,8 @@ import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-
 import { normalizeWfLabel } from "./wf-label.mjs";
 import { entryVerdict, isDocsTarget, parseVerdictLine } from "./verdict.mjs"; // usa-60: read-only reuse of the idea-883 verdict parsers
 import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "./lead-handoff.mjs";
+import { BRAINSTORM_WARN_NUDGE } from "./token-watch.mjs";
+import { DONE_TEXT } from "./restart-coord.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 4000;
@@ -393,6 +395,42 @@ const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
   (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
 );
 
+// usa-63 (EXP7b): per-turn trigger classification from real runner/server evidence only.
+// Structured runner fields (senderId, owner, resume, origin) take precedence; otherwise only exact anchored server protocol headers match.
+export const TURN_TRIGGERS = ["watch", "send", "log-event", "restart-done", "restart-request", "compact", "wrap-up", "idle-kick", "none"];
+const WATCH_PING_RE = /^(?:Watch w-[0-9a-f]+ (?:complete\b|finished\b|stall\b)|Verdicts \(read in code from each agent's own )/;
+const LOG_EVENT_RE = /^New team log event in lane /;
+const RESTART_DONE_RE = new RegExp(`^${escapeRe(DONE_TEXT)}:\\s+the\\s+VS\\s+restart\\s+finished\\b`);
+// "Restart request rr-<id> (tip ..." (drain ask) and "... was aborted" notices: server pings that drain leads before a restart.
+// Kept apart from restart-done (the lift-your-hold ping): they are the restart's cost on the way in, not on the way out.
+const RESTART_REQUEST_RE = /^Restart request rr-[0-9A-Za-z-]+ \(tip /;
+const WRAP_UP_TRIGGER_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT, BRAINSTORM_WARN_NUDGE].map(
+  (prompt) => new RegExp(`^${escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+")}`, "i"),
+);
+const IDLE_KICK_RE = /^(?:You are idle with open work: |Lane \S+ went idle again on ")/;
+
+/** Classify why a turn started from runner input metadata + exact server protocol headers. Never infers from free-form text. */
+export function classifyTurnTrigger(ev, { isFirstInput = false } = {}) {
+  if (!ev || typeof ev !== "object") return "none";
+  if (typeof ev.senderId === "string" && ev.senderId) return "send"; // an agent send is always `send`, whatever its text says
+  if (ev.resume === true || ev.origin) return "none";
+  if (isFirstInput) return ev.owner === true ? "send" : "none";
+  const text = typeof ev.text === "string" ? ev.text : "";
+  // Server-side pings (restart-done, restart request, /compact) reach the runner as owner:true, so the anchored headers are
+  // checked BEFORE the owner fallback (usa-63 R1 H1). An owner typing a header verbatim counts as it: the owner is trusted.
+  if (text) {
+    if (WATCH_PING_RE.test(text)) return "watch";
+    if (LOG_EVENT_RE.test(text)) return "log-event";
+    if (RESTART_DONE_RE.test(text)) return "restart-done";
+    if (RESTART_REQUEST_RE.test(text)) return "restart-request";
+    if (COMPACT_INPUT_RE.test(text)) return "compact";
+    if (WRAP_UP_TRIGGER_RES.some((re) => re.test(text))) return "wrap-up";
+    if (IDLE_KICK_RE.test(text)) return "idle-kick";
+  }
+  if (ev.owner === true) return "send";
+  return "none";
+}
+
 
 // ---- usa-44: unit evidence for implementers that ran in the MAIN checkout (cwd is not a `unit-*` worktree), so the
 // worktree-basename path in attributeImplementer() can't see them. Folded during the existing event fold (no second pass),
@@ -510,6 +548,9 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "exit" || ev.type === "error") {
     st.curTools = undefined; // usa-40 R1 M3: a failed turn's tools must not leak into the next turn
+    st.curTurnDispatched = false;
+    st.curTrigger = "none";
+    st.hasTurnTrigger = false;
     st.exited = true;
     if (t !== null) st.exitTs = t;
     if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) {
@@ -524,12 +565,18 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "input") {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
+    st.curTurnDispatched = false;
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED") st.priorPass = false;
     // L4: an env-stop BLOCKED survives follow-up turns that carry no verdict line; any PASS/FAIL verdict clears it.
     if (st.msgVerdict === "BLOCKED") st.priorBlocked = true;
     else if (st.msgVerdict === "PASS" || st.msgVerdict === "FAIL") st.priorBlocked = false;
-    if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
+    const isFirstInput = !st.inputSeen;
+    if (isFirstInput) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
+    if (!ev.steerOnly || !st.hasTurnTrigger) {
+      st.curTrigger = classifyTurnTrigger(ev, { isFirstInput });
+      st.hasTurnTrigger = true;
+    }
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
     st.lastLine = "";
@@ -556,8 +603,11 @@ function foldEvent(st, ev) {
       st.pass = st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
   } else if (ev.type === "tool") {
-    if ((st.role === "lead" || st.role === "brainstorm") && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
+    if ((st.role === "lead" || st.role === "brainstorm") && ev.phase === "call") (st.curTools ??= []).push({ name: ev.name, input: ev.input });
     else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
+    if (ev.phase === "call" && st.handoff && !st.catchupDone && isDispatchTool({ name: ev.name, input: ev.input })) {
+      st.curTurnDispatched = true;
+    }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -602,14 +652,45 @@ function foldEvent(st, ev) {
     }
     const turnTools = st.curTools ?? [];
     st.curTools = undefined;
+    const dispatched = !!st.curTurnDispatched;
+    st.curTurnDispatched = false;
+    const trigger = st.curTrigger ?? "none";
+    st.curTrigger = "none";
+    st.hasTurnTrigger = false;
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
-    // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
-    if ((st.role === "lead" || st.role === "brainstorm") && st.turns + 1 > LEAD_LONG_TURN_MIN) {
-      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, waiting: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
-      const k = classifyLeadTurn(turnTools, lt.seen);
-      lt[k].turns += 1;
-      lt[k].costUsd += delta;
+    // usa-63 (Per3): postHandoff = successor catch-up turns (first turn up to and including first dispatch, capped at POST_HANDOFF_CAP).
+    // Predecessor lingering turns after handoff-successor are tracked separately as postHandoffPredecessor.
+    // successorLifetime preserves the full lifetime of vs.handoff-from successors as a separate field.
+    const turnNum = st.turns + 1;
+    const postHandoffPredecessor = Boolean(st.handedOff);
+    let postHandoff = false;
+    if (st.handoff && !st.catchupDone && !postHandoffPredecessor) {
+      if (turnNum <= POST_HANDOFF_CAP) {
+        postHandoff = true;
+        if (dispatched) {
+          st.catchupDone = true;
+        } else if (turnNum === POST_HANDOFF_CAP) {
+          st.catchupDone = true;
+          st.catchupCapped = true;
+        }
+      } else {
+        st.catchupDone = true;
+      }
+    }
+    const successorLifetime = Boolean(st.handoff);
+    const tt = (st.turnTriggers ??= new Map());
+    const tk = `${trigger}|${postHandoff ? 1 : 0}|${postHandoffPredecessor ? 1 : 0}|${successorLifetime ? 1 : 0}`;
+    let ttb = tt.get(tk);
+    if (!ttb) { ttb = { trigger, postHandoff, postHandoffPredecessor, successorLifetime, turns: 0, costUsd: 0 }; tt.set(tk, ttb); }
+    ttb.turns += 1;
+    ttb.costUsd += delta;
+    // usa-40 R1 L5 / usa-63: record per-turn tool classification signals for lead/brainstorm so ?leadLongThreshold=N can slice at any threshold.
+    if (st.role === "lead" || st.role === "brainstorm") {
+      const waiting = turnTools.length > 0 && turnTools.every(isWaitTool);
+      const productive = !waiting && turnTools.some(isProductiveTool);
+      const sigs = waiting ? [] : turnTools.filter((t) => t.input !== undefined && !isWaitTool(t)).map(toolSig);
+      (st.leadTurns ??= []).push({ turn: st.turns + 1, costUsd: delta, waiting, productive, sigs });
     }
     const b = bucketFor(st, day);
     b.turns += 1;
@@ -625,6 +706,7 @@ function foldIdentity(st, m) {
   if (!m) return;
   if (typeof m.role === "string" && m.role) st.role = m.role.replace(/^(?:former|old|retired)-/i, ""); // usa-56: retired roles ("former-lead") fold into the live role at the source
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
+  if (typeof m.labels?.["handoff-successor"] === "string" && m.labels["handoff-successor"]) st.handedOff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
   const rawProfile = typeof m.profile === "string" && m.profile ? m.profile : (typeof m.labels?.profile === "string" && m.labels.profile ? m.labels.profile : undefined);
@@ -801,7 +883,7 @@ function logLinesStep(file, maxBytes) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, handedOff: false, catchupDone: false, catchupCapped: false, curTurnDispatched: false, curTrigger: "none", hasTurnTrigger: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -829,6 +911,16 @@ const SPAWN_BURST_WINDOW_MS = 2 * 60_000;
 const SPAWN_BURST_MIN = 3;
 // usa-40: lead turns past this index are the "long tail"; mirrors RESPAWN_OF_LABEL in server/hooks/agent-duties.ts (a .ts module this .mjs can't import).
 export const LEAD_LONG_TURN_MIN = 80;
+/** usa-63 (Per3): max catch-up turns counted as postHandoff for a handoff successor before a dispatch. */
+export const POST_HANDOFF_CAP = 10;
+const DISPATCH_TOOL_RE = /^\S*(?:^|[_./:-])(?:spawn_worker|create_agent)$/i;
+const DISPATCH_CMD_RE = /(?:^|[\s;&|])vs\s+log\s+decision\b/;
+function isDispatchTool(t) {
+  const name = String(t.name ?? "");
+  if (DISPATCH_TOOL_RE.test(name)) return true;
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  return DISPATCH_CMD_RE.test(cmd) || DISPATCH_CMD_RE.test(name);
+}
 const RESPAWN_OF_LABEL = "respawnOf";
 const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:log|spawn)\b/;
 const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:spawn_worker|report)$/i;
@@ -1402,6 +1494,7 @@ function agentV2(st, agentId) {
     lastError: st.lastError ?? "",
     lastErrorTs: st.lastErrorTs ?? null,
     handoff: !!st.handoff,
+    catchupCapped: !!st.catchupCapped,
     firstTurnCostUsd: st.firstTurnCostUsd ?? null,
     wrapUpCostUsd: st.wrapUpCostUsd ?? 0,
     wrapUpTurns: st.wrapUpTurns ?? 0,
@@ -2195,25 +2288,140 @@ function findStorms(tsList, windowMs, min) {
   return storms.map((s) => ({ firstAt: s.firstAt, lastAt: s.lastAt, count: ts.filter((t) => t >= s.firstAt && t <= s.lastAt).length }));
 }
 
-/** usa-40: lead long-tail (turn > LEAD_LONG_TURN_MIN) split, pooled and per team. Whole-log, unfiltered by squad/day like the other v2 rollups. */
-function buildLeadLongTurns(allAgentSquads) {
+export const LEAD_LONG_THRESHOLD_MIN = 1;
+export const LEAD_LONG_THRESHOLD_MAX = 1000;
+/** Clamp ?leadLongThreshold=N to [1, 1000], falling back to LEAD_LONG_TURN_MIN (80) when omitted or non-numeric. */
+export function clampLeadLongThreshold(raw) {
+  if (raw === undefined || raw === null || raw === "") return LEAD_LONG_TURN_MIN;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return LEAD_LONG_TURN_MIN;
+  return Math.min(LEAD_LONG_THRESHOLD_MAX, Math.max(LEAD_LONG_THRESHOLD_MIN, Math.trunc(n)));
+}
+
+/** usa-40 / usa-63: lead long-tail (turn > threshold) split, pooled and per team. Whole-log, unfiltered by squad/day like the other v2 rollups. */
+function buildLeadLongTurns(allAgentSquads, threshold = LEAD_LONG_TURN_MIN) {
+  const thresh = clampLeadLongThreshold(threshold);
   const zero = () => ({ turns: 0, costUsd: 0 });
   const mk = () => ({ productive: zero(), waiting: zero(), loop: zero(), other: zero() });
   const pooled = mk();
   const by = new Map();
   const byLR = new Map(); // usa-49: per (team, lane, role), lead + brainstorm
   for (const { st, squad } of allAgentSquads) {
-    if (!st.longTail) continue;
+    if (!st.leadTurns?.length) continue;
+    let seen = null;
+    let lt = null;
+    for (const t of st.leadTurns) {
+      if (t.turn <= thresh) continue;
+      if (!lt) { lt = mk(); seen = new Map(); }
+      let k;
+      if (t.waiting) {
+        k = "waiting";
+      } else {
+        const repeated = !t.productive && t.sigs.some((g) => (seen.get(g) ?? 0) >= 2);
+        for (const g of t.sigs) seen.set(g, (seen.get(g) ?? 0) + 1);
+        k = t.productive ? "productive" : repeated ? "loop" : "other";
+      }
+      lt[k].turns += 1;
+      lt[k].costUsd += t.costUsd;
+    }
+    if (!lt) continue;
     const lr = getOrSet(byLR, JSON.stringify([squad ?? "unknown", st.lane ?? "", st.role]), () => ({ teamId: squad ?? "unknown", lane: st.lane ?? "", role: st.role, ...mk() }));
-    for (const k of ["productive", "waiting", "loop", "other"]) { lr[k].turns += st.longTail[k].turns; lr[k].costUsd += st.longTail[k].costUsd; }
-    if (st.role !== "lead") continue; // pooled + bySquad stay lead-only
+    for (const k of ["productive", "waiting", "loop", "other"]) { lr[k].turns += lt[k].turns; lr[k].costUsd += lt[k].costUsd; }
+    if (st.role !== "lead") continue; // pooled + bySquad stay lead-only (usa-56 already folds former-lead -> lead at foldIdentity)
     const row = getOrSet(by, squad ?? "unknown", mk);
     for (const k of ["productive", "waiting", "loop", "other"]) {
-      for (const t of [pooled[k], row[k]]) { t.turns += st.longTail[k].turns; t.costUsd += st.longTail[k].costUsd; }
+      for (const dst of [pooled[k], row[k]]) { dst.turns += lt[k].turns; dst.costUsd += lt[k].costUsd; }
     }
   }
-  return { threshold: LEAD_LONG_TURN_MIN, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })),
+  return { threshold: thresh, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })),
     byLaneRole: [...byLR.values()].sort((a, b) => a.teamId.localeCompare(b.teamId) || a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role)) };
+}
+
+/** usa-63 (EXP7b): turn trigger distribution (totals, byRole, byLaneRole) with postHandoff + postHandoffPredecessor counts/cost per trigger. */
+function buildTurnTriggers(agentStates) {
+  const mkBucket = () => ({ turns: 0, costUsd: 0, postHandoffTurns: 0, postHandoffCostUsd: 0, postHandoffPredecessorTurns: 0, postHandoffPredecessorCostUsd: 0 });
+  const mkMap = () => Object.fromEntries(TURN_TRIGGERS.map((k) => [k, mkBucket()]));
+  const addTo = (dst, e) => {
+    dst.turns += e.turns;
+    dst.costUsd += e.costUsd;
+    if (e.postHandoff) { dst.postHandoffTurns += e.turns; dst.postHandoffCostUsd += e.costUsd; }
+    if (e.postHandoffPredecessor) { dst.postHandoffPredecessorTurns += e.turns; dst.postHandoffPredecessorCostUsd += e.costUsd; }
+  };
+  const totals = mkMap();
+  const byRole = new Map();
+  const byLR = new Map();
+  for (const { st, squad } of agentStates) {
+    if (!st.turnTriggers?.size) continue;
+    const role = st.role || "unknown";
+    const r = getOrSet(byRole, role, () => ({ role, turns: 0, costUsd: 0, byTrigger: mkMap() }));
+    const lr = getOrSet(byLR, JSON.stringify([squad ?? "unknown", st.lane ?? "", role]), () => ({ teamId: squad ?? "unknown", lane: st.lane ?? "", role, turns: 0, costUsd: 0, byTrigger: mkMap() }));
+    for (const e of st.turnTriggers.values()) {
+      const k = TURN_TRIGGERS.includes(e.trigger) ? e.trigger : "none";
+      addTo(totals[k], e);
+      addTo(r.byTrigger[k], e);
+      r.turns += e.turns; r.costUsd += e.costUsd;
+      addTo(lr.byTrigger[k], e);
+      lr.turns += e.turns; lr.costUsd += e.costUsd;
+    }
+  }
+  const roleOrd = (role) => { const i = ROLE_ORDER.indexOf(role); return i >= 0 ? i : ROLE_ORDER.length; };
+  return {
+    triggers: [...TURN_TRIGGERS],
+    totals,
+    byRole: [...byRole.values()].sort((a, b) => roleOrd(a.role) - roleOrd(b.role) || a.role.localeCompare(b.role)),
+    byLaneRole: [...byLR.values()].sort((a, b) => a.teamId.localeCompare(b.teamId) || a.lane.localeCompare(b.lane) || roleOrd(a.role) - roleOrd(b.role) || a.role.localeCompare(b.role)),
+  };
+}
+
+/** usa-63 (Per3): pre-handoff vs successor catch-up (postHandoff, capped at POST_HANDOFF_CAP) vs predecessor lingering (postHandoffPredecessor), plus successorLifetime. */
+function buildPostHandoffCost(agentStates) {
+  const mk = () => ({
+    preHandoff: { turns: 0, costUsd: 0 },
+    postHandoff: { turns: 0, costUsd: 0 },
+    postHandoffPredecessor: { turns: 0, costUsd: 0 },
+    successorLifetime: { turns: 0, costUsd: 0 },
+    catchupCapped: 0,
+  });
+  const finish = (x) => {
+    const tot = x.preHandoff.costUsd + x.postHandoff.costUsd + x.postHandoffPredecessor.costUsd;
+    return {
+      ...x,
+      postHandoffShare: tot > 0 ? Math.round((x.postHandoff.costUsd / tot) * 1000) / 1000 : null,
+      postHandoffPredecessorShare: tot > 0 ? Math.round((x.postHandoffPredecessor.costUsd / tot) * 1000) / 1000 : null,
+    };
+  };
+  const totals = mk();
+  const byRole = new Map();
+  for (const { st } of agentStates) {
+    if (!st.turnTriggers?.size) continue;
+    const role = st.role || "unknown";
+    const r = getOrSet(byRole, role, mk);
+    if (st.catchupCapped) {
+      totals.catchupCapped += 1;
+      r.catchupCapped += 1;
+    }
+    for (const e of st.turnTriggers.values()) {
+      const side = e.postHandoff ? "postHandoff" : e.postHandoffPredecessor ? "postHandoffPredecessor" : "preHandoff";
+      totals[side].turns += e.turns;
+      totals[side].costUsd += e.costUsd;
+      r[side].turns += e.turns;
+      r[side].costUsd += e.costUsd;
+      if (e.successorLifetime) {
+        totals.successorLifetime.turns += e.turns;
+        totals.successorLifetime.costUsd += e.costUsd;
+        r.successorLifetime.turns += e.turns;
+        r.successorLifetime.costUsd += e.costUsd;
+      }
+    }
+  }
+  const roleOrd = (role) => { const i = ROLE_ORDER.indexOf(role); return i >= 0 ? i : ROLE_ORDER.length; };
+  return {
+    cap: POST_HANDOFF_CAP,
+    totals: finish(totals),
+    byRole: [...byRole.entries()]
+      .sort(([a], [b]) => roleOrd(a) - roleOrd(b) || a.localeCompare(b))
+      .map(([role, x]) => ({ role, ...finish(x) })),
+  };
 }
 
 /** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
@@ -3385,7 +3593,7 @@ let usageQueue = Promise.resolve(); // one computation at a time: the sliced ste
 
 /** getUsage() for request paths: warm caches off the loop, then the aggregate in slices. Same result as getUsage(opts). */
 export function getUsageAsync(opts = {}) {
-  const key = JSON.stringify([opts.home ?? null, opts.since ?? null, opts.until ?? null, opts.squad ?? null, !!opts.usageReview?.suppressSchedule]);
+  const key = JSON.stringify([opts.home ?? null, opts.since ?? null, opts.until ?? null, opts.squad ?? null, clampLeadLongThreshold(opts.leadLongThreshold), !!opts.usageReview?.suppressSchedule]);
   const ttl = opts.git ? 0 : (opts.cacheMs ?? USAGE_RESULT_TTL_MS);
   const cached = usageResults.get(key);
   const clock = opts.now ?? Date.now;
@@ -3420,7 +3628,7 @@ export const usageTestHooks = {
 };
 
 /** The /usage rollup as steps: `yield` marks a point where the async path may hand the loop back (no other effect). */
-function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed, noSyncGit = false } = {}) {
+function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, leadLongThreshold, now = Date.now, warmed, noSyncGit = false } = {}) {
   const homeDir = home || vibesquadHome();
   const squad = typeof squadOpt === "string" && squadOpt.trim() ? squadOpt.trim() : null; // usa-24: optional per-Squad filter
   const laneTeams = readLaneTeams(home);
@@ -3447,7 +3655,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad, agentId: n.slice(0, -6) });
     if (squad && agentSquad !== squad) continue;
-    agentStates.push({ st, agentId: n.slice(0, -6) });
+    agentStates.push({ st, agentId: n.slice(0, -6), squad: agentSquad });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
     la.agents += 1;
     if (st.handoff) la.handoffs += 1;
@@ -3827,7 +4035,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   });
   yield;
   const spawnStorms = computeSpawnStorms(agents);
-  const leadLongTurns = buildLeadLongTurns(allAgentSquads);
+  const leadLongTurns = buildLeadLongTurns(allAgentSquads, leadLongThreshold);
+  const turnTriggers = buildTurnTriggers(agentStates);
+  const postHandoffCost = buildPostHandoffCost(agentStates);
   const readyTime = buildReadyTime(agents);
   yield;
   const bootSize = yield* bootSizesSteps(home, { since, until });
@@ -3865,6 +4075,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byProfile,
     spawnStorms,
     leadLongTurns,
+    turnTriggers,
+    postHandoffCost,
     readyTime,
     compaction: buildCompaction(agents, floor, compactEvents),
     bootSize,
@@ -4024,7 +4236,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
       if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const format = url.searchParams.get("format") ?? "json";
       if (format !== "md" && format !== "json") return sendJson(res, 400, { error: `bad format "${format}"` });
-      const usage = await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview });
+      const usage = await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, leadLongThreshold: url.searchParams.get("leadLongThreshold") ?? undefined, git: probeOpts.git, usageReview });
       if (format === "json") return sendJson(res, 200, { ok: true, exportedAt: new Date().toISOString(), ...usage });
       return sendJson(res, 200, { ok: true, markdown: usageToMarkdown(usage) });
     }
@@ -4043,7 +4255,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
     // Light route for the banner poll: limits.jsonl + the alert state only, no usage fold.
     if (sub === "quota-alerts") return sendJson(res, 200, { quotaAlerts: activeQuotaAlerts(readLimits(home), home) });
-    if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
+    if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, leadLongThreshold: url.searchParams.get("leadLongThreshold") ?? undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     // idea-242 L1: an fs fault (settings write/rename, usage scan) names the host path; it goes to the server log only.
