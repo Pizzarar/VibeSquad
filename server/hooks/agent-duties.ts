@@ -261,6 +261,7 @@ export const WORKER_PACK = [
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
   "- Your final message IS the report: the server forwards it to your lead when your turn ends. Do not spend a turn on `vs send`/`report` to the lead afterwards, whatever the task prompt says (`Report to ★ …` means just finish with a final message). Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
+  "- Run your tests, builds and audits in the FOREGROUND (a plain Bash call; raise `timeout` if needed). Never use `run_in_background` or Monitor for them, and never end your turn while one is still running: your final message is the report and goes out as DONE, so a turn ended on a running job reaches your lead with no verdict. If a run is too long, split it or run fewer files.",
 ].join("\n");
 
 export const BRAINSTORM_PACK = [

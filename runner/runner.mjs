@@ -1828,7 +1828,18 @@ export class Runner {
     const { queued, ...rec } = f.rec;
     // R4-1: a tool can only be in flight in a running agent with a child; a lost/exited/parked log that ended mid-call has none.
     const openTool = status === 'running' ? rec.openTool ?? null : null;
-    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()], openTool };
+    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()], openTool, ...(status === 'idle' && this._bgHeldNow(id) ? { bgHeld: true } : {}) };
+  }
+
+  // idea-631: an idle live agent whose park the runner is holding on its own background work, OR that is still in the post-turn
+  // grace + first probe (heldIds' rule, without its re-arm side effect): its turn end is not a report yet. False once the probe saw
+  // no shell (it parks, leaving live) or the hold dropped (bg-stopped / held-dead clear heldSince).
+  _bgHeldNow(id) {
+    const e = this.live.get(id);
+    if (!e || e.status !== 'idle' || e.perms.size > 0) return false; // a pending permission reads blocked (permission), not waiting-bg
+    if (e.heldSince !== null && e.heldSince !== undefined) return true;
+    if (this._wakeOwed(e)) return true; // the hold's shells exited (held-dead / probe saw none): the bg-wake turn is coming, not a report
+    return !!(this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0 && (e.parkTimer !== null || e.probing)); // post-turn window, only while a park check is coming
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
