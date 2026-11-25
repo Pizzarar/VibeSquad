@@ -25,7 +25,7 @@ The unit does what it set out to do. On lead rows the lane now survives, the pro
 | longlane | long lane | Main Game Project |
 | xllane | …And Side Content Pass (61ch) | Main Game Project |
 | shortlane | UI | the xl project |
-| real names | Playtest Overlay / Release Desk / Boring Mode / Standing Teams | Escape From Idle / SportsBallBattles / rosserlogic.tech / Windows · VibeSquad App |
+| real names | Playtest Overlay / Release Desk / Boring Mode / Standing Teams | Escape From Idle / SportsBallBattles / EFI / Windows · VibeSquad App |
 
 - **Viewports:** 1280×900 (sidebar 290px), 1920×1080 (307px) and 3200×1800 (380px), each in dark and light, for both builds. That is 72 runs. The full windows were shot at 1920 dark and light and at 3200 @1.2 dark.
 - **Psycho sidebar:** I also checked the rows with no lane, in dark and light. These are Psycho rows, where the `Desk` lane is `null`. I set `app.vibe=fun` plus `vs.vibeMigratedNormal=1`.
@@ -45,7 +45,7 @@ I did my first pass before reading the plan.
 | Check | Result | Evidence |
 |---|---|---|
 | Titles keep ≥ 20ch | **Pass.** The title box is 178px at 290, 195px at 307 and 268px at 380 in all 72 runs, the same as BASE. The title CSS was not touched. Every stock title shows in full. | `logs/*.json` `whoW` |
-| Location line readable | **Pass with realistic names; m1/m2 at the edges.** At 1280, lane/project reads: <br>• "Playtest Overl… · Escape Fro…" (BASE "Playtest O… · Escape From Idle") <br>• "Standing Tea… · Windows · Vi…" (BASE "S… · Windows · VibeSquad App") <br>• "Release Desk · SportsBallBatt…" <br>• "Boring Mode · rosserlogic.tech" in full | `cmp-base-vs-head-real-names-1280.png` |
+| Location line readable | **Pass with realistic names; m1/m2 at the edges.** At 1280, lane/project reads: <br>• "Playtest Overl… · Escape Fro…" (BASE "Playtest O… · Escape From Idle") <br>• "Standing Tea… · Windows · Vi…" (BASE "S… · Windows · VibeSquad App") <br>• "Release Desk · SportsBallBatt…" <br>• "Boring Mode · EFI" in full | `cmp-base-vs-head-real-names-1280.png` |
 | Full text in `title=` | **Pass.** Every row carries `title="<Lane> · <Project>"` (stock, long, xl and Psycho), including Desk rows. | `logs/*.json` `title` |
 | Rows with no lane, and hub/Desk rows | **Unaffected.** <br>• Normal Desk rows read "Desk · VibeSquad", the same as BASE. <br>• Psycho Desk rows (lane `null`) read "VibeSquad" with `::before` = `none`, so there's no dot. <br>• Psycho lane rows render the separator, light and dark. | `head-psycho-light-nolane.png`; psycho run output in "Artifacts" |
 | Invariants (counts, selection) at 1920/3200 | **Pass.** Header `6` = 5 rows + "1 more". Project badges: Desk 4 + Bug Chaser 1 + Main Game 1 = 6. Exactly one `.on` row. | `head-{dark,light}-1920-window.png`, `head-dark-3200-window.png` |
