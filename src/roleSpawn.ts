@@ -53,7 +53,7 @@ const AGY_CLAUDE_EXCLUDED_ROLES = new Set(["lead", "brainstorm"]);
 export const STAKES_CHOICES = ["normal", "tierA-security", "tierA-invariant", "mechanical"] as const;
 export type Stakes = (typeof STAKES_CHOICES)[number];
 
-type RoleLike = { name: string; tier: string; providers: string[] };
+type RoleLike = { key?: string; name: string; tier: string; providers: string[] };
 type LadderLike = Record<string, Partial<Record<string, { model?: string; effort?: string }>>>;
 export type Override = { provider: string; model?: string };
 
@@ -80,12 +80,13 @@ export function walkOrder(role: RoleLike, stakes: string): string[] {
 }
 
 /** Effective walk order (R10): worker roles try agy-claude just before direct claude when the ladder has a rung for this tier. */
-function effectiveWalkOrder(role: RoleLike, ladder: LadderLike | undefined, stakes: string): string[] {
-  const order = role.providers.length ? walkOrder(role, stakes) : ["claude"];
+export function effectiveWalkOrder(role: RoleLike, ladder: LadderLike | undefined, stakes: string, roleKey?: string): string[] {
+  const order = walkOrder(role, stakes);
   const tier = tierFor(role, stakes);
   const ci = order.indexOf("claude");
+  const key = (roleKey ?? role.key ?? "").trim().toLowerCase();
   if (
-    !AGY_CLAUDE_EXCLUDED_ROLES.has(role.name.trim().toLowerCase()) &&
+    !AGY_CLAUDE_EXCLUDED_ROLES.has(key) &&
     ci >= 0 &&
     !order.includes(AGY_CLAUDE_FAMILY) &&
     ladder?.[AGY_CLAUDE_FAMILY]?.[tier]?.model
@@ -96,8 +97,8 @@ function effectiveWalkOrder(role: RoleLike, ladder: LadderLike | undefined, stak
 }
 
 /** The provider + model the ladder would pick (the first provider of the stakes' walk order x tier for these stakes). */
-export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stakes: string): { provider: string; model: string } {
-  const provider = effectiveWalkOrder(role, ladder, stakes)[0] ?? "claude";
+export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stakes: string, roleKey?: string): { provider: string; model: string } {
+  const provider = effectiveWalkOrder(role, ladder, stakes, roleKey)[0] ?? "claude";
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
 }
 
@@ -110,7 +111,7 @@ export function landingPick(
   role: RoleLike,
   ladder: LadderLike | undefined,
   stakes: string,
-  opts: { capped?: readonly string[]; override?: Override | null } = {},
+  opts: { capped?: readonly string[]; override?: Override | null; roleKey?: string } = {},
 ): { provider: string; model: string; via: string; allCapped: boolean } {
   const ov = opts.override ?? null;
   const capped = opts.capped ?? [];
@@ -119,7 +120,7 @@ export function landingPick(
   if (ov && !capped.includes(ov.provider)) {
     return { provider: ov.provider, model: ov.model ?? modelOf(ov.provider), via: ov.model ? "override" : "override (provider, ladder model)", allCapped: false };
   }
-  const providers = effectiveWalkOrder(role, ladder, stakes);
+  const providers = effectiveWalkOrder(role, ladder, stakes, opts.roleKey);
   const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
   for (const provider of providers) {
     if (ov && provider === ov.provider) continue;
@@ -130,7 +131,7 @@ export function landingPick(
     // The hook keeps the caller's model only when it belongs to the hop target's family; this badge has no family table, so it shows the ladder model.
     return { provider, model: modelOf(provider), via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder", allCapped: false };
   }
-  const stay = ov?.provider ?? ladderPick(role, ladder, stakes).provider;
+  const stay = ov?.provider ?? ladderPick(role, ladder, stakes, opts.roleKey).provider;
   return { provider: stay, model: ov?.model ?? modelOf(stay), via: `all capped (${skipped.join(", ")})`, allCapped: true };
 }
 
@@ -169,7 +170,7 @@ export function buildRoleSpawn(opts: { roleKey: string; role: RoleLike; ladder?:
     const v = routeOverrideLabel({ provider: ov.provider, model: ov.model });
     if (v) labels["vs.route-override"] = v;
   }
-  const picked = ladderPick(opts.role, opts.ladder, stakes);
+  const picked = ladderPick(opts.role, opts.ladder, stakes, opts.roleKey);
   const runnerProvider = picked.provider === AGY_CLAUDE_FAMILY ? "antigravity-cli" : picked.provider;
   return { provider: ov?.provider || runnerProvider, ...(ov?.model ? { model: ov.model } : {}), profile: opts.roleKey, labels };
 }

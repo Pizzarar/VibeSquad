@@ -104,8 +104,8 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
 
 /** Which model a role row will run: the ladder's pick for these stakes (after capped failover), or the override.
  *  `warn` = every provider is capped (Spawn stays enabled; the note says what happens). */
-function roleBadges(roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, capped: readonly string[]): { badges: [string, string][]; note: string } {
-  const l = landingPick(roleDef, ladder, stakes, { capped, override });
+function roleBadges(roleKey: string, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, capped: readonly string[]): { badges: [string, string][]; note: string } {
+  const l = landingPick(roleDef, ladder, stakes, { capped, override, roleKey });
   return { badges: [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]], note: l.allCapped ? allCappedNote(l.provider) : "" };
 }
 
@@ -273,7 +273,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
   const isProviderInstalled = installedProviders.includes(spawnProvider);
-  const landing = roleSpawn && roleDef ? roleBadges(roleDef, ladder, stakes, override, capped) : null;
+  const landing = roleSpawn && roleDef ? roleBadges(roleSpawn.profile, roleDef, ladder, stakes, override, capped) : null;
   const badges: [string, string][] = landing ? landing.badges : [["provider/model", `${profile.provider}/${profile.model}`]];
   if (modeId) badges.push(["modeId", modeId]);
   if (!roleSpawn && profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
@@ -791,7 +791,7 @@ export function AddBuddyModal({
   const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
-  const buddyLanding = roleSpawn && roleDef ? roleBadges(roleDef, ladder, stakes, parseOverrideValue(ovValue), capped) : null;
+  const buddyLanding = roleSpawn && roleDef ? roleBadges(roleSpawn.profile, roleDef, ladder, stakes, parseOverrideValue(ovValue), capped) : null;
   const buddyBadges: [string, string][] = buddyLanding ? buddyLanding.badges : [["provider/model", `${profile.provider}/${profile.model}`]];
 
   const submit = async () => {
