@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileFindings, staleUsageReviewFindings, transcriptFindings, AUDIT_SOURCE } from '../scripts/audit-perfection.mjs';
+import { fileFindings, staleUsageReviewFindings, transcriptFindings, newModelFindings, AUDIT_SOURCE } from '../scripts/audit-perfection.mjs';
 import { readInboxCards, addInboxCards } from '../server/inbox.mjs';
 
 const tmpDirs = [];
@@ -120,4 +120,91 @@ test('vs inbox add --source tags the card', () => {
   const [c] = readInboxCards(home);
   assert.equal(c.source, 'audit:perfection');
   assert.equal(c.laneId, 'perfection');
+});
+
+test('newModelFindings flags a new catalog model once, ignores ladder models and effort variants, and dedupes across runs', async () => {
+  const baseHome = tmp();
+  const ladder = {
+    claude: {
+      top: { model: 'claude-opus-5-5', effort: 'high' },
+      mid: { model: 'claude-sonnet-5-5', effort: 'medium' },
+    },
+    'antigravity-cli': {
+      top: { model: 'gemini-4-neon', effort: 'high' },
+      cheap: { model: 'gemini-3.8-flash' },
+    },
+  };
+  const catalog = {
+    claude: {
+      provider: 'claude',
+      models: [
+        { id: 'claude-opus-5-5', source: 'built-in' },
+        { id: 'claude-sonnet-5-5-high', source: 'built-in' },
+      ],
+    },
+    'antigravity-cli': {
+      provider: 'antigravity-cli',
+      models: [
+        { id: 'gemini-4-neon-low', source: 'cli probe' },
+        { id: 'gemini-4-neon-high', source: 'cli probe' },
+        { id: 'gemini-4-argon-high', source: 'cli probe' },
+        { id: 'gemini-3.8-flash', source: 'cli probe' },
+        { id: 'gemini-4-carbon-low', source: 'cli probe' },
+        { id: 'gemini-4-carbon-high', source: 'cli probe' },
+      ],
+    },
+  };
+
+  const findings = await newModelFindings({ catalog, ladder });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].key, 'new-model:antigravity-cli/gemini-4-carbon');
+  assert.equal(findings[0].text, 'antigravity-cli/gemini-4-carbon seen in catalog, not on ladder: trial it as an arm?');
+  assert.match(findings[0].evidence, /providers-catalog antigravity-cli/);
+
+  const first = fileFindings(findings, { baseHome });
+  assert.equal(first.filed.length, 1);
+  const cards = readInboxCards(baseHome);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].laneId, 'perfection');
+  assert.equal(cards[0].source, AUDIT_SOURCE);
+  assert.match(cards[0].text, /antigravity-cli\/gemini-4-carbon seen in catalog, not on ladder: trial it as an arm\?/);
+
+  const second = fileFindings(await newModelFindings({ catalog, ladder }), { baseHome });
+  assert.equal(second.filed.length, 0);
+  assert.deepEqual(second.skipped, ['new-model:antigravity-cli/gemini-4-carbon']);
+  assert.equal(readInboxCards(baseHome).length, 1);
+});
+
+test('newModelFindings respects stored ladder overrides in baseHome', async () => {
+  const baseHome = tmp();
+  fs.writeFileSync(
+    path.join(baseHome, 'stakes-ladder.json'),
+    JSON.stringify({ 'antigravity-cli': { mid: { model: 'gemini-4-carbon' } } }),
+  );
+  const catalog = {
+    'antigravity-cli': {
+      provider: 'antigravity-cli',
+      models: [
+        { id: 'gemini-4-neon-high', source: 'cli probe' },
+        { id: 'gemini-4-carbon-medium', source: 'cli probe' },
+      ],
+    },
+  };
+  const findings = await newModelFindings({ baseHome, catalog });
+  assert.deepEqual(findings, []);
+});
+
+test('newModelFindings returns no findings and does not throw when catalog read fails', async () => {
+  const ladder = { claude: { top: { model: 'claude-opus-5-5' } } };
+  const asyncFail = await newModelFindings({
+    readCatalog: async () => { throw new Error('provider offline'); },
+    ladder,
+  });
+  assert.deepEqual(asyncFail, []);
+
+  const syncFail = await newModelFindings({
+    readCatalog: () => { throw new Error('ENOENT'); },
+    ladder,
+  });
+  assert.deepEqual(syncFail, []);
 });
