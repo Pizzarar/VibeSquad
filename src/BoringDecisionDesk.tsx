@@ -324,6 +324,20 @@ export async function refreshDecisions(): Promise<void> {
   return inFlightFetch;
 }
 
+let decisionViewOpen = false;
+const decisionViewSubs = new Set<() => void>();
+export function setBoringDecisionView(open: boolean) {
+  if (open === decisionViewOpen) return;
+  decisionViewOpen = open;
+  for (const f of decisionViewSubs) f();
+}
+const subscribeDecisionView = (f: () => void) => {
+  decisionViewSubs.add(f);
+  return () => void decisionViewSubs.delete(f);
+};
+export const getBoringDecisionView = () => decisionViewOpen;
+export const useBoringDecisionView = () => useSyncExternalStore(subscribeDecisionView, getBoringDecisionView, () => false);
+
 /** Sidebar hook: subscribes to the open decision count and keeps it fresh in the background. */
 export function useDecisionCount(): number {
   const s = useSyncExternalStore(subscribeStore, () => storeState, () => storeState);
@@ -389,9 +403,11 @@ export function BoringDecisionDesk({
 
   const teamKey = views.map((v) => v.team.id).join("|");
 
-  // Load decisions on mount.
+  // Load decisions on mount and publish the active Decision Desk view for App's URL sync (?view=decisions).
   useEffect(() => {
+    setBoringDecisionView(true);
     void refreshDecisions();
+    return () => setBoringDecisionView(false);
   }, []);
 
   // Load per-Squad logs for the live status strip (refetches when logRev bumps after sending).

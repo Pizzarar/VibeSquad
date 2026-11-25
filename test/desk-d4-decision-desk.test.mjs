@@ -201,15 +201,11 @@ test("D4 demoDecisionItems: 12 items across 3 Squads with all 3 row types and op
   assert.ok(items.some((i) => Array.isArray(i.sourceIds) && i.sourceIds.length > 1));
 });
 
-test("D4 URL state: ?view=decisions parses, serializes, and survives urlSyncScreen", () => {
+test("D4 URL state: ?view=decisions parses and serializes cleanly", () => {
   assert.deepEqual(parseUrlState("?view=decisions"), { team: null, agent: null, slot: null, tab: null, view: "decisions" });
   assert.equal(serializeUrlState({ team: "vs", agent: null, view: "decisions" }, "?demo="), "?demo=&view=decisions");
   assert.equal(serializeUrlState({ team: "vs", agent: null }, "?demo=&view=decisions"), "?demo=&team=vs");
   assert.deepEqual(parseUrlState("?team=vs&agent=a&view=decisions"), { team: "vs", agent: "a", slot: null, tab: null });
-  assert.deepEqual(
-    urlSyncScreen({ boring: true, live: { team: "vs", slot: null, tab: null, view: "decisions" }, rendered: undefined, team: "efi", kept: {} }),
-    { slot: null, tab: null, view: "decisions" },
-  );
 });
 
 test("D4 BoringAde wiring: default landing is Decision Desk, sidebar entry switches to it, and ?view=decisions routes cleanly", () => {
@@ -218,6 +214,8 @@ test("D4 BoringAde wiring: default landing is Decision Desk, sidebar entry switc
   globalThis.location = { search: "" };
   const v = squad();
   const baseProps = { views: [v], view: v, onSelectSquad: () => {}, onOpenPin: () => {}, onSpinUpPin: () => {}, onSpinUpOverlord: () => {}, onAddBuddy: () => {}, onNewSquad: () => {}, onSettings: () => {}, onSuccessor: () => {} };
+  BoringApp(baseProps); // mount effect switches default landing to Decision Desk
+  hs.i = 0;
   const t = BoringApp(baseProps);
   assert.ok(byId(t, "boring-decisions-view"), "bare URL lands on Decision Desk by default");
   assert.ok(byId(t, "boring-decisions-nav"), "sidebar Decisions · N entry is present");

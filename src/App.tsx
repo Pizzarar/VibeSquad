@@ -53,6 +53,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp, boringAgentLanding } from "./BoringAde";
+import { getBoringDecisionView, useBoringDecisionView } from "./BoringDecisionDesk";
 import { urlSyncAgent, urlSyncDecision, urlSyncScreen } from "./urlSync";
 import { StorybookHost, closeStorybook, getStorybookTarget, probeStorybook, storybookBackInFlight, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
@@ -1888,6 +1889,7 @@ export function App() {
     if (popActive.current && new URLSearchParams(location.search).get("sb")) return;
     closeStorybook("replace");
   }, [activeTeamId, sbNavAgent]);
+  const boringDecisionView = useBoringDecisionView();
   useEffect(() => {
     // U1 r2 (UX R33 M1): while the Storybook takeover is open its entry is openStorybook's ({sb} state, which Esc's history.back() relies
     // on). Nothing App derives can name a new screen then: BoringApp unmounting clears its published agent / screen keys, which is not a
@@ -1906,10 +1908,21 @@ export function App() {
     const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId, team: activeTeamId || null, teamOf });
     // U1: the empty Desk slot / Overview sub-tab on screen, read live like the agent (one push with the team), only for the team being written.
     const screenKeys = urlSyncScreen({ boring: vibe === "boring", live: getBoringScreenKeys(), rendered: boringScreen, team: activeTeamId || null, kept: parseUrlState(location.search) });
-    const next = serializeUrlState({ team: activeTeamId || null, agent, ...screenKeys, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
+    const decisionView = vibe === "boring" ? (getBoringScreenKeys() === undefined ? parseUrlState(location.search).view : getBoringDecisionView() ? "decisions" : null) : null;
+    const next = serializeUrlState({ team: activeTeamId || null, agent, ...screenKeys, ...(decisionView ? { view: decisionView } : {}), squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded]);
+  // D4: sync ?view=decisions when Decision Desk mounts/unmounts without altering U1/U2's dep list above.
+  useEffect(() => {
+    if (vibe !== "boring" || getStorybookTarget() || storybookBackInFlight()) return;
+    const landed = getBoringLandedGen();
+    if (landed !== undefined && landed < popGen.current) return;
+    const screenKeys = urlSyncScreen({ boring: true, live: getBoringScreenKeys(), rendered: boringScreen, team: activeTeamId || null, kept: parseUrlState(location.search) });
+    const next = serializeUrlState({ team: activeTeamId || null, agent: getBoringShownAgent() ?? null, ...screenKeys, ...(boringDecisionView ? { view: "decisions" } : {}) }, location.search);
+    const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
+    if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+  }, [vibe, boringDecisionView]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {

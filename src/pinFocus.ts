@@ -313,22 +313,12 @@ export const getBoringShownAgent = () => boringShown;
 
 // U1 (idea-997/895): the non-agent screen keys BoringApp has on screen (an empty Desk slot card, an Overview sub-tab), tagged with the
 // project they belong to; undefined while BoringApp is not mounted. App's URL sync writes them as ?slot= / ?tab= (urlSyncScreen).
-// D4: optional `view: "decisions"` published separately via setBoringScreenView so BoringAde's U1 block stays untouched.
-export type BoringScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null; view?: "decisions" | null };
+export type BoringScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
 let boringScreen: BoringScreenKeys | undefined;
-let boringView: "decisions" | null = null;
 const boringScreenSubs = new Set<() => void>();
 export function setBoringScreenKeys(k: BoringScreenKeys | undefined) {
-  const next = k ? { team: k.team, slot: k.slot, tab: k.tab, ...(boringView ? { view: boringView } : {}) } : undefined;
-  if (next === boringScreen || (next && boringScreen && next.team === boringScreen.team && next.slot === boringScreen.slot && next.tab === boringScreen.tab && (next.view ?? null) === (boringScreen.view ?? null))) return;
-  boringScreen = next;
-  for (const f of boringScreenSubs) f();
-}
-export function setBoringScreenView(v: "decisions" | null) {
-  if (v === boringView) return;
-  boringView = v;
-  if (!boringScreen) return;
-  boringScreen = { team: boringScreen.team, slot: boringScreen.slot, tab: boringScreen.tab, ...(v ? { view: v } : {}) };
+  if (k === boringScreen || (k && boringScreen && k.team === boringScreen.team && k.slot === boringScreen.slot && k.tab === boringScreen.tab)) return;
+  boringScreen = k;
   for (const f of boringScreenSubs) f();
 }
 const subscribeBoringScreen = (f: () => void) => {

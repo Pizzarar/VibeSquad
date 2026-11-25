@@ -15,7 +15,7 @@ import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from
 import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { setBoringLandedGen, setBoringScreenKeys, setBoringScreenView, setBoringShownAgent, spinUpPin } from "./pinFocus";
+import { setBoringLandedGen, setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
 import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
@@ -433,18 +433,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // ?team=gone fallback, a Ctrl+K switch out of Storybook while the URL still names the old project) adopts nothing; a view that resolves
   // after mount (registry / roster arrive late) adopts them when it becomes the URL's team (pendingUrl0 below).
   const urlKeys0 = url0 && url0.team && url0.team === (view?.team.id ?? null) ? url0 : null;
-  const [mode, setMode] = useState<Mode>(() =>
-    takeColdUsageFocus() ? "usage"
-    : url0?.view === "decisions" ? "decisions"
-    : urlKeys0?.slot ? "chat"
-    : DECISION_DESK_DEFAULT_LANDING && !url0?.team && !url0?.agent ? "decisions"
-    : "project",
-  );
+  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : urlKeys0?.slot ? "chat" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
-  const decisionCount = useDecisionCount();
-  useEffect(() => setBoringScreenView(mode === "decisions" ? "decisions" : null), [mode]);
-  useEffect(() => () => setBoringScreenView(null), []);
   useEffect(() => {
     const open = () => setMode("usage");
     window.addEventListener(OPEN_USAGE_EVENT, open);
@@ -454,6 +445,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
+  const decisionCount = useDecisionCount();
+  useEffect(() => {
+    if (mode === "project" && (url0?.view === "decisions" || (DECISION_DESK_DEFAULT_LANDING && !url0?.team && !url0?.agent))) setMode("decisions");
+  }, []);
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
   const [removingPin, setRemovingPin] = useState<{ pin: Pin; name: string; returnTo: unknown } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
