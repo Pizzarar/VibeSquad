@@ -1,5 +1,6 @@
 // R1 (docs/PLAN_PER_ROLES_LADDER_1125.md): `vs profiles` lists roles + the tier ladder; old model-named profiles are
 // hidden aliases behind one count line (--aliases lists them). --role/--name/--json keep today's profile shape.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
