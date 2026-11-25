@@ -575,6 +575,7 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
     ? null
     : roleSpawnConfig(desiredKey, {
         profiles,
+        profilesPath,
         usageList: [
           ...(Array.isArray(capOpts.usageProviders) ? capOpts.usageProviders : []),
           ...Object.keys(

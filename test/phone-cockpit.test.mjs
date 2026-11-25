@@ -13,6 +13,8 @@ import {
   openBuddy,
   phoneBugsSurface,
   phoneLaneRows,
+  pickLiveRestart,
+  hostRestartKey,
   resetBuddyRequest,
   subscribeBuddyRequest,
 } from "../src/phoneCockpitLogic.ts";
@@ -108,17 +110,27 @@ test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onS
   assert.ok(/state === "none"\) onSpinUp\(r\.pin(?:,\s*[^)]+)?\);\s*openBuddy\(r\.laneId\)/.test(s));
 });
 
-test("idea-838: phone shell has a Storybook entry gated by probeStorybook, opens via openStorybook, Back returns to cockpit", () => {
+test("idea-838: phone shell has a Storybook entry gated by the known-missing probe, opens via openStorybook, Back returns to cockpit", () => {
   const c = src("PhoneCockpit.tsx");
-  assert.ok(c.includes('import { openStorybook, probeStorybook } from "./StorybookView";'), "imports openStorybook + probeStorybook");
+  assert.ok(c.includes('import { openStorybook, useStorybookMissing } from "./StorybookView";'), "imports openStorybook + useStorybookMissing");
   assert.ok(c.includes("phone-storybook-btn"), "entry present");
-  assert.match(c, /!probeStorybook\(view\.team\.id\)/, "entry hidden when probe reports no Storybook");
+  assert.match(c, /const sbMissing = useStorybookMissing\(view\?\.team\.id \?\? null\)/, "probe read through the subscribe/notify hook so a resolved probe re-renders");
+  assert.match(c, /\{view && !sbMissing && \(/, "entry hidden when the probe reports no Storybook");
   assert.match(c, /openStorybook\(view\.team\.id, view\.team\.name\)/, "entry opens the current project's Storybook");
   // Storybook takeover must precede the phone-shell gate so a phone user actually sees the view (and its ← Back closes it).
   const app = src("App.tsx");
   const sbGate = app.indexOf("storybookOpen && deviceRole");
   const phoneGate = app.indexOf("if (phoneShell)");
   assert.ok(sbGate > 0 && sbGate < phoneGate, "StorybookHost branch precedes the phone shell, so Back returns to the cockpit");
+});
+
+test("idea-838 m2: Storybook entry names the project like the desktop item, project name ellipsized when long", () => {
+  const c = src("PhoneCockpit.tsx");
+  assert.match(c, /<span className="phone-storybook-label">Open Storybook · <\/span>/);
+  assert.match(c, /<span className="phone-storybook-name">\{view\.team\.name\}<\/span>/);
+  const css = src("styles.css");
+  for (const cls of [".phone-storybook-btn", ".phone-storybook-label", ".phone-storybook-name"]) assert.ok(css.includes(cls), cls);
+  assert.match(css, /\.phone-storybook-name \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
 });
 
 test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher & corpo settings search", () => {
@@ -315,4 +327,18 @@ test("H2: Restart Host (Server & Runner) — two-step confirm, coordinated route
   assert.match(t, /data-testid="phone-restart-host-abort"[^>]*onClick=\{\(\) => void host\("DELETE"\)\}/);
   assert.match(t, /const ABORTABLE = new Set\(\["queued", "requested", "draining", "ready"\]\)/, "no Abort once firing");
   assert.match(t, /<RestartHost hostRestart=\{host\?\.restartRequest \?\? null\} \/>/, "seeded from H1's host status");
+});
+
+test("idea-894 pickLiveRestart: local yields to a newer host prop", () => {
+  const k = (h) => hostRestartKey(h);
+  const oldDone = { id: "a", state: "done" };
+  const localDone = { req: { id: "a", state: "aborted" }, hostKey: k(oldDone) };
+  assert.deepEqual(pickLiveRestart(localDone, oldDone), { id: "a", state: "aborted" }, "same prop -> local");
+  assert.deepEqual(pickLiveRestart(localDone, { id: "b", state: "queued" }), { id: "b", state: "queued" }, "new id -> prop");
+  assert.equal(pickLiveRestart(localDone, null), null, "prop cleared -> null");
+  const localActive = { req: { id: "a", state: "draining" }, hostKey: k({ id: "a", state: "queued" }) };
+  assert.deepEqual(pickLiveRestart(localActive, { id: "a", state: "queued" }), { id: "a", state: "draining" }, "local active, same prop -> local");
+  assert.deepEqual(pickLiveRestart(localActive, { id: "a", state: "done" }), { id: "a", state: "done" }, "prop state moved -> prop");
+  assert.deepEqual(pickLiveRestart(undefined, { id: "c", state: "queued" }), { id: "c", state: "queued" }, "no local -> prop");
+  assert.equal(pickLiveRestart(undefined, undefined), null);
 });

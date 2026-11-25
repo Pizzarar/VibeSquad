@@ -10,13 +10,14 @@ import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readR
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
-import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
+import { attestedVerdict, digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { abortRestartRequest, createRestartRequest, formatRequestStatus, readRestartRequest, syncRepoRoot } from "./restart-request.mjs";
 import { isHubLane } from "./lane-pure.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
+import { assertLegacyProfilesWritable, handleRolesApi } from "./roles-api.mjs";
 import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,7 +31,7 @@ import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { foldersOf, isTeamAsleep, patchTeamsRegistryAsync, readTeamsConfig, resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateFoldersBody, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
-import { isServerSideFsError } from "./file-lock.mjs";
+import { isServerSideFsError, withFileLock } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
@@ -477,7 +478,16 @@ export async function drainedFeedbackGate(caller, type, text, backend, teams = n
  * reviewer with no verdict line logs NO-VERDICT. Any other entry is unchanged. An unreadable worker report is marked UNVERIFIED.
  */
 export async function verbatimDigestText(caller, type, text, backend) {
-  if (!caller?.digest || type !== "done" || !caller.digestFor) return text;
+  return (await digestLogRecord(caller, type, text, backend)).text;
+}
+
+/**
+ * idea-883: verbatimDigestText's text plus the server-attested `verdict` ({ reviewer, profile, line }) a digest's `done` entry
+ * stores when the digested worker is a reviewer with a verdict line (attestedVerdict). The merge/push verdict gate trusts only
+ * that field; it is set here, never read from a request body, so a non-reviewer's report(done) cannot produce one.
+ */
+export async function digestLogRecord(caller, type, text, backend) {
+  if (!caller?.digest || type !== "done" || !caller.digestFor) return { text, verdict: null };
   const id = String(caller.digestFor);
   try {
     const b = backend ?? sharedRunnerBackend();
@@ -486,9 +496,12 @@ export async function verbatimDigestText(caller, type, text, backend) {
     const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
     const profile = String(worker?.labels?.profile ?? worker?.profile ?? "").trim() || null;
-    return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
+    const workerText = lastAssistantText(tl, Infinity);
+    const out = digestVerdictText({ workerText, digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
+    const verdict = attestedVerdict({ worker: { ...worker, id: worker?.id ?? id }, workerText });
+    return { text: out, verdict };
   } catch {
-    return `UNVERIFIED (worker report unreadable): ${text}`;
+    return { text: `UNVERIFIED (worker report unreadable): ${text}`, verdict: null };
   }
 }
 
@@ -818,12 +831,14 @@ async function handleLog(req, res, opts = {}) {
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
       const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
       await drainedFeedbackGate(caller, who.type, t, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
+      const rec = await digestLogRecord(caller, who.type, t, opts.backend); // idea-883: text + server-attested reviewer verdict
       const { entry } = appendVsLogEntry({
         teamId: String(team),
         laneId: String(lane || team),
         agent: who.agent,
         type: who.type,
-        text: await verbatimDigestText(caller, who.type, t, opts.backend),
+        text: rec.text,
+        verdict: rec.verdict,
         refs: who.refs,
         plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: pass === true,
@@ -1221,12 +1236,14 @@ async function handleVsLog(req, res, opts = {}) {
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
       const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
       await drainedFeedbackGate(caller, who.type, text, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
+      const rec = await digestLogRecord(caller, who.type, text, opts.backend); // idea-883: text + server-attested reviewer verdict
       const resEntry = appendVsLogEntry({
         teamId,
         laneId,
         agent: who.agent,
         type: who.type,
-        text: await verbatimDigestText(caller, who.type, text, opts.backend),
+        text: rec.text,
+        verdict: rec.verdict,
         refs: who.refs,
         plan: body.plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: body.pass === true,
@@ -1646,7 +1663,8 @@ async function handleProfiles(req, res) {
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
-      const saved = saveProfiles(body);
+      // P5d: same lock as the roles editor's profiles.json writes; once migrated a write that changes a role is a 409.
+      const saved = await withFileLock(getProfilesPath(), () => saveProfiles(body, undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(saved.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1658,6 +1676,7 @@ async function handleProfiles(req, res) {
     return res.end();
   } catch (e) {
     if (sendServerFsError(res, e, "profiles")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1670,7 +1689,7 @@ async function handleProfilesImport(req, res) {
   try {
     const body = await readCleanBody(req);
     if (body.mode === "default") {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(seeded.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1702,7 +1721,7 @@ async function handleProfilesImport(req, res) {
       finalProfiles = existing;
     }
     if (!finalProfiles.length) {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         mode: "default",
@@ -1711,7 +1730,7 @@ async function handleProfilesImport(req, res) {
         warningsByProfile: {},
       });
     }
-    const saved = saveProfiles({ profiles: finalProfiles });
+    const saved = await withFileLock(getProfilesPath(), () => saveProfiles({ profiles: finalProfiles }, undefined, { beforeWrite: assertLegacyProfilesWritable }));
     return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
       ok: true,
       mode: "paseo",
@@ -1721,6 +1740,7 @@ async function handleProfilesImport(req, res) {
     });
   } catch (e) {
     if (sendServerFsError(res, e, "profiles import")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -2789,6 +2809,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handlePushTest(req, res);
       case "/__vibesquad/profiles":
         return handleProfiles(req, res);
+      case "/__vibesquad/roles":
+        return handleRolesApi(req, res, {
+          sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir),
+          readBody: readCleanBody,
+          serverError: (r, e) => sendServerFsError(r, e, "roles") || sendServerError(r, e, "roles"),
+        });
       case "/__vibesquad/profiles/import":
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":

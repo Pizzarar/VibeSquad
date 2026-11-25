@@ -217,7 +217,9 @@ function recentPlanHandoff(laneLogPath, entry) {
   return null;
 }
 
-export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [], plan = "", pass = false }) {
+// idea-883: `verdict` ({ reviewer, profile, line }) is the server-attested reviewer verdict from digestLogRecord (vibesquad-api);
+// only a `done` entry keeps it, and no endpoint passes a request body's value here.
+export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [], plan = "", pass = false, verdict = null }) {
   const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
   const safeTeam = safeSegment(teamId || "vibesquad");
   const safeLane = safeSegment(laneId || safeTeam || "vibesquad");
@@ -234,6 +236,9 @@ export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric
     refs: Array.isArray(refs) ? refs.map(String) : [],
     ...(pf.plan ? { plan: pf.plan } : {}),
     ...(pf.plan && pf.pass ? { pass: true } : {}),
+    ...(String(type) === "done" && verdict?.reviewer && verdict?.line
+      ? { verdict: { reviewer: String(verdict.reviewer), profile: verdict.profile ? String(verdict.profile) : null, line: String(verdict.line) } }
+      : {}),
   };
   const line = JSON.stringify(entry) + "\n";
 
@@ -830,7 +835,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
           : rawProfileName.toLowerCase() === "brainstorm - gemini"
             ? "Brainstorm - Gemini"
             : // P5c: the brainstorm ROLE ("brainstorm", any case but the old alias "Brainstorm") respawns as the role.
-              roleNameHit(rawProfileName, liveRoles(profiles))?.key === "brainstorm"
+              roleNameHit(rawProfileName, liveRoles(profiles, body.profilesPath))?.key === "brainstorm"
               ? "brainstorm"
               : undefined)
       : undefined;
@@ -851,6 +856,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       ? null
       : roleSpawnConfig(desiredProfileKey, {
           profiles,
+          profilesPath: body.profilesPath,
           usageList: body.forceProvider
             ? []
             : [

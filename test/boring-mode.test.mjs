@@ -1152,6 +1152,7 @@ stubHdr("antigravity.mjs", "export const CANCEL_AND_RESUME_PROMPT = (n) => `resu
 stubHdr("pinActions.mjs", "export const openBriefEditor = () => {};");
 stubHdr("boringHeaderStrip.mjs", "export const BORING_CTX_WARN_PCT = 72;\nexport const boringHeaderStrip = () => [];\nexport const boringNeedsYouStall = () => null;\nexport const formatToolMinutes = (s) => `${s}`;\nexport const shortToolName = (n) => n;");
 stubHdr("attentionItems.mjs", "export const openToolOf = () => null;");
+stubHdr("profiles.mjs", "export const useProfiles = () => ({ roles: undefined });\nexport const roleNameFor = () => null;\nexport const shortModel = (m) => String(m ?? '');");
 const hdrCode = transformSync("BoringAgentHeader.tsx", d3src("BoringAgentHeader.tsx"), { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/g, `from ${JSON.stringify(reactUrl)}`)
