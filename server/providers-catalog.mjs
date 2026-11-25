@@ -2415,24 +2415,44 @@ function cohortOf(units) {
   };
 }
 
+const BURST_DEFS = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
+const BURST_STAKES_ORDER = ["normal", "tierA-security", "tierA-invariant", "mechanical", "unknown"];
+
+/** One burst cell: units + the usa-51 metrics, nulled (`insufficient`) under PLAN_SCORE_MIN_N units. */
+function burstCell(def, us) {
+  const insufficient = us.length < PLAN_SCORE_MIN_N;
+  const c = cohortOf(us);
+  return { key: def.key, label: def.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
+}
+function burstIndex(u) {
+  const n = u.dispatchBurstSize;
+  return !Number.isFinite(n) || n < 1 ? -1 : BURST_DEFS.findIndex((d) => d.test(n));
+}
+
 /** usa-51: merged units bucketed by dispatchBurstSize (1 solo, 2-3, 4+). A null/invalid burst counts toward `unjoined`.
- * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5). */
+ * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5).
+ * usa-59: `byStakes` / `byLane` cross-split the same buckets by the implementer's stakes label / the unit's lane. Each row is
+ * `{ key, units, buckets: [3 cells, same shape as `buckets`] }` over joined units only; empty rows are dropped. */
 export function buildBurstCohorts(merged) {
-  const defs = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
-  const groups = defs.map(() => []);
+  const groups = BURST_DEFS.map(() => []);
+  const byStakes = new Map(), byLane = new Map();
   let unjoined = 0;
+  const add = (map, key, i, u) => { if (!map.has(key)) map.set(key, BURST_DEFS.map(() => [])); map.get(key)[i].push(u); };
   for (const u of merged) {
-    const n = u.dispatchBurstSize;
-    if (!Number.isFinite(n) || n < 1) { unjoined += 1; continue; }
-    groups[defs.findIndex((d) => d.test(n))].push(u);
+    const i = burstIndex(u);
+    if (i < 0) { unjoined += 1; continue; }
+    groups[i].push(u);
+    add(byStakes, typeof u.stakes === "string" && u.stakes ? u.stakes : "unknown", i, u);
+    add(byLane, typeof u.lane === "string" && u.lane ? u.lane : "unknown", i, u);
   }
-  const buckets = defs.map((d, i) => {
-    const us = groups[i];
-    const insufficient = us.length < PLAN_SCORE_MIN_N;
-    const c = cohortOf(us);
-    return { key: d.key, label: d.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
-  });
-  return { buckets, unjoined, minN: PLAN_SCORE_MIN_N };
+  const rows = (map, order) => [...map.entries()].map(([key, g]) => ({ key, units: g.reduce((t, x) => t + x.length, 0), buckets: BURST_DEFS.map((d, i) => burstCell(d, g[i])) }))
+    .sort(order);
+  const rank = (k) => { const i = BURST_STAKES_ORDER.indexOf(k); return i < 0 ? BURST_STAKES_ORDER.length : i; };
+  return {
+    buckets: BURST_DEFS.map((d, i) => burstCell(d, groups[i])), unjoined, minN: PLAN_SCORE_MIN_N,
+    byStakes: rows(byStakes, (a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)),
+    byLane: rows(byLane, (a, b) => b.units - a.units || a.key.localeCompare(b.key)),
+  };
 }
 
 /** Last ≤10 merged units (recent) vs the preceding ≤10 (prior); delta = recent - prior per metric. */
