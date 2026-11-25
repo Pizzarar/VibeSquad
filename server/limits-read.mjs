@@ -87,8 +87,17 @@ export function readLimits(home) {
 export const QUOTA_READING_MAX_AGE_MS = 5 * 3600_000;
 
 /**
+ * Length of each quota window (G2 r1). A long window's row (weekly) with a valid resetsAt still ahead is kept up to its
+ * window length, not the 5h bound: once a provider sits at its weekly cap its turns stop, so no new sample arrives, and
+ * dropping the row after 5h flipped spawns back onto it mid-limit every 5h. A resetsAt further out than one window is
+ * garbled and gets only the 5h bound. 5h rows and rows with no resetsAt keep the 5h bound.
+ */
+export const QUOTA_WINDOW_MS = Object.freeze({ "5h": 5 * 3600_000, weekly: 7 * 24 * 3600_000 });
+
+/**
  * readLimits rows -> usageProviders entries ({ id, source, windows: [{ window, usedPct, resetsAt }] }, one per provider
- * family) for provider-failover.isProviderOverQuota. A row is dropped when its reading is older than maxAgeMs, when its
+ * family) for provider-failover.isProviderOverQuota. A row is dropped when its reading is older than maxAgeMs (a weekly
+ * row with resetsAt ahead: older than its window, QUOTA_WINDOW_MS), when its
  * resetsAt has passed (the window rolled over: the old % no longer applies), or when usedPct is not a number. Pool rows
  * (`antigravity-cli/claude-gpt`: the Claude/GPT quota on the Google plan) are dropped: normalizeProviderFamily would fold
  * them into antigravity-cli, but Gemini spawns don't draw on that pool. Missing data -> [] (no switch).
@@ -101,9 +110,11 @@ export function usageFromLimits(rows, { now = Date.now(), maxAgeMs = QUOTA_READI
     const used = Number(r?.usedPct);
     if (r?.usedPct === null || r?.usedPct === undefined || !Number.isFinite(used)) continue;
     const seenMs = Math.max(tsMs(r.checkedAt) ?? -Infinity, tsMs(r.at) ?? -Infinity);
-    if (!Number.isFinite(seenMs) || now - seenMs > maxAgeMs) continue;
     const resetMs = tsMs(r.resetsAt);
     if (resetMs !== null && resetMs <= now) continue;
+    const windowMs = QUOTA_WINDOW_MS[String(r.window ?? "")] ?? 0;
+    const heldToReset = resetMs !== null && windowMs > QUOTA_READING_MAX_AGE_MS && resetMs - now <= windowMs;
+    if (!Number.isFinite(seenMs) || now - seenMs > (heldToReset ? Math.max(maxAgeMs, windowMs) : maxAgeMs)) continue;
     getOrSet(byProvider, provider, () => []).push({ window: String(r.window ?? ""), usedPct: used, resetsAt: r.resetsAt ?? null });
   }
   return [...byProvider].map(([id, windows]) => ({ id, source: "limits.jsonl", windows }));

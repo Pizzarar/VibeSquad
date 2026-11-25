@@ -246,51 +246,53 @@ test(
   }),
 );
 
+/** One self-handoff of a site-polish lead; `over` = { usageProviders?, labels?, provider? } (no usageProviders key = the live default). */
+async function runHandoff({ dir, vsHome, profilesPath, noDisk }, over = {}) {
+  const oldLead = {
+    id: `lead-${Math.random().toString(36).slice(2, 8)}`,
+    title: "★ SITE POLISH ord5",
+    provider: over.provider ?? "claude",
+    model: "claude-opus-5-5",
+    cwd: dir,
+    status: "idle",
+    createdAt: "2026-11-01T00:00:00.000Z",
+    labels: { team: "site", lane: "site-polish", role: "lead", ord: "5", profile: "Lead - Claude", ...over.labels },
+  };
+  const agents = new Map([[oldLead.id, oldLead]]);
+  const payloads = [];
+  const coordinator = createLeadHandoffCoordinator({
+    rootDir: dir,
+    baseHome: vsHome,
+    profilesPath,
+    ...noDisk,
+    cappedProviders: [],
+    ...("usageProviders" in over ? { usageProviders: over.usageProviders } : {}),
+    listAgents: async () => [...agents.values()],
+    getAgent: async (id) => agents.get(id) ?? null,
+    setLabels: async (id, labels) => {
+      const cur = agents.get(id);
+      if (cur) cur.labels = { ...(cur.labels ?? {}), ...labels };
+    },
+    sendMessage: async () => {},
+    createAgent: async (payload) => {
+      payloads.push(payload);
+      const created = { id: `succ-${payloads.length}-${oldLead.id}`, title: payload.title, provider: payload.config.provider, model: payload.config.model, cwd: payload.cwd, status: "running", labels: { ...payload.labels } };
+      agents.set(created.id, created);
+      return created;
+    },
+    deleteHeartbeat: async () => {},
+    appendLog: () => {},
+    reownWatches: async () => [],
+  });
+  const res = await coordinator.triggerSelfHandoff(oldLead);
+  assert.equal(res?.ok, true, JSON.stringify(res));
+  return { res, payload: payloads[0] };
+}
+
 test(
   "G2 lead successor: handoff at >=95% Claude spawns the Gemini lead with the failover reason on labels, env and result",
-  leadEnv(async ({ dir, vsHome, profilesPath, noDisk }) => {
-    const run = async (usageProviders) => {
-      const oldLead = {
-        id: `lead-${Math.random().toString(36).slice(2, 8)}`,
-        title: "★ SITE POLISH ord5",
-        provider: "claude",
-        model: "claude-opus-5-5",
-        cwd: dir,
-        status: "idle",
-        createdAt: "2026-11-01T00:00:00.000Z",
-        labels: { team: "site", lane: "site-polish", role: "lead", ord: "5", profile: "Lead - Claude" },
-      };
-      const agents = new Map([[oldLead.id, oldLead]]);
-      const payloads = [];
-      const coordinator = createLeadHandoffCoordinator({
-        rootDir: dir,
-        baseHome: vsHome,
-        profilesPath,
-        ...noDisk,
-        cappedProviders: [],
-        usageProviders,
-        listAgents: async () => [...agents.values()],
-        getAgent: async (id) => agents.get(id) ?? null,
-        setLabels: async (id, labels) => {
-          const cur = agents.get(id);
-          if (cur) cur.labels = { ...(cur.labels ?? {}), ...labels };
-        },
-        sendMessage: async () => {},
-        createAgent: async (payload) => {
-          payloads.push(payload);
-          const created = { id: `succ-${payloads.length}-${oldLead.id}`, title: payload.title, provider: payload.config.provider, model: payload.config.model, cwd: payload.cwd, status: "running", labels: { ...payload.labels } };
-          agents.set(created.id, created);
-          return created;
-        },
-        deleteHeartbeat: async () => {},
-        appendLog: () => {},
-        reownWatches: async () => [],
-      });
-      const res = await coordinator.triggerSelfHandoff(oldLead);
-      assert.equal(res?.ok, true, JSON.stringify(res));
-      return { res, payload: payloads[0] };
-    };
-
+  leadEnv(async (env) => {
+    const run = (usageProviders) => runHandoff(env, { usageProviders });
     const { res, payload } = await run(() => freshClaude(97));
     assert.equal(payload.config.provider, "antigravity-cli");
     assert.equal(payload.labels.profile, "Lead - Gemini");
@@ -310,3 +312,124 @@ test(
     assert.equal(thrown.res.failover, undefined);
   }),
 );
+
+// ---- r1 fixes (reviews Gemini rn-4497971971bf, Sonnet rn-9d3f8a588837) ----
+
+test(
+  "G2 r1 H1: a runner handoff with NO usageProviders reads live quota from the vs home and fails over (label, env, result)",
+  leadEnv(async (env) => {
+    mkdirSync(join(env.vsHome, "runner"), { recursive: true });
+    writeLimits(env.vsHome, 96);
+    const { res, payload } = await runHandoff(env, {});
+    assert.equal(payload.config.provider, "antigravity-cli");
+    assert.equal(payload.labels.profile, "Lead - Gemini");
+    assert.equal(payload.labels["vs.failover"], "Lead - Claude -> Lead - Gemini (claude usage 96% >= 95%)");
+    assert.equal(payload.env.VS_FAILOVER, payload.labels["vs.failover"]);
+    assert.equal(res.failover?.to, "Lead - Gemini");
+    // An explicit (empty) usageProviders still overrides the live default.
+    const explicit = await runHandoff(env, { usageProviders: [] });
+    assert.equal(explicit.payload.config.provider, "claude");
+    assert.equal(explicit.res.failover, undefined);
+  }),
+);
+
+test("G2 r1 M: a weekly >=95% row with resetsAt ahead outlives the 5h bound (up to its window); past resetsAt or a 5h row does not", () => {
+  const H = 3600_000;
+  const weeklyOld = row("claude", 97, { window: "weekly", ageMs: 6 * H, resetInMs: 3 * 24 * H });
+  assert.equal(leadFo(usage([weeklyOld])).failedOver, true, "weekly 6h old, resets in 3d: kept");
+  assert.deepEqual(usage([row("claude", 97, { window: "weekly", ageMs: 6 * H, resetInMs: -MIN })]), [], "weekly, resetsAt passed: dropped");
+  assert.deepEqual(usage([row("claude", 97, { window: "weekly", ageMs: 6 * H, resetInMs: null })]), [], "weekly, no resetsAt: 5h bound");
+  assert.deepEqual(usage([row("claude", 97, { window: "weekly", ageMs: 8 * 24 * H, resetInMs: H })]), [], "weekly older than its window: dropped");
+  assert.deepEqual(usage([row("claude", 97, { window: "weekly", ageMs: 6 * H, resetInMs: 9 * 24 * H })]), [], "garbled resetsAt beyond one window: 5h bound");
+  assert.deepEqual(usage([row("claude", 97, { window: "5h", ageMs: 6 * H, resetInMs: H })]), [], "5h row keeps the 5h bound");
+});
+
+test(
+  "G2 r1 L: the stored-lead quota failover ignores disk caps when the caller passed in-memory caps (as the role path does)",
+  leadEnv(async ({ vsHome, profilesPath, noDisk }) => {
+    const capFile = join(vsHome, "env-caps.json");
+    writeFileSync(capFile, JSON.stringify({ capped: { "antigravity-cli": { reason: "cap", updatedAt: new Date().toISOString() } } }));
+    const prev = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
+    process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH = capFile;
+    try {
+      const r = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: [], usageProviders: freshClaude(96) });
+      assert.equal(r.profileName, "Lead - Gemini");
+      assert.equal(r.spawnCfg.provider, "antigravity-cli");
+    } finally {
+      if (prev === undefined) delete process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
+      else process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH = prev;
+    }
+  }),
+);
+
+test(
+  "G2 r1 L2: a failed-over lead records vs.failover-from; the next handoff returns to it when quota is back, stays over while not",
+  leadEnv(async (env) => {
+    const hop1 = await runHandoff(env, { usageProviders: () => freshClaude(97) });
+    assert.equal(hop1.payload.labels.profile, "Lead - Gemini");
+    assert.equal(hop1.payload.labels["vs.failover-from"], "Lead - Claude");
+    const fromGemini = { provider: "antigravity-cli", labels: { profile: hop1.payload.labels.profile, "vs.failover-from": hop1.payload.labels["vs.failover-from"] } };
+
+    // Hop 2, Claude still >=95%: stays on Gemini, still remembers Claude.
+    const still = await runHandoff(env, { ...fromGemini, usageProviders: () => freshClaude(98) });
+    assert.equal(still.payload.labels.profile, "Lead - Gemini");
+    assert.equal(still.payload.labels["vs.failover-from"], "Lead - Claude");
+    assert.match(still.payload.labels["vs.failover"], /^Lead - Claude -> Lead - Gemini/);
+
+    // Hop 2, Claude back under: returns to Lead - Claude, no failover labels left.
+    const back = await runHandoff(env, { ...fromGemini, usageProviders: () => freshClaude(20) });
+    assert.equal(back.payload.config.provider, "claude");
+    assert.equal(back.payload.labels.profile, "Lead - Claude");
+    assert.equal(back.payload.labels["vs.failover-from"], undefined);
+    assert.equal(back.payload.labels["vs.failover"], undefined);
+
+    // An explicit --profile still wins over the remembered one.
+    const asked = resolveLeadProfile({ provider: "antigravity-cli", labels: fromGemini.labels }, env.profilesPath, { ...env.noDisk, requestedProfile: "Lead - Gemini", cappedProviders: [], usageProviders: freshClaude(20) });
+    assert.equal(asked.profileName, "Lead - Gemini");
+  }),
+);
+
+test("G2 r1 M1: at claude >=95% live quota a plain Implement spawn picks the Neon arm (capped:claude); labels match the model run", async () => {
+  const { callTool, createContext } = await import("../server/mcp/tools.mjs");
+  const { verifiedIdentity } = await import("./helpers/agent-token.mjs");
+  const { USER_PROFILES } = await import("./helpers/route-golden.mjs");
+  const { readArmCaps } = await import("../server/exp6-arm.mjs");
+  const TEAMS = [{ id: "mx", name: "Matrix", paths: ["matrix"], lanes: [{ id: "feat", name: "Feat" }] }];
+  const spawnOnce = async (pct) => {
+    const h = mkdtempSync(join(tmpdir(), "vs-g2-arm-"));
+    try {
+      mkdirSync(join(h, "runner"), { recursive: true });
+      if (pct !== null) writeLimits(h, pct);
+      const creates = [];
+      const agents = [];
+      const backend = {
+        createAgent: async (req) => { creates.push(req); agents.push({ createdAt: new Date().toISOString(), labels: req.labels }); return { id: "a1", title: req.config.title }; },
+        sendAgentPrompt: async () => {},
+        fetchAgents: async () => ({ entries: agents.map((agent) => ({ agent })) }),
+      };
+      const ctx = createContext({
+        env: { VIBESQUAD_HOME: h },
+        ...verifiedIdentity({ agentId: "rn-bud1", team: "mx", lane: "feat", role: "brainstorm" }, { backend, teams: TEAMS }),
+        cwd: "/w", teams: TEAMS, loadProfiles: async () => USER_PROFILES,
+        withBackend: async (_t, fn) => fn(backend), findLiveLeads: async () => [], writeLog: async () => {},
+      });
+      const caps = await readArmCaps({ env: { VIBESQUAD_HOME: h } });
+      const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement", stakes: "normal" });
+      return { res, c: creates[0], caps };
+    } finally {
+      rmSync(h, { recursive: true, force: true });
+    }
+  };
+  // Baseline (no quota data): the first pick ties and keeps the requested Sonnet arm.
+  const base = await spawnOnce(null);
+  assert.deepEqual([base.res.ab.arm, base.res.ab.reason, base.c.config.provider], ["sonnet", "alternation", "claude"]);
+  // 96%: the claude arm is capped by quota, the pick (and its labels) go to Neon on Gemini.
+  const over = await spawnOnce(96);
+  assert.deepEqual(over.caps.claude, { reason: "claude usage 96% >= 95%", quota: true });
+  assert.deepEqual([over.res.ab.arm, over.res.ab.reason, over.c.config.provider], ["neon", "capped:claude", "antigravity-cli"]);
+  assert.deepEqual([over.c.labels["vs.arm"], over.c.labels["vs.arm-reason"], over.c.labels["vs.model"]], ["neon", "capped:claude", over.c.config.model]);
+  assert.match(over.c.config.model, /^gemini-/);
+  // 94%: no quota cap, Sonnet as before.
+  const under = await spawnOnce(94);
+  assert.deepEqual([under.res.ab.arm, under.res.ab.reason, under.c.config.provider], ["sonnet", "alternation", "claude"]);
+});

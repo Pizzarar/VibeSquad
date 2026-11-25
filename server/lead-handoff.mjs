@@ -36,6 +36,7 @@ import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, readCappedProviders, 
 import { GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 import { roleSpawnConfig } from "./spawn-route.mjs";
 import { isProviderOverQuota, resolveProfileWithFailover, ROLE_PROVIDER_CHAINS } from "./provider-failover.mjs";
+import { liveQuotaUsage } from "./limits-read.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -564,7 +565,9 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
   const rawProvider = String(oldLead?.provider || "claude");
   const isAgy = rawProvider.startsWith("antigravity");
   const fallbackProfileName = isAgy ? "Lead - Gemini" : "Lead - Claude";
-  const desiredKey = (requested || String(oldLabels.profile || fallbackProfileName)).trim();
+  // G2 r1 (L2): a failed-over lead carries the profile it was meant to run (FAILOVER_FROM_LABEL); the next handoff asks
+  // for that one again, so the lane returns to it once its quota is back instead of staying on the counterpart.
+  const desiredKey = (requested || String(oldLabels[FAILOVER_FROM_LABEL] || oldLabels.profile || fallbackProfileName)).trim();
 
   const { profiles } = loadProfiles(profilesPath, { autoSeed: false });
   // P5c (idea-77): a role-name label ("lead", from a role-name spawn) with no stored profile of that name respawns from
@@ -605,7 +608,7 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
   // prompt + labels match the provider it runs on. Only quota triggers it here: a `vs cap` alone stays the hook's swap, as before.
   let failover = null;
   if (profile && quota.length > 0 && isProviderOverQuota(profile.provider, quota, undefined, { ignoreDiskCaps: true }).overQuota) {
-    const fo = resolveProfileWithFailover(profile, profiles, usageList);
+    const fo = resolveProfileWithFailover(profile, profiles, usageList, { ignoreDiskCaps: true });
     if (fo.failedOver && fo.profile) {
       failover = { from: profile.name, to: fo.profile.name, reason: fo.reason };
       profile = fo.profile;
@@ -636,6 +639,9 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
     failover,
   };
 }
+
+/** Successor label naming the profile a failed-over lead was meant to run; the next handoff resolves that one first. */
+export const FAILOVER_FROM_LABEL = "vs.failover-from";
 
 /** The `vs.failover` label / VS_FAILOVER env text for a failed-over successor: `<from> -> <to> (<reason>)`. */
 export function failoverLabelText(failover) {
@@ -889,9 +895,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
     // Quota reports (deps.usageProviders: a list, or a function returning the live list, as the spawn hook takes it).
     // A source that throws = no quota data = no switch (fail-open to the requested profile; `vs cap` still applies).
+    // G2 r1 (H1): no deps.usageProviders = the live quota under this vs home (the spawn hook's default), so runner
+    // handoffs (vs handoff, MCP handoff_lead, UI, token-watch) fail over too; only an explicit value overrides it.
+    const quotaSource = deps.usageProviders !== undefined ? deps.usageProviders : () => liveQuotaUsage({ home: getBaseHome(getBase()) });
     const liveQuota = (() => {
       try {
-        const u = typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders;
+        const u = typeof quotaSource === "function" ? quotaSource() : quotaSource;
         return Array.isArray(u) ? u : null;
       } catch {
         return null;
@@ -935,6 +944,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       "vs.handoff-from": oldLead.id,
       "vs.handoff-trigger": trigger,
       ...(failoverText ? { "vs.failover": failoverText } : {}),
+      ...(failover?.from && failover.from !== profileName ? { [FAILOVER_FROM_LABEL]: failover.from } : {}),
     };
 
     timer.mark("prep");
