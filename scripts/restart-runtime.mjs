@@ -68,7 +68,10 @@ export function writeProgress(outDir, rec) {
 // file: { pid, nonce, by, at, extendUntil (ms) | abort: { reason } }. Read (and consumed) on each 2 s poll of the wait, for
 // this pid only; past the wait (phase 'restarting') nothing reads it, so an abort never cuts a stop or relaunch halfway.
 export const CONTROL_FILE = 'vs-restart-control.json';
-/** The longest a wait may be pushed out to, from now (the runner's drain ceiling). */
+/**
+ * The furthest a wait may be pushed out to, from this run's start (not from now: repeated extends are bounded, and the wait
+ * stays well under server/restart-request.mjs FIRING_TIMEOUT_MS, 3 h after the fire).
+ */
 export const EXTEND_MAX_MS = 2 * 60 * 60 * 1000;
 export function takeControl(outDir, pid = process.pid) {
   const file = path.join(outDir, CONTROL_FILE);
@@ -820,6 +823,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
   // idea-653: progress for vs restart status and the request loop (best effort: a write failure never fails the restart).
   const progress = (phase, extra = {}) => writeProgress(outDir, { pid: process.pid, startedAt: result.startedAt, phase, at: new Date(d.now()).toISOString(), ...extra });
   progress('starting');
+  let lastControl = null; // idea-673: the last control read (its nonce is the CLI's acknowledgement; kept on 'finished')
   const markerFile = path.join(configDir, 'server.restarting');
   const touchMarker = () => {
     try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
@@ -891,7 +895,6 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
       let lastHealth = health0;
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec, ...(opts.requester ? { requester: opts.requester } : {}) });
-      let lastControl = null; // idea-673: the last control read (its nonce is the CLI's acknowledgement)
       const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20), ...(lastControl ? { control: lastControl } : {}) });
       // idea-673: extend or abort the wait (vs restart extend / abort). An extend refreshes the drain to cover the new deadline.
       const applyControl = async () => {
@@ -909,7 +912,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         }
         const until = Number(c.extendUntil);
         if (!Number.isFinite(until)) return;
-        const to = Math.min(until, d.now() + EXTEND_MAX_MS);
+        const to = Math.min(until, Date.parse(result.startedAt) + EXTEND_MAX_MS);
         if (to > deadline) {
           deadline = to;
           if (drainOn) {
@@ -1472,7 +1475,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     result.finishedAt = new Date(d.now()).toISOString();
     const file = path.join(outDir, `restart-${result.startedAt.replace(/[:.]/g, '-')}.json`);
     try { writeFileSync(file, JSON.stringify(result, null, 2)); result.resultFile = file; log(`result: ${file}`); } catch (e) { log(`could not write result: ${e.message}`); }
-    progress('finished', { ok: result.ok, resultFile: result.resultFile ?? null });
+    // idea-673: an abort throws straight here; keeping its control nonce lets vs restart abort's ack poll still see it.
+    progress('finished', { ok: result.ok, resultFile: result.resultFile ?? null, ...(lastControl ? { control: lastControl } : {}) });
     const holder = readJson(lockFile);
     if (holder?.pid === process.pid) rmSync(lockFile, { force: true });
   }

@@ -312,7 +312,8 @@ export function abortRestartRequest(home, { by = "owner", reason = "", now = Dat
 
 /**
  * idea-673: `vs restart extend <min>` on an open request that has not fired: requested/draining push `deadline` out (from
- * the later of it and now, capped at MAX_DEADLINE_MIN from now); queued lengthens the drain that starts at its window.
+ * the later of it and now), capped at MAX_DEADLINE_MIN after the drain started (requestedAt; older files: createdAt), so
+ * repeated extends never hold the machine-wide drain open without bound; queued lengthens the drain that starts at its window.
  * Ready/firing/none: throws with `code` 'FIRING' / 'READY' / 'NONE' (the CLI then extends the waiting script, if any).
  */
 export function extendRestartRequest(home, { by = "owner", minutes, now = Date.now() } = {}) {
@@ -332,8 +333,10 @@ export function extendRestartRequest(home, { by = "owner", minutes, now = Date.n
       return cur;
     }
     const before = cur.deadline;
-    const to = Math.min(Math.max(Date.parse(before) || now, now) + min * 60_000, now + MAX_DEADLINE_MIN * 60_000);
-    if (!(to > (Date.parse(before) || 0))) throw new Error(`vs restart extend: ${cur.id}'s deadline ${before} is already at the ${MAX_DEADLINE_MIN} min cap.`);
+    const start = Date.parse(cur.requestedAt ?? cur.createdAt ?? "");
+    const cap = (Number.isFinite(start) ? start : now) + MAX_DEADLINE_MIN * 60_000;
+    const to = Math.min(Math.max(Date.parse(before) || now, now) + min * 60_000, cap);
+    if (!(to > (Date.parse(before) || 0)) || !(to > now)) throw new Error(`vs restart extend: ${cur.id}'s deadline ${before} is already at the ${MAX_DEADLINE_MIN} min cap (from its drain start ${iso(cap - MAX_DEADLINE_MIN * 60_000)}).`);
     cur.deadline = iso(to);
     event(cur, at, `deadline extended by ${by}: ${before} -> ${cur.deadline}`);
     return cur;
@@ -352,7 +355,11 @@ export function readScriptProgress(home, { alive = pidAlive } = {}) {
 
 /** scripts/restart-runtime.mjs CONTROL_FILE: read on each poll of its idle wait, for its own pid only. */
 export const CONTROL_FILE = "vs-restart-control.json";
-/** scripts/restart-runtime.mjs EXTEND_MAX_MS: how far out (from now) a script's wait may be pushed. */
+/**
+ * scripts/restart-runtime.mjs EXTEND_MAX_MS: how far after the script's start its wait may be pushed. Anchored to the start
+ * (not now), so repeated extends stay well under FIRING_TIMEOUT_MS from the fire and the request never times out on a script
+ * that is still waiting.
+ */
 export const SCRIPT_EXTEND_MAX_MS = 2 * 3600_000;
 
 /**
@@ -372,7 +379,11 @@ export function controlWaitingScript(home, { kind, by = "owner", minutes, reason
   else {
     const min = Number(minutes);
     if (!Number.isInteger(min) || min < 1 || min > SCRIPT_EXTEND_MAX_MS / 60_000) throw new Error(`vs restart extend: while vs restart waits, <min> must be whole minutes, 1-${SCRIPT_EXTEND_MAX_MS / 60_000}`);
-    rec.extendUntil = Math.min(Math.max(Date.parse(p.waitDeadline ?? "") || now, now) + min * 60_000, now + SCRIPT_EXTEND_MAX_MS);
+    const from = Math.max(Date.parse(p.waitDeadline ?? "") || now, now);
+    const start = Date.parse(p.startedAt ?? "");
+    const cap = (Number.isFinite(start) ? start : now) + SCRIPT_EXTEND_MAX_MS;
+    rec.extendUntil = Math.min(from + min * 60_000, cap);
+    if (!(rec.extendUntil > from)) throw new Error(`vs restart extend: the vs restart script (pid ${p.pid}) already waits to ${p.waitDeadline ?? "?"}, the ${SCRIPT_EXTEND_MAX_MS / 60_000} min cap from its start ${iso(cap - SCRIPT_EXTEND_MAX_MS)}.`);
   }
   writeFileAtomic(path.join(vsHomeOf(home), CONTROL_FILE), JSON.stringify(rec));
   return { pid: p.pid, nonce, ...(rec.extendUntil ? { extendUntil: rec.extendUntil } : {}) };

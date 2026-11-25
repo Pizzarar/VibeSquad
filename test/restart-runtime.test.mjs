@@ -2776,6 +2776,42 @@ test("idea-673: a control abort ends the idle wait at once: nothing stopped, no 
     assert.deepEqual(w.spawned, [], "nothing started");
     assert.equal(existsSync(path.join(w.outDir, CONTROL_FILE)), false, "consumed");
     assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker cleared");
+    // rn-01a55ab3f1bf minor: the 'finished' write in finally keeps the abort's nonce, so vs restart abort's ack poll (500 ms,
+    // long after finally ran) still sees its own abort read instead of a false "left its idle wait" alarm.
+    const { PROGRESS_FILE } = await import("../scripts/restart-runtime.mjs");
+    const p = JSON.parse(readFileSync(path.join(w.outDir, PROGRESS_FILE), "utf8"));
+    assert.equal(p.phase, "finished");
+    assert.equal(p.control?.nonce, "n1");
+    assert.equal(p.control?.kind, "abort");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-673 (rn-01a55ab3f1bf major): control extends are capped at EXTEND_MAX_MS after the run's start, not after now", async () => {
+  const { CONTROL_FILE, EXTEND_MAX_MS } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    const T0 = Date.parse("2026-11-23T16:00:00.000Z");
+    let t = T0;
+    let wrote = false;
+    const ctl = (rec) => writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, by: "owner", ...rec }));
+    ctl({ nonce: "e1", extendUntil: T0 + 3 * 3600_000 }); // asks past the cap at once
+    const depsOver = {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        if (!wrote && t >= T0 + 90 * 60_000) { wrote = true; ctl({ nonce: "e2", extendUntil: t + 2 * 3600_000 }); } // a second +120 at t=90 min
+        await new Promise((r) => setTimeout(r, 0));
+      },
+    };
+    const r = await w.run({ waitTimeoutSec: 60 }, [], depsOver);
+    const capIso = new Date(T0 + EXTEND_MAX_MS).toISOString();
+    assert.equal(r.startedAt, new Date(T0).toISOString());
+    assert.equal(r.waitExtended?.length, 2, JSON.stringify(r.waitExtended));
+    assert.equal(r.waitExtended[0].waitDeadline, capIso, "first extend cut to the cap from the start");
+    assert.equal(r.waitExtended[1].waitDeadline, capIso, "the second extend cannot slide it further");
+    assert.ok(r.deferred, "still held at the cap: defers as before");
+    assert.ok(t <= T0 + EXTEND_MAX_MS + 10 * 60_000, `the wait ended at the cap (+${(t - T0) / 60_000} min)`);
   } finally { await w.cleanup(); }
 });
 

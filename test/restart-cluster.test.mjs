@@ -117,6 +117,25 @@ test('idea-870: an agent token gets 403 on /restart-gate (admin only); no auth 4
   } finally { await s.stop(); }
 });
 
+test('idea-870 (rn-01a55ab3f1bf minor): a runner with no admin token refuses /restart-gate (fails closed, as /drain)', async () => {
+  const h = harness();
+  const srv = createServer(h.runner, { hash: 'h', onShutdown() {} });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  try {
+    const port = srv.address().port;
+    for (const method of ['POST', 'DELETE']) {
+      const r = await fetch(`http://127.0.0.1:${port}/restart-gate`, { method, headers: { 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+      assert.equal(r.status, 403, method);
+      assert.match((await r.json()).error, /restart gate not enabled/);
+    }
+    assert.equal(h.runner._restartGate, null, 'never closed');
+    // closeRestartGate reads that 403 as unknown/busy, so the server never kills a runner it could not gate.
+    const g = await closeRestartGate({ rc: { request: async () => { throw new RunnerHttpError(403, 'restart gate not enabled'); } } });
+    assert.equal(g.gated, false);
+    assert.equal(g.busy, true);
+  } finally { srv.closeAllConnections?.(); await new Promise((r) => srv.close(r)); h.runner.shutdown(); }
+});
+
 test('idea-870: the gate lapses after its TTL and the queued turn starts', async () => {
   const h = harness();
   try {
@@ -345,9 +364,9 @@ test('idea-673: extendRestartRequest pushes a draining deadline out (capped), le
   assert.equal(Date.parse(r.deadline), before + 20 * 60_000);
   assert.match(readRestartRequest(home).events.at(-1).text, /deadline extended by rn-ove/);
   const capped = extendRestartRequest(home, { minutes: MAX_DEADLINE_MIN, now: FIRED });
-  assert.equal(Date.parse(capped.deadline), FIRED + MAX_DEADLINE_MIN * 60_000, 'never past the cap from now');
+  assert.equal(Date.parse(capped.deadline), FIRED - 60_000 + MAX_DEADLINE_MIN * 60_000, 'never past the cap from the drain start (createdAt)');
   assert.throws(() => extendRestartRequest(home, { minutes: 5, now: FIRED }), /already at the 240 min cap/);
-  setState(home, { state: 'requested', deadline: new Date(FIRED - 60_000).toISOString() });
+  setState(home, { state: 'requested', requestedAt: new Date(FIRED - 60_000).toISOString(), deadline: new Date(FIRED - 60_000).toISOString() });
   assert.equal(Date.parse(extendRestartRequest(home, { minutes: 10, now: FIRED }).deadline), FIRED + 10 * 60_000, 'a passed deadline extends from now');
   setState(home, { state: 'queued', windowAt: new Date(FIRED + 3600_000).toISOString(), deadlineMin: 30 });
   const q = extendRestartRequest(home, { minutes: 15, now: FIRED });
@@ -358,6 +377,49 @@ test('idea-673: extendRestartRequest pushes a draining deadline out (capped), le
     assert.throws(() => extendRestartRequest(home, { minutes: 5, now: FIRED }), (e) => e.code === code, state);
   }
   for (const bad of [0, -1, 1.5, MAX_DEADLINE_MIN + 1, 'x']) assert.throws(() => extendRestartRequest(home, { minutes: bad }), /whole minutes/, String(bad));
+});
+
+test('idea-673 (rn-01a55ab3f1bf major): repeated extends of a draining request stop at MAX_DEADLINE_MIN after the drain start, not after now', async () => {
+  const { extendRestartRequest, MAX_DEADLINE_MIN } = await import('../server/restart-request.mjs');
+  const home = firingHome();
+  const start = FIRED;
+  setState(home, { state: 'draining', requestedAt: new Date(start).toISOString(), deadline: new Date(start + 30 * 60_000).toISOString() });
+  const cap = start + MAX_DEADLINE_MIN * 60_000;
+  // An extend every 25 min of the max size: under the old now-relative cap this slid forever.
+  let t = start;
+  let last = 0;
+  for (let i = 0; i < 12; i += 1, t += 25 * 60_000) {
+    try { last = Date.parse(extendRestartRequest(home, { minutes: MAX_DEADLINE_MIN, now: t }).deadline); } catch (e) { assert.match(e.message, /already at the 240 min cap \(from its drain start 2026-11-23T16:04:05.000Z\)/); }
+    assert.ok(Date.parse(readRestartRequest(home).deadline) <= cap, `extend ${i} at +${(t - start) / 60_000} min stays under the cap`);
+  }
+  assert.equal(last, cap, 'reached exactly the anchored cap');
+  // Past the cap (a stuck drain): refused rather than set to a deadline already in the past.
+  setState(home, { deadline: new Date(start + 60 * 60_000).toISOString() });
+  assert.throws(() => extendRestartRequest(home, { minutes: 5, now: cap + 60_000 }), /already at the 240 min cap/);
+  // An older file with no requestedAt anchors to createdAt.
+  setState(home, { requestedAt: undefined, deadline: new Date(FIRED).toISOString() });
+  assert.equal(Date.parse(extendRestartRequest(home, { minutes: MAX_DEADLINE_MIN, now: FIRED }).deadline), FIRED - 60_000 + MAX_DEADLINE_MIN * 60_000);
+});
+
+test('idea-673 (rn-01a55ab3f1bf major): a waiting script\'s extends stop at SCRIPT_EXTEND_MAX_MS after its start, inside FIRING_TIMEOUT_MS', async () => {
+  const { controlWaitingScript, SCRIPT_EXTEND_MAX_MS, FIRING_TIMEOUT_MS } = await import('../server/restart-request.mjs');
+  const { EXTEND_MAX_MS } = await import('../scripts/restart-runtime.mjs');
+  assert.equal(SCRIPT_EXTEND_MAX_MS, EXTEND_MAX_MS, 'server and script agree on the cap');
+  assert.ok(SCRIPT_EXTEND_MAX_MS + 30 * 60_000 < FIRING_TIMEOUT_MS, 'a fully extended wait plus stop/relaunch ends well before the firing timeout');
+  const home = firingHome();
+  const startedAt = FIRED + 3000;
+  const cap = startedAt + SCRIPT_EXTEND_MAX_MS;
+  const req = readRestartRequest(home);
+  // The reviewer's case: +120 at t=0 and again at t=90 min used to reach t=210 min, past the 3 h firing timeout.
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(startedAt).toISOString(), phase: 'waiting', waitDeadline: new Date(startedAt + 600_000).toISOString() });
+  const a = controlWaitingScript(home, { kind: 'extend', minutes: 120, req, now: FIRED });
+  assert.equal(a.extendUntil, cap, 'first +120 is cut to the cap from the start');
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(startedAt).toISOString(), phase: 'waiting', waitDeadline: new Date(a.extendUntil).toISOString() });
+  assert.throws(() => controlWaitingScript(home, { kind: 'extend', minutes: 120, req, now: FIRED + 90 * 60_000 }), /already waits to .*the 120 min cap from its start/);
+  assert.ok(cap - FIRED < FIRING_TIMEOUT_MS);
+  // A shorter wait still extends, up to the cap.
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(startedAt).toISOString(), phase: 'waiting', waitDeadline: new Date(startedAt + 100 * 60_000).toISOString() });
+  assert.equal(controlWaitingScript(home, { kind: 'extend', minutes: 60, req, now: FIRED + 90 * 60_000 }).extendUntil, cap);
 });
 
 test('idea-673: vs restart extend / abort on a firing request write the control for its waiting script; past the wait they refuse', async () => {
@@ -385,6 +447,18 @@ test('idea-673: vs restart extend / abort on a firing request write the control 
   writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED - 3600_000).toISOString(), phase: 'waiting' });
   await assert.rejects(vsRestart(home, ['abort']), /no running vs restart for rr-test-0001/, 'an earlier run\'s script is not this fire\'s');
   await assert.rejects(vsRestart(home, ['extend', 'x']), /usage: vs restart extend <min>/);
+});
+
+test('idea-673 (rn-01a55ab3f1bf minor): vs restart abort reports the abort when the script already wrote finished (nonce kept), not a false alarm', async () => {
+  const home = firingHome();
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', waitDeadline: new Date(FIRED + 600_000).toISOString() });
+  // The script reads the abort, throws, and its finally writes 'finished' before the CLI's first ack poll.
+  const finished = (control) => async () => { const n = readControl(home).nonce; writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'finished', ok: false, ...(control ? { control: { nonce: n, kind: 'abort' } } : {}) }); };
+  const out = await vsRestart(home, ['abort'], { ackMs: 2000, sleep: finished(true) });
+  assert.match(out, /aborted in its idle wait: nothing was stopped; rr-test-0001 ends as aborted/);
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', waitDeadline: new Date(FIRED + 600_000).toISOString() });
+  const lost = await vsRestart(home, ['abort'], { ackMs: 2000, sleep: finished(false) });
+  assert.match(lost, /left its idle wait before reading the abort \(finished\)/, 'without the nonce (the pre-fix finally) it reads as missed');
 });
 
 test('idea-673: with no open request, abort/extend reach a direct vs restart still waiting; with none waiting the old error stands', async () => {

@@ -190,6 +190,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         // between the idle check and the kill: a new turn queues instead (recoverQueued replays it on the next runner).
         // Busy -> { gated: false, running, held, ids } and the gate stays open. DELETE reopens it. Admin only, as /drain.
         if (isAgent) return forbid(res, 'restart-gate is admin only (the VS server restart)');
+        if (!token) return json(res, 403, { error: 'restart gate not enabled' }); // as /drain: a tokenless runner fails closed
         if (typeof runner.setRestartGate !== 'function') return json(res, 404, { error: 'not found' });
         if (req.method === 'DELETE') return json(res, 200, { ok: true, cleared: runner.clearRestartGate() });
         const b = await readBody(req);
