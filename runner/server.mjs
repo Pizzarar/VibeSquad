@@ -21,6 +21,7 @@ import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { createDevServerReaper } from './reap.mjs';
 import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
+import { buildHealthLiveDiag, createHealthSnapshotCache } from './health-diag.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
@@ -80,7 +81,11 @@ export function tokenMatches(header, token) {
 }
 
 // teamLog(entry): appends { team, lane, agent, type, text, refs } to the VS team log (teamLogWriter); a no-op when not wired (tests).
-export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS, hash = hashRunnerFiles(), onShutdown = null, teamLog = () => {} } = {}) {
+export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS, hash = hashRunnerFiles(), onShutdown = null, teamLog = () => {}, processSnapshot, processSnapshotTtlMs } = {}) {
+  const getHealthProcs = createHealthSnapshotCache({
+    ...(processSnapshot !== undefined ? { snapshot: processSnapshot } : {}),
+    ...(processSnapshotTtlMs !== undefined ? { ttlMs: processSnapshotTtlMs } : {}),
+  });
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
@@ -151,8 +156,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         const heldAgents = runner.heldIds?.() ?? [];
         // heldWork: id -> the live shells each hold is on ({ pid, name, cmd }), so a deferral names what actually holds.
         const heldWork = runner.heldWork?.() ?? {};
+        // idea-909: read-only live breakdown (provider × state, per-agent rows with process count) + orphan provider processes.
+        const procs = await getHealthProcs();
+        const diag = buildHealthLiveDiag(runner, { heldAgents, heldWork, procs });
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, bootFoldMs: runner.bootFoldReport?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, ...diag, drain: runner.drainState?.() ?? null, bootFoldMs: runner.bootFoldReport?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
       }
       if (req.method === 'GET' && parts[0] === 'write-seq' && parts.length === 1) return json(res, 200, { boot: writes.boot, seq: writes.seq });
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
