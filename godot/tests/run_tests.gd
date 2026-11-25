@@ -1205,7 +1205,22 @@ func _test_role_warning() -> void:
 		on._refresh_pairing()
 		for i in 3:
 			await process_frame
-		var rc: Dictionary = mock.calls[0] if not mock.calls.is_empty() else {}
+		check(_auth_calls(mock) == 0, "role[%s]: no auth/status call before the dock opens" % c[0])
+		on.open_dock()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: first dock open makes exactly one auth/status call" % c[0])
+		on.close_dock()
+		on.open_dock()
+		on.start_capture()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: reopen / capture does not repeat the call" % c[0])
+		var rc: Dictionary = {}
+		for mc: Dictionary in mock.calls:
+			if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+				rc = mc
+				break
 		check(on._dock.pair_state == Dock.PAIR_PAIRED and str(rc.get("url", "")) == "https://forge.tail1234.ts.net:4180/__vibesquad/auth/status" and _has_header(rc.get("headers", PackedStringArray()), "x-vs-device-token"), "role[%s]: GET auth/status over https with the device token" % c[0])
 		check(on._dock._role_warn.visible == c[2], "role[%s]: warning visible == %s" % [c[0], str(c[2])])
 		on.queue_free()
@@ -1230,6 +1245,14 @@ func _test_role_warning() -> void:
 		for f in DirAccess.get_files_at(d):
 			DirAccess.remove_absolute(d.path_join(f))
 		DirAccess.remove_absolute(d)
+
+
+func _auth_calls(mock: MockHttp) -> int:
+	var n := 0
+	for mc: Dictionary in mock.calls:
+		if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+			n += 1
+	return n
 
 
 func _key_event(code: Key, mods: Dictionary = {}) -> InputEventKey:
