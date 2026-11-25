@@ -1,6 +1,7 @@
 // X1c (docs/PLAN_X1_IDENTITY.md): the VS server resolves one caller per request (owner | agent | unknown), the middleware
 // is default-deny for non-owner writes except AGENT_WRITE_ALLOWLIST, and every allow-listed handler re-checks the role.
 // A real Runner + runner HTTP server answers GET /verify-agent; the VS middleware runs on a temp VIBESQUAD_HOME.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

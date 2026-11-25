@@ -1,5 +1,6 @@
 // PLAN_PIN_BRIEF_HOME B1+B2: a new pin's brief is written before its lane is in teams.json, so the Squad id must
 // travel with the write or the brief lands in the installed runtime folder and the Buddy boots with "(no brief yet)".
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
