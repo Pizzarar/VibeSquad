@@ -464,6 +464,8 @@ export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"
   quickLane?: "bugs" | "workflows";
   /** Called when the server saved the brief in its runtime folder instead of the project's. */
   onBriefFallback?: (laneId: string) => void;
+  /** idea-816: the pin landed but its first Buddy did not start (spin-off). Surface it; never swallow it. */
+  onBuddyStartFailed?: (pin: Pin, err: unknown) => void;
 };
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
@@ -739,7 +741,10 @@ export const createSpinOffPins = (key: string, squadId: string, teams: { name: s
     async (name, brief) => {
       const pin = await createPin(squadId, name, brief, deps);
       if (deps.startBuddies !== false) {
-        void openPin(pin, deps).catch(() => {});
+        void openPin(pin, deps).catch((err) => {
+          console.error(`spin-off: ${pin.lane.id} pinned but its Buddy did not start`, err);
+          deps.onBuddyStartFailed?.(pin, err);
+        });
       }
       return pin;
     },

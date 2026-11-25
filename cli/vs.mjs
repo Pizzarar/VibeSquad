@@ -331,6 +331,7 @@ export function parseArgs(argv) {
     "here",
     "summary",
     "catchUp",
+    "noStart",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -2112,7 +2113,13 @@ export async function commandPinHide(verb, flags, { env = process.env, listAgent
   return 0;
 }
 
-export function commandPin(flags) {
+function commandPinSub(flags) {
+  const sub = String(flags._.shift() ?? "").toLowerCase();
+  if (sub === "merge") return commandPinMerge(flags);
+  return commandPinHide(sub, flags);
+}
+
+function commandPinNewSave(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
   if (sub === "merge") return commandPinMerge(flags);
   if (sub === "hide" || sub === "unhide" || sub === "remove") return commandPinHide(sub, flags);
@@ -2165,16 +2172,12 @@ ${brief}`, live);
     if (!saved.ok) return 1;
     const written = saved.written;
 
-    if (flags.json) {
-      process.stdout.write(
-        JSON.stringify({ ok: true, squad: squadDef.id, laneId: reopenTarget.id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision }, null, 2) + "\n",
-      );
-      return 0;
-    }
-    process.stdout.write(
-      `Pinned ${name} (${reopenTarget.id}) in ${squadDef.name}. Brief: ${written.path}. No agent started; the first click on the pin starts its Brainstorm.\n`,
-    );
-    return 0;
+    return {
+      code: 0,
+      laneId: reopenTarget.id,
+      json: { ok: true, squad: squadDef.id, laneId: reopenTarget.id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision },
+      text: `Pinned ${name} (${reopenTarget.id}) in ${squadDef.name}. Brief: ${written.path}.`,
+    };
   }
 
   const taken = new Set(takenLaneIds((doc.teams ?? []).flatMap((t) => t.lanes ?? [])));
@@ -2194,12 +2197,60 @@ ${brief}`, live);
   if (!saved.ok) return 1;
   const written = saved.written;
 
-  if (flags.json) {
-    process.stdout.write(JSON.stringify({ ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision }, null, 2) + "\n");
-    return 0;
+  return {
+    code: 0,
+    laneId: id,
+    json: { ok: true, squad: squadDef.id, laneId: id, name, brief: written.path, teamsFile: saved.file, revision: saved.revision },
+    text: `Pinned ${name} (${id}) in ${squadDef.name}. Brief: ${written.path}.`,
+  };
+}
+
+/**
+ * idea-816: the first Buddy of a freshly pinned lane, started through the same `vs buddy restart --lane` path (restart_buddy ->
+ * /__vibesquad/brainstorm-restart start-brainstorm) so its grants and per-lane dedupe apply. Never throws: the result says whether
+ * it started and, if not, why, so a pin that landed without its Buddy is loud (stderr, exit 1, a `vs log` blocker) instead of silent.
+ */
+export async function startPinnedLaneBuddy(laneId, { restart, makeContext = createContext } = {}) {
+  const run =
+    restart ??
+    (async (lane) => {
+      let out = "";
+      const code = await commandAgentVerb("buddy", { _: ["restart"], lane }, makeContext, (s) => { out += s; });
+      if (code !== 0) throw new Error(`exit ${code}`);
+      return JSON.parse(out || "{}");
+    });
+  try {
+    const r = await run(laneId);
+    return { started: true, buddyId: String(r?.id ?? ""), ...(r?.reused ? { reused: true } : {}) };
+  } catch (e) {
+    return { started: false, error: String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 300) };
   }
-  process.stdout.write(`Pinned ${name} (${id}) in ${squadDef.name}. Brief: ${written.path}. No agent started; the first click on the pin starts its Brainstorm.\n`);
-  return 0;
+}
+
+export async function commandPin(flags, { startBuddy = startPinnedLaneBuddy, writeLog } = {}) {
+  const sub = String(flags._[0] ?? "").toLowerCase();
+  if (sub === "merge" || sub === "hide" || sub === "unhide" || sub === "remove") return commandPinSub(flags);
+  const r = commandPinNewSave(flags);
+  if (typeof r === "number") return r;
+  if (!r.laneId) return r.code;
+  const buddy = flags.noStart ? { skipped: true } : await startBuddy(r.laneId);
+  const failed = buddy.started === false;
+  if (failed) {
+    const msg = `vs pin new: lane ${r.laneId} is pinned but its Buddy did NOT start: ${buddy.error}. Run \`vs buddy restart --lane ${r.laneId}\` (lane lead, the Squad's Overlord, or the owner).`;
+    process.stderr.write(msg + "\n");
+    try {
+      await (writeLog ?? ((text) => commandLog({ _: ["blocker", text], ref: [] })))(`pin ${r.laneId}: Buddy did NOT start: ${buddy.error}`.slice(0, 236));
+    } catch (e) {
+      process.stderr.write(`vs pin new: could not log the failed Buddy start (${e?.message ?? e})\n`);
+    }
+  }
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ ...r.json, buddy }, null, 2) + "\n");
+  } else {
+    const tail = buddy.skipped ? " No agent started (--no-start)." : failed ? " Buddy NOT started." : ` Buddy ${buddy.buddyId || "started"}${buddy.reused ? " (already running)" : " started"}.`;
+    process.stdout.write(r.text + tail + "\n");
+  }
+  return failed ? 1 : r.code;
 }
 
 /** Maps a waitForFinish result to the CLI exit code and a one-line summary. */

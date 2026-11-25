@@ -112,7 +112,7 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
   const n = teams.length;
   const go = async () => {
     const fellBack: string[] = [];
-    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: (id) => fellBack.push(id) }); // the full list: runSpinOffOnce skips the rows already created
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: (id) => fellBack.push(id), onBuddyStartFailed: (p, err) => showPinToast(`${p.lane.name} is pinned but its Buddy did not start: ${err instanceof Error ? err.message : err}. Click the pin to retry.`) }); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
     showPinToast(withBriefWarning(describeSpinOff(results), fellBack));
     if (results.every((r) => r.pin)) {

@@ -106,7 +106,7 @@ test("createPin: the brief lands in the project folder and a GET returns it", as
 test("vs pin new: the brief lands in the project folder and a GET returns it", async () => {
   writeTeams();
   const env = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: runtime, VIBESQUAD_TEAMS_FILE: teamsFile, PASEO_AGENT_ID: "" };
-  const r = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Cli pin", "--brief", "cli idea", "--team", "mg"], { env, encoding: "utf8", cwd: ROOT_DIR });
+  const r = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Cli pin", "--brief", "cli idea", "--team", "mg", "--no-start"], { env, encoding: "utf8", cwd: ROOT_DIR });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(fs.existsSync(join(project, "docs", "brainstorm", "cli-pin.md")));
   assert.ok(!fs.existsSync(join(runtime, "docs", "brainstorm", "cli-pin.md")));
