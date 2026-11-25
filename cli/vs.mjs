@@ -552,7 +552,7 @@ Usage:
   vs inbox reply <idea-N> "<text>"   answer an alpha tester on their card (the only agent text a tester sees; leads/Buddies of the card's Squad)
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
-  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
+  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]   owner, the same-Squad Overlord or hub Buddy only
   vs pin hide|unhide|remove <lane> [--team <squad>] [--force] [--json]   owner or the same-Squad Overlord only (idea-632): hide sets hidden (unhide reverses), remove sets state removed (vs pin new "<name>" reopens it); refuses the hub lane, and a lane with live agents unless --force (agents are never archived)
   vs spec [show] [--lane <lane>] [--team <team>]
   vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
@@ -1832,7 +1832,11 @@ function savePinTeams(doc, revision, flags, { prevDoc = null, writeBrief } = {})
   return { ok: true, status: res.status, file: res.file, revision: res.body?.revision, written };
 }
 
-export function commandPinMerge(flags) {
+/**
+ * `vs pin merge <from> <into>`: folds <from>'s brief into <into> and marks <from> removed. Owner, the same-Squad Overlord or
+ * the same-Squad hub Buddy only (assertPinAdminCaller allowHubBuddy): before the gate any agent could remove a lane by merging it.
+ */
+export async function commandPinMerge(flags, { env = process.env, ...gateOpts } = {}) {
   const fromRaw = String(flags._[0] ?? "").trim();
   const intoRaw = String(flags._[1] ?? "").trim();
   if (!fromRaw || !intoRaw) {
@@ -1853,6 +1857,7 @@ export function commandPinMerge(flags) {
   if (!fromLane) throw new Error(`unknown source lane "${fromRaw}" in ${squadDef.name}`);
   if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
   if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
+  const caller = await assertPinAdminCaller("merge", target.id, doc.teams, env, { ...gateOpts, allowHubBuddy: true });
 
   const briefRoot = process.env.VIBESQUAD_ROOT ? path.resolve(process.env.VIBESQUAD_ROOT) : undefined;
   const fromBrief = readBrainstormSummary(fromLane.id, briefRoot, { teamId: squadDef.id }).content;
@@ -1912,7 +1917,7 @@ export function commandPinMerge(flags) {
 
   const logEntry = {
     ts: nowIso,
-    agent: identity.agent || "RiffBot",
+    agent: caller.owner ? identity.agent || "RiffBot" : caller.id,
     lane: intoLane.id,
     type: "decision",
     text: `Merged ${fromLane.name || fromLane.id} (${fromLane.id}) -> ${intoLane.name || intoLane.id} (${intoLane.id})${note ? `: ${note}` : ""}`.slice(0, MAX_TEXT),
@@ -1937,9 +1942,11 @@ export function commandPinMerge(flags) {
  * idea-632: who may hide, unhide or remove a pinned lane. The owner's shell (owner proof: no agent id + the local token), or
  * the Overlord (a live lead on the hub lane) of the lane's OWN Squad, with the Overlord identified by its token (/verify-agent,
  * the vs restart proofs). The VS_ROLE/VS_LANE/VS_TEAM env are never read. Any other agent, or another Squad's Overlord, is
- * refused. `identity` is a DI shortcut for tests ({ role, team: { id }, lane }); `hasOwnerProof` / `verify` inject the proofs.
+ * refused. `allowHubBuddy` also lets that Squad's hub Buddy (role brainstorm on the hub lane) through: `vs pin merge` only,
+ * since HUB_BUDDY_RULES (server/hooks/agent-duties.ts) has the hub Buddy fold lanes after the user confirms.
+ * `identity` is a DI shortcut for tests ({ role, team: { id }, lane }); `hasOwnerProof` / `verify` inject the proofs.
  */
-export async function assertPinAdminCaller(verb, squadId, teams, env = process.env, { identity = null, hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
+export async function assertPinAdminCaller(verb, squadId, teams, env = process.env, { identity = null, hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env), allowHubBuddy = false } = {}) {
   const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
   if (!id || !isRunnerId(id)) {
     if (!hasOwnerProof(env)) throw new Error(`vs pin ${verb}: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Squad's Overlord may ${verb} a lane.`);
@@ -1963,8 +1970,10 @@ export async function assertPinAdminCaller(verb, squadId, teams, env = process.e
   const want = String(squadId ?? "").toLowerCase();
   const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
   const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
-  if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane) || String(team.id).toLowerCase() !== want) {
-    throw new Error(`vs pin ${verb}: ${id} is a ${who.role || "worker"}${team && String(team.id).toLowerCase() !== want ? ` of Squad ${team.id}` : ""}; only the owner or the Overlord of Squad ${squadId} may ${verb} its lanes. Ask your lead.`);
+  const roleOk = who.role === "lead" || (allowHubBuddy && who.role === "brainstorm");
+  if (!roleOk || !team || !lane || !isHubLane(team, lane) || String(team.id).toLowerCase() !== want) {
+    const allowed = allowHubBuddy ? "the owner, the Overlord or the hub Buddy" : "the owner or the Overlord";
+    throw new Error(`vs pin ${verb}: ${id} is a ${who.role || "worker"}${team && String(team.id).toLowerCase() !== want ? ` of Squad ${team.id}` : ""}; only ${allowed} of Squad ${squadId} may ${verb} its lanes. Ask your lead.`);
   }
   return { owner: false, id };
 }

@@ -54,7 +54,7 @@ const logLines = (squad = "vibesquad") => {
 };
 reset();
 
-const { commandPinHide, assertPinAdminCaller } = await import("../cli/vs.mjs");
+const { commandPinHide, commandPinMerge, assertPinAdminCaller } = await import("../cli/vs.mjs");
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -253,4 +253,68 @@ test("idea-632 CLI: vs pin hide from a worker shell is refused; from the owner's
   const back = vs(base, "unhide", "art", "--team", "vibesquad");
   assert.equal(back.status, 0, back.stderr);
   assert.equal(laneOf("art").hidden, false);
+});
+
+// `vs pin merge` marks <from> removed, so it is the same security class (it had no gate before). Same gate, plus the
+// same-Squad hub Buddy, which HUB_BUDDY_RULES has run the merge after the user confirms.
+const briefs = () => {
+  for (const id of ["art", "bug-chaser"]) writeFileSync(join(root, "docs", "brainstorm", `${id}.md`), `# Brainstorm Summary · ${id}\n\n## Decided\n- d-${id}\n\n## Open\n- o-${id}\n`);
+};
+const merge = (env, verify, team = "vibesquad") =>
+  quiet(() => commandPinMerge({ _: ["art", "bug-chaser"], note: "fold", team }, { env, ...(verify ? { verify } : {}) }));
+
+test("pin merge gate: worker, lane lead, lane Buddy, other Squads' Overlord/Buddy, no proof and no token are refused", async () => {
+  reset();
+  briefs();
+  const before = raw();
+  const brief = readFileSync(join(root, "docs", "brainstorm", "bug-chaser.md"), "utf8");
+  for (const [who, verify] of [
+    ["plain worker", as("worker", "bug-chaser")],
+    ["lane lead (non-hub)", as("lead", "bug-chaser")],
+    ["lane Buddy", as("brainstorm", "art")],
+    ["other Squad's Overlord", as("lead", "efi", "efi")],
+    ["other Squad's hub Buddy", as("brainstorm", "efi", "efi")],
+    ["digest on the hub", as("digest", "vibesquad")],
+  ]) {
+    await assert.rejects(merge(agentEnv, verify), /vs pin merge: .*only the owner, the Overlord or the hub Buddy of Squad vibesquad/, who);
+  }
+  await assert.rejects(merge({}), /no owner proof/, "a scrubbed shell");
+  const verifyNever = async () => { throw new Error("verify must not be called"); };
+  await assert.rejects(merge({ ...OWNER_ENV, VS_AGENT_ID: AGENT, VS_ROLE: "lead", VS_LANE: "vibesquad", VS_TEAM: "vibesquad" }, verifyNever), /403/, "id without token");
+  await assert.rejects(merge(agentEnv, async () => { throw Object.assign(new Error("bad"), { status: 403 }); }), /403/, "wrong token");
+  assert.equal(raw(), before, "teams.json unchanged");
+  assert.equal(readFileSync(join(root, "docs", "brainstorm", "bug-chaser.md"), "utf8"), brief, "the target brief is unchanged");
+});
+
+test("pin merge gate: the owner, the same-Squad Overlord and the same-Squad hub Buddy may merge", async () => {
+  for (const [who, env, verify, agent] of [
+    ["owner", OWNER_ENV, null, null], // the owner shell keeps its resolved name
+    ["Overlord", agentEnv, as("lead", "vibesquad"), AGENT],
+    ["hub Buddy", agentEnv, as("brainstorm", "vibesquad"), AGENT],
+  ]) {
+    reset();
+    briefs();
+    const logStart = logLines().length;
+    const r = await merge(env, verify);
+    assert.equal(r.code, 0, `${who}: ${r.out}`);
+    assert.equal(laneOf("art").state, "removed", who);
+    assert.ok(laneOf("bug-chaser").aliases.includes("art"), who);
+    const entry = logLines().slice(logStart).find((e) => e.type === "decision");
+    if (agent) assert.equal(entry.agent, agent, `${who}: the decision is attributed to the verified caller`);
+    else assert.notEqual(entry.agent, AGENT);
+  }
+  // the hub-Buddy allowance is merge-only: the same Buddy still cannot hide or remove
+  reset();
+  await assert.rejects(run("remove", "art", { env: agentEnv, verify: as("brainstorm", "vibesquad") }), /only the owner or the Overlord/);
+});
+
+test("pin merge CLI: a worker shell is refused and teams.json is unchanged", () => {
+  reset();
+  briefs();
+  const before = raw();
+  const env = { PATH: process.env.PATH, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root, VS_AGENT_ID: AGENT, VS_ROLE: "lead", VS_LANE: "vibesquad", VS_TEAM: "vibesquad" };
+  const r = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "merge", "art", "bug-chaser", "--team", "vibesquad"], { cwd: ROOT_DIR, env, encoding: "utf8" });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /vs pin merge: 403/);
+  assert.equal(raw(), before);
 });
