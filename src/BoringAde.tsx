@@ -362,7 +362,7 @@ export function boringLaneTableRows(
   };
   const bugsRow: LaneTableRow = {
     key: "_bugs", kind: "desk", laneId: "_bugs", label: bugs.label, code: "", brainstorm: "—", lead: bugs.leadRunning ? "running" : "none",
-    workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age, sortAge: 0,
+    workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age || "—", sortAge: 0,
   };
   return [deskRow, bugsRow, ...lanes];
 }
@@ -1075,7 +1075,17 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                       if (r.laneId === "_bugs") return pickBugs();
                       if (c && view) return role === "worker" ? openLane(view, c) : openTarget(view, c.pin, c.laneId, { role, agentId: null });
                     };
-                    const stat = (s: string) => (s === "—" || s === "none" ? <span className="boring-muted">—</span> : <>{<span className={`boring-dot ${s} ${glyphCls(s)}`} />}{s}</>);
+                    // B14b: Art14 canon mini-busts for the Brainstorm/Lead cells (mirrors bustRoleForAgent: Desk = RiffBot/Overlord, Bugs = Bugs, lane = Buddy/Lead).
+                    const bust: { bs: BustRole; ld: BustRole } = r.laneId === "_desk" ? { bs: "riffbot", ld: "overlord" } : r.laneId === "_bugs" ? { bs: "bugs", ld: "bugs" } : { bs: "buddy", ld: "lead" };
+                    // The Bugs lane has no separate Brainstorm role: the row itself is the Bugs mascot, so its bust always
+                    // renders with a real working/idle/needs-you cue (never hollow). Other hollows mean "no agent in that role".
+                    const bustCell = (role: BustRole, status: string, always: boolean) => {
+                      const live = always ? r.running > 0 : status === "running";
+                      if (!always && (status === "—" || status === "none")) return <><span className="boring-lane-mini none" aria-hidden="true" /><span className="boring-lane-stat">—</span></>;
+                      const text = always && (status === "—" || status === "none") ? (r.needsYou > 0 ? "needs you" : live ? "running" : "idle") : (status === "—" || status === "none" ? "—" : status);
+                      const state = status === "error" ? "err" : r.needsYou > 0 ? "attn" : live ? "run" : "idle";
+                      return <><span className={`boring-lane-mini ${state}${live ? " lit" : ""}`} aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={22} height={22} /></span><span className="boring-lane-stat">{text}</span></>;
+                    };
                     return (
                       <tr key={r.key} className={`boring-lane-row${r.needsYou > 0 ? " attn" : ""}${r.kind === "desk" ? " desk" : ""}`} data-testid={`boring-lane-row-${r.laneId}`}>
                         <td><button type="button" className="boring-lane-cell" onClick={() => go("brainstorm")}>
@@ -1083,8 +1093,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                           <span className="boring-row-label boring-lane-name" title={r.topicLabel || undefined}>{r.label}</span>{r.code && <code className="boring-lane-code">{r.code}</code>}
                           {r.needsYou > 0 && <span className="badge boring-badge">Needs you · {r.needsYou}</span>}
                         </button></td>
-                        <td><button type="button" className="boring-lane-cell" onClick={() => go("brainstorm")}>{stat(r.brainstorm)}</button></td>
-                        <td><button type="button" className="boring-lane-cell" onClick={() => go("lead")}>{stat(r.lead)}</button></td>
+                        <td><button type="button" className="boring-lane-cell" onClick={() => go("brainstorm")}>{bustCell(bust.bs, r.brainstorm, r.laneId === "_bugs")}</button></td>
+                        <td><button type="button" className="boring-lane-cell" onClick={() => go("lead")}>{bustCell(bust.ld, r.lead, false)}</button></td>
                         <td><button type="button" className="boring-lane-cell" onClick={() => go("worker")}>{r.workers}</button></td>
                         {hasEvents && <td className="boring-lane-event">{r.lastEvent || "—"}</td>}
                         <td className="boring-conv-age">{r.age}</td>
