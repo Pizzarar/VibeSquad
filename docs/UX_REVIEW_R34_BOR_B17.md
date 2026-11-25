@@ -61,3 +61,78 @@ Prose (960) vs column (1360): assistant paragraphs stop about 400px short of the
 
 ## Verdict
 M1 (Needs-you strip misses Desk/worker needs, so counts disagree), M2 (lane names truncated to one letter at 1440p) and M3 (dead pills do nothing) are open. **FAIL 0/3/5.** All fixes are XS-S and contained in `BoringPanePicker.tsx`, `boring.css` and one `BoringAde.tsx` hunk. Part A (fluid column) passes for 1440p.
+
+---
+
+# R34 r2: fix tip `9d37f43e`
+
+Scope: `git diff 751078a2..9d37f43e` (`BoringPanePicker.tsx`, the B17 hunks in `BoringAde.tsx`, and `boring.css` for the picker, the container measure and the cap of 1680).
+
+Evidence: `dist` was rebuilt from `9d37f43e` (`vite build`) and served as static files, then opened at `?demo=1&riff=1&team=vibesquad&agent=demo-impl-1` with Playwright on Chromium 158. Viewports: 1280x720, 1600x900, 2560x1440 and 3200x1800@1.2 (4K at 120%), each in dark and light. Each one was measured with the ctx panel open, then collapsed, then in a split with the right pane (no ctx panel). Shots are in `artifacts/boring-b17/ux-r34r2/` (untracked, like the lane shots): `chat-ctxopen-*`, `chat-ctxcollapsed-*`, `split-picker-*`, `split-open-*`, `ov-*` (overlays), and `pk-*` (picker flows).
+
+## Status vs R34
+
+| R34 | Status | Evidence |
+|---|---|---|
+| M1 Needs-you strip misses Desk/worker needs | **Fixed** | Strip at 2560 (all themes and sizes): 5 needs (Audit token scout, Review-Sonnet, Bug Runner, Review-Gemini, Mechanical stalled), then 12 Working. That matches the 5 VibeSquad rows in the sidebar's Needs you **6** (the 6th is `Lead 75`, Main Game Project; see N4) and the Desk badge **4** (the 4 Desk items). |
+| M2 Lane names cut to one letter | **Fixed** | No lane name is truncated at any size (`scrollWidth == width`). The smallest is `Art Direction` 114px at 4K and `Runner Pilot` 118px at 1280. The riffbot card wraps its pills to a second line instead of squeezing the name. |
+| M3 Dead pills are silent no-ops | **Fixed, but see M4** | Clicking `Plugins · Buddy` (dormant) shows the empty card in the pane with `← All lanes`, `Start Brainstorm`, `Available in this lane: Lead · Idle`, and `Other active lanes: Bug Chaser · Needs you` (`pk-dormant-dark-2560.png`, `pk-dormant-light-3200.png`). The quick-jumps open in the right pane and keep the split: `Plugins›Lead` and `Bug Chaser›Brainstorm`, both with split on. |
+| L1 Status ignores the Lead | **Fixed** | `@plugins Lead idle`, and `@riffbot Lead working · Buddy working`. |
+| L2 No keyboard | **Fixed** (one gap: N5) | The filter has focus on mount. Esc returns from the empty card to the grid, then clears the filter, then closes the split. Typing `ui-bois` + Enter opens `UI Bois›Lead` on the right. After a dormant pill, focus moves to `← All lanes` and returns to the filter on Back. |
+| L3 Placeholder contrast | **Fixed** | `::placeholder` now uses `--text-2` (the same token as subs, which measured 9.2/10.1 in R34). |
+| L4 Pane ~70% empty below the grid | **Open, minor** (skipped by the lane) | `split-picker-light-3200x1800.png`: the grid ends at ~40% of the pane height. |
+| L5 Quick-jump copy | **Fixed** | The jumps read `Lead · Idle` / `Brainstorm · …` / `Bug Chaser · Needs you`. The lane-head strip is role-aware (`Lead idle · no Brainstorm`, `BoringAde.tsx:1230`). |
+| D1 4K cap | **Applied by the lead** | See Part A. |
+
+## Part A: container measure + cap at 1680 (column / timeline in CSS px)
+
+| Viewport | ctx open | ctx collapsed | split, each pane |
+|---|---|---|---|
+| 1280x720 | 482 / 530 (gutters 24) | 880 / 954 | 447 / 495 |
+| 1600x900 | 802 / 850 | 1147 / 1274 | 607 / 655 |
+| 2560x1440 | 1548 / 1720 (gutters 86) | 1680 / 2144 (gutters 232) | 981 / 1090 |
+| 3200x1800 (4K@120%) | **1680 / 2360 (gutters 340)** | 1680 / 2784 (gutters 552) | 1269 / 1410 |
+
+- At every size, theme and state, the pinned-todo, composer child, perm card (right pane) and user-bubble right edges are identical, and `pre` is inset by the same ~12px. The `min(…, 100cqw − ctx − 48px)` clamp stops the column from overflowing at 1280 with the ctx open (482 inside 530), and that state is not cramped.
+- **The 1680 column with 960 prose at 4K:** the tool and diff blocks use 1637px. The PowerShell block reads as a proper terminal, and the 4K ctx-open gutter (340 CSS px) reads as margin rather than void (`chat-ctxopen-dark-3200x1800.png`). Assistant prose stops 720px short of the column's right edge. That is acceptable because the left edges, avatars and headers line up, and the 960 measure is right for reading. A side effect: at 4K the user bubble (1760→2400) and the replies (778→1738) no longer overlap horizontally, so the eye zig-zags ~1000px per turn. This is not a finding; see D2.
+- With the ctx panel collapsed at 4K, the gutters are 552 CSS px per side (~660 physical px), which is back in the "600-800px margins" range the owner complained about. Prose is unaffected. This is a consequence of the cap the lead chose; see D2.
+
+## Overlays inside the container (`.drawer { container-type: inline-size }`)
+
+- **Probe:** a `position:fixed; top:0; left:0` div appended inside `.boring-convo-col` lands at **(0,0)**, while the drawer is at (380,48). So in Chromium 158 the container is **not** the containing block for fixed descendants, and `overflow` is `visible`.
+- Opened each overlay and hit-tested its centre (it must hit itself, not something covering it):
+
+| Overlay | Position | Result |
+|---|---|---|
+| Header `⋯` agent menu (`boring-agent-menu`) | absolute, inside the drawer | In the viewport and hits itself at 1280, 2560 and 4K. |
+| Ref popover (hover on `msg:-1`) | fixed, portalled | Correct coordinates; hits itself at all 3 sizes. |
+| Timeline context menu (`custom-context-menu`) | fixed, portalled | Correct coordinates at 4K. |
+| Secure-input popover, slash menu, `@` mention menu | in-flow (relative) | Render above the composer at the column width and hit themselves (`ov-secret-dark-1280.png`). |
+| Model / Think / Mode | native `<select>` | Unaffected. |
+| Toasts (`brainstorm-inbox-toast`) | in-flow | Unaffected. |
+
+**No overlay regression.** Residual risk: I did not test the Tauri Linux WebKitGTK webview. Older engines applied layout containment for `container-type`, which would trap fixed overlays (`ref-popover` and `ctx-menu` are portalled, so they are safe; the menu built on `.drawer-features-menu` (`styles.css:4532`) is phone-only). Windows WebView2 is evergreen Chromium.
+
+## New findings
+
+| # | Sev | Finding | Job hurt | Evidence | Fix | Files | Effort |
+|---|---|---|---|---|---|---|---|
+| M4 | **Major** | **`Start Brainstorm` in the right pane tears the split down.** The R34 M3 fix puts the lane's empty card in the right pane, and its primary CTA is Start. Clicking it starts the Brainstorm, but the split collapses: `split=false`, the crumb goes to `Plugins›Brainstorm`, and the left agent (`Implement - drawer crash`) is replaced. For 7 of 10 lanes in the demo that is the only way to get a running agent, so "open a lane **next to** the current one" still fails for dormant lanes. The quick-jumps in the same card do keep the split. | Split; open any lane next to the current one | `pk2` run at 4K light: `dormant → start: {"splitOn":"false","crumb":"VibeSquad›Plugins›Brainstorm","drawers":["○"]}` vs `lead-jump: {"splitOn":"true","crumb":"VibeSquad›Plugins›Lead"}`; `pk-start-light-3200.png`. Cause: the pane reuses the main-pane `emptyCard()` (`BoringAde.tsx:723-739`), whose `spec.run` → `startBrainstorm` (`:683`, `:692`) is not pane-aware. When the new agent lands, it becomes the main selection and the split state is dropped. | When the card is rendered by the picker (`renderEmpty`), run the start, then open the new Brainstorm in the **right** pane (the same path as `pickerHandlers.openAgent`), leaving the left pane as it was. Add a test: dormant pill → Start → split stays on and the right pane holds the new agent. | `BoringAde.tsx` (pass a pane-aware start into `emptyCard`, e.g. `emptyCard({ inPane: true })`) | S |
+| N2 | Minor | The in-pane empty card never names the lane. After clicking `Plugins · Buddy`, the pane says `No Brainstorm session is running for this conversation yet.` The crumb stays `Split · pick an agent`, nothing in the sidebar is selected, and the only clue is the top-bar `Brainstorm \| Lead · idle` switcher, which now refers to Plugins without saying so. On a mis-click you cannot tell which lane you are looking at. | Pick a lane | `pk-dormant-dark-2560.png`; state `crumb:"VibeSquad›Split · pick an agent", sel:[]`. | Put the lane in the card head (`Plugins · @plugins · Lead idle · no Brainstorm`) next to `← All lanes`, or set the crumb to `Split › Plugins`. | `BoringPanePicker.tsx` (empty branch), `BoringAde.tsx` | XS |
+| N3 | Minor | The strip labels ★ Overlord as **`Lead · Desk`**. The sidebar, the Desk card and the lanes grid all say `★ Overlord`. | Pick an agent | `split-picker-light-3200x1800.png`, strip row 2. Cause: `pickerStrip` (`BoringAde.tsx:717`) maps `kind === "lead"` to `Lead · <lane name ?? "Desk">`. | Use the shared display-name helper the sidebar uses for core agents (`★ Overlord`, `RiffBot`). | `BoringAde.tsx` | XS |
+| N4 | Minor | The strip is scoped to the current project, so `Lead 75` (Main Game Project, which needs you) is in the sidebar's **6** but not in the strip's 5. The strip shows no count, so no number disagrees, but "open what needs me on the right" skips other projects. | Needs-you → act | Sidebar `boring-needs-you-count = 6` vs 5 strip needs items. `needsYouRows([view], …)` at `BoringAde.tsx:714`. | Append other projects' rows tagged `· Main Game Project`, or add `+1 in other projects`. | `BoringAde.tsx` | XS |
+| N5 | Minor | When Esc closes the split, focus is dropped to `<body>` instead of returning to `◫ Split`. The next Tab starts from the top of the document. | Keyboard-driven open | `esc-close {"split":false,"focus":"BODY"}`. | `onClose` → focus `[data-testid=boring-split-toggle]` (use `captureFocusReturn`). | `BoringAde.tsx:762` | XS |
+| N6 | Minor (code) | `.boring-pp-agent` declares `max-width` twice. The later `max-width: 100%` overrides the new `min(100%, 640px)`, so the claimed strip-chip cap does nothing. It is harmless today (the longest chip is ~400px, and long subs ellipsize with a `title`). | none | `boring.css:1528`. | Drop the trailing `max-width: 100%`. | `boring.css` | XS |
+
+Still open from earlier rounds (pre-existing, not counted): R30 L2/L5. At 1280 the composer wraps `Mode` onto a second row (`ov-secret-dark-1280.png`).
+
+## Fresh eyes on the picker
+- The order works: the strip has needs items first, with an amber border, then Working items. The lanes grid comes next, then the hint. The filter gets focus on open, and the Close split control is in the head.
+- 17 strip chips at 4K wrap to 5 rows, which is busy but scannable. Above ~20 items, consider folding the Working items behind `+N working`. This is not a finding.
+- Dormant pills look visibly quieter than live pills (border only vs accent), and their aria-label says `(not running)`. Combined with the empty-card landing, the R34 M3 "looks clickable, does nothing" problem is gone.
+
+## Owner decisions
+- **D2: the remaining 4K gutter.** With the cap at 1680, 4K ctx-open looks right (340 CSS px gutters), but 4K ctx-collapsed is back to 552 CSS px per side. Options: (a) accept it, since collapsing the ctx panel is a choice to have more room around the chat; (b) when the ctx panel is collapsed and the viewport is ≥3000px, raise the cap to ~2000px for tool and diff blocks only (prose stays 960); (c) right-align the user bubble to the prose measure (960) instead of the column edge, which removes the ~1000px zig-zag at 4K. **Recommend (a) + (c).** (c) is a one-rule change and fixes the more noticeable 4K oddity; more width for blocks has diminishing returns because demo terminal lines are under 80 chars.
+
+## Verdict
+R34 M1, M2 and M3 are fixed, as are L1, L2, L3 and L5. The container measure is aligned at every size, theme and ctx state, and `container-type` did not break any overlay. The fix round adds **M4**: the in-pane `Start Brainstorm` collapses the split, so dormant lanes still cannot be started next to the current agent. **FAIL 0/1/6** (M4; N2-N6 + L4). The M4 fix is S and lives in one `BoringAde.tsx` hunk.
