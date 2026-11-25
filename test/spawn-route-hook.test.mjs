@@ -610,8 +610,10 @@ test(
     assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
 
     const old = resolveLeadProfile({ provider: "claude", labels: { profile: "Lead - Claude" } }, profilesPath, { ...noDisk, cappedProviders: ["claude"] });
-    assert.equal(old.profileName, "Lead - Claude");
-    assert.deepEqual([old.spawnCfg.provider, old.spawnCfg.model], [C, "claude-opus-5-5"], "old names: the hook's walk decides, as today");
+    // @per G2 L1: a stored name with its provider capped fails over here (same walk as the hook), so prompt + labels match.
+    assert.equal(old.profileName, "Lead - Gemini");
+    assert.equal(old.spawnCfg.provider, A, "stored names: a `vs cap` fails over on the successor path, not only in the hook");
+    assert.equal(old.failover?.from, "Lead - Claude");
   }),
 );
 
