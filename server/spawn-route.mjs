@@ -15,7 +15,7 @@ import { buildRolesFromProfiles, loadRoles } from "./profiles-v2.mjs";
 import { legacyProfileRole } from "./profiles.mjs";
 import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failover.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
-import { loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
+import { TIERS, loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
 import { armCapped } from "./exp6-arm.mjs";
 
 import { isForeignModel } from "./route-override.mjs";
@@ -100,14 +100,27 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * @param {string} hint
  * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, override?: {provider?: string, model?: string} | null}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, override } = {}) {
+export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
   const fam = routeProviderFamily(prefer);
   const order = found0.role.providers ?? [];
-  if (fam && order.includes(fam) && order[0] !== fam) {
-    table = { ...table, [found0.key]: { ...found0.role, providers: [fam, ...order.filter((p) => p !== fam)] } };
+  const capList = caps instanceof Set || Array.isArray(caps) ? [...caps] : Object.keys(caps ?? {}).filter((k) => caps[k]);
+  const preferCapped = Boolean(fam && capList.some((c) => routeProviderFamily(c) === fam));
+  const tierNorm = TIERS.includes(String(tier ?? "").trim().toLowerCase()) ? String(tier).trim().toLowerCase() : "";
+  const preferHit = Boolean(fam && order.includes(fam) && order[0] !== fam);
+  // R8: an arm tier (e.g. flash -> cheap) applies when the preferred family is not capped (failover keeps the role's tier).
+  const tierHit = Boolean(tierNorm && !preferCapped && found0.role.tier !== tierNorm);
+  if (preferHit || tierHit) {
+    table = {
+      ...table,
+      [found0.key]: {
+        ...found0.role,
+        ...(preferHit ? { providers: [fam, ...order.filter((p) => p !== fam)] } : {}),
+        ...(tierHit ? { tier: tierNorm } : {}),
+      },
+    };
   }
   const found = roleNameHit(hint, table);
   const rungs = ladder ?? loadTierLadder();
@@ -285,11 +298,11 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
  * the same values it would pick. null = not a role name (callers keep their profile path). `override` = the caller's own
  * provider/model (spawn_worker, H1): routed as in roleSpawnProfile, so the spawn config already names that provider's rung.
  */
-export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer, override } = {}) {
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer, tier, override } = {}) {
   const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
-  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer, override });
+  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer, tier, override });
   if (!hit) return null;
   const p = hit.profile;
   return {

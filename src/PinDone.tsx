@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { completeBlocker, type Pin } from "./pins";
 import { createDoneShelfStore } from "./pinFocusLogic";
 import { dismissedVersion, subscribeDismissed, dismissLooksDone, isLooksDoneDismissed, markPinComplete, reopenPin } from "./pinActions";
+import { etDate } from "./etTime";
 
 type MarkState = { kind: "idle" } | { kind: "blocked"; why: string } | { kind: "armed" } | { kind: "busy" };
 
@@ -110,7 +111,7 @@ export function ReopenButton({ pin, className = "" }: { pin: Pin; className?: st
   );
 }
 
-const doneDate = (pin: Pin) => (pin.lane.doneAt ? new Date(pin.lane.doneAt).toLocaleDateString() : "");
+const doneDate = (pin: Pin) => (pin.lane.doneAt ? etDate(pin.lane.doneAt) : "");
 
 /** One Done entry: ✓ name · date · Reopen. Shared by the sidebar and the squad page. */
 export function DoneRow({ pin, testId }: { pin: Pin; testId: string }) {

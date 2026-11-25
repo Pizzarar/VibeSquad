@@ -16,6 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, readArmCaps } from "../exp6-arm.mjs";
+import { claimHoldNotice, holdText, laneSpawnHold, releaseHoldNotice, spawnStreakPath } from "../spawn-streak.mjs";
 import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
@@ -119,6 +120,7 @@ export async function verifyCaller(ctx) {
     digest: rec.digest === true,
     digestFor: rec.digestFor ? String(rec.digestFor) : null,
     overlord: rec.overlord === true,
+    schedule: rec.schedule ? String(rec.schedule) : null, // idea-629: runner-verified (protected label), never the env
     verified: true,
   };
   Object.defineProperty(ctx, VERIFIED, { value: { id: caller.id, token: caller.token, rec }, enumerable: false, configurable: true });
@@ -219,7 +221,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles, { stakes, prefer, override } = {}) {
+    async resolveProfile(name, profiles, { stakes, prefer, tier, override } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
       // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
       // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
@@ -229,8 +231,8 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const stored = (Array.isArray(profiles) ? profiles : []).some((p) => clean(p?.name).toLowerCase() === key || (p?.id && p.id === clean(name)));
       if (!stored) {
         const { roleSpawnConfig } = await import("../spawn-route.mjs");
-        // prefer: R1 arm provider for a role spawn. override: the caller's own provider/model (H1), which win.
-        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer, override });
+        // prefer: R1 arm provider for a role spawn; tier: R8 opt-in arm tier. override: the caller's own provider/model (H1), which win.
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer, tier, override });
         if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
       }
       const profile = findProfile(name, profiles);
@@ -240,10 +242,12 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent, plan, pass }) {
+    async writeLog({ type, text, refs, agent, plan, pass, team, lane }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
-      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
+      // `team`/`lane` override the target only for the owner's shell (no lane identity); an agent always logs to its own.
+      const owner = !agentCallerOf(ctx);
+      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -373,6 +377,26 @@ async function spawnWorker(ctx, args = {}) {
   }
 }
 
+// idea-820 (dups 660/825): a lane whose last FAIL_STREAK_MAX worker spawns failed at start is held (server/spawn-streak.mjs,
+// recorded by runner-backend handleLogEvent). A worker spawn into a held lane is refused; the first refused caller of each hold
+// writes the one needs-you line (claimHoldNotice), later ones only get the error. Lead/Buddy spawns never reach this (exempt).
+async function refuseOnLaneHold(ctx, { team, lane }) {
+  const file = spawnStreakPath(ctx.env ?? process.env);
+  const hold = laneSpawnHold({ team, lane }, { file });
+  if (!hold) return;
+  const text = holdText(lane, hold);
+  // Only a caller the vs-log route lets write needs-you (lead, Buddy, owner shell; agentLogFields) may claim the one notice:
+  // a worker's 403 would spend the claim and leave the hold silent.
+  const callerRole = clean(ctx.identity.role).toLowerCase();
+  const canNotify = !callerAgentId(ctx) || callerRole === LEAD_ROLE || callerRole === "brainstorm";
+  if (canNotify && (await claimHoldNotice({ team, lane }, { file }))) {
+    // The owner's shell has no lane of its own: log against the held lane. (An agent's entry is attributed by the server.)
+    try { await ctx.writeLog({ type: "needs-you", text, ...(callerAgentId(ctx) ? {} : { team, lane }) }); }
+    catch { await releaseHoldNotice({ team, lane }, { file }); } // L1: an unsent notice must not burn the hold's one claim; the refusal below still carries the reason
+  }
+  throw new Error(text);
+}
+
 async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   await verifyCaller(ctx); // X1b: role/lane/team below are the runner's record, not the env claim (403 propagates)
   const prompt = need(args, "prompt", "initialPrompt");
@@ -414,6 +438,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     const stk = {
       stakes: clean(args.labels?.stakes) || clean(args.stakes),
       ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}),
+      ...(ab?.role && ab.tier ? { tier: ab.tier } : {}),
       ...(given.provider || given.model ? { override: { provider: given.provider, model: given.model } } : {}),
     };
     let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
@@ -447,7 +472,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const requestedTeam = clean(labels.team);
   const requestedLane = clean(labels.lane);
   // Identity-affecting labels (everything effectiveAgentRole / resolveAgentIdentity read) are never caller-supplied.
-  for (const k of ["role", "digestFor", "lead", "orphan", "topic", "ord"]) delete labels[k];
+  for (const k of ["role", "digestFor", "lead", "orphan", "topic", "ord", "schedule", "scheduleName"]) delete labels[k]; // idea-629: schedule marks are the server's
   // Handoff bookkeeping is written only by the lead-handoff flow; a caller-supplied one could forge a takeover (demote the live lead).
   for (const k of Object.keys(labels)) if (/^(vs\.handoff|handoff-)/i.test(k)) delete labels[k];
   // A Buddy may start the lane's lead; nobody else, and no other role. Any failed condition is an error, never a downgrade.
@@ -530,6 +555,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     labels[ARM_REASON_LABEL] = ab.reason;
     if (model) labels[MODEL_LABEL] = model; // the spawn hook re-syncs it to the final model after failover / the stakes ladder
   }
+  if (!asLead && labels.lane) await refuseOnLaneHold(ctx, { team: labels.team, lane: labels.lane }); // idea-820: before createAgent
   const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels[ROUTE_OVERRIDE_LABEL] ? { [ROUTE_OVERRIDE_ENV]: labels[ROUTE_OVERRIDE_LABEL] } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
@@ -1082,6 +1108,15 @@ async function watchTool(ctx, args = {}) {
     if (!isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
     if (seen.has(ref)) continue;
     seen.add(ref);
+    // idea-742: an unknown id (a literal rn-PLACEHOLDER, a typo) would arm a watch that can only stall as "no-events" 15 min later.
+    // A definite not-found rejects; a runner outage/timeout fails open (the watch engine's own poll tolerates hiccups).
+    let rec = true;
+    try {
+      rec = norm(agentOf(await ctx.withBackend({ id: ref }, (b) => b.fetchAgent(ref))));
+    } catch (e) {
+      if (e?.status === 404 || /not[ _-]?found|no such agent|unknown agent|\b404\b/i.test(String(e?.message ?? e))) rec = null;
+    }
+    if (!rec) throw new Error(`cannot watch unknown agent "${ref}" (no runner record; check the id with \`vs list\`)`);
     items.push({ kind: "agent", ref });
   }
   if (args.suite) items.push({ kind: "suite", ref: "" });

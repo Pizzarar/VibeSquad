@@ -1,3 +1,4 @@
+import { etClock } from "./etTime.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 
@@ -369,7 +370,7 @@ export function interpretRefresh(status: number, body: any, now: number = Date.n
 
 const fmtClock = (v: unknown): string => {
   const ms = typeof v === "number" ? v : typeof v === "string" ? Date.parse(v) : NaN;
-  return Number.isFinite(ms) ? new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  return Number.isFinite(ms) ? etClock(ms) : "";
 };
 
 export const shortSha = (sha: unknown): string => (typeof sha === "string" ? sha.slice(0, 8) : "");

@@ -35,6 +35,24 @@ export function drainHookDecision(input, drain, now = Date.now()) {
   return drainRefusalText(drain);
 }
 
+// idea-673: the drain file lags an abort (the server clears the request drain on its next tick, ~15 s, or the drain lapses
+// within its 5 min TTL if that call fails). A request-only drain is lifted here at once when the request it names is
+// no longer current or no longer holds background work: aborted, done, queued, or firing with vs restart launched (the
+// script's own drain, kind 'restart', takes over). A missing or unreadable request file keeps the refusal (fail closed:
+// the drain file is the runner's word, this is only a shortcut). <vs home>/restart-request.json = dirname(dirname(drainFile)).
+export const REQUEST_FILE = 'restart-request.json';
+export function requestFileFor(drainFile) { return path.join(path.dirname(path.dirname(path.resolve(drainFile))), REQUEST_FILE); }
+export function requestDrainLifted(drain, doc) {
+  if (drain?.kind !== 'request' || !doc || typeof doc !== 'object' || !('current' in doc)) return false;
+  const cur = doc.current;
+  if (!cur) return true;
+  if (drain.request?.id && cur.id !== drain.request.id) return true;
+  return cur.state === 'done' || cur.state === 'aborted' || cur.state === 'queued' || (cur.state === 'firing' && !!cur.launch);
+}
+export function readRequestDoc(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
+}
+
 // idea-476: an unreadable drain file fails OPEN (a broken file must never block every background command), but not
 // silently: anything but "no file" (no drain, the common case) leaves a line on stderr, which the CLI keeps in its hook
 // output, so the agent and the transcript show that the drain could not be checked.
@@ -56,7 +74,8 @@ if (process.argv[1] && norm(fileURLToPath(import.meta.url)) === norm(process.arg
   const gitGuard = argv.includes('--git-guard');
   const drainPath = argv.find((a) => !a.startsWith('--')) ?? '';
   const drain = drainPath && drainPath !== '-' ? readDrain(drainPath) : null;
-  const draining = Boolean(drain && Number.isFinite(drain.until) && Date.now() < drain.until);
+  // idea-673: a request drain whose request already ended (or was replaced) is lifted here, before the server's next tick.
+  const draining = Boolean(drain && Number.isFinite(drain.until) && Date.now() < drain.until) && !requestDrainLifted(drain, readRequestDoc(requestFileFor(drainPath)));
   if (!draining && !gitGuard) process.exit(0); // the common case for leads/Buddies: no stdin read at all
   let raw = '';
   process.stdin.setEncoding('utf8');

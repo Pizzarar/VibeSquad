@@ -302,7 +302,7 @@ export function classifyItem(item, set, ctx) {
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text, ...fin };
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
-    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && (o.activeAt ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText, ...fin };
+    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && Math.max(o.activeAt ?? -Infinity, o.progressAtMs ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText, ...fin };
     if (o.archived) return { phase: "archived", state: "stalled", reason: "archived" };
     if (o.status === "closed") return { phase: "closed", state: "stalled", reason: o.lost || o.resumable ? "lost" : "exited" };
     if (o.status === "error") return { phase: "error", state: "stalled", reason: "error" };
@@ -715,6 +715,16 @@ export function createWatchEngine({
     // A turn is (or just was) running: only text from a turn active at/after the set's creation / latest turn start may count
     // as the report. Covers a turn that began BEFORE `vs watch add` (status already running, no status change to catch).
     if (isBusy || wasBusy) o.activeAt = t;
+    // idea-897: lastProgressAt is the runner's record of the last TURN event (meta/label writes, stderr, cancel do not move it,
+    // unlike updatedAt). A missed turn_started/turn_ended (restart, stream hiccup) leaves activeAt stale, so an idle worker whose
+    // report is visible read as idle-no-report. When it advances, a cached finalText belongs to an earlier round: drop it so the
+    // next tick re-reads the timeline.
+    const prog = Date.parse(String(a.lastProgressAt ?? ""));
+    if (Number.isFinite(prog) && prog > (o.progressAtMs ?? -Infinity)) {
+      o.finalText = "";
+      o.finalChecked = 0;
+      o.progressAtMs = prog;
+    }
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
     o.archived = Boolean(a.archivedAt || a.archived);
