@@ -92,5 +92,28 @@ test("menu labels flip and disable at the ends (source)", () => {
 
 test("sidebar sources its order from teams.json via buildTeamViews, then orderViews", () => {
   assert.match(src("teams.ts"), /const all = \[\.\.\.TEAMS, UNASSIGNED\]/);
-  assert.match(src("BoringAde.tsx"), /partitionViews\(orderViews\(allViews\)/);
+  assert.match(src("BoringAde.tsx"), /partitionViews\(mainV \? allViews\.filter\(\(v\) => v !== mainV\) : allViews, folders, stat\)/);
+});
+
+test("O2: Main row is pinned outside the scrolling tree, compact, with an Open target to the Buddy chat", () => {
+  const ade = src("BoringAde.tsx"), css = src("boring.css");
+  assert.ok(ade.indexOf('data-testid="boring-main-pin"') < ade.indexOf('data-testid="boring-project-tree"'), "pin sits above the tree (and its scroll/folders)");
+  assert.match(ade, /renderProject\(mainV, true\)/);
+  assert.match(ade, /pickCore\("_riffbot", m\.core\.riffbot\.agentId, v\.team\.id\)/, "Open goes straight to that Squad's Buddy chat");
+  assert.match(ade, /projectOpen\[v\.team\.id\] \?\? false/, "starts compact");
+  const block = css.slice(css.indexOf("PLAN_PROJECT_ORDER O2"), css.indexOf("end PLAN_PROJECT_ORDER O2"));
+  assert.match(block, /\.boring-main-pin \{[^}]*border: 1px solid var\(--accent\)/);
+  assert.match(block, /\.boring-main-line \{[^}]*min-height: 54px/, "~1.5x the 36px row");
+  assert.ok(!/opacity: 0\./.test(block) && !/image-rendering: auto/.test(block), "dim by colour, no fractional opacity");
+  assert.match(css, /\.boring-project-line:focus-within \.boring-drag-grip/, "grip shows on hover/focus/active row (a touch tap sticks :hover); phones also have Move up/down");
+});
+
+test("O2: drag uses pointer events (mouse + touch), same-list guard, drop persists through projectOrder.drop", () => {
+  const ade = src("BoringAde.tsx"), css = src("boring.css");
+  assert.match(ade, /onPointerDown=.*setPointerCapture/);
+  assert.match(ade, /dataset\.orderGroup !== orderGroup\(v\)/, "cross-list targets are ignored");
+  assert.match(ade, /projectOrder\.drop\(d\.id, d\.over, d\.where, knownF\)/);
+  assert.match(css, /\.boring-drag-grip \{[^}]*touch-action: none/);
+  assert.match(css, /drop-before \{ box-shadow: inset 0 2px 0 var\(--accent\)/, "visible drop indicator");
+  assert.ok(!/boring-drag-grip/.test(src("App.tsx")), "Psycho gets no new UI");
 });

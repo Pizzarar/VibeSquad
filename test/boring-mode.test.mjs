@@ -152,6 +152,7 @@ stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; 
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const setCrunchMode = async () => true;`);
+stub("projectOrderActions.mjs", `export const projectOrder = { drop: async () => true, move: async () => true, setMain: async () => true }; export const knownFolderNames = (f) => new Set(f.map((x) => x.name));`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/, `from "./react-hooks.mjs"`)
