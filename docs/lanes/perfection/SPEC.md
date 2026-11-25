@@ -5,6 +5,7 @@ Display name "Workflows"; id stays `perfection` (aliases `perfection-2`, `perf`;
 ## Job
 "How do we know": workflow doubts become hypotheses + experiments read from @usage metrics. Each experiment closes with `vs log decision "@per EXP<n> verdict keep|change|ruled-out: <evidence>"`. New metrics = @usage inbox asks, never built here. Build work goes to the owning lane.
 Routing model: role-only profiles + provider x tier ladder, see `docs/PLAN_PROFILES_ROLE_ONLY.md` (P5a-P5f).
+Yardstick (Aub 11-25, docs/PLAN_PER_BEST_USE_1125.md): "used best, not to save any one quota" — routing is judged on first-try review PASS first, then fix-after-merge guard, then fit per task kind; $/merged unit is only a tiebreak.
 
 Revision 11-09 (Aub): @usage MEASURES, @per JUDGES, @bug FIXES. Judge on pooled data from all Squads. Verdicts ship as code/config (profiles, routing, caps, defaults), never as new prompt rules. No per-project Workflows chip or per-project workflow notes (repo quirks go in each repo AGENTS.md).
 
