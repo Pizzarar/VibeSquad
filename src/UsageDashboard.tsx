@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -713,7 +713,10 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <tbody>
                   {profiles.map((p) => (
                     <tr key={p.key} data-profile={p.profile} data-role={p.role} data-model={p.model ?? undefined} data-stakes={p.stakes ?? undefined} data-kind={p.jobKind ?? undefined}>
-                      <td>{profileModelLabel(p)}</td>
+                      <td>
+                        {profileModelLabel(p)}
+                        {formatFamilySuffix(p.byFamily) && <span className="small muted"> ({formatFamilySuffix(p.byFamily)})</span>}
+                      </td>
                       <td>{p.stakes ? <span className="usage-stakes" data-stakes={p.stakes}>{p.stakes}</span> : <span className="muted">–</span>}</td>
                       <td className="muted">{profileKindLabel(p)}</td>
                       <td className="muted">{providerLabel(p.provider)}</td>
@@ -896,6 +899,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                     <tr key={w.workflowMode} data-workflow={w.workflowMode}>
                       <td>
                         {w.workflowMode}
+                        {formatFamilySuffix(w.byFamily) && <span className="small muted"> ({formatFamilySuffix(w.byFamily)})</span>}
                         {lowCostCoverage(w.costCoverage) && (
                           <span className="usage-estimate usage-low-coverage" title={`Cost known for ${pctText(w.costCoverage)} of units; non-Claude cost may be missing`}>low cost data</span>
                         )}

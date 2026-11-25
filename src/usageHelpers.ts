@@ -75,6 +75,24 @@ export type LongTurnSplit = { productive: LongTurnBucket; waiting?: LongTurnBuck
 export type LaneRoleLongTurns = Partial<LongTurnSplit> & { teamId: string; lane: string; role: string };
 export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[]; byLaneRole?: LaneRoleLongTurns[] };
 
+export type FamilySplitRow = {
+  family: string;
+  runs?: number;
+  units: number;
+  turns: number;
+  costUsd: number;
+  costPerUnit: number | null;
+  firstTryPassCount: number;
+  firstTryKnown: number;
+  firstTryPassRate: number | null;
+};
+
+/** Compact family suffix for workflow/profile tables; empty when only pre-R10 unlabeled data is present. */
+export function formatFamilySuffix(byFamily?: FamilySplitRow[]): string {
+  if (!byFamily?.length || !byFamily.some((f) => f.family !== "unlabeled")) return "";
+  return byFamily.map((f) => `${f.family} ${f.units > 0 ? f.units : (f.runs ?? 0)}`).join(" · ");
+}
+
 export type ProfileRow = {
   provider: string;
   profile: string;
@@ -105,6 +123,7 @@ export type ProfileRow = {
   fixAfterMergeCount: number;
   fixAfterMergeRate: number;
   avgUnitCycleMs: number | null;
+  byFamily?: FamilySplitRow[];
 };
 export type UsageData = {
   limits: LimitRow[];
@@ -293,6 +312,7 @@ export type ProfileView = {
   costPerRun: number | null;
   fixRate: number;
   workPct: number | null;
+  byFamily?: FamilySplitRow[];
 };
 
 const IMPLEMENTER_ROLES = new Set(["worker", "implementer"]);
@@ -352,6 +372,7 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       costPerRun: typeof p.costPerRun === "number" && Number.isFinite(p.costPerRun) ? p.costPerRun : null,
       fixRate: p.fixAfterMergeRate ?? 0,
       workPct: total > 0 ? (p.workingMs ?? 0) / total : null,
+      byFamily: p.byFamily,
     };
     const ms = msByKey.get(view.key) ?? { work: 0, idle: 0 };
     ms.work += p.workingMs ?? 0;
@@ -643,6 +664,7 @@ export type WorkflowRow = {
   avgUnitCycleMs: number | null;
   fixAfterMergeRate: number;
   costCoverage: number;
+  byFamily?: FamilySplitRow[];
 };
 
 /** Metrics shown as cohort tiles, in display order. `higherIsBetter` drives the good/bad colouring. */
