@@ -842,7 +842,7 @@ const UNASSIGNED_LANE = "_unassigned";
  * The live agent `vs who <role> --lane <lane>` resolves: the same whoCandidate filter (cwd, lane alias/code, team) and
  * resolveLeadWinner tie-break. A lane's Buddy front door is the one without a topic; topic Buddies are side threads.
  */
-function pickLiveAgent(agents, { role, teamId, laneId, teams }) {
+export function pickLiveAgent(agents, { role, teamId, laneId, teams }) {
   const matches = agents
     .map((item) => item?.agent ?? item)
     .filter((a) => a && whoCandidate(a, { teams, wantTeamId: teamId, wantLane: laneId })?.role === role);
