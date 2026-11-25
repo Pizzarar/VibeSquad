@@ -34,7 +34,7 @@ test("vs profiles (no flags): roles + ladder, custom profiles, old names hidden 
   const r = run([]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^Roles \(spawn with profile=<label>; stakes picks the model/m);
-  assert.match(r.stdout, /^Planner · label=Planner · tier=mid · providers=claude>antigravity-cli>opencode$/m);
+  assert.match(r.stdout, /^Planner · label=Planner · tier=mid · claude=claude-sonnet-5-5\/medium > antigravity-cli=gemini-4-neon > opencode=\S+$/m);
   assert.match(r.stdout, /^Implement · label=Implement · tier=mid/m);
   assert.doesNotMatch(r.stdout, /Work Order/, "hidden role is not listed");
   assert.match(r.stdout, /^Tier ladder/m);
@@ -87,4 +87,13 @@ test("vs profiles lists server built-ins missing from a stored profiles.json, ma
   assert.match(r.stdout, /^Implement · label=Implement/m, "role names still listed as routing labels");
   const j = JSON.parse(run(["--name", "UX Reviewer", "--json"]).stdout);
   assert.ok(j.some((p) => p.name === "UX Reviewer - Opus"));
+});
+
+test("vs profiles roles carry their ladder rung per provider; --roles --json has rungs; no model-named profile is listed (idea-732)", (t) => {
+  const { run } = setup(t);
+  const j = JSON.parse(run(["--roles", "--json"]).stdout);
+  const impl = j.roles.find((x) => x.key === "implement");
+  assert.equal(impl.rungs.claude, j.ladder.claude[impl.tier].model + "/" + j.ladder.claude[impl.tier].effort);
+  const out = run([]).stdout;
+  assert.doesNotMatch(out, /^(Implement|Lead|Planner|Review) - \w+ · /m);
 });

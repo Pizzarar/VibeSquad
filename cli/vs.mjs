@@ -1493,6 +1493,7 @@ function commandProfiles(flags) {
     label: roleProfileLabel(key, roles),
     tier: r.tier,
     providers: [...(r.providers ?? [])],
+    rungs: roleRungs(r),
     ...(isHiddenRole(key, roles) ? { hidden: true } : {}),
   }));
   const listedRows = roleRows.filter((r) => !r.hidden);
@@ -1570,11 +1571,22 @@ function writeProfileRow(p, suffix, includeNotes) {
   }
 }
 
+/** idea-732: a role's model per provider, from the same tier ladder spawn routing reads (role tier -> ladder rung). */
+function roleRungs(r) {
+  const ladder = loadTierLadder();
+  const out = {};
+  for (const prov of r.providers ?? []) {
+    const x = ladder[prov]?.[r.tier];
+    if (x?.model) out[prov] = `${x.model}${x.effort ? `/${x.effort}` : ""}`;
+  }
+  return out;
+}
+
 /** `vs profiles` roles block: one line per role (label, default tier, provider order), then the tier ladder. */
 function writeRoleRows(roleRows) {
   process.stdout.write("Roles (spawn with profile=<label>; stakes picks the model: tierA-* -> top, mechanical -> cheap; provider/model to override):\n");
   for (const r of roleRows) {
-    process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · providers=${r.providers.join(">")}\n`);
+    process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · ${Object.entries(r.rungs ?? {}).map(([k, v]) => `${k}=${v}`).join(" > ")}\n`);
   }
   process.stdout.write("\nTier ladder (provider: top | mid | cheap):\n");
   const rung = (x) => (x?.model ? `${x.model}${x.effort ? `/${x.effort}` : ""}` : "-");
