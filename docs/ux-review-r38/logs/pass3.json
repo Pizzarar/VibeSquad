@@ -1,0 +1,63 @@
+{
+ "fresh-view-decisions": {
+  "errs": [],
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&team=efi",
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": true,
+  "crumb": "Decision Desk",
+  "hl": [
+   "boring-decision-nav on :: Decisions· 12"
+  ]
+ },
+ "deeplink": {
+  "errs": [],
+  "url": "?demo=&team=vibesquad&agent=demo-rev",
+  "h": [],
+  "desk": false,
+  "crumb": "VibeSquad",
+  "hl": [
+   "boring-worker-row on needs-attn :: Review - Sonnet · drawer9m ago"
+  ]
+ },
+ "deeplink-noteam": {
+  "errs": [],
+  "url": "?demo=&team=vibesquad&agent=demo-rev",
+  "h": [
+   "replaceState /?demo=&team=efi&agent=demo-rev",
+   "replaceState /?demo=&team=vibesquad&agent=demo-rev"
+  ],
+  "desk": false,
+  "crumb": "VibeSquad",
+  "hl": [
+   "boring-worker-row on needs-attn :: Review - Sonnet · drawer9m ago"
+  ]
+ },
+ "desk-selection": {
+  "errs": [],
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": true,
+  "crumb": "Decision Desk",
+  "hl": [
+   "boring-decision-nav on :: Decisions· 12"
+  ]
+ },
+ "project-selection": {
+  "errs": [],
+  "url": "?demo=&team=site",
+  "h": [
+   "replaceState /?demo=&view=decisions",
+   "pushState /?demo=&team=site"
+  ],
+  "desk": false,
+  "crumb": "Site",
+  "hl": [
+   "boring-project-row on :: Site"
+  ]
+ }
+}

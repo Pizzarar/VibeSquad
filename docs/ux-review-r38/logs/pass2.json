@@ -1,0 +1,427 @@
+{
+ "initial": {
+  "bar": {
+   "btn": "Send 0 answers",
+   "disabled": true,
+   "bar": "6 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (6) | Send 0 answers"
+  },
+  "c1": [
+   "UI Bois · Lead 2[null|boring-decision-asker]",
+   "LeanYes, default landing + sidebar entry[false|is-lean suggested]",
+   "Sidebar entry only[false|]",
+   "Not that[false|is-not]"
+  ]
+ },
+ "leanClick": {
+  "bar": {
+   "btn": "Send 1 answer",
+   "disabled": false,
+   "bar": "1 ready to send · 5 leans not included | Use all leans (5) | Send 1 answer"
+  },
+  "c1": [
+   "UI Bois · Lead 2[null|boring-decision-asker]",
+   "✓ LeanYes, default landing + sidebar entry[true|is-lean selected staged]",
+   "Sidebar entry only[false|]",
+   "Not that[false|is-not]"
+  ]
+ },
+ "leanUnclick": {
+  "bar": {
+   "btn": "Send 0 answers",
+   "disabled": true,
+   "bar": "6 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (6) | Send 0 answers"
+  },
+  "c1": [
+   "UI Bois · Lead 2[null|boring-decision-asker]",
+   "LeanYes, default landing + sidebar entry[false|is-lean suggested]",
+   "Sidebar entry only[false|]",
+   "Not that[false|is-not]"
+  ]
+ },
+ "flip2answer1": {
+  "bar": {
+   "btn": "Send 3 answers",
+   "disabled": false,
+   "bar": "3 ready to send · 4 leans not included | Use all leans (4) | Send 3 answers"
+  },
+  "c1": [
+   "UI Bois · Lead 2[null|boring-decision-asker]",
+   "LeanYes, default landing + sidebar entry[false|is-lean suggested]",
+   "Sidebar entry only[false|]",
+   "Not that[true|is-not selected staged]"
+  ],
+  "c2": [
+   "Plugins · Lead 1[null|boring-decision-asker]",
+   "LeanMerge after green suite[false|is-lean suggested]",
+   "Hold for D4 bundle[true|selected staged]",
+   "Not that[false|is-not]"
+  ],
+  "c5": [
+   "Main Game · Lead 3[null|boring-decision-asker]",
+   "LeanKeep 00:00 UTC[false|is-lean suggested]",
+   "Align to server local midnight[false|]",
+   "Rolling 24h per player[false|]",
+   "Not that[false|is-not]"
+  ]
+ },
+ "useAll": {
+  "bar": {
+   "btn": "Send 7 answers",
+   "disabled": false,
+   "bar": "7 ready to send | Send 7 answers"
+  },
+  "c5": [
+   "Main Game · Lead 3[null|boring-decision-asker]",
+   "✓ LeanKeep 00:00 UTC[true|is-lean selected staged]",
+   "Align to server local midnight[false|]",
+   "Rolling 24h per player[false|]",
+   "Not that[false|is-not]"
+  ],
+  "c1": [
+   "UI Bois · Lead 2[null|boring-decision-asker]",
+   "LeanYes, default landing + sidebar entry[false|is-lean suggested]",
+   "Sidebar entry only[false|]",
+   "Not that[true|is-not selected staged]"
+  ]
+ },
+ "navBefore": "Decisions· 12",
+ "feedBefore": {
+  "summary": "12 open · 9 here · 3 off-screen",
+  "cards": 9,
+  "feedMeta": "Oldest first · 9"
+ },
+ "sending": {
+  "btn": "Undo",
+  "disabled": false,
+  "bar": "Sending 7 answers in 5s… | Undo | Send now"
+ },
+ "afterSend": {
+  "delivered": 7,
+  "nav": "Decisions· 5",
+  "feed": {
+   "summary": "5 open · 2 here · 3 off-screen",
+   "cards": 2,
+   "feedMeta": "Oldest first · 2"
+  },
+  "bar": {
+   "btn": "Send 0 answers",
+   "disabled": true,
+   "bar": "Sent 7 answers. | Send 0 answers"
+  }
+ },
+ "errs": [],
+ "quietOpen": {
+  "stripBottom": 1072,
+  "lines": 35,
+  "btn": "− hide 24 quiet",
+  "innerHeight": 1080
+ },
+ "errsQ": [],
+ "narrow1600": {
+  "wide": "boring-decision-desk",
+  "strip": [
+   118,
+   618
+  ],
+  "sendTop": 853,
+  "cardsStart": 1,
+  "cardsFull": 1,
+  "errs": []
+ },
+ "narrow1366": {
+  "wide": "boring-decision-desk",
+  "strip": [
+   118,
+   618
+  ],
+  "sendTop": 721,
+  "cardsStart": 0,
+  "cardsFull": 0,
+  "errs": []
+ },
+ "landing-needs-back": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "click needs-you",
+    "url": "?demo=&team=vibesquad&agent=demo-rev",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-rev"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "forward",
+    "url": "?demo=&team=vibesquad&agent=demo-rev",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "POP ?demo=&team=vibesquad&agent=demo-rev"
+    ]
+   },
+   {
+    "step": "back again",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "reload",
+    "url": "?demo=&team=vibesquad&agent=demo-rev",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "replaceState /?demo=&team=vibesquad&agent=demo-rev"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "deeplink-agent": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&team=efi",
+    "h": [
+     "replaceState /?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "",
+    "desk": 0,
+    "crumb": "",
+    "sel": [],
+    "h": []
+   }
+  ],
+  "errs": []
+ },
+ "team-url": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&team=vibesquad",
+    "h": []
+   },
+   {
+    "step": "reload on team",
+    "url": "?demo=&team=vibesquad",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": []
+   },
+   {
+    "step": "click Decisions",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&team=vibesquad",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "POP ?demo=&team=vibesquad"
+    ]
+   },
+   {
+    "step": "forward",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "reload",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "replaceState /?demo=&team=vibesquad",
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "back after reload",
+    "url": "?demo=&team=vibesquad",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "POP ?demo=&team=vibesquad"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "proj-a-b-back2": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "proj Main",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "proj Site",
+    "url": "?demo=&team=site",
+    "desk": 0,
+    "crumb": "Site",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&team=site"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "sel": [],
+    "h": [
+     "POP ?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "forward",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "sel": [],
+    "h": [
+     "POP ?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "reload",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "sel": [],
+    "h": []
+   }
+  ],
+  "errs": []
+ },
+ "ctrlj": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "ctrl+j",
+    "url": "?demo=&team=vibesquad&agent=demo-aud",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-aud"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "strip-line-click": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "click strip Plugins",
+    "url": "?demo=&team=vibesquad&agent=demo-lead-pl",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "sel": [],
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-lead-pl"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "sel": [],
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   }
+  ],
+  "errs": []
+ }
+}

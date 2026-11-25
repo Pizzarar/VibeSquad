@@ -1,0 +1,1070 @@
+{
+ "dark-1920": {
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1159,
+   "y": 132,
+   "w": 580,
+   "h": 474
+  },
+  "feed": {
+   "x": 488,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "11 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1033,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "firstCard": {
+   "x": 488,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "dark-1920-lanes24": {
+  "url": "?demo=&lanes=24&view=decisions",
+  "h": [
+   "replaceState /?demo=&lanes=24&view=decisions"
+  ],
+  "desk": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1159,
+   "y": 132,
+   "w": 580,
+   "h": 500
+  },
+  "feed": {
+   "x": 488,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "35 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [
+   {
+    "t": "+24 quiet",
+    "title": "Lane 1, Lane 2, Lane 3, Lane 4, Lane 5, Lane 6, Lane 7, Lane 8, Lane 9, Lane 10, Lane 11, Lane 12, Lane 13, Lane 14, Lane 15, Lane 16, Lane 17, Lane 18, Lane 19, Lane 20, Lane 21, Lane 22, Lane 23, Lane 24: idle, no event in the last 2h",
+    "x": 1178,
+    "y": 601,
+    "w": 83,
+    "h": 22
+   }
+  ],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1033,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "firstCard": {
+   "x": 488,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "light-1920": {
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1159,
+   "y": 132,
+   "w": 580,
+   "h": 474
+  },
+  "feed": {
+   "x": 488,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "11 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1033,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "firstCard": {
+   "x": 488,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "light-1920-lanes24": {
+  "url": "?demo=&lanes=24&view=decisions",
+  "h": [
+   "replaceState /?demo=&lanes=24&view=decisions"
+  ],
+  "desk": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 488,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1159,
+   "y": 132,
+   "w": 580,
+   "h": 500
+  },
+  "feed": {
+   "x": 488,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "35 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [
+   {
+    "t": "+24 quiet",
+    "title": "Lane 1, Lane 2, Lane 3, Lane 4, Lane 5, Lane 6, Lane 7, Lane 8, Lane 9, Lane 10, Lane 11, Lane 12, Lane 13, Lane 14, Lane 15, Lane 16, Lane 17, Lane 18, Lane 19, Lane 20, Lane 21, Lane 22, Lane 23, Lane 24: idle, no event in the last 2h",
+    "x": 1178,
+    "y": 601,
+    "w": 83,
+    "h": 22
+   }
+  ],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1033,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "firstCard": {
+   "x": 488,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "dark-3200": {
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1836,
+   "y": 132,
+   "w": 580,
+   "h": 474
+  },
+  "feed": {
+   "x": 1164,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "11 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1753,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "firstCard": {
+   "x": 1164,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "dark-3200-lanes24": {
+  "url": "?demo=&lanes=24&view=decisions",
+  "h": [
+   "replaceState /?demo=&lanes=24&view=decisions"
+  ],
+  "desk": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1836,
+   "y": 132,
+   "w": 580,
+   "h": 500
+  },
+  "feed": {
+   "x": 1164,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "35 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [
+   {
+    "t": "+24 quiet",
+    "title": "Lane 1, Lane 2, Lane 3, Lane 4, Lane 5, Lane 6, Lane 7, Lane 8, Lane 9, Lane 10, Lane 11, Lane 12, Lane 13, Lane 14, Lane 15, Lane 16, Lane 17, Lane 18, Lane 19, Lane 20, Lane 21, Lane 22, Lane 23, Lane 24: idle, no event in the last 2h",
+    "x": 1855,
+    "y": 601,
+    "w": 83,
+    "h": 22
+   }
+  ],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1753,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "firstCard": {
+   "x": 1164,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "light-3200": {
+  "url": "?demo=&view=decisions",
+  "h": [
+   "replaceState /?demo=&view=decisions"
+  ],
+  "desk": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1836,
+   "y": 132,
+   "w": 580,
+   "h": 474
+  },
+  "feed": {
+   "x": 1164,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "11 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1753,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "firstCard": {
+   "x": 1164,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ },
+ "light-3200-lanes24": {
+  "url": "?demo=&lanes=24&view=decisions",
+  "h": [
+   "replaceState /?demo=&lanes=24&view=decisions"
+  ],
+  "desk": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 1968
+  },
+  "wide": "boring-decision-desk is-wide",
+  "nav": "Decisions· 12",
+  "summary": "12 open · 9 here · 3 off-screen",
+  "offLink": "jump to off-screen",
+  "h1": 0,
+  "head": {
+   "x": 1164,
+   "y": 76,
+   "w": 1252,
+   "h": 28
+  },
+  "strip": {
+   "x": 1836,
+   "y": 132,
+   "w": 580,
+   "h": 500
+  },
+  "feed": {
+   "x": 1164,
+   "y": 132,
+   "w": 648,
+   "h": 1494
+  },
+  "stripMeta": "35 lanes",
+  "stripLines": [
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "trunc": true,
+    "y": 193
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "trunc": true,
+    "y": 221
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "trunc": true,
+    "y": 249
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "trunc": false,
+    "y": 327
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "trunc": true,
+    "y": 353
+   },
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "trunc": true,
+    "y": 431
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "trunc": true,
+    "y": 459
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "trunc": true,
+    "y": 487
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "trunc": true,
+    "y": 515
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "trunc": true,
+    "y": 543
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "trunc": true,
+    "y": 571
+   }
+  ],
+  "quietBtns": [
+   {
+    "t": "+24 quiet",
+    "title": "Lane 1, Lane 2, Lane 3, Lane 4, Lane 5, Lane 6, Lane 7, Lane 8, Lane 9, Lane 10, Lane 11, Lane 12, Lane 13, Lane 14, Lane 15, Lane 16, Lane 17, Lane 18, Lane 19, Lane 20, Lane 21, Lane 22, Lane 23, Lane 24: idle, no event in the last 2h",
+    "x": 1855,
+    "y": 601,
+    "w": 83,
+    "h": 22
+   }
+  ],
+  "feedMeta": "Oldest first · 9",
+  "sendText": "Send 0 answers",
+  "sendBarText": "Send 0 answers",
+  "sendTop": 1753,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "firstCard": {
+   "x": 1164,
+   "y": 204,
+   "w": 648,
+   "h": 142
+  },
+  "lean1": [
+   {
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   },
+   {
+    "t": "LeanMerge after green suite",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean suggested",
+    "bs": "dashed",
+    "bg": "rgba(0, 0, 0, 0)"
+   }
+  ],
+  "selected": [],
+  "crumb": "Decision Desk",
+  "needsTitle": [
+   "Permissions, errors and stalls. Decisions live in Decisions."
+  ],
+  "errs": []
+ }
+}
