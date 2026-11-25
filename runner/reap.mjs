@@ -27,7 +27,7 @@ const MAX_DEPTH = 64;
 const SYSTEM_PIDS = new Set([0, 4]);
 // Defense in depth: the VS runtime never carries an agent token (scripts/restart-runtime.mjs AGENT_ENV_KEYS scrub), but a
 // process that looks like it is never reaped either.
-const VS_RUNTIME = /(?:^|[\\/\s"'])(?:scripts[\\/]serve|scripts[\\/]restart-runtime|runner[\\/]server|runner[\\/]runner)\.mjs\b/i;
+export const VS_RUNTIME = /(?:^|[\\/\s"'])(?:scripts[\\/]serve|scripts[\\/]restart-runtime|runner[\\/]server|runner[\\/]runner)\.mjs\b/i;
 
 /** A reaped command fit for runner.log and the team log: Claude's wrapper stripped, host paths redacted to their script name, tail kept. */
 export function reapCmdText(cmd, max = 160) {
