@@ -362,7 +362,7 @@ export function boringLaneTableRows(
   };
   const bugsRow: LaneTableRow = {
     key: "_bugs", kind: "desk", laneId: "_bugs", label: bugs.label, code: "", brainstorm: "—", lead: bugs.leadRunning ? "running" : "none",
-    workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age, sortAge: 0,
+    workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age || "—", sortAge: 0,
   };
   return [deskRow, bugsRow, ...lanes];
 }
@@ -1080,9 +1080,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                     // The Bugs lane has no separate Brainstorm role: the row itself is the Bugs mascot, so its bust always
                     // renders with a real working/idle/needs-you cue (never hollow). Other hollows mean "no agent in that role".
                     const bustCell = (role: BustRole, status: string, always: boolean) => {
-                      const text = always && (status === "—" || status === "none") ? (r.needsYou > 0 ? "needs you" : "idle") : (status === "—" || status === "none" ? "—" : status);
-                      if (!always && (status === "—" || status === "none")) return <><span className="boring-lane-mini none" aria-hidden="true" /><span className="boring-lane-stat">—</span></>;
                       const live = always ? r.running > 0 : status === "running";
+                      if (!always && (status === "—" || status === "none")) return <><span className="boring-lane-mini none" aria-hidden="true" /><span className="boring-lane-stat">—</span></>;
+                      const text = always && (status === "—" || status === "none") ? (r.needsYou > 0 ? "needs you" : live ? "running" : "idle") : (status === "—" || status === "none" ? "—" : status);
                       const state = status === "error" ? "err" : r.needsYou > 0 ? "attn" : live ? "run" : "idle";
                       return <><span className={`boring-lane-mini ${state}${live ? " lit" : ""}`} aria-hidden="true"><img className="boring-bust-img" src={bustUrl(role, theme)} alt="" width={22} height={22} /></span><span className="boring-lane-stat">{text}</span></>;
                     };

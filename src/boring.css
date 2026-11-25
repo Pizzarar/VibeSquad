@@ -1341,7 +1341,7 @@ html[data-vibe="boring"] .boring-lane-mini.none { background: transparent; box-s
 html[data-vibe="boring"] .boring-lane-mini.idle { filter: grayscale(0.85) brightness(0.8); }
 html[data-vibe="boring"] .boring-lane-mini.attn { box-shadow: 0 0 0 1.5px var(--st-attn); }
 html[data-vibe="boring"] .boring-lane-mini.err { box-shadow: 0 0 0 1.5px var(--st-err); }
-html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit { box-shadow: 0 0 0 1.5px var(--living-warm); }
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit:not(.attn) { box-shadow: 0 0 0 1.5px var(--living-warm); }
 html[data-vibe="boring"] [data-squad-state="idle"] .boring-lane-mini.lit { filter: grayscale(0.85) brightness(0.8); }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-mate-av, html[data-vibe="boring"] .boring-lane-mini { transition: none; } }
 
@@ -1445,6 +1445,8 @@ html[data-vibe="boring"] .boring-lane-row.desk:hover { background: var(--surface
 html[data-vibe="boring"] .boring-lane-name { color: var(--text-1); font-weight: 600; }
 html[data-vibe="boring"] .boring-lane-code { font-family: var(--mono); font-size: var(--t-caption, 11px); color: var(--text-3); background: transparent; }
 html[data-vibe="boring"] .boring-lane-stat { font-family: var(--mono); font-size: var(--t-caption, 11px); letter-spacing: 0.01em; color: var(--text-2); white-space: nowrap; }
+/* Empty-role bust slots (no Brainstorm/Lead) read as broken images: soften the full-strength box to a low-opacity ghost. */
+html[data-vibe="boring"] .boring-lane-table .boring-lane-mini.none { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 40%, transparent); }
 /* Busts reuse the B13c mini-avatar ring vocabulary (working = lit glow, idle = greyscale, needs-you = amber, error = red). */
 @media (prefers-reduced-motion: reduce) {
   html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill,
