@@ -169,3 +169,65 @@ test('usa-60: a verdict naming a commit outside the unit branch does not attach;
   assert.equal(u.cohorts.recent.firstTryPassRate, 1, '1 known PASS of 1 known; the unknown unit is not in the denominator');
   assert.equal(u.cohorts.recent.unknownReviewUnits, 1);
 });
+
+// ---- review fixes (Review-Gemini rn-8e5ec78f1f98 on 20d97482)
+import { pctText, cohortValueText, burstCellText, deltaText, efficiencySummary } from '../src/usageHelpers.ts';
+
+test('usa-60 review H1: autonomy.bySquad uses the enriched units (no 163/163 artifact), even under a squad filter', () => {
+  const h = home({
+    'rn-i1': worker({ ts: T0, cwd: WT('unit-a') }),
+    'rn-i2': worker({ ts: T0, cwd: WT('unit-b') }),
+    'rn-r1': reviewer({ ts: T0 + 10 * MIN, lines: [`FAIL 1/0/0 ${SHA('b').slice(0, 8)}`] }),
+  });
+  const merges = [{ m: 'd', b: 'c', unit: 'unit-b', ms: T0 + 30 * MIN }, { m: 'a', b: 'b', unit: 'unit-a', ms: T0 + 60 * MIN }];
+  fs.writeFileSync(path.join(h, 'teams.json'), JSON.stringify({ teams: [{ id: 'efi', lanes: [{ id: 'usage', code: 'usa' }] }] }));
+  for (const squad of [undefined, 'efi']) {
+  clearUsageCache();
+  const u = getUsage({ home: h, git: gitFor(merges), laneCodes: { usa: 'usage' }, squad, usageReview: { suppressSchedule: true } });
+  const rows = u.autonomy.bySquad;
+  assert.ok(rows.length);
+  const tot = rows.reduce((t, r) => t + r.mergedUnits, 0);
+  assert.equal(tot, 2);
+  const withRate = rows.filter((r) => r.firstTryPassRate !== null);
+  assert.deepEqual(withRate.map((r) => r.firstTryPassRate), [0], 'unit-a: first verdict FAIL -> 0%; unit-b unknown is out of the denominator');
+  assert.ok(rows.some((r) => r.avgReviewRounds === 0.5), 'avgReviewRounds sees the verdict count (1 + 0) / 2');
+  }
+});
+
+test('usa-60 review M3: merged.perLane reviewRounds include verdict counts', () => {
+  const h = home({
+    'rn-i1': worker({ ts: T0, cwd: WT('unit-a') }),
+    'rn-r1': reviewer({ ts: T0 + 10 * MIN, lines: [`FAIL 1/0/0 ${SHA('b').slice(0, 8)}`] }),
+    'rn-r2': reviewer({ ts: T0 + 20 * MIN, lines: [`PASS 0/0/0 ${SHA('b').slice(0, 8)}`] }),
+  });
+  const u = usage(h, [{ m: 'a', b: 'b', unit: 'unit-a', ms: T0 + 60 * MIN }]);
+  assert.equal(u.merged.perLane.find((l) => l.lane === 'usage').reviewRounds, 2);
+});
+
+test('usa-60 review M2/L6: an attested duplicate keeps the reviewer\'s earlier timestamp (fast fixer still counts); 7- vs 8-hex citations dedupe', () => {
+  const rv = T0 + 10 * MIN;
+  const h = home({
+    'rn-impl': worker({ ts: T0, cwd: WT('unit-efi-9') }),
+    'rn-r1': reviewer({ ts: rv, lines: [`FAIL 1/0/0 ${SHA('b').slice(0, 8)}`] }),
+    'rn-fix': worker({ ts: rv + 5000, cwd: WT('unit-efi-9'), profile: 'Implement - Gemini' }), // spawned before the digest wrote the log
+  }, [
+    { ts: new Date(rv + 2 * MIN).toISOString(), agent: 'rn-d', lane: 'usage', type: 'done', text: 'x', verdict: { reviewer: 'rn-r1', line: `FAIL 1/0/0 ${SHA('b').slice(0, 7)}` } },
+  ]);
+  const u = usage(h, [{ m: 'a', b: 'b', unit: 'unit-efi-9', ms: T0 + 60 * MIN }]);
+  const m = unitsOf(u)['unit-efi-9'];
+  assert.equal(m.reviewVerdicts, 1, 'one reviewer verdict, cited with 7 and 8 hex');
+  assert.equal(m.reviewVerdictOrigin, 'attested');
+  assert.equal(m.fixRounds, 1, 'the fixer spawned right after the reviewer wrote FAIL (before the digest) is counted');
+});
+
+test('usa-60 review L4/L5: a null firstTryPassRate renders safely in the UI helpers and the review markdown', () => {
+  assert.equal(pctText(null), '—');
+  assert.equal(cohortValueText('pct', null), '—');
+  assert.equal(burstCellText({ insufficient: false }, null, pctText), '—');
+  assert.equal(deltaText('pct', null), '— no prior');
+  assert.ok(!/NaN|null|undefined/.test(efficiencySummary({ recent: { firstTryPassRate: null } }, null)));
+  const h = home({ 'rn-i1': worker({ ts: T0, cwd: WT('unit-a') }) });
+  const u = usage(h, [{ m: 'a', b: 'b', unit: 'unit-a', ms: T0 + 60 * MIN }]);
+  assert.equal(u.byWorkflow[0].firstTryPassRate, null);
+  assert.equal(u.byWorkflow[0].unknownReviewUnits, 1);
+});

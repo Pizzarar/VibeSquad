@@ -1715,10 +1715,10 @@ function firstTryTally(units) {
  * usa-60 (idea-989): per-request index of reviewer verdicts by 7-char hash prefix. Two sources, the idea-883 ones:
  *   attested   - server-set `done.verdict` entries in <home>/teams/<squad>/log.jsonl (verdict.mjs entryVerdict; entry text never read)
  *   runner     - verdict lines in a reviewer run's own record (agent.verdictLines, jobKind reviewer)
- * Each entry { verdict, hash, tsMs, reviewer, origin }. A unit takes the entries whose hash is a prefix of one of its branch
+ * `reviewerRuns` = [{ agentId, verdictLines }] of EVERY Squad's reviewer runs (a squad filter must not hide a verdict). Each entry { verdict, hash, tsMs, reviewer, origin }. A unit takes the entries whose hash is a prefix of one of its branch
  * commits (branchShas), deduped by (reviewer, hash): the attested entry wins over the same reviewer's runner line.
  */
-function buildReviewVerdictIndex(home, agents) {
+function buildReviewVerdictIndex(home, reviewerRuns) {
   const byPrefix = new Map();
   const add = (e) => getOrSet(byPrefix, e.hash.slice(0, 7), () => []).push(e);
   const dir = home || vibesquadHome();
@@ -1737,7 +1737,7 @@ function buildReviewVerdictIndex(home, agents) {
       }
     } catch { /* no team logs */ }
   }
-  for (const a of agents) for (const l of a.verdictLines ?? []) add({ verdict: l.verdict, hash: l.hash, tsMs: l.ts ?? null, reviewer: a.agentId, origin: "runner-record" });
+  for (const a of reviewerRuns) for (const l of a.verdictLines ?? []) add({ verdict: l.verdict, hash: l.hash, tsMs: l.ts ?? null, reviewer: a.agentId, origin: "runner-record" });
   return byPrefix;
 }
 
@@ -1747,9 +1747,13 @@ function unitReviewVerdicts(index, branchShas) {
   for (const sha of branchShas ?? []) {
     for (const e of index.get(String(sha).slice(0, 7)) ?? []) {
       if (!String(sha).toLowerCase().startsWith(e.hash)) continue;
-      const k = `${e.reviewer}\u0000${e.hash}\u0000${e.verdict}`;
+      const k = `${e.reviewer}\u0000${String(sha).toLowerCase()}\u0000${e.verdict}`;
       const old = seen.get(k);
-      if (!old || (old.origin !== "attested" && e.origin === "attested")) seen.set(k, e);
+      if (!old) { seen.set(k, e); continue; }
+      // same verdict from both sources: keep the attested origin but the EARLIEST time (the digest lands after the reviewer wrote it;
+      // the later digest ts would push the first FAIL past a fixer the lead spawned straight away)
+      const tsMs = old.tsMs !== null && e.tsMs !== null ? Math.min(old.tsMs, e.tsMs) : (old.tsMs ?? e.tsMs);
+      seen.set(k, { ...(old.origin !== "attested" && e.origin === "attested" ? e : old), tsMs });
     }
   }
   return [...seen.values()].sort((a, b) => ((a.tsMs ?? Infinity) - (b.tsMs ?? Infinity)) || (a.verdict === b.verdict ? 0 : a.verdict === "FAIL" ? -1 : 1));
@@ -2923,12 +2927,12 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   const bw = u.byWorkflow ?? [];
   if (bw.length) {
     out.push(`A/B workflows (mode | units | firstTryPassRate | costPerUnit | costPer100Loc | fixAfterMergeRate):`);
-    for (const w of bw.slice(0, 12)) out.push(`- ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.fixAfterMergeRate}`);
+    for (const w of bw.slice(0, 12)) out.push(`- ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate ?? "-"} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.fixAfterMergeRate}`);
   }
   const cohorts = u.cohorts;
   if (cohorts?.recent?.units) {
     const d = cohorts.delta ?? {};
-    out.push(`Cohorts (Last ${cohorts.recent.units} vs Prior ${cohorts.prior?.units ?? 0}): firstTryPass ${cohorts.recent.firstTryPassRate} vs ${cohorts.prior?.firstTryPassRate ?? "-"} (Δ${d.firstTryPassRate ?? "-"}), cost/unit $${cohorts.recent.costPerUnit} vs $${cohorts.prior?.costPerUnit ?? "-"} (Δ${d.costPerUnit ?? "-"}), fix rate ${cohorts.recent.fixAfterMergeRate} vs ${cohorts.prior?.fixAfterMergeRate ?? "-"}.`);
+    out.push(`Cohorts (Last ${cohorts.recent.units} vs Prior ${cohorts.prior?.units ?? 0}): firstTryPass ${cohorts.recent.firstTryPassRate ?? "-"} vs ${cohorts.prior?.firstTryPassRate ?? "-"} (Δ${d.firstTryPassRate ?? "-"}), cost/unit $${cohorts.recent.costPerUnit} vs $${cohorts.prior?.costPerUnit ?? "-"} (Δ${d.costPerUnit ?? "-"}), fix rate ${cohorts.recent.fixAfterMergeRate} vs ${cohorts.prior?.fixAfterMergeRate ?? "-"}.`);
   }
   const floor = u.floor;
   if (floor) {
@@ -3516,8 +3520,6 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const mergedExcluded = (mergedSrc ?? mergedRawAll).excluded ?? new Map(); // usa-54: sha -> reason, for the ledger re-fold
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
-  const mergedByLane = new Map();
-  for (const u of mergedRaw) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
 
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
@@ -3535,7 +3537,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
   const dispatchIndex = buildDispatchBurstIndex(agents);
-  const verdictIndex = buildReviewVerdictIndex(home, agents); // usa-60
+  const verdictIndex = buildReviewVerdictIndex(home, allAgentSquads.filter((a) => classifyJobKind(a.st) === "reviewer").map((a) => ({ agentId: a.agentId, verdictLines: a.st.verdictLines ?? [] }))); // usa-60
+  /** usa-60: a unit's review outcome (shared by merged.units and the unfiltered autonomy.bySquad rows). */
+  const reviewOutcomeOf = (u) => {
+    const verdicts = unitReviewVerdicts(verdictIndex, u.branchShas);
+    const subjectRounds = u.reviewRounds ?? 0;
+    return { verdicts, subjectRounds, reviewRounds: Math.max(subjectRounds, verdicts.length), firstReviewVerdict: verdicts[0]?.verdict ?? null, reviewSource: verdicts.length ? (subjectRounds > 0 ? "both" : "verdict-log") : (subjectRounds > 0 ? "subject" : "none") };
+  };
   const merged = [];
   for (const u of mergedRaw) {
     if (merged.length % 200 === 199) yield;
@@ -3558,9 +3566,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const burst = dispatchBurstFor(dispatchIndex, implementer);
     // usa-60: review outcomes + fix rounds. reviewRounds stays max(subject `review rN`, verdict count): VS numbers don't move.
     const { branchShas, ...unitRest } = u;
-    const verdicts = unitReviewVerdicts(verdictIndex, branchShas);
-    const subjectRounds = u.reviewRounds ?? 0;
-    const reviewSource = verdicts.length ? (subjectRounds > 0 ? "both" : "verdict-log") : (subjectRounds > 0 ? "subject" : "none");
+    const { verdicts, reviewRounds: outRounds, firstReviewVerdict: outFirst, reviewSource } = reviewOutcomeOf(u);
     const fixSpawns = unitFixSpawns(u, verdicts, workerIndex, mergedAtMs);
     const fixProfiles = [];
     for (const f of fixSpawns) {
@@ -3571,9 +3577,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     }
     return {
       ...unitRest, mergedAtMs,
-      reviewRounds: Math.max(subjectRounds, verdicts.length),
+      reviewRounds: outRounds,
       reviewVerdicts: verdicts.length,
-      firstReviewVerdict: verdicts[0]?.verdict ?? null,
+      firstReviewVerdict: outFirst,
       reviewSource,
       reviewVerdictOrigin: verdicts.length ? (verdicts.some((v) => v.origin === "attested") ? "attested" : "runner-record") : null,
       fixRounds: fixSpawns.length, fixProfiles, fixSpawns,
@@ -3597,6 +3603,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     };
   }
   yield;
+  const mergedByLane = new Map(); // usa-60: the enriched units (reviewRounds includes verdict counts), not the raw git rows
+  for (const u of merged) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const attributionCoverage = buildAttributionCoverage(merged);
 
   // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
@@ -3796,7 +3804,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const squads = [...new Set([...laneTeams.values(), ...entries.map((e) => e.squad), ...allAgentSquads.map((a) => a.squad), ...mergedRawAll.map(unitSquad)].filter(Boolean))].sort();
   const autonomy = yield* buildAutonomySteps({
     entries, squads, squad,
-    merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), reviewRounds: u.reviewRounds, reviewSource: u.reviewSource, firstReviewVerdict: u.firstReviewVerdict })),
+    merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), ...(({ reviewRounds, reviewSource, firstReviewVerdict }) => ({ reviewRounds, reviewSource, firstReviewVerdict }))(reviewOutcomeOf(u)) })),
     agents: allAgentSquads.map(({ st, squad: sq }) => { const a = agentV2(st, ""); return { squad: sq, turns: a.turns, costUsd: a.costUsd }; }),
   });
   yield;
@@ -3887,7 +3895,7 @@ function usageToMarkdown(u) {
   if (c?.recent?.units) {
     lines.push("");
     lines.push("## Cohort trend (last vs prior)");
-    lines.push(`- first-try PASS: ${c.recent.firstTryPassRate} vs ${c.prior?.firstTryPassRate ?? "-"} (Δ${c.delta?.firstTryPassRate ?? "-"})`);
+    lines.push(`- first-try PASS: ${c.recent.firstTryPassRate ?? "-"} vs ${c.prior?.firstTryPassRate ?? "-"} (Δ${c.delta?.firstTryPassRate ?? "-"})`);
     lines.push(`- rev rounds/unit: ${c.recent.avgReviewRounds} vs ${c.prior?.avgReviewRounds ?? "-"} (Δ${c.delta?.avgReviewRounds ?? "-"})`);
     lines.push(`- cost/unit: $${c.recent.costPerUnit} vs $${c.prior?.costPerUnit ?? "-"} (Δ${c.delta?.costPerUnit ?? "-"})`);
     lines.push(`- tokens/unit: ${c.recent.tokensPerUnit} vs ${c.prior?.tokensPerUnit ?? "-"}`);
@@ -3899,7 +3907,7 @@ function usageToMarkdown(u) {
     lines.push("## A/B workflow comparison");
     lines.push("| mode | units | 1st-pass | rev/unit | $/unit | $/100LOC | tok/unit | fix rate |");
     lines.push("|---|---|---|---|---|---|---|---|");
-    for (const w of bw) lines.push(`| ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.avgReviewRounds} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.tokensPerUnit} | ${w.fixAfterMergeRate} |`);
+    for (const w of bw) lines.push(`| ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate ?? "-"} | ${w.avgReviewRounds} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.tokensPerUnit} | ${w.fixAfterMergeRate} |`);
   }
   const pl = u.merged?.perLane ?? [];
   if (pl.length) {

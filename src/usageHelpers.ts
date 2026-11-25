@@ -633,7 +633,8 @@ export type Savings = {
 export type WorkflowRow = {
   workflowMode: string;
   units: number;
-  firstTryPassRate: number;
+  firstTryPassRate: number | null;
+  unknownReviewUnits?: number;
   avgReviewRounds: number;
   costUsd: number;
   costPerUnit: number | null;
