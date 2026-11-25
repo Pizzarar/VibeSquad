@@ -7,6 +7,12 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
+// Needs-you rows as {title, text}: title = the where-span title= ("Lane · Project", full text; the separator is CSS-drawn since U3), text = row textContent.
+const needsRows = (page) => page.locator(".boring-sidebar .boring-needs-open").evaluateAll((els) => els.map((e) => ({ title: (e.querySelector('[data-testid="boring-needs-where"]')?.getAttribute("title") || "").trim(), text: (e.textContent || "").trim() })));
+// Same-project (VibeSquad) Needs-you rows' text, optionally excluding some, in DOM order.
+const sameProjectRows = async (page, excl = null) => (await needsRows(page)).filter((r) => r.text && /· VibeSquad$/.test(r.title) && !(excl && excl.test(r.text))).map((r) => r.text);
+// The Needs-you row with this exact textContent (rows are unique by reason text).
+const needsRowByText = async (page, text) => { const i = (await needsRows(page)).findIndex((r) => r.text === text); return page.locator(".boring-sidebar .boring-needs-open").nth(i); };
 
 let pw, exe, server, baseUrl, browser, unavailable;
 
@@ -183,12 +189,12 @@ test("B1 e2e (a,d): Back onto a mixed team=A&agent=<B's agent> entry: 0 pushes w
   assert.match(back.url, /agent=demo-aud/);
   const len0 = back.hlen;
   const urls = [];
-  const names = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => x && !/Audit - token scout/.test(x) && /· VibeSquad/.test(x)); // same-project rows: one push each
+  const names = (await sameProjectRows(page, /Audit - token scout/)); // same-project rows: one push each
   assert.ok(names.length >= 3, `demo has >=3 other Needs-you rows (${JSON.stringify(names)})`);
   await page.evaluate(() => { window.__u = []; const o = history.pushState.bind(history); history.pushState = (...a) => { window.__u.push(String(a[2])); return o(...a); }; });
   let pushed = 0;
   for (let i = 0; i < 3; i++) {
-    await page.locator(".boring-sidebar .boring-needs-open", { hasText: names[i].slice(0, 20) }).first().click();
+    await (await needsRowByText(page, names[i])).click();
     await page.waitForTimeout(700);
     const s = await take();
     pushed += pushes(s);
@@ -241,17 +247,17 @@ test("B1 e2e (a): a pop followed by a non-Boring route and then a user nav pushe
 test("B1 e2e (b): double Back lands on the 2nd target; a click on a different agent pushes", async (t) => {
   if (unavailable) return t.skip(unavailable);
   const { context, page, take } = await openChat("dark");
-  const rows = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => /· VibeSquad/.test(x));
+  const rows = (await sameProjectRows(page));
   assert.ok(rows.length >= 3, `>=3 same-project rows (${JSON.stringify(rows)})`);
   const urls = [];
-  for (const r of rows.slice(0, 3)) { await page.locator(".boring-sidebar .boring-needs-open", { hasText: r.slice(0, 20) }).first().click(); await page.waitForTimeout(500); urls.push(await page.evaluate(() => location.search)); }
+  for (const r of rows.slice(0, 3)) { await (await needsRowByText(page, r)).click(); await page.waitForTimeout(500); urls.push(await page.evaluate(() => location.search)); }
   await take();
   await page.evaluate(() => { history.back(); history.back(); }); // two pops in one tick: rows[2] -> rows[1] -> rows[0]
   await page.waitForTimeout(1200);
   const two = await take();
   assert.equal(pushes(two), 0, `double Back: 0 pushState (got ${JSON.stringify(two.h)})`);
   assert.equal(two.url, urls[0], "the double Back lands on the 2nd target (rows[0]'s URL)");
-  await page.locator(".boring-sidebar .boring-needs-open", { hasText: rows[2].slice(0, 20) }).first().click();
+  await (await needsRowByText(page, rows[2])).click();
   await page.waitForTimeout(900);
   const nav = await take();
   assert.ok(pushes(nav) >= 1, `a click on a different agent pushes (got ${JSON.stringify(nav.h)})`);

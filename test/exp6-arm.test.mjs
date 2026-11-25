@@ -63,9 +63,12 @@ test("decideArm caps (idea-703): a capped arm is never picked; both capped keeps
     assert.deepEqual(pick3(r), ["sonnet", `capped:${armCapKey("neon", caps)}`, false, SONNET], JSON.stringify(caps));
     assert.equal(r.capped, true);
   }
-  // Capped claude: Neon even when Sonnet's turn.
+  // Capped claude: Neon even when Sonnet's turn (legacy Implement - Sonnet does not walk agy-claude).
   const c = await decideArm(base({ capProbe: async () => ({ claude: { reason: "cap" } }) }));
   assert.deepEqual(pick3(c), ["neon", "capped:claude", true, NEON]);
+  // R10 fu3: role-spawn Implement walks agy-claude first, so direct claude alone does not cap its sonnet arm.
+  const rc = await decideArm(base({ profile: "Implement", capProbe: async () => ({ claude: {} }) }));
+  assert.deepEqual([rc.arm, rc.reason, rc.swapped, rc.profile, rc.provider], ["sonnet", "alternation", false, "Implement", "claude"]);
   // A cap on the arm that would not be picked anyway is not a reason.
   assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => ({ claude: {} }), listAgents: async () => [ag("sonnet")] }))), ["neon", "alternation", true, NEON]);
   // DSP cap is irrelevant (not an arm).
@@ -196,8 +199,8 @@ test("spawn_worker: normal implementer spawns alternate Sonnet -> Neon -> Sonnet
 test("spawn_worker: capped Neon keeps Sonnet; capped claude picks Neon; both capped keeps the request", async () => {
   const cases = [
     [{ "antigravity-cli": {} }, [ag("sonnet")], SONNET, "claude", "capped:antigravity-cli"],
-    [{ claude: {} }, [], NEON, "antigravity-cli", "capped:claude"],
-    [{ claude: {}, gemini: {} }, [], SONNET, "claude", "capped:claude+antigravity-cli"],
+    [{ claude: {}, "agy-claude": {} }, [], NEON, "antigravity-cli", "capped:claude"],
+    [{ claude: {}, "agy-claude": {}, gemini: {} }, [], SONNET, "claude", "capped:claude+antigravity-cli"],
   ];
   for (const [caps, agents, profile, provider, reason] of cases) {
     const { ctx, creates } = ctxWith([...agents], [], { env: { VIBESQUAD_HOME: home(caps) } });

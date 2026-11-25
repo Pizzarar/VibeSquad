@@ -85,7 +85,7 @@ test("role: every role row routes by ladder through the hook (no legacy-name, pr
         assert.doesNotMatch(metric(out), /legacy-name/, at);
         assert.equal(out.labels.profile, key === "lead" || key === "brainstorm" ? key : ROLES[key].name, at); // server labels lead/brainstorm lowercase
         // the model the badge predicts (first provider x tier for stakes) is the model that lands
-        const want = ladderPick(ROLES[key], DEFAULT_TIER_LADDER, stakes);
+        const want = ladderPick(ROLES[key], DEFAULT_TIER_LADDER, stakes, key);
         assert.equal(out.config.provider, want.provider === "agy-claude" ? "antigravity-cli" : want.provider, at);
         assert.equal(out.config.model, want.model, at);
       }

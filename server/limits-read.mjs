@@ -158,3 +158,31 @@ export function liveQuotaUsage({ home, now = Date.now(), maxAgeMs = QUOTA_READIN
     return [];
   }
 }
+
+/**
+ * Latest prepaid credit readings per provider from <runner home>/credits.json (written by runner/limits.mjs CreditStore).
+ * Missing/corrupt file -> []. Strict field allowlist so secrets can never surface.
+ */
+export function readCredits(home) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(join(dir, "runner", "credits.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const map = parsed && typeof parsed.credits === "object" && parsed.credits && !Array.isArray(parsed.credits) ? parsed.credits : {};
+  const out = [];
+  for (const r of Object.values(map)) {
+    if (!r || typeof r !== "object" || typeof r.provider !== "string" || !r.provider) continue;
+    out.push({
+      provider: r.provider,
+      balance: typeof r.balance === "number" && Number.isFinite(r.balance) ? r.balance : null,
+      currency: typeof r.currency === "string" && r.currency ? r.currency : null,
+      checkedAt: typeof r.checkedAt === "string" && r.checkedAt ? r.checkedAt : null,
+      status: typeof r.status === "string" && r.status ? r.status : "error",
+    });
+  }
+  return out.sort((a, b) => a.provider.localeCompare(b.provider));
+}

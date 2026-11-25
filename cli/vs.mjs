@@ -76,7 +76,9 @@ import {
   createManagedWorktree,
   sweepAllRepos,
   throttledLiveCwds,
+  throttledHoldCwds,
   liveAgentCwds,
+  holdAgentCwds,
   cleanupProjectsFolder,
   resolveManagedWorktreeRoot,
   retentionSweep,
@@ -302,9 +304,11 @@ export function parseArgs(argv) {
     "lean",
     "alt",
     "kind",
+    "stepTimeout",
   ]);
   const booleans = new Set([
     "sinceMe",
+    "quiet",
     "peek",
     "pass",
     "digest",
@@ -2742,23 +2746,41 @@ function specLine(unit) {
   return `- ${unit.id} [${unit.status}] goal="${unit.goal ?? ""}" files=[${files}] doneCheck="${unit.doneCheck ?? ""}"`;
 }
 
-// idea-932: the registry resolves a lane to its project's MAIN checkout, so `vs task set` run from a unit worktree
-// wrote there while the agent (and git) looked at the worktree's own TASKS.json. When cwd is a linked worktree of
-// that same project, target the worktree itself.
+// idea-932 / idea-1056: the registry resolves a lane to its project's MAIN checkout (or, unresolved, rootDir), so
+// `vs task set` run from a unit worktree wrote there while the agent (and git) looked at the worktree's own
+// TASKS.json. When cwd is a linked worktree of the SAME repo as that target (compared by git common dir, so symlinks,
+// bind mounts and moved clones still match; a different repo or a non-git target never does), use the worktree.
+// An explicit/test rootDir that is not a git repo therefore always wins and can never redirect writes into this repo.
+function gitPaths(dir) {
+  const r = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"], {
+    cwd: dir,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (r.status !== 0) return null;
+  const [gitDir, commonDir, top] = String(r.stdout).split(/\r?\n/).map((l) => l.trim());
+  if (!gitDir || !commonDir || !top) return null;
+  // realpathSync.native so Windows short names / casing compare equal.
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(path.resolve(p));
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  return { gitDir: real(gitDir), commonDir: real(commonDir), top: real(top) };
+}
+
 export function laneArtifactBase(identity, rootDir, cwd = process.cwd()) {
   try {
-    const main = laneWorkingDir(identity.team.id, identity.lane, rootDir);
-    const mainOfCwd = resolveWorktreeRootPath(cwd);
-    if (!main || !mainOfCwd || path.resolve(main) !== path.resolve(mainOfCwd)) return undefined;
-    let dir = path.resolve(cwd);
-    for (let i = 0; i < 12; i++) {
-      try {
-        if (fs.statSync(path.join(dir, ".git")).isFile()) return dir;
-      } catch {}
-      const up = path.dirname(dir);
-      if (up === dir) break;
-      dir = up;
-    }
+    const target = laneWorkingDir(identity.team.id, identity.lane, rootDir) || rootDir;
+    if (!target) return undefined;
+    const here = gitPaths(cwd);
+    // Linked worktrees only: a plain checkout has gitDir === commonDir, and submodules live under /.git/modules/.
+    if (!here || here.gitDir === here.commonDir || !here.gitDir.replace(/\\/g, "/").includes("/worktrees/")) return undefined;
+    const there = gitPaths(target);
+    if (!there || there.commonDir !== here.commonDir) return undefined;
+    return here.top;
   } catch {}
   return undefined;
 }
@@ -3374,17 +3396,39 @@ function commandWorktree(flags) {
     // (--here: only the cwd's repo). Merged = ancestor | git cherry | tree match; untracked build output is not dirt.
     // Branch refs are never deleted. --apply needs the agent roster for the live-cwd guard: unreadable roster, nothing removed.
     let liveCwds = null;
+    let holdCwds = null;
     try {
       const agents = listRunnerAgentsSync();
       // [] also means "runner logs unreadable" (the fold returns [] then): treat it as unknown, so --apply removes nothing.
-      if (agents.length) liveCwds = liveAgentCwds(agents);
+      if (agents.length) {
+        liveCwds = liveAgentCwds(agents);
+        holdCwds = holdAgentCwds(agents); // idea-1043: + agents archived < 24h, for worktrees with no commit of their own
+      }
     } catch {}
     const here = path.resolve(repoRoot).toLowerCase();
+    // idea-1059: progress on stderr (stdout stays the JSON report), so a long sweep shows where it is; --quiet silences it.
+    const t0 = Date.now();
+    const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+    const progress = flags.quiet
+      ? null
+      : (ev) => {
+          if (ev.type === "start") process.stderr.write(`sweep ${path.basename(ev.repoRoot)} [${secs(Date.now() - t0)}]\n`);
+          else if (ev.type === "repo") process.stderr.write(`  ${ev.worktrees} worktree(s) vs ${ev.defaultBranch ?? "?"}\n`);
+          else if (ev.type === "result" && (ev.action !== "kept" || ev.ms >= 2000 || ev.reason === "step-timeout"))
+            process.stderr.write(`  ${ev.index}/${ev.total} ${ev.branch ?? path.basename(ev.path)}: ${ev.action}${ev.reason ? ` (${ev.reason})` : ""} ${secs(ev.ms)}\n`);
+        };
+    const stepTimeoutMs = flags.stepTimeout === undefined ? undefined : Number(flags.stepTimeout) * 1000;
+    if (stepTimeoutMs !== undefined && !(stepTimeoutMs > 0)) throw new Error("--step-timeout must be a number of seconds > 0");
     const res = sweepAllRepos({
       apply,
       liveCwds,
+      holdCwds,
+      onProgress: progress,
+      ...(stepTimeoutMs ? { stepTimeoutMs } : {}),
       // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
       refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
+      // idea-1043: and the hold set (live + archived < 24h) before removing a tree with no commit of its own.
+      refreshHoldCwds: apply ? throttledHoldCwds(() => listRunnerAgentsSync()) : null,
       sizes: Boolean(flags.sizes),
       repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
     });

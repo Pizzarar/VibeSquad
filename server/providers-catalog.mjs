@@ -3,7 +3,9 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
-import { readLimits } from "./limits-read.mjs";
+import { readCredits, readLimits } from "./limits-read.mjs";
+import { DEFAULT_CREDIT_THRESHOLD_USD } from "./credit-guard.mjs";
+import { ARM_LABEL, ARM_REASON_LABEL } from "./exp6-arm.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -254,7 +256,11 @@ export function normalizeRunnerSettings(raw) {
   const interval = USAGE_REVIEW_INTERVALS.includes(r.usageReview?.interval) ? r.usageReview.interval : USAGE_REVIEW_DEFAULT_INTERVAL;
   const t = Number(r.usageReview?.timeoutMs);
   const timeoutMs = Number.isFinite(t) && t >= USAGE_REVIEW_TIMEOUT_RANGE[0] && t <= USAGE_REVIEW_TIMEOUT_RANGE[1] ? Math.round(t) : USAGE_REVIEW_DEFAULT_TIMEOUT_MS;
-  return { providers, usageReview: { interval, timeoutMs } };
+  const ct = Number(r.creditGuard?.thresholdUsd);
+  const thresholdUsd = r.creditGuard?.thresholdUsd !== undefined && r.creditGuard?.thresholdUsd !== null && r.creditGuard?.thresholdUsd !== "" && Number.isFinite(ct) && ct >= 0
+    ? ct
+    : DEFAULT_CREDIT_THRESHOLD_USD;
+  return { providers, usageReview: { interval, timeoutMs }, creditGuard: { thresholdUsd } };
 }
 
 export function loadRunnerSettings(home) {
@@ -283,7 +289,10 @@ export function saveRunnerSettings(patch, home) {
     ? { interval: "interval" in patch.usageReview ? incoming.usageReview.interval : current.usageReview.interval,
         timeoutMs: "timeoutMs" in patch.usageReview ? incoming.usageReview.timeoutMs : current.usageReview.timeoutMs }
     : current.usageReview;
-  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview } };
+  const creditGuard = patch && patch.creditGuard && typeof patch.creditGuard === "object"
+    ? { thresholdUsd: "thresholdUsd" in patch.creditGuard ? incoming.creditGuard.thresholdUsd : current.creditGuard.thresholdUsd }
+    : current.creditGuard;
+  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview, creditGuard } };
   writeSettingsAtomic(settingsPath(home), next);
   return normalizeRunnerSettings(next.runner);
 }
@@ -701,6 +710,16 @@ function foldEvent(st, ev) {
 
 const PROFILE_NAME_BY_ID = new Map(DEFAULT_PACK_PROFILES.map((p) => [p.id, p.name]));
 
+const UNLABELED_FAMILY = "unlabeled";
+const familyKeyOf = (f) => (typeof f === "string" && f ? f : UNLABELED_FAMILY);
+
+/** usa-65: parse quota family from labels["vs.route"] (`family=<f>`). Empty value -> null; odd non-empty values kept verbatim. */
+export function parseRouteFamily(route) {
+  if (typeof route !== "string" || !route) return null;
+  const m = /\bfamily=([A-Za-z0-9_-]+)/.exec(route);
+  return m ? m[1] : null;
+}
+
 /** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
@@ -719,10 +738,19 @@ function foldIdentity(st, m) {
   if (wfLabel) st.wfLabel = wfLabel;
   // usa-29: stakes (route label) + digest marker (identity.mjs isDigestAgent labels) ride the same meta.
   // vs.route is "stakes=<s> model=<m> effort=<e> reason=<r>" (agent-duties.ts); an explicit stakes/labels.stakes always wins.
-  const route = typeof m.labels?.["vs.route"] === "string" ? (/\bstakes=([A-Za-z0-9_-]+)/.exec(m.labels["vs.route"])?.[1] ?? m.labels["vs.route"]) : undefined;
+  const rawRoute = typeof m.labels?.["vs.route"] === "string" ? m.labels["vs.route"] : undefined;
+  const route = rawRoute !== undefined ? (/\bstakes=([A-Za-z0-9_-]+)/.exec(rawRoute)?.[1] ?? rawRoute) : undefined;
   const explicit = m.stakes ?? m.labels?.stakes;
   if (typeof explicit === "string" && explicit) st.stakes = normalizeStakes(explicit);
   else if (typeof route === "string" && route && st.stakes === undefined) st.stakes = normalizeStakes(route);
+  // usa-65: quota family on vs.route (`family=<f>`); empty/absent leaves st.family unset, odd values kept verbatim.
+  const routeFamily = parseRouteFamily(rawRoute);
+  if (routeFamily) st.family = routeFamily;
+  // usa-66: arm pick labels (exp6-arm.mjs vs.arm / vs.arm-reason) carried onto merged unit rows.
+  const rawArm = typeof m.labels?.[ARM_LABEL] === "string" ? m.labels[ARM_LABEL].trim() : "";
+  if (rawArm) st.arm = rawArm;
+  const rawArmReason = typeof m.labels?.[ARM_REASON_LABEL] === "string" ? m.labels[ARM_REASON_LABEL].trim() : "";
+  if (rawArmReason) st.armReason = rawArmReason;
   if (m.role === "digest" || m.labels?.role === "digest" || m.labels?.digest || m.labels?.digestFor || m.labels?.digestTurn) st.digest = true;
 }
 
@@ -1004,7 +1032,7 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 // ---- provider limit windows: <runner home>/limits.jsonl, one JSON line per sample (written by the adapters/runner):
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
 // readLimits lives in ./limits-read.mjs (G2 idea-1012: a leaf module, so the spawn hook reads it without this catalog).
-export { readLimits } from "./limits-read.mjs";
+export { readCredits, readLimits } from "./limits-read.mjs";
 
 const AGY_THIRD_PARTY_POOL = "antigravity-cli/claude-gpt";
 /** Attribute the Antigravity 3rd-party (Claude/GPT) pool to VibeSquad agents: antigravity-cli agents running claude or gpt models. */
@@ -1126,11 +1154,12 @@ const NUMSTAT_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat
 /** usa-54: a merge OF the default branch (`git pull` on main, "Merge origin/master into unit-x"): never a unit itself. */
 const BACK_MERGE_RE = /^Merge (?:(?:remote-tracking )?branch '(?:origin\/)?(?:main|master)'|(?:origin\/)?(?:main|master)(?=[\s:,(]|$))/i;
 /** Merge subject -> unit branch. "Merge branch 'x'" (git, GitLab "... into 'main'"), the hand-typed "Merge unit-<name>: ..."
- * form some leads used 11-19..11-20 (usa-44), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
+ * or "Merge <hyphen-slug>: ..." form leads use (usa-44/usa-65), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
 export function mergeSubjectBranch(subject) {
   const s = String(subject ?? "");
   return /Merge branch '([^']+)'/i.exec(s)?.[1]
     ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(s)?.[1]
+    ?? /^Merge ([A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9._-]*[A-Za-z0-9])(?=:|\s+\()/.exec(s)?.[1]
     ?? /^Merge pull request #\d+ from [^/\s]+\/(\S*[^\s.,:;)])/.exec(s)?.[1]
     ?? null;
 }
@@ -1469,6 +1498,9 @@ function agentV2(st, agentId) {
     title: st.title ?? "",
     roleOnly: !!st.roleOnly,
     stakes: normalizeStakes(st.stakes),
+    family: st.family ?? null,
+    arm: st.arm ?? null,
+    armReason: st.armReason ?? null,
     wfLabel: st.wfLabel ?? null,
     respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
@@ -2572,13 +2604,15 @@ function buildByWorkflow(merged, agentById) {
     const g = getOrSet(groups, workflowMode, () => ({
       workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
       wfSources: new Set(),
+      families: new Map(),
       units: 0, firstTryPassCount: 0, firstTryKnown: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
       fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
     }));
     g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
-    { const ft = unitFirstTry(u); if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryPassCount += 1; } }
+    const ft = unitFirstTry(u);
+    if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryPassCount += 1; }
     g.reviewRoundsSum += u.reviewRounds ?? 0;
     const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
     if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
@@ -2590,6 +2624,14 @@ function buildByWorkflow(merged, agentById) {
     if (cost > 0) g.knownCostUnits += 1;
     if (u.unitCycleMs !== null && u.unitCycleMs !== undefined) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+    // usa-65: quota family sub-breakdown inside each workflow arm (pre-R10 / absent -> "unlabeled")
+    const fam = familyKeyOf(u.implementerFamily ?? implementer?.family ?? null);
+    const fg = getOrSet(g.families, fam, () => ({ family: fam, units: 0, turns: 0, costUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+    fg.units += 1;
+    fg.turns += u.turns ?? (!u.implementerShared ? implementer?.turns : 0) ?? 0;
+    if (!u.implementerShared) fg.costUnits += 1;
+    fg.costUsd += cost;
+    if (ft !== null) { fg.firstTryKnown += 1; if (ft) fg.firstTryPassCount += 1; }
   }
   return [...groups.values()].map((g) => {
     const totalLoc = g.locAdded + g.locDeleted;
@@ -2608,6 +2650,16 @@ function buildByWorkflow(merged, agentById) {
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
       fixAfterMergeRate: g.units ? Math.round((g.fixAfterMergeCount / g.units) * 1000) / 1000 : 0,
       costCoverage: g.costUnits ? Math.round((g.knownCostUnits / g.costUnits) * 1000) / 1000 : 0,
+      byFamily: [...g.families.values()].map((f) => ({
+        family: f.family,
+        units: f.units,
+        turns: f.turns,
+        costUsd: f.costUsd,
+        costPerUnit: f.costUnits ? f.costUsd / f.costUnits : null,
+        firstTryPassCount: f.firstTryPassCount,
+        firstTryKnown: f.firstTryKnown,
+        firstTryPassRate: f.firstTryKnown ? Math.round((f.firstTryPassCount / f.firstTryKnown) * 1000) / 1000 : null,
+      })).sort((a, b) => b.units - a.units || b.costUsd - a.costUsd || a.family.localeCompare(b.family)),
     };
   }).sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
 }
@@ -2906,6 +2958,9 @@ function buildLedgerSnapshot(merged, rows) {
     implementerProfile: u.implementerProfile ?? null,
     implementerProvider: u.implementerProvider ?? null,
     ...(u.implementerModel ? { implementerModel: u.implementerModel } : {}),
+    ...(u.implementerFamily ? { implementerFamily: u.implementerFamily } : {}),
+    ...(u.implementerArm ? { implementerArm: u.implementerArm } : {}),
+    ...(u.implementerArmReason ? { implementerArmReason: u.implementerArmReason } : {}),
     ...(u.stakes ? { stakes: u.stakes } : {}),
     ...(u.reviewerFamily ? { reviewerFamily: u.reviewerFamily } : {}),
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
@@ -3627,6 +3682,8 @@ export const usageTestHooks = {
   buildPlanScores,
   buildBurstCohorts,
   usageSteps,
+  agentV2,
+  foldEvent,
 };
 
 /** The /usage rollup as steps: `yield` marks a point where the async path may hand the loop back (no other effect). */
@@ -3638,6 +3695,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const seen = new Set();
   const agg = new Map();
   const aggAgents = new Map(); // agg key -> Set of agent files (one agent spans several buckets when its role changes mid-day)
+  const providerFamily = new Map(); // usa-65: provider|family -> { provider, family, runs, units, turns, costUsd, costUnits, firstTryPassCount, firstTryKnown }
+  const providerFamilyAgents = new Map(); // provider|family -> Set of agent file names
   const laneRole = new Map(); // lane|role -> stats (day-filtered)
   const laneAgents = new Map(); // lane -> { agents, handoffs, byRole: Map<role, count> }
   const loops = [];
@@ -3663,6 +3722,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (st.handoff) la.handoffs += 1;
     la.byRole.set(st.role, (la.byRole.get(st.role) ?? 0) + 1);
     if (st.turns > LOOP_TURN_THRESHOLD && !st.pass) loops.push({ agentId: n.slice(0, -6), lane: st.lane, role: st.role, title: st.title, turns: st.turns });
+    const stIsImplementer = classifyJobKind(st) === "implementer";
     for (const b of st.buckets.values()) {
       if ((since && b.day < since) || (until && b.day > until)) continue;
       const a = getOrSet(agg, `${b.provider}|${b.model}|${b.lane}|${b.day}`, () => ({ provider: b.provider, model: b.model, lane: b.lane, day: b.day, ...zeroStats(), agents: 0 }));
@@ -3670,6 +3730,14 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       const aKey = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
       a.agents = getOrSet(aggAgents, aKey, () => new Set()).add(n).size;
       addStats(getOrSet(laneRole, `${b.lane}|${b.role}`, () => ({ lane: b.lane, role: b.role, ...zeroStats() })), b);
+      // usa-65: provider x quota family split (day-filtered like byProvider; implementerCostUsd isolates $/unit from lead/Buddy/reviewer spend)
+      const pfFam = familyKeyOf(st.family);
+      const pfKey = `${b.provider}|${pfFam}`;
+      const pf = getOrSet(providerFamily, pfKey, () => ({ provider: b.provider, family: pfFam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+      pf.turns += b.turns;
+      pf.costUsd += b.costUsd;
+      if (stIsImplementer) pf.implementerCostUsd += b.costUsd;
+      pf.runs = getOrSet(providerFamilyAgents, pfKey, () => new Set()).add(n).size;
     }
   }
   for (const f of [...usageFiles.keys()]) if (!seen.has(f)) usageFiles.delete(f); // file removed: forget it
@@ -3811,6 +3879,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerProfile: implementer ? implementer.profile : null,
       implementerProvider: implementer ? implementer.provider : null,
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
+      implementerFamily: implementer ? (implementer.family ?? null) : null,
+      implementerArm: implementer ? (implementer.arm ?? null) : null,
+      implementerArmReason: implementer ? (implementer.armReason ?? null) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
       attributionMiss: implementer ? null : attributionMiss,
@@ -3850,7 +3921,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, firstTryKnown: 0, fixRounds: 0, fixPassN: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, firstTryKnown: 0, fixRounds: 0, fixPassN: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0, families: new Map() }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -3862,6 +3933,11 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (a.blocked) g.blockedCount += 1;
     if (a.loop) g.loopCount += 1;
     g.errorCount += a.errors ?? 0;
+    const fam = familyKeyOf(a.family);
+    const fg = getOrSet(g.families, fam, () => ({ family: fam, runs: 0, units: 0, reviewedUnits: 0, turns: 0, costUsd: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+    fg.runs += 1;
+    fg.turns += a.turns;
+    fg.costUsd += a.costUsd;
   }
   const agentById = new Map(agents.map((a) => [a.agentId, a])); // agentId = log file name, unique
   for (const u of merged) {
@@ -3871,10 +3947,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const g = profileMap.get(profileKey(a));
     if (!g) continue;
     g.mergedUnits += 1;
-    { const ft = unitFirstTry(u); if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryCount += 1; } } // usa-60: unknown outcomes are not first-try PASSes
+    const ft = unitFirstTry(u);
+    if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryCount += 1; } // usa-60: unknown outcomes are not first-try PASSes
     g.reviewRounds += u.reviewRounds;
     if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+    const fg = g.families.get(familyKeyOf(a.family));
+    if (fg) {
+      fg.units += 1;
+      if (ft !== null) { fg.firstTryKnown += 1; if (ft) fg.firstTryPassCount += 1; }
+    }
   }
   // usa-60 (idea-988): fix rounds by the fixer's own profile row: spawns after the unit's first FAIL, and how often the next verdict passed.
   for (const u of merged) {
@@ -3896,6 +3978,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     g.reviewedUnits += 1;
     g.reviewedReviewRounds += u.reviewRounds;
     if (u.fixAfterMerge) g.reviewedFixAfterMergeCount += 1;
+    const fg = g.families.get(familyKeyOf(a.family));
+    if (fg) fg.reviewedUnits += 1;
   }
   const byProfile = [...profileMap.values()].map((g) => {
     const isReviewer = g.jobKind === "reviewer";
@@ -3924,6 +4008,20 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       fixAfterMergeCount: isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount,
       fixAfterMergeRate: mergedUnits ? Math.round(((isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount) / mergedUnits) * 1000) / 1000 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
+      byFamily: [...g.families.values()].map((f) => {
+        const fUnits = isReviewer ? f.reviewedUnits : f.units;
+        return {
+          family: f.family,
+          runs: f.runs,
+          units: fUnits,
+          turns: f.turns,
+          costUsd: f.costUsd,
+          costPerUnit: fUnits ? f.costUsd / fUnits : null,
+          firstTryPassCount: f.firstTryPassCount,
+          firstTryKnown: f.firstTryKnown,
+          firstTryPassRate: f.firstTryKnown ? Math.round((f.firstTryPassCount / f.firstTryKnown) * 1000) / 1000 : null,
+        };
+      }).sort((a, b) => b.units - a.units || b.costUsd - a.costUsd || b.runs - a.runs || a.family.localeCompare(b.family)),
     };
   }).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
 
@@ -4002,7 +4100,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
       // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
       attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
-      implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
+      implementerModel: r.implementerModel ?? null, implementerFamily: r.implementerFamily ?? null, implementerArm: r.implementerArm ?? null, implementerArmReason: r.implementerArmReason ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       reviewVerdicts: r.reviewVerdicts ?? 0, firstReviewVerdict: r.firstReviewVerdict ?? null, reviewSource: r.reviewSource ?? undefined, reviewVerdictOrigin: r.reviewVerdictOrigin ?? null, fixRounds: r.fixRounds ?? 0, fixProfiles: r.fixProfiles ?? [],
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
@@ -4019,6 +4117,42 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const byDayFinal = by("day");
   if (foldedDayRows.length) for (const d of foldedDayRows) byDayFinal.push({ day: d.day, ...addStats(zeroStats(), d) });
   const byWorkflow = buildByWorkflow(merged, agentById);
+  // usa-65: fold merged unit counts + first-try PASS into providerFamily in the same [since, until] window as byProvider.
+  for (const u of merged) {
+    if (!u.implementerProvider) continue;
+    if (since || until) {
+      const uDay = typeof u.mergedAt === "string" && u.mergedAt.length >= 10 ? u.mergedAt.slice(0, 10) : null;
+      if (!uDay || (since && uDay < since) || (until && uDay > until)) continue;
+    }
+    const fam = familyKeyOf(u.implementerFamily);
+    const pfKey = `${u.implementerProvider}|${fam}`;
+    const pf = getOrSet(providerFamily, pfKey, () => ({ provider: u.implementerProvider, family: fam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+    pf.units += 1;
+    if (!u.implementerShared) {
+      pf.costUnits += 1;
+      if (u.fromLedger && Number.isFinite(u.costUsd)) pf.implementerCostUsd += u.costUsd;
+    }
+    const ft = unitFirstTry(u);
+    if (ft !== null) { pf.firstTryKnown += 1; if (ft) pf.firstTryPassCount += 1; }
+  }
+  const providerFamiliesByProvider = new Map();
+  for (const f of providerFamily.values()) {
+    getOrSet(providerFamiliesByProvider, f.provider, () => []).push({
+      family: f.family,
+      runs: f.runs,
+      units: f.units,
+      turns: f.turns,
+      costUsd: f.costUsd,
+      implementerCostUsd: f.implementerCostUsd,
+      costPerUnit: f.costUnits ? f.implementerCostUsd / f.costUnits : null,
+      firstTryPassCount: f.firstTryPassCount,
+      firstTryKnown: f.firstTryKnown,
+      firstTryPassRate: f.firstTryKnown ? Math.round((f.firstTryPassCount / f.firstTryKnown) * 1000) / 1000 : null,
+    });
+  }
+  for (const list of providerFamiliesByProvider.values()) {
+    list.sort((a, b) => b.units - a.units || b.costUsd - a.costUsd || b.runs - a.runs || a.family.localeCompare(b.family));
+  }
   const savings = buildSavings(merged, totalsFinal, lanes, agents, rows);
   const cohorts = buildCohorts(merged);
   const burstCohorts = buildBurstCohorts(merged);
@@ -4046,18 +4180,22 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   yield;
 
   const limitRows = readLimits(home);
+  const creditRows = readCredits(home);
+  const creditThresholdUsd = loadRunnerSettings(home).creditGuard.thresholdUsd;
   const result = {
     squad, squads, autonomy,
     planScores: buildPlanScores(entries, { now: now(), squad, roleByAgent: new Map(allAgentSquads.map((a) => [a.agentId, a.st.role])) }),
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals: totalsFinal,
-    byProvider: by("provider"),
+    byProvider: by("provider").map((p) => ({ ...p, byFamily: providerFamiliesByProvider.get(p.provider) ?? [] })),
     byModel: by("model"),
     byLane: by("lane"),
     byDay: byDayFinal,
     rows,
     limits: withPoolAgents(limitRows, agents),
+    credits: creditRows,
+    creditThresholdUsd,
     quotaAlerts: activeQuotaAlerts(limitRows, home, { now: now() }),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)

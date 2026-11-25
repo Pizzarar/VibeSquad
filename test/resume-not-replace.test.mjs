@@ -11,15 +11,16 @@ import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { RunnerHttpError } from '../server/backend/runner-client.mjs';
 import { RunnerBackend } from '../server/backend/runner-backend.mjs';
 import { performBrainstormRestart, resetBrainstormRestartState } from '../server/brainstorm.mjs';
+import { until } from './helpers/load-budget.mjs';
 
 // The brainstorm cases use a mock daemon (Paseo-style); pin lanes to Paseo so the real runner is never started.
 process.env.VS_DEFAULT_BACKEND = 'paseo';
 delete process.env.VS_BACKEND;
 
 const dirs = [];
+const runners = [];
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-resume-')); dirs.push(d); return d; };
-after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
-const tick = () => new Promise((r) => setTimeout(r, 25));
+after(() => { for (const r of runners) r.shutdown(); for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
 function fakeSpawn() {
   const calls = [];
@@ -40,25 +41,29 @@ function fakeSpawn() {
   impl.calls = calls;
   return impl;
 }
-const mkRunner = (dir, spawnImpl) => new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) } });
+const mkRunner = (dir, spawnImpl) => {
+  const r = new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, parkGraceMs: 60_000, bgProbe: null });
+  runners.push(r);
+  return r;
+};
 
 test('a runner restart makes an idle agent lost; resume() brings it back in place (parked, idea-122), the next send with --resume', async () => {
   const dir = tmp();
   const s1 = fakeSpawn();
   const r1 = mkRunner(dir, s1);
   const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), prompt: 'hello' });
-  await tick();
+  await until(() => r1.status(id).status === 'idle' && r1.status(id).resumable);
   assert.equal(r1.status(id).status, 'idle');
   // restart: a fresh Runner on the same log dir has no live child
   const s2 = fakeSpawn();
   const r2 = mkRunner(dir, s2);
   assert.equal(r2.status(id).status, 'lost');
   assert.equal(r2.resume(id), true);
-  await tick();
+  await new Promise((r) => setImmediate(r));
   assert.equal(s2.calls.length, 0, 'a prompt-less claude resume starts no process');
   assert.equal(r2.status(id).status, 'parked', 'back in place: parked until its next send');
   r2.send(id, 'next');
-  await tick();
+  await until(() => r2.status(id).status === 'idle');
   assert.equal(s2.calls.length, 1);
   assert.ok(s2.calls[0].args.includes('--resume') && s2.calls[0].args.includes('sess-1'), s2.calls[0].args.join(' '));
   assert.deepEqual(r2.list(), [id], 'same id, no new agent');
@@ -70,7 +75,7 @@ test('send to a lost (restarted) agent resumes it in place instead of "not runni
   const s1 = fakeSpawn();
   const r1 = mkRunner(dir, s1);
   const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), prompt: 'hello' });
-  await tick();
+  await until(() => r1.status(id).status === 'idle' && r1.status(id).resumable);
   assert.equal(r1.status(id).status, 'idle');
   // restart: a fresh Runner on the same log dir has no live child -> lost
   const s2 = fakeSpawn();
@@ -78,7 +83,7 @@ test('send to a lost (restarted) agent resumes it in place instead of "not runni
   assert.equal(r2.status(id).status, 'lost');
   // send must resume in place (same id + session), not throw "agent <id> is not running"
   assert.doesNotThrow(() => r2.send(id, 'follow up'));
-  await tick();
+  await until(() => r2.status(id).status === 'idle');
   assert.equal(s2.calls.length, 1, 'spawned once');
   assert.ok(s2.calls[0].args.includes('--resume') && s2.calls[0].args.includes('sess-1'), s2.calls[0].args.join(' '));
   assert.deepEqual(r2.list(), [id], 'same id, no new agent');
@@ -89,7 +94,7 @@ test('resume() refuses an exited agent, a session-less one, and an unknown id', 
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
   const exited = r1.create({ provider: 'claude', cwd: os.tmpdir() });
-  await tick();
+  await until(() => r1.status(exited).resumable);
   r1.shutdown(); // logs exit
   const noSession = 'rn-nosession';
   r1.store.append(noSession, 'created', { provider: 'claude', model: null, cwd: os.tmpdir(), meta: {} });
@@ -106,12 +111,12 @@ test('resume() keeps the role prompt of a lost agent (--append-system-prompt-fil
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
   const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), systemPrompt: 'You are the ADE Buddy.', prompt: 'hi' });
-  await tick();
+  await until(() => r1.status(id).status === 'idle' && r1.status(id).resumable);
   const s2 = fakeSpawn();
   const r2 = mkRunner(dir, s2);
   assert.equal(r2.resume(id), true);
   r2.send(id, 'next'); // the parked agent's process starts on its next send
-  await tick();
+  await until(() => s2.calls.length === 1 && r2.status(id).status === 'idle');
   const args = s2.calls[0].args;
   const i = args.indexOf('--append-system-prompt-file');
   assert.ok(i >= 0, args.join(' '));
@@ -124,7 +129,7 @@ test('an archived agent is never resumed (resume() false, nothing spawned)', asy
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
   const id = r1.create({ provider: 'claude', cwd: os.tmpdir(), prompt: 'hi' });
-  await tick();
+  await until(() => r1.status(id).status === 'idle' && r1.status(id).resumable);
   r1.archive(id);
   const s2 = fakeSpawn();
   const r2 = mkRunner(dir, s2);
