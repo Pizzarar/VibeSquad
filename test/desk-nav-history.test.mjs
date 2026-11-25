@@ -54,7 +54,7 @@ writeFileSync(join(dir, "condenseReason.mjs"), transformSync("condenseReason.ts"
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
-stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {};`);
+stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {}; export const setBoringLandedGen = () => {};`);
 stub("pinFocusLogic.mjs", `export const boringDeepLinkPending = (a) => !a.rosterLoaded && !!a.activeAgentId; export const boringUrlAgent = (a) => (!a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId);`);
 stub(
   "pins.mjs",
@@ -99,6 +99,7 @@ const squad = (over = {}) => ({
   running: 0,
   ...over,
 });
+const efiSquad = () => squad({ team: { id: "efi", name: "Main Game Project" }, pins: [] });
 
 const reset = () => {
   hs.slots = [];
@@ -202,10 +203,11 @@ test("B1: navGen bump with ?agent= lands in chat even though the active agent is
 test("B1: navGen bump with a team (no agent) for another project calls onSelectSquad and shows its Overview", () => {
   reset();
   const view = squad();
-  render(props(view));
+  const views = [view, efiSquad()]; // U2 m3: "another project" is a known view (an unknown ?team= is a gone team)
+  render(props(view, { views }));
   globalThis.location = { search: "?team=efi" };
-  render(props(view, { navGen: 1 }));
-  const t = render(props(view, { navGen: 1 }));
+  render(props(view, { views, navGen: 1 }));
+  const t = render(props(view, { views, navGen: 1 }));
   assert.ok(globalThis.__calls.some((c) => c[0] === "onSelectSquad" && c[1] === "efi"), "switches to the URL team");
   assert.ok(byId(t, "boring-project-view"));
   assert.equal(byType(t, "AgentDrawer"), null);
@@ -257,11 +259,12 @@ test("B1: a pop to a known-but-unpinned agent clears the stale lane/worker selec
 test("B1: a remount with navGen>0 does not re-land (the effect ignores its initial-mount value)", () => {
   reset();
   const view = squad();
+  const views = [view, efiSquad()]; // U2 m3: efi is a known view
   globalThis.location = { search: "?team=efi" };
-  const t = render(props(view, { navGen: 3 })); // mounts with navGen 3
+  const t = render(props(view, { views, navGen: 3 })); // mounts with navGen 3
   assert.equal(globalThis.__calls.filter((c) => c[0] === "onSelectSquad").length, 0, "no stale re-landing on mount");
   assert.ok(byId(t, "boring-project-view"));
-  render(props(view, { navGen: 4 })); // a real pop after mount still lands
+  render(props(view, { views, navGen: 4 })); // a real pop after mount still lands
   assert.ok(globalThis.__calls.some((c) => c[0] === "onSelectSquad" && c[1] === "efi"), "a later pop re-lands");
 });
 
@@ -305,6 +308,33 @@ test("U1: boringLandingFromUrl maps ?slot= to the empty Desk slot and ?tab= to t
   assert.deepEqual(boringLandingFromUrl(v, "?team=vs&tab=feed"), { mode: "project", teamId: "vs", tab: null }, "the URL says standup, not the internal feed key");
   assert.equal(boringLandingFromUrl(v, "?team=vs&agent=ade-bs&slot=overlord&tab=inbox").mode, "chat", "an agent wins over slot and tab");
   assert.equal(boringLandingFromUrl(v, "?slot=overlord"), null, "no team: nothing to route (as before)");
+});
+
+// U2 (UX R33 r2 m3): a ?team= that is not a known view never lends its slot/tab to the project App falls back to.
+test("U2: boringLandingFromUrl ignores ?slot= / ?tab= when ?team= is not a known view (fallback project's plain Overview)", () => {
+  const v = [squad()];
+  for (const q of ["?team=gone", "?team=gone&slot=overlord", "?team=gone&tab=inbox", "?team=gone&slot=bugs&tab=standup"]) {
+    assert.deepEqual(boringLandingFromUrl(v, q), { mode: "project", teamId: null, tab: null }, q);
+  }
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=overlord"), { mode: "slot", teamId: "vs", slot: "overlord" }, "a known team keeps its slot");
+  assert.equal(boringLandingFromUrl(v, "?team=gone&agent=ade-bs").mode, "chat", "an agent still lands in its own project");
+});
+
+// U2 (idea-983 / R33 m2 / idea-971): source contracts for the history edge races.
+test("U2: load arms the pop; the URL sync waits for BoringApp to land the latest pop; a popped ?sb= entry is not closed by its own landing", () => {
+  const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.match(app, /const popActive = useRef\(true\);/, "the load is a landing: canonicalization replaces");
+  assert.match(app, /if \(popActive\.current && !popDisarm\.current\) armPop\(\);/, "the load's landing is ended by the first input, like a pop");
+  assert.match(app, /if \(vibe === "boring" && landed !== undefined && landed < popGen\.current\) return;/, "no write before BoringApp landed the latest pop");
+  assert.match(app, /boringScreen, boringLanded\]\);/, "the landing re-runs the sync");
+  assert.match(app, /if \(popActive\.current && new URLSearchParams\(location\.search\)\.get\("sb"\)\) return;\n    closeStorybook\("replace"\);/, "sbNav keeps a popped ?sb= entry");
+  assert.match(src, /setLandedGen\(navGen\);\n    pendingUrl0\.current = null;/, "BoringApp marks the pop landed with that landing's state (also when nothing routes)");
+  assert.ok(src.indexOf("setBoringLandedGen(landedGen)") > src.indexOf("setBoringScreenKeys({ team: screenTeam"), "landed is published after the shown agent / screen keys");
+  // Safety (B1's settle-gate lesson): the gate opens on its own. Off outside Normal and while BoringApp is unmounted (undefined), and a
+  // mounted BoringApp marks every pop landed before any early return, so `landed < popGen` lasts at most one render.
+  assert.match(src, /useEffect\(\(\) => \(\) => setBoringLandedGen\(undefined\), \[\]\);/, "unmount (Storybook, Psycho, phone) turns the gate off");
+  assert.ok(src.indexOf("setLandedGen(navGen);") < src.indexOf("if (!land) return;"), "a no-route pop is still marked landed");
+  assert.match(src, /const \[landedGen, setLandedGen\] = useState\(navGen\);/, "a (re)mount starts landed at the current pop");
 });
 
 const tabOn = (t) => ["overview", "inbox", "feed"].find((k) => /\bon\b/.test(byId(t, `boring-tab-${k}`)?.props.className ?? ""));
@@ -371,5 +401,5 @@ test("U1 wiring: BoringApp publishes the slot/tab keys (team-tagged); App's sync
   assert.match(src, /const urlSlot = mode === "chat" && !agent && selectedLaneId \? LANE_SLOT\[selectedLaneId\] \?\? null : null;/);
   const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
   assert.match(app, /urlSyncScreen\(\{ boring: vibe === "boring", live: getBoringScreenKeys\(\), rendered: boringScreen, team: activeTeamId \|\| null, kept: parseUrlState\(location\.search\) \}\)/);
-  assert.match(app, /\}, \[activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen\]\);/);
+  assert.match(app, /\}, \[activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded\]\);/);
 });

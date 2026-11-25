@@ -329,6 +329,25 @@ export const useBoringScreenKeys = () => useSyncExternalStore(subscribeBoringScr
 /** Live value for App's URL sync effect (published from BoringApp's child effect in the same commit, like getBoringShownAgent). */
 export const getBoringScreenKeys = () => boringScreen;
 
+// U2 (idea-983): the last pop (App's navGen) BoringApp has landed AND rendered (its shown agent / screen keys above are that landing's).
+// undefined while BoringApp is not mounted. App's URL sync writes nothing while a newer pop is still landing: the screen it would derive
+// then is the pre-pop one, and writing it replaced the popped entry with another screen's URL (healed a render later, or, when a second
+// Back landed in between, written into the wrong entry).
+let boringLanded: number | undefined;
+const boringLandedSubs = new Set<() => void>();
+export function setBoringLandedGen(gen: number | undefined) {
+  if (gen === boringLanded) return;
+  boringLanded = gen;
+  for (const f of boringLandedSubs) f();
+}
+const subscribeBoringLanded = (f: () => void) => {
+  boringLandedSubs.add(f);
+  return () => void boringLandedSubs.delete(f);
+};
+export const useBoringLandedGen = () => useSyncExternalStore(subscribeBoringLanded, () => boringLanded, () => undefined);
+/** Live value for App's URL sync effect (published from BoringApp's child effect after its shown agent / screen keys). */
+export const getBoringLandedGen = () => boringLanded;
+
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
   if (state.focus || state.home) set({ focus: null, home: false, homeActive: null, squadsHome: false });

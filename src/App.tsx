@@ -100,7 +100,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, useBoringScreenKeys, getBoringScreenKeys, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, useBoringScreenKeys, getBoringScreenKeys, useBoringLandedGen, getBoringLandedGen, usePinsHome, useSquadsHome } from "./pinFocus";
 import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
@@ -1625,9 +1625,20 @@ export function App() {
   // B1: App owns the pop alone. onPop sets popActive; while it is set every URL-sync write is replace-if-differs (never a pushState()).
   // A pop ends only on the first capture-phase pointerdown / keydown (or a vs:select-agent notification click, via stopPop), or is
   // retargeted by a newer pop; reaching the popped URL never ends it. Nothing depends on BoringApp being mounted (Storybook, phone, Psycho).
-  const popActive = useRef(false);
+  // U2 (UX R33 m2): the page load is the first landing on an entry, like a pop: it starts active (armed below), so canonicalizing a pasted
+  // or bookmarked URL (key order, ?tab=bogus, ?team=gone) replaces the loaded entry instead of pushing a second one behind a dead Back.
+  const popActive = useRef(true);
   const popDisarm = useRef<(() => void) | null>(null);
   const stopPop = useCallback(() => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; }, []);
+  /** Arm the pop: the first user input (capture-phase pointerdown / keydown) ends it. A second arm drops the previous listeners. */
+  const armPop = useCallback(() => {
+    popActive.current = true;
+    popDisarm.current?.();
+    const end = stopPop;
+    window.addEventListener("pointerdown", end, { capture: true, once: true });
+    window.addEventListener("keydown", end, { capture: true, once: true });
+    popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };
+  }, []);
 
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
@@ -1676,21 +1687,19 @@ export function App() {
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
   // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
   const [navGen, setNavGen] = useState(0);
+  const popGen = useRef(0); // U2: the latest pop, synchronously (navGen is its render-time copy); the URL sync waits for BoringApp to land it
   useEffect(() => {
+    if (popActive.current && !popDisarm.current) armPop(); // U2: the load's landing (see popActive), unless input already ended it
     const onPop = () => {
-      popActive.current = true;
-      popDisarm.current?.(); // a second pop retargets: drop the previous input listeners, arm fresh ones
-      const end = stopPop;
-      window.addEventListener("pointerdown", end, { capture: true, once: true });
-      window.addEventListener("keydown", end, { capture: true, once: true });
-      popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };
+      armPop(); // a second pop retargets: drop the previous input listeners, arm fresh ones
+      popGen.current += 1;
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       const act = popAction(location.search);
       if (act === "agent" && u.agent) openAgent(u.agent);
       else if (act === "squads-home") enterSquadsHome();
       else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
-      setNavGen((g) => g + 1);
+      setNavGen(popGen.current);
     };
     window.addEventListener("popstate", onPop);
     return () => { window.removeEventListener("popstate", onPop); popDisarm.current?.(); popDisarm.current = null; };
@@ -1868,6 +1877,7 @@ export function App() {
   // R5-4: Normal's ?agent= is the agent BoringApp has on screen (none on Overview / usage); the active tab only until it reports.
   const boringShown = useBoringShownAgent();
   const boringScreen = useBoringScreenKeys(); // U1: ?slot= / ?tab= (render-time; the sync reads the live value)
+  const boringLanded = useBoringLandedGen(); // U2: re-runs the URL sync once BoringApp has landed (and rendered) the latest pop
   const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
   // Declared BEFORE the URL sync so the close (which strips ?sb= in place) happens first and the sync can replace that same entry.
@@ -1875,9 +1885,14 @@ export function App() {
   // flips urlAgentId to the pane's agent without any navigation (it closed Storybook as soon as it opened over an Overview after a chat).
   const sbNavAgent = vibe === "boring" ? activeAgentId : urlAgentId;
   const sbNav = useRef(`${activeTeamId}|${sbNavAgent}`);
+  // U2 (idea-971): unless the entry on screen IS a Storybook entry reached by Back/Forward (or the load): then the team/agent change is that
+  // entry's own screen landing under the takeover, not a navigation away. Closing here stripped ?sb= from the popped entry in place.
   useEffect(() => {
     const k = `${activeTeamId}|${sbNavAgent}`;
-    if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
+    if (sbNav.current === k) return;
+    sbNav.current = k;
+    if (popActive.current && new URLSearchParams(location.search).get("sb")) return;
+    closeStorybook("replace");
   }, [activeTeamId, sbNavAgent]);
   useEffect(() => {
     // U1 r2 (UX R33 M1): while the Storybook takeover is open its entry is openStorybook's ({sb} state, which Esc's history.back() relies
@@ -1885,6 +1900,11 @@ export function App() {
     // navigation. Any real navigation closes Storybook first (sbNav above, or the palette/sidebar handler), so the live target is null here.
     // Esc / Close (history.back()) likewise: until its pop lands the URL is still the Storybook entry (storybookBackInFlight).
     if (getStorybookTarget() || storybookBackInFlight()) return;
+    // U2 (idea-983): a pop BoringApp has not landed yet. Its render still shows the screen before the pop, so writing now would put that
+    // screen's URL into the popped entry; and if a second Back lands before the heal, the heal goes into the wrong entry. Write once it
+    // has landed (boringLanded below re-runs this). Two pops before one render coalesce: BoringApp lands the latest URL, then this writes.
+    const landed = getBoringLandedGen();
+    if (vibe === "boring" && landed !== undefined && landed < popGen.current) return;
     // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
     // Only while that agent belongs to the team being written (a notification lands the agent a commit before its team: Gemini M1).
     const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`
@@ -1895,7 +1915,7 @@ export function App() {
     const next = serializeUrlState({ team: activeTeamId || null, agent, ...screenKeys, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen]);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {

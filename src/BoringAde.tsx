@@ -15,7 +15,7 @@ import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from
 import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
+import { setBoringLandedGen, setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
 import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
@@ -125,6 +125,9 @@ export function boringLandingFromUrl(
     return { mode: "chat", teamId: land.view?.team.id ?? team, view: land.view, sel: land.sel, agentId: agent };
   }
   // U1: an empty Desk slot (?slot=) or an Overview sub-tab (?tab=). Unknown values parse to null: the plain Overview.
+  // U2 (UX R33 r2 m3): a team that is not a known view (?team=gone) shows the fallback project's plain Overview: its slot/tab belong to
+  // the gone team, never to the fallback (teamId null = stay on the view App falls back to).
+  if (team && !views.some((v) => v.team.id === team)) return { mode: "project", teamId: null, tab: null };
   if (team && slot) return { mode: "slot", teamId: team, slot };
   if (team) return { mode: "project", teamId: team, tab: tab ?? null };
   return null;
@@ -587,9 +590,13 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
   const navGen0 = useRef(navGen); // B1: a remount starts with the current navGen; only a pop after mount re-lands
+  // U2 (idea-983): the pop whose landing this render shows (set with the landing's own state, so it commits in the same render).
+  const [landedGen, setLandedGen] = useState(navGen);
   // B1: Back/Forward re-derive mode + selection from the URL, even when the active agent is unchanged (App's openAgent no-ops).
+  // U2: location.search is read here, at effect time, so pops that arrive before this runs coalesce to the latest entry.
   useEffect(() => {
     if (!navGen || navGen === navGen0.current || typeof location === "undefined") return;
+    setLandedGen(navGen);
     pendingUrl0.current = null; // U1 r2: a pop names its own screen
     const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
     if (!land) return;
@@ -699,6 +706,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   }, [screenTeam]);
   useEffect(() => setBoringScreenKeys({ team: screenTeam, slot: urlSlot, tab: urlTab }), [screenTeam, urlSlot, urlTab]);
   useEffect(() => () => setBoringScreenKeys(undefined), []);
+  // U2: declared after the shown-agent / screen-key publishers, so App's URL sync reads that landing's values when this one flips.
+  useEffect(() => setBoringLandedGen(landedGen), [landedGen]);
+  useEffect(() => () => setBoringLandedGen(undefined), []);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 
