@@ -397,10 +397,13 @@ const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
 
 // usa-63 (EXP7b): per-turn trigger classification from real runner/server evidence only.
 // Structured runner fields (senderId, owner, resume, origin) take precedence; otherwise only exact anchored server protocol headers match.
-export const TURN_TRIGGERS = ["watch", "send", "log-event", "restart-done", "wrap-up", "idle-kick", "none"];
-const WATCH_PING_RE = /^(?:Watch w-[0-9a-f]+ (?:complete|finished|stall):|Verdicts \(read in code from each agent's own )/;
+export const TURN_TRIGGERS = ["watch", "send", "log-event", "restart-done", "restart-request", "compact", "wrap-up", "idle-kick", "none"];
+const WATCH_PING_RE = /^(?:Watch w-[0-9a-f]+ (?:complete\b|finished\b|stall\b)|Verdicts \(read in code from each agent's own )/;
 const LOG_EVENT_RE = /^New team log event in lane /;
 const RESTART_DONE_RE = new RegExp(`^${escapeRe(DONE_TEXT)}:\\s+the\\s+VS\\s+restart\\s+finished\\b`);
+// "Restart request rr-<id> (tip ..." (drain ask) and "... was aborted" notices: server pings that drain leads before a restart.
+// Kept apart from restart-done (the lift-your-hold ping): they are the restart's cost on the way in, not on the way out.
+const RESTART_REQUEST_RE = /^Restart request rr-[0-9A-Za-z-]+ \(tip /;
 const WRAP_UP_TRIGGER_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT, BRAINSTORM_WARN_NUDGE].map(
   (prompt) => new RegExp(`^${escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+")}`, "i"),
 );
@@ -409,17 +412,22 @@ const IDLE_KICK_RE = /^(?:You are idle with open work: |Lane \S+ went idle again
 /** Classify why a turn started from runner input metadata + exact server protocol headers. Never infers from free-form text. */
 export function classifyTurnTrigger(ev, { isFirstInput = false } = {}) {
   if (!ev || typeof ev !== "object") return "none";
-  if (typeof ev.senderId === "string" && ev.senderId) return "send";
-  if (ev.owner === true) return "send";
+  if (typeof ev.senderId === "string" && ev.senderId) return "send"; // an agent send is always `send`, whatever its text says
   if (ev.resume === true || ev.origin) return "none";
-  if (isFirstInput) return "none";
+  if (isFirstInput) return ev.owner === true ? "send" : "none";
   const text = typeof ev.text === "string" ? ev.text : "";
-  if (!text) return "none";
-  if (WATCH_PING_RE.test(text)) return "watch";
-  if (LOG_EVENT_RE.test(text)) return "log-event";
-  if (RESTART_DONE_RE.test(text)) return "restart-done";
-  if (WRAP_UP_TRIGGER_RES.some((re) => re.test(text))) return "wrap-up";
-  if (IDLE_KICK_RE.test(text)) return "idle-kick";
+  // Server-side pings (restart-done, restart request, /compact) reach the runner as owner:true, so the anchored headers are
+  // checked BEFORE the owner fallback (usa-63 R1 H1). An owner typing a header verbatim counts as it: the owner is trusted.
+  if (text) {
+    if (WATCH_PING_RE.test(text)) return "watch";
+    if (LOG_EVENT_RE.test(text)) return "log-event";
+    if (RESTART_DONE_RE.test(text)) return "restart-done";
+    if (RESTART_REQUEST_RE.test(text)) return "restart-request";
+    if (COMPACT_INPUT_RE.test(text)) return "compact";
+    if (WRAP_UP_TRIGGER_RES.some((re) => re.test(text))) return "wrap-up";
+    if (IDLE_KICK_RE.test(text)) return "idle-kick";
+  }
+  if (ev.owner === true) return "send";
   return "none";
 }
 
@@ -645,7 +653,8 @@ function foldEvent(st, ev) {
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
     // usa-63 (EXP7b): per-turn trigger + postHandoff rollup (after invalid-ts guard so totals match st.turns).
-    const postHandoff = Boolean(st.handoff || st.respawnOf || st.handedOff);
+    // successor lifetime (vs.handoff-from) + predecessor turns after its handoff-successor label; a plain respawn is not a handoff (usa-63 R1 M2)
+    const postHandoff = Boolean(st.handoff || st.handedOff);
     const tt = (st.turnTriggers ??= new Map());
     const tk = `${trigger}|${postHandoff ? 1 : 0}`;
     let ttb = tt.get(tk);

@@ -49,7 +49,7 @@ function callApi(urlPath, home) {
 test('classifyTurnTrigger: structured runner fields and anchored server headers only; never infers from prose', () => {
   // Structured fields win even if text looks like a server protocol message
   assert.equal(classifyTurnTrigger({ senderId: 'rn-lead', text: 'Watch w-abcdef12 complete: all 1 item done.' }), 'send');
-  assert.equal(classifyTurnTrigger({ owner: true, text: doneText('2026-11-25T13:00:00Z') }), 'send');
+  assert.equal(classifyTurnTrigger({ senderId: 'rn-lead', owner: true, text: doneText('2026-11-25T13:00:00Z') }), 'send');
   assert.equal(classifyTurnTrigger({ senderId: 'rn-lead', text: 'hello' }, { isFirstInput: true }), 'send');
   assert.equal(classifyTurnTrigger({ owner: true, text: 'hello' }, { isFirstInput: true }), 'send');
 
@@ -71,9 +71,25 @@ test('classifyTurnTrigger: structured runner fields and anchored server headers 
   assert.equal(classifyTurnTrigger({ text: kickText('usa-63') }), 'idle-kick');
   assert.equal(classifyTurnTrigger({ text: escalateText('usage', 'usa-63', 30) }), 'idle-kick');
 
+  // usa-63 R1 H1: server pings arrive owner:true; anchored headers win over the owner fallback (real formats from the live logs)
+  const rr = 'Restart request rr-20261123212542-a218 (tip 5f9acccd, needs server-restart,runner-restart,frontend-reload) from rn-6360cfc7afbc (Squad vibesquad): the server restarts the runtime';
+  assert.equal(classifyTurnTrigger({ owner: true, text: `${doneText('2026-11-25T13:00:00Z')} (restart-request rr-1, tip abc1234)` }), 'restart-done');
+  assert.equal(classifyTurnTrigger({ owner: true, text: rr }), 'restart-request');
+  assert.equal(classifyTurnTrigger({ owner: true, text: 'Restart request rr-20261123212542-a218 (tip 5f9acccd) was aborted: the restart deferred' }), 'restart-request');
+  assert.equal(classifyTurnTrigger({ owner: true, text: '/compact keep the plan, the blocks (status, branch, commit) and the worker ids' }), 'compact');
+  assert.equal(classifyTurnTrigger({ owner: true, text: 'Watch w-8bf76fa0 complete (4/4 items done):\n- rn-1' }), 'watch');
+  // an agent send can never spoof a header; pasted/embedded headers (not at the start) stay `send` for the owner
+  assert.equal(classifyTurnTrigger({ senderId: 'rn-x', text: rr }), 'send');
+  assert.equal(classifyTurnTrigger({ senderId: 'rn-x', text: '/compact now' }), 'send');
+  assert.equal(classifyTurnTrigger({ owner: true, text: `fyi:\n${rr}` }), 'send');
+  assert.equal(classifyTurnTrigger({ owner: true, text: 'please Restart request rr-1 (tip x' }), 'send');
+  // owner-typed header verbatim counts as the header (owner is trusted; locked in)
+  assert.equal(classifyTurnTrigger({ owner: true, text: 'restart-request rr-1' }), 'send');
+  assert.equal(classifyTurnTrigger({ owner: true, text: doneText('2026-11-25T13:00:00Z') }), 'restart-done');
+
   // Free-form prose mentioning trigger keywords -> none (never infer from prose)
   assert.equal(classifyTurnTrigger({ text: 'Please watch for the restart-done event and wrap up when idle-kick fires.' }), 'none');
-  assert.equal(classifyTurnTrigger({ text: '/compact keep the plan' }), 'none');
+  assert.equal(classifyTurnTrigger({ text: '/compact keep the plan' }), 'compact');
   assert.equal(classifyTurnTrigger({ text: 'Here is a New team log event in lane usage: [done] foo' }), 'none');
   assert.equal(classifyTurnTrigger({ text: 'Let us wait for restart-done before running tests.' }), 'none');
   assert.equal(classifyTurnTrigger({ text: '' }), 'none');
@@ -146,7 +162,7 @@ test('turnTriggers: tags all 7 trigger kinds, ignores mid-turn steerOnly overwri
   assert.equal(tt.byLaneRole[0].lane, 'usage');
 });
 
-test('postHandoff & postHandoffCost: predecessor after handoff-successor, successor (vs.handoff-from), and respawnOf', () => {
+test('postHandoff & postHandoffCost: predecessor after handoff-successor, successor (vs.handoff-from); a plain respawnOf is NOT a handoff', () => {
   const home = tmp();
 
   // Predecessor lead: 2 turns BEFORE handoff-successor ($1.00), then meta patch, then 1 turn AFTER ($0.50)
@@ -200,11 +216,10 @@ test('postHandoff & postHandoffCost: predecessor after handoff-successor, succes
   assert.equal(lead.postHandoffShare, Math.round((2.50 / 3.50) * 1000) / 1000);
 
   const worker = ph.byRole.find((r) => r.role === 'worker');
-  assert.equal(worker.preHandoff.turns, 1);
-  assert.ok(Math.abs(worker.preHandoff.costUsd - 3.00) < 1e-6);
-  assert.equal(worker.postHandoff.turns, 1);
-  assert.ok(Math.abs(worker.postHandoff.costUsd - 1.00) < 1e-6);
-  assert.equal(worker.postHandoffShare, 0.25);
+  assert.equal(worker.preHandoff.turns, 2); // respawn is not a handoff (R1 M2)
+  assert.ok(Math.abs(worker.preHandoff.costUsd - 4.00) < 1e-6);
+  assert.equal(worker.postHandoff.turns, 0);
+  assert.equal(worker.postHandoffShare, 0);
 
   const buddy = ph.byRole.find((r) => r.role === 'brainstorm');
   assert.equal(buddy.preHandoff.turns, 1);
@@ -212,11 +227,11 @@ test('postHandoff & postHandoffCost: predecessor after handoff-successor, succes
   assert.equal(buddy.postHandoffShare, 0);
 
   // Totals across all roles: pre = 4.50 (4 turns), post = 3.50 (4 turns)
-  assert.equal(ph.totals.preHandoff.turns, 4);
-  assert.ok(Math.abs(ph.totals.preHandoff.costUsd - 4.50) < 1e-6);
-  assert.equal(ph.totals.postHandoff.turns, 4);
-  assert.ok(Math.abs(ph.totals.postHandoff.costUsd - 3.50) < 1e-6);
-  assert.equal(ph.totals.postHandoffShare, Math.round((3.50 / 8.00) * 1000) / 1000);
+  assert.equal(ph.totals.preHandoff.turns, 5);
+  assert.ok(Math.abs(ph.totals.preHandoff.costUsd - 5.50) < 1e-6);
+  assert.equal(ph.totals.postHandoff.turns, 3);
+  assert.ok(Math.abs(ph.totals.postHandoff.costUsd - 2.50) < 1e-6);
+  assert.equal(ph.totals.postHandoffShare, Math.round((2.50 / 8.00) * 1000) / 1000);
 
   // Trigger buckets also carry postHandoff breakdown
   assert.equal(u.turnTriggers.totals.watch.turns, 2);
