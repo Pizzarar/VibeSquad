@@ -92,7 +92,7 @@ test(
         assert.deepEqual(getTeams()[0].lanes.map((l) => l.id), ["scav-ui"]);
 
         const env = { ...process.env, VIBESQUAD_HOME: vsHome, VIBESQUAD_ROOT: repo, PASEO_AGENT_ID: "" };
-        const cli = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Crafting tree", "--brief", "tiers", "--team", "efi", "--no-start"], { env, encoding: "utf8" });
+        const cli = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Crafting tree", "--brief", "tiers", "--team", "efi"], { env, encoding: "utf8" });
         assert.equal(cli.status, 0, cli.stderr);
 
         // The UI still holds the pre-CLI snapshot and renames a lane from it (plain array, as most callers do).
@@ -128,7 +128,7 @@ async function modalSaveAcrossPoll({ repo, vsHome }, editCopy) {
       const copy = editCopy(JSON.parse(JSON.stringify(opened.teams)));
 
       const env = { ...process.env, VIBESQUAD_HOME: vsHome, VIBESQUAD_ROOT: repo, PASEO_AGENT_ID: "" };
-      const cli = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Crafting tree", "--brief", "tiers", "--team", "efi", "--no-start"], { env, encoding: "utf8" });
+      const cli = spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "Crafting tree", "--brief", "tiers", "--team", "efi"], { env, encoding: "utf8" });
       assert.equal(cli.status, 0, cli.stderr);
       assert.equal(await refreshTeams(), true, "poll picked up the CLI lane");
 

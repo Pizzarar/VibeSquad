@@ -34,6 +34,8 @@ export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
   agents?: Map<string, PaseoAgent>;
   fetch?: typeof fetch;
+  /** Where the failed-start `vs log` event is posted (defaults to the global fetch). */
+  logFetch?: typeof fetch;
   getTeams?: () => TeamDef[];
   /** Takes an updater, re-run on the fresh registry if someone else wrote it first. */
   saveTeams?: (update: TeamsUpdater) => Promise<unknown>;
@@ -68,13 +70,32 @@ export function openPin(pin: Pin, depsOrProfile: OpenPinDeps | string = {}): Pro
   const pending = inFlight.get(key);
   if (pending) return pending;
   const chosenProfile = deps.profile?.trim() || r.profile || pin.lane?.lastProfile || DEFAULT_PIN_PROFILE;
-  const run = quickStart(pin, chosenProfile, deps).finally(() => {
-    inFlight.delete(key);
-    startListeners.forEach((l) => l());
-  });
+  const run = quickStart(pin, chosenProfile, deps)
+    .catch((err) => {
+      void logPinStartFailure(pin, err, deps.logFetch); // idea-816: a refused/capped first start is reported (best-effort, not awaited), not just thrown
+      throw err;
+    })
+    .finally(() => {
+      inFlight.delete(key);
+      startListeners.forEach((l) => l());
+    });
   inFlight.set(key, run);
   startListeners.forEach((l) => l());
   return run;
+}
+
+/** Best-effort `vs log blocker` (via the server) saying a pinned lane's first Buddy did not start, and why. Never throws. */
+export async function logPinStartFailure(pin: Pin, err: unknown, fetchImpl?: typeof fetch): Promise<void> {
+  const why = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").slice(0, 160);
+  console.error(`pin ${pin.lane.id}: its Buddy did not start: ${why}`);
+  if (DEMO) return;
+  try {
+    await (fetchImpl ?? fetch)("/__vibesquad/vs-log", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ team: pin.squad.id, lane: pin.lane.id, type: "blocker", text: `pin ${pin.lane.id}: Buddy did NOT start: ${why}`.slice(0, 236) }),
+    });
+  } catch {}
 }
 
 async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise<string> {
@@ -455,7 +476,7 @@ export function setLastBrainstormProfile(profile: string): void {
   } catch {}
 }
 
-export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "logFetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
   lastProfile?: string;
   startBuddies?: boolean;
   /** Mark the created/reopened lane as a permanent standing team (`standing: true`). */

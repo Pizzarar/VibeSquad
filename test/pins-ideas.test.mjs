@@ -60,7 +60,7 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     mkdirSync(join(root, "docs", "brainstorm"), { recursive: true });
     writeFileSync(join(home, "teams.json"), JSON.stringify({ teams: [{ id: "efi", name: "EFI", paths: [], lanes: lanes.slice(0, 2) }] }));
     const env = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root, PASEO_AGENT_ID: "" };
-    const vs = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", "--no-start", ...args], { env, encoding: "utf8" });
+    const vs = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", "new", ...args], { env, encoding: "utf8" });
 
     const refused = vs("Scavenging loot", "--brief", "x", "--team", "efi");
     assert.equal(refused.status, 1);

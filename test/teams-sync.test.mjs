@@ -95,7 +95,7 @@ test(
     const vs = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", ...args], { env, encoding: "utf8" });
 
     // 1. CLI pin new with the current revision succeeds and bumps revision.
-    const ok = vs("new", "Crafting tree", "--brief", "tiers", "--team", "efi", "--revision", rev0, "--json", "--no-start");
+    const ok = vs("new", "Crafting tree", "--brief", "tiers", "--team", "efi", "--revision", rev0, "--json");
     assert.equal(ok.status, 0, ok.stderr);
     const rev1 = teamsRevision(teamsFile);
     assert.notEqual(rev1, rev0, "revision bumped after CLI pin");
@@ -133,11 +133,10 @@ test(
       assert.equal(r.status, 200);
       expectedAfterServerReopen = readFileSync(teamsFile, "utf8");
     };
-    const raceCode = await commandPin({
+    const raceCode = commandPin({
       _: ["new", "Fishing"],
       brief: "reopen fishing",
       team: "efi",
-      noStart: true,
       beforeWrite: inBetweenServerWrite,
     });
     assert.equal(raceCode, 1, "reopen refused when server wrote in between");
