@@ -1549,17 +1549,17 @@ test('usa-10: cohorts compare Last 10 vs Prior 10 (delta = recent - prior)', () 
     return '';
   };
   const units = [];
-  for (let i = 0; i < 12; i++) units.push({ unit: `unit-${i}`, reviewRounds: i < 2 ? 2 : 0, ctSec: sec(T0 + i * 1000) });
+  for (let i = 0; i < 12; i++) units.push({ unit: `unit-${i}`, reviewRounds: i < 2 ? 2 : 1, ctSec: sec(T0 + i * 1000) }); // usa-60: r0 (no review evidence) is unknown, not clean; clean = one round
   const u = getUsage({ home, git: chainGit(units), laneCodes: { usa: 'usage' } });
   const c = u.cohorts;
   assert.equal(c.recent.units, 10);
   assert.equal(c.prior.units, 2);
   assert.equal(c.recent.firstTryPassRate, 1, 'recent all clean');
-  assert.equal(c.recent.avgReviewRounds, 0);
+  assert.equal(c.recent.avgReviewRounds, 1);
   assert.equal(c.prior.firstTryPassRate, 0, 'prior all rework');
   assert.equal(c.prior.avgReviewRounds, 2);
   assert.equal(c.delta.firstTryPassRate, 1);
-  assert.equal(c.delta.avgReviewRounds, -2);
+  assert.equal(c.delta.avgReviewRounds, -1);
 });
 
 test('usa-10: floor splits spend into clean vs rework/loops/fix/restart buckets', () => {
