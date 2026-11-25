@@ -259,6 +259,7 @@ export function parseArgs(argv) {
     "brief",
     "timeout",
     "deadline",
+    "requester",
     "needs",
     "file",
     "goal",
@@ -2910,8 +2911,13 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
 
 export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  const caller = flags.dryRun ? null : await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
+  // idea-695: the requester's own held background work (e.g. its vs restart status poll loop) never holds or defers its
+  // restart. An agent is always its own requester; the owner (and the server's restart-request fire) may name one.
+  if (flags.requester !== undefined && !/^[A-Za-z0-9][\w.-]{0,63}$/.test(String(flags.requester))) throw new Error("vs restart: --requester must be an agent id");
+  if (caller?.owner === false && flags.requester !== undefined && flags.requester !== caller.id) throw new Error(`vs restart: --requester is your own id (${caller.id}) when an agent runs it`);
+  const requester = caller?.owner === false ? caller.id : flags.requester !== undefined ? String(flags.requester) : null;
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   // idea-355: a detached launch (e.g. PowerShell Start-Process) may come without a usable cwd or home: say so, never vanish.
@@ -2957,6 +2963,7 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   if (flags.noForce) args.push("--no-force");
   if (flags.killBackground) args.push("--kill-background");
   if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
+  if (requester) args.push("--requester", requester);
   for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   if (flags.dryRun) {

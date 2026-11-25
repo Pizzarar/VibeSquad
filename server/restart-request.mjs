@@ -908,6 +908,12 @@ export function runVsAsync(args, { env = process.env, timeoutMs = 60_000, exec =
     .catch((err) => ({ ok: false, error: String(err?.message ?? err).slice(0, 300) }));
 }
 
+/** idea-695: `vs restart` args for a request's fire: `--requester <id>` when an agent (not the owner) requested it. */
+export function fireArgs(req) {
+  const by = String(req?.requestedBy ?? "");
+  return by && by !== "owner" && /^[A-Za-z0-9][\w.-]{0,63}$/.test(by) ? ["--requester", by] : [];
+}
+
 /**
  * The server loop. Deps (all injectable for tests): listAgents() -> runner agents, heldList() -> { ids, work } | null,
  * listAgentsWithArchived() -> the same list plus archived records (read only when a held id is not in listAgents(), so an
@@ -921,7 +927,8 @@ export function createRestartRequestLoop({
   listAgentsWithArchived = null,
   heldList = async () => null,
   runVs = (args) => runVsAsync(args),
-  fire = () => runVsAsync(["restart"], { timeoutMs: 120_000 }),
+  // idea-695: the fire names the request's requester, so its own held work does not hold or defer the restart it asked for.
+  fire = (req) => runVsAsync(["restart", ...fireArgs(req)], { timeoutMs: 120_000 }),
   sync = () => runSyncAsync(),
   runtimeLag = (req) => runtimeLagAsync(req),
   teams = () => loadTeamsRegistry(),

@@ -2682,3 +2682,77 @@ test("idea-653: the run writes vs-restart-progress.json: starting, waiting (dead
     assert.ok(!readdirSync(w.outDir).some((f) => /^restart-.*progress/.test(f)), "never named like a result file");
   } finally { await w.cleanup(); }
 });
+
+// idea-695: rr-20261123212542-a218 deferred only on the requester's own `vs restart status` poll loop. The requester's own
+// held work is recorded, never waited on; any other agent's held work still holds and defers the restart.
+test("idea-695: withoutRequester strips only the requester's held work", async () => {
+  const { withoutRequester } = await import("../scripts/restart-runtime.mjs");
+  const h = { running: 0, held: 2, heldAgents: ["rn-req", "rn-other"], heldWork: { "rn-req": [{ pid: 1, name: "bash" }], "rn-other": [{ pid: 2, name: "node" }] } };
+  const r = withoutRequester(h, "rn-req");
+  assert.deepEqual(r.health.heldAgents, ["rn-other"]);
+  assert.equal(r.health.held, 1);
+  assert.deepEqual(Object.keys(r.health.heldWork), ["rn-other"]);
+  assert.deepEqual(r.excluded, { id: "rn-req", work: [{ pid: 1, name: "bash" }] });
+  assert.deepEqual(h.heldAgents, ["rn-req", "rn-other"], "the input is not mutated");
+  for (const [hh, req] of [[h, null], [h, "rn-nobody"], [{ running: 0 }, "rn-req"], [null, "rn-req"]]) {
+    const n = withoutRequester(hh, req);
+    assert.equal(n.health, hh);
+    assert.equal(n.excluded, null);
+  }
+  assert.equal(parseArgs(["--requester", "rn-req"]).requester, "rn-req");
+  for (const bad of ["", "-x", "a b", "x".repeat(65), "a;b"]) assert.throws(() => parseArgs(["--requester", bad]), /requester/, bad);
+});
+
+test("idea-695: the requester's own held work never defers its restart; another agent's still does", async () => {
+  const w = await world({ running: [0], held: [["rn-req"]] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05, requester: "rn-req" });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.deferred, undefined);
+    assert.equal(r.requesterExcluded?.id, "rn-req");
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], held: [["rn-req", "rn-other"]] });
+  try {
+    const r = await w2.run({ waitTimeoutSec: 0.05, requester: "rn-req" });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.deferred?.heldAgents, ["rn-other"], JSON.stringify(r.deferred));
+    assert.equal(r.requesterExcluded?.id, "rn-req");
+    assert.equal(w2.shutdownAuth.length, 0, "runner never told to stop");
+  } finally { await w2.cleanup(); }
+  const w3 = await world({ running: [0], held: [["rn-req"]] });
+  try {
+    const r = await w3.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.ok, false, "without --requester the same hold defers, as before");
+    assert.deepEqual(r.deferred?.heldAgents, ["rn-req"]);
+  } finally { await w3.cleanup(); }
+});
+
+test("idea-695: vs restart names its agent caller as --requester; the owner may name one; fireArgs", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const { fireArgs } = await import("../server/restart-request.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-home-"));
+  const run = async (flags, opts) => {
+    const seen = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try { await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, teams, drainGuard: () => ({ pending: [] }), ...opts }); return seen[0]; } finally { process.stdout.write = orig; }
+  };
+  try {
+    const tokenEnv = { VS_AGENT_ID: "rn-deadbeef0000", VS_AGENT_TOKEN: "t0k", VIBESQUAD_HOME: home };
+    const verify = async ({ id }) => ({ id, role: "lead", lane: "vibesquad", team: "vibesquad", overlord: true });
+    const a = await run({}, { env: tokenEnv, verify });
+    assert.equal(a[a.indexOf("--requester") + 1], "rn-deadbeef0000", "an agent caller is its own requester");
+    assert.equal((await run({ requester: "rn-deadbeef0000" }, { env: tokenEnv, verify })).filter((x) => x === "--requester").length, 1);
+    await assert.rejects(run({ requester: "rn-other" }, { env: tokenEnv, verify }), /--requester is your own id/);
+    const owner = { env: { VIBESQUAD_HOME: home }, hasOwnerProof: () => true };
+    assert.equal((await run({}, owner)).includes("--requester"), false, "the owner names none by default");
+    const o = await run({ requester: "rn-req" }, owner);
+    assert.equal(o[o.indexOf("--requester") + 1], "rn-req", "the owner (the server's fire) may name one");
+    await assert.rejects(run({ requester: "a b" }, owner), /--requester must be an agent id/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+  assert.deepEqual(fireArgs({ requestedBy: "owner" }), []);
+  assert.deepEqual(fireArgs({}), []);
+  assert.deepEqual(fireArgs({ requestedBy: "rn-abc" }), ["--requester", "rn-abc"]);
+  assert.deepEqual(fireArgs({ requestedBy: "bad id;x" }), []);
+});

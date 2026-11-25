@@ -71,6 +71,22 @@ export function drainTtlMs(opts) {
 // Blank, non-numeric or <= 0 env values fall back to the default (a 0ms wait would fail every slow start).
 export function bootDefault(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN; return Number.isFinite(n) && n > 0 ? n : BOOT_TIMEOUT_DEFAULT_SEC; }
 
+// idea-695: the agent that asked for this restart (vs restart passes its caller; the restart-request loop its requester).
+export const REQUESTER_RE = /^[A-Za-z0-9][\w.-]{0,63}$/;
+/**
+ * idea-695 (rr-20261123212542-a218 deferred only on the requester's own `vs restart status` poll loop, pid 951750): a runner
+ * /health body with the requester's own held background work taken out, so it never holds or defers the restart that agent
+ * asked for. -> { health, excluded } (excluded: { id, work } when the requester held something, else null). Its running
+ * turns still count (it ends its turn as before); any other holder is untouched.
+ */
+export function withoutRequester(h, requester) {
+  if (!requester || !h || typeof h !== 'object' || !Array.isArray(h.heldAgents) || !h.heldAgents.includes(requester)) return { health: h, excluded: null };
+  const heldAgents = h.heldAgents.filter((id) => id !== requester);
+  const heldWork = h.heldWork && typeof h.heldWork === 'object' ? Object.fromEntries(Object.entries(h.heldWork).filter(([id]) => id !== requester)) : h.heldWork;
+  const held = typeof h.held === 'number' ? Math.max(0, h.held - (h.held === h.heldAgents.length ? 1 : 0)) : undefined;
+  return { health: { ...h, heldAgents, ...(heldWork !== undefined ? { heldWork } : {}), ...(held !== undefined ? { held } : {}) }, excluded: { id: requester, work: h.heldWork?.[requester] ?? [] } };
+}
+
 export function parseArgs(argv) {
   const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90, bootTimeoutSec: bootDefault(process.env.VS_RESTART_BOOT_TIMEOUT) };
   const val = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
@@ -94,6 +110,7 @@ export function parseArgs(argv) {
     else if (a === '--out-dir') o.outDir = val(i++);
     else if (a === '--log') o.log = val(i++);
     else if (a === '--vs-home') o.vsHome = val(i++);
+    else if (a === '--requester') { const v = val(i++); if (!REQUESTER_RE.test(v)) throw new Error('bad --requester (an agent id)'); o.requester = v; }
     else throw new Error(`unknown flag ${a}`);
   }
   for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
@@ -752,7 +769,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
         ...(opts.wait ? [`drain: runner POST /drain (ttl ${Math.round(drainTtlMs(opts) / 1000)}s): new background work is refused while waiting; cleared at the end`] : []),
-        opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
+        opts.wait ? `wait for runner /health running:0 and held:0${opts.requester ? ` (not counting requester ${opts.requester}'s own held work)` : ''} (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : det.runner.identity === 'unknown' && det.runner.pid ? `runner pid ${det.runner.pid} alive, identity unknown: stop only via token /shutdown (never killed by pid)` : 'runner not running: nothing to stop',
         det.systemd?.refuse ? `REFUSE: ${det.systemd.refuse}` : det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : det.systemd?.use && det.systemd.mainPid === det.server.pid ? `systemctl --user stop ${det.systemd.unit} (KillMode=process: the main pid only); a failed stop aborts the restart (no SIGTERM: Restart= would race the relaunch)` : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
         det.systemd?.use
@@ -846,17 +863,24 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         } else step('drain not set', { status: r.status, error: r.status === 404 ? 'runner predates /drain' : String(r.body?.error ?? '') });
       } catch (e) { step('drain not set', { error: e.message }); }
       const deadline = d.now() + opts.waitTimeoutSec * 1000;
-      let running = det.runner.health.running;
-      let heldAgents = det.runner.health.heldAgents ?? [];
-      let held = det.runner.health.held ?? heldAgents.length;
-      let heldWork = det.runner.health.heldWork ?? {};
+      // idea-695: the requester's own held work is recorded, never waited on or deferred for.
+      const mine = (h) => {
+        const { health, excluded } = withoutRequester(h, opts.requester);
+        if (excluded) result.requesterExcluded = { id: excluded.id, work: excluded.work, at: new Date(d.now()).toISOString() };
+        return health;
+      };
+      const health0 = mine(det.runner.health);
+      let running = health0.running;
+      let heldAgents = health0.heldAgents ?? [];
+      let held = health0.held ?? heldAgents.length;
+      let heldWork = health0.heldWork ?? {};
       // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
-      let lastHealth = det.runner.health;
-      step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
+      let lastHealth = health0;
+      step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec, ...(opts.requester ? { requester: opts.requester } : {}) });
       const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20) });
       waitProgress();
       let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
-      const fetchHealth = async () => (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
+      const fetchHealth = async () => mine((await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {});
       const applyHealth = (h) => {
         lastHealth = h;
         running = h.running ?? running;
