@@ -118,6 +118,7 @@ export async function verifyCaller(ctx) {
     digest: rec.digest === true,
     digestFor: rec.digestFor ? String(rec.digestFor) : null,
     overlord: rec.overlord === true,
+    schedule: rec.schedule ? String(rec.schedule) : null, // idea-629: runner-verified (protected label), never the env
     verified: true,
   };
   Object.defineProperty(ctx, VERIFIED, { value: { id: caller.id, token: caller.token, rec }, enumerable: false, configurable: true });
@@ -431,7 +432,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const requestedTeam = clean(labels.team);
   const requestedLane = clean(labels.lane);
   // Identity-affecting labels (everything effectiveAgentRole / resolveAgentIdentity read) are never caller-supplied.
-  for (const k of ["role", "digestFor", "lead", "orphan", "topic", "ord"]) delete labels[k];
+  for (const k of ["role", "digestFor", "lead", "orphan", "topic", "ord", "schedule", "scheduleName"]) delete labels[k]; // idea-629: schedule marks are the server's
   // Handoff bookkeeping is written only by the lead-handoff flow; a caller-supplied one could forge a takeover (demote the live lead).
   for (const k of Object.keys(labels)) if (/^(vs\.handoff|handoff-)/i.test(k)) delete labels[k];
   // A Buddy may start the lane's lead; nobody else, and no other role. Any failed condition is an error, never a downgrade.

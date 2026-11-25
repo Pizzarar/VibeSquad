@@ -43,6 +43,8 @@ import {
   findLaneInRegistry,
   findTeamInRegistry,
   isHubLane,
+  isHiddenLane,
+  isLiveAgent,
   isDigestAgent,
   freezeLaneCodes,
   isRetiredRole,
@@ -439,6 +441,8 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
     profile,
     digest,
     digestFor: labels.digestFor ? String(labels.digestFor) : null,
+    // idea-629: a schedule-spawned agent, from its runner record's protected label (runner/runner.mjs scheduleOf), not the env.
+    schedule: /^sch-[A-Za-z0-9_-]{1,64}$/.test(String(labels.schedule ?? "").trim()) ? String(labels.schedule).trim() : null,
     role,
     ord,
     team,
@@ -549,6 +553,7 @@ Usage:
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
+  vs pin hide|unhide|remove <lane> [--team <squad>] [--force] [--json]   owner or the same-Squad Overlord only (idea-632): hide sets hidden (unhide reverses), remove sets state removed (vs pin new "<name>" reopens it); refuses the hub lane, and a lane with live agents unless --force (agents are never archived)
   vs spec [show] [--lane <lane>] [--team <team>]
   vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
   vs task list [--lane <lane>] [--json]
@@ -590,7 +595,8 @@ Storage:  VIBESQUAD_HOME (default ~/.vibesquad)
 
 Team log: the Owner writes "you"; leads and Buddies write every other type; a worker writes
 metric, or done/blocker as a self-report (refs = itself); the Pre-check - Flash digest (per its
-record, never --digest) writes done/metric for the worker it digests.`;
+record, never --digest) writes done/metric for the worker it digests; a schedule-spawned worker
+(runner-verified schedule label) may also write needs-you.`;
 
 async function commandLog(flags) {
   const identity = resolveIdentity(flags);
@@ -657,7 +663,10 @@ export function clientLogFields(identity, { type, refs, digestFlag = false } = {
   }
   if (type === "done" || type === "blocker") return { agent: id, type, refs: [id] };
   if (type === "metric") return { agent: id, type, refs: list.filter((r) => !isRunnerId(r) || r === id) };
-  throw new Error(`role=worker cannot write ${type} to the team log (only done, blocker or metric, as a self-report); put it in your final message for your lead.`);
+  // idea-629 mirror of agentLogFields: a schedule-spawned worker (protected `schedule` label on its runner record) may raise
+  // needs-you as itself. The server re-checks against the runner's verified record; this only gives a clear error earlier.
+  if (type === "needs-you" && identity.schedule) return { agent: id, type, refs: [id, ...list.filter((r) => !isRunnerId(r) && r !== id)] };
+  throw new Error(`role=worker cannot write ${type} to the team log (only done, blocker or metric, as a self-report; needs-you only from a schedule-spawned agent); put it in your final message for your lead.`);
 }
 
 function readSinceMe(flags, identity) {
@@ -1924,10 +1933,139 @@ export function commandPinMerge(flags) {
   return 0;
 }
 
+/**
+ * idea-632: who may hide, unhide or remove a pinned lane. The owner's shell (owner proof: no agent id + the local token), or
+ * the Overlord (a live lead on the hub lane) of the lane's OWN Squad, with the Overlord identified by its token (/verify-agent,
+ * the vs restart proofs). The VS_ROLE/VS_LANE/VS_TEAM env are never read. Any other agent, or another Squad's Overlord, is
+ * refused. `identity` is a DI shortcut for tests ({ role, team: { id }, lane }); `hasOwnerProof` / `verify` inject the proofs.
+ */
+export async function assertPinAdminCaller(verb, squadId, teams, env = process.env, { identity = null, hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
+  const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
+  if (!id || !isRunnerId(id)) {
+    if (!hasOwnerProof(env)) throw new Error(`vs pin ${verb}: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Squad's Overlord may ${verb} a lane.`);
+    return { owner: true, id: "owner" };
+  }
+  let who = identity;
+  if (!who) {
+    const token = String(env.VS_AGENT_TOKEN ?? "").trim();
+    if (!token) throw new Error(`vs pin ${verb}: 403: ${id} has no VS_AGENT_TOKEN, so it cannot be verified; refusing.`);
+    let rec;
+    try {
+      rec = await verify({ id, token });
+    } catch (e) {
+      if (e?.status === 403) throw new Error(`vs pin ${verb}: 403: ${id}'s token does not match the runner's (or the agent is gone/retired); refusing.`);
+      throw new Error(`vs pin ${verb}: could not verify ${id} with the runner: ${e?.message ?? e}`);
+    }
+    rec = rec?.agent ?? rec;
+    if (!rec || String(rec.id ?? "") !== id) throw new Error(`vs pin ${verb}: 403: the runner does not know ${id}; refusing.`);
+    who = { role: String(rec.role ?? "").trim().toLowerCase(), team: { id: rec.team ?? "" }, lane: rec.lane ?? "" };
+  }
+  const want = String(squadId ?? "").toLowerCase();
+  const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
+  const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
+  if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane) || String(team.id).toLowerCase() !== want) {
+    throw new Error(`vs pin ${verb}: ${id} is a ${who.role || "worker"}${team && String(team.id).toLowerCase() !== want ? ` of Squad ${team.id}` : ""}; only the owner or the Overlord of Squad ${squadId} may ${verb} its lanes. Ask your lead.`);
+  }
+  return { owner: false, id };
+}
+
+/** Live agents (not archived/retired/exited) in a lane of a Squad: label team + lane (or lead) on the lane's id or aliases. */
+function liveLaneAgents(agents, squadId, lane) {
+  const keys = new Set([lane.id, ...(lane.aliases ?? [])].map((x) => String(x).toLowerCase()));
+  const sq = String(squadId).toLowerCase();
+  return (agents ?? []).filter((a) => {
+    const l = a?.labels ?? {};
+    return String(l.team ?? "").toLowerCase() === sq && keys.has(String(l.lane || l.lead || "").toLowerCase()) && isLiveAgent(a);
+  });
+}
+
+/**
+ * idea-632: `vs pin hide|unhide|remove <lane> [--team <squad>] [--force] [--json]`. Owner / same-Squad Overlord only
+ * (assertPinAdminCaller). hide sets `hidden: true` (the pin grid, focus rail and Buddy roster skip it: src/pins.ts,
+ * server/lane-pure.mjs isHiddenLane); unhide sets `hidden: false`. remove sets state "removed" like the UI's Remove team
+ * (src/pinRemoveLogic.ts) but archives nothing and deletes no worktree; `vs pin new "<name>"` reopens it. hide/remove refuse
+ * a lane with live agents unless --force (an unreadable roster refuses too), and always refuse the hub lane. Logged as a
+ * decision by the verified caller.
+ */
+export async function commandPinHide(verb, flags, { env = process.env, listAgents = (e) => listRunnerAgentsLive({ env: e }), ...gateOpts } = {}) {
+  const laneRaw = String(flags._[0] ?? "").trim();
+  if (!laneRaw || flags._.length > 1) throw new Error(`usage: vs pin ${verb} <lane> [--team <squad>]${verb === "unhide" ? "" : " [--force]"} [--json]`);
+  const { file, revision, doc } = loadPinTeamsSnapshot(flags);
+  const identity = resolveIdentity({ ...flags, lane: undefined });
+  const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
+  if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+  const lane = matchLaneRef(target.lanes ?? [], laneRaw);
+  if (!lane) throw new Error(`unknown lane "${laneRaw}" in ${squadDef.name}`);
+
+  const caller = await assertPinAdminCaller(verb, target.id, doc.teams, env, gateOpts);
+  if (isHubLane(target, lane)) throw new Error(`vs pin ${verb}: ${lane.id} is ${squadDef.name}'s hub lane (the Overlord's); it cannot be hidden or removed.`);
+
+  const already =
+    (verb === "hide" && lane.hidden === true) || (verb === "unhide" && !isHiddenLane(target, lane)) || (verb === "remove" && lane.state === "removed");
+  if (already) {
+    const out = { ok: true, squad: target.id, lane: lane.id, verb, changed: false };
+    process.stdout.write(flags.json ? JSON.stringify(out, null, 2) + "\n" : `${lane.name || lane.id} (${lane.id}) is already ${verb === "hide" ? "hidden" : verb === "unhide" ? "shown" : "removed"}; nothing changed.\n`);
+    return 0;
+  }
+
+  let live = [];
+  if (verb !== "unhide") {
+    let agents;
+    try {
+      agents = await listAgents(env);
+    } catch (e) {
+      if (!flags.force) throw new Error(`vs pin ${verb}: could not read the agent roster (${e?.message ?? e}), so live agents in ${lane.id} are unknown; refusing. Re-run with --force to ${verb} it anyway.`);
+      agents = [];
+    }
+    live = liveLaneAgents(agents, target.id, lane);
+    if (live.length && !flags.force) {
+      const names = live.map((a) => `${a.title || a.name || a.id} (${a.id}, ${a.labels?.role || "worker"})`).join(", ");
+      process.stderr.write(`vs pin ${verb}: ${lane.id} has ${live.length} live agent(s): ${names}. Retire or archive them first, or re-run with --force (they keep running).\n`);
+      return 1;
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  target.lanes = target.lanes.map((l) => {
+    if (l.id !== lane.id) return l;
+    if (verb === "hide") return { ...l, hidden: true, hiddenAt: nowIso };
+    if (verb === "unhide") {
+      const { hiddenAt, ...rest } = l;
+      return { ...rest, hidden: false };
+    }
+    const { doneAt, ...rest } = l;
+    return { ...rest, state: "removed", removedAt: nowIso };
+  });
+  const saved = savePinTeams(doc, revision, flags);
+  if (!saved.ok) return 1;
+
+  const undo = verb === "hide" ? `vs pin unhide ${lane.id}` : verb === "unhide" ? `vs pin hide ${lane.id}` : `vs pin new "${lane.name || lane.id}" --team ${target.id}`;
+  const forced = live.length ? ` with --force over ${live.length} live agent(s)` : "";
+  const homeDir = path.resolve(process.env.VIBESQUAD_HOME || BASE_DIR);
+  appendLog({ ...identity, team: squadDef, lane: lane.id, teamDir: path.join(homeDir, "teams", squadDef.id) }, {
+    ts: nowIso,
+    agent: caller.owner ? identity.agent || "owner" : caller.id,
+    lane: lane.id,
+    type: "decision",
+    text: `vs pin ${verb} ${lane.name || lane.id} (${lane.id})${forced}; undo: ${undo}`.slice(0, MAX_TEXT),
+    refs: [lane.id],
+  });
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ ok: true, squad: target.id, lane: lane.id, verb, changed: true, live: live.map((a) => a.id), undo, revision: saved.revision }, null, 2) + "\n");
+    return 0;
+  }
+  const done = verb === "hide" ? "Hid" : verb === "unhide" ? "Unhid" : "Removed";
+  process.stdout.write(`${done} ${lane.name || lane.id} (${lane.id}) in ${squadDef.name}${forced}. Undo: ${undo}\n`);
+  return 0;
+}
+
 export function commandPin(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
   if (sub === "merge") return commandPinMerge(flags);
-  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"]');
+  if (sub === "hide" || sub === "unhide" || sub === "remove") return commandPinHide(sub, flags);
+  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"] | vs pin hide|unhide|remove <lane> [--team <squad>] [--force]');
   const name = flags._.join(" ").trim();
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;
