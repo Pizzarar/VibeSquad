@@ -534,12 +534,22 @@ export function reduceTurn(t, e) {
 
 /** How long an agent that died on an upstream model-API failure keeps its provider capped (idea-442). */
 export const UPSTREAM_CAP_TTL_MS = 10 * 60 * 1000;
-/** idea-826: an out-of-credit provider stays out until the owner tops up (`vs cap off <provider>` lifts it early). */
+/** idea-826: an out-of-credit provider stays out until the owner tops up (`vs cap off <provider>` lifts it early). Only a
+ *  CONFIRMED balance fault (a second agent within BALANCE_CONFIRM_WINDOW_MS) gets this; a lone one gets BALANCE_FIRST_TTL_MS. */
 export const BALANCE_CAP_TTL_MS = 60 * 60 * 1000;
+/** A single balance fault (unconfirmed: could be a transient blip or a false match) caps like an upstream failure. */
+export const BALANCE_FIRST_TTL_MS = 10 * 60 * 1000;
+/** A balance fault from a DIFFERENT agent within this window of an earlier one confirms it (escalates to BALANCE_CAP_TTL_MS).
+ *  Longer than BALANCE_FIRST_TTL_MS so the first spawn after the short cap lapses can confirm it. */
+export const BALANCE_CONFIRM_WINDOW_MS = 90 * 60 * 1000;
+/** An `error` event longer than this is turn/assistant prose, not a provider error line (those are one short sentence or a
+ *  small JSON body); it never counts as a provider fault. */
+export const PROVIDER_ERROR_MAX_CHARS = 400;
 /** idea-826: a provider CLI missing from the host (true resolve/ENOENT miss, not a gone cwd: runner/spawn.mjs spawnErrorMessage). */
 export const BINARY_CAP_TTL_MS = 10 * 60 * 1000;
 // DeepSeek: "Internal error: Insufficient Balance" (an `error` event, the agent stays parked); OpenAI/Anthropic wordings alike.
-export const BALANCE_ERROR_RE = /insufficient[ _](account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|payment required/i;
+// A bare "payment required" is any HTTP-402 discussion; only the status line form ("402 Payment Required") counts.
+export const BALANCE_ERROR_RE = /insufficient[ _](account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|\b402\W{0,3}payment required/i;
 // runner/spawn.mjs: "<cmd> binary not found at <path>" (spawn ENOENT, cwd present) / resolveExecutable's 'executable "<cmd>" not found'.
 export const BINARY_MISSING_RE = /\bbinary not found at\b|\bexecutable "[^"]+" not found\b/i;
 
@@ -550,6 +560,12 @@ export const BINARY_MISSING_RE = /\bbinary not found at\b|\bexecutable "[^"]+" n
 export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
   if (e?.type !== "exit" && e?.type !== "error") return null;
   const msg = String((e.type === "exit" ? e.error : e.message) ?? "");
+  if (e.type === "error") {
+    // The Claude adapter's failed-turn error carries the turn's own result text: an error_* subtype (max turns, max budget,
+    // during execution) is the task failing, whatever its text mentions (runner/adapters/claude.mjs). Long text is prose.
+    if (/^error_/i.test(String(e.subtype ?? ""))) return null;
+    if (msg.length > PROVIDER_ERROR_MAX_CHARS) return null;
+  }
   if (msg && BALANCE_ERROR_RE.test(msg)) return { kind: "balance", ttlMs: BALANCE_CAP_TTL_MS, msg };
   // A runner from before the spawnErrorMessage cwd check still names the binary when the agent's cwd is gone: not a binary fault.
   if (msg && BINARY_MISSING_RE.test(msg)) return cwd && !safeExists(exists, cwd) ? null : { kind: "binary-missing", ttlMs: BINARY_CAP_TTL_MS, msg };
@@ -568,24 +584,48 @@ const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient bala
  * (resolveProfileWithFailover / resolveRoute) routes around it, and says so on stderr. A longer live cap (a manual `vs cap`) is never
  * shortened. Never throws. Returns the cap written or null.
  */
-export function capProviderOnUpstreamExit(provider, e, { cwd, cap = setProviderCapped, readCaps = cap === setProviderCapped ? () => readLiveCapDoc().capped : null, log = logRunnerMetric, now = Date.now(), exists = fs.existsSync } = {}) {
+export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes = balanceStrikes, cap = setProviderCapped, readCaps = cap === setProviderCapped ? () => readLiveCapDoc().capped : null, log = logRunnerMetric, now = Date.now(), exists = fs.existsSync } = {}) {
   const fault = provider ? providerFaultOf(e, { cwd, exists }) : null;
   if (!fault) return null;
-  const ageMs = Number.isFinite(e.ts) ? Math.max(0, now - e.ts) : 0;
-  const ttlMs = fault.ttlMs - ageMs;
+  const family = normalizeProviderFamily(provider);
+  const at = Number.isFinite(e.ts) ? e.ts : now;
+  const confirmed = fault.kind === "balance" ? noteBalanceStrike(strikes, family, agentId, at) : true;
+  const baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
+  const ageMs = Math.max(0, now - at);
+  const ttlMs = baseTtlMs - ageMs;
   if (ttlMs <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
-  const reason = `${FAULT_REASON[fault.kind]}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
+  const reason = `${FAULT_REASON[fault.kind]}${confirmed ? "" : " (unconfirmed)"}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
   try {
-    const have = readCaps?.()?.[normalizeProviderFamily(provider)];
+    // Fast path only (skips a lock round-trip); the authoritative keep-longer check is inside setProviderCapped's lock.
+    const have = readCaps?.()?.[family];
     if (have && !(Number(have.resetsAt) < now + ttlMs)) return null; // already capped at least as long (manual caps have no resetsAt)
-  } catch { /* unreadable caps: write ours */ }
+  } catch { /* unreadable caps: the locked write below still never shortens */ }
   try {
-    cap(provider, true, { reason, ttlMs });
+    const after = cap(provider, true, { reason, ttlMs, keepLonger: true, now });
+    const mine = after && typeof after === "object" ? after[family] : undefined;
+    if (mine !== undefined && !(mine && typeof mine === "object" && mine.reason === reason && Number(mine.resetsAt) === now + ttlMs)) return null; // a longer cap won the race
     log(`${provider} capped for ${Math.ceil(ttlMs / 60000)} min: ${reason}`);
-    return { provider, reason, kind: fault.kind };
+    return { provider, reason, kind: fault.kind, ttlMs, confirmed };
   } catch {
     return null; // best effort: the exit already carries the reason
   }
+}
+
+/** family -> [{ agentId, at }]: recent balance faults (process memory; a restart only costs one more unconfirmed cap). */
+const balanceStrikes = new Map();
+
+/**
+ * Record one balance fault and say whether it is confirmed: another, DIFFERENT known agent reported one for the same family
+ * within BALANCE_CONFIRM_WINDOW_MS. One agent repeating itself (or an unknown agent) never confirms (H1: a single false
+ * match must not take the provider out for an hour).
+ */
+export function noteBalanceStrike(strikes, family, agentId, at) {
+  const list = (strikes.get(family) ?? []).filter((s) => Math.abs(at - s.at) <= BALANCE_CONFIRM_WINDOW_MS);
+  const id = String(agentId ?? "");
+  const confirmed = !!id && list.some((s) => s.agentId && s.agentId !== id);
+  if (!list.some((s) => s.agentId === id && s.at === at)) list.push({ agentId: id, at });
+  strikes.set(family, list.slice(-20));
+  return confirmed;
 }
 
 /** idea-820: a failed turn counts as a failed SPAWN only this soon after the agent was created. A parked worker re-prompted
@@ -606,7 +646,7 @@ export function spawnOutcomeOf(agent, lifecycle, { at = Date.now() } = {}) {
   if (kind !== "completed" && kind !== "failed") return null;
   const born = Date.parse(agent.createdAt ?? "");
   if (kind === "failed" && !(at - born <= SPAWN_FAIL_WINDOW_MS)) return null; // unknown createdAt: not provably a spawn
-  return { team: String(agent.labels?.team ?? ""), lane, agentId: agent.id, outcome: kind, error: String(lifecycle.outcome?.error?.message ?? "") };
+  return { team: String(agent.labels?.team ?? ""), lane, agentId: agent.id, outcome: kind, error: String(lifecycle.outcome?.error?.message ?? ""), ...(Number.isFinite(born) ? { bornAt: born } : {}) };
 }
 
 /** One stderr line plus a `metric` entry in the team log (same path the runner hook failure uses); never throws. */
@@ -1664,7 +1704,7 @@ export class RunnerBackend {
       // idea-504: after the cap (so spawn failover already routes around the provider), tell the hooks: a worker that died on
       // an upstream failure, or on a missing CLI binary (idea-821), in its first turn is re-spawned once on the alternate provider
       // (agent-duties). A cancel never is.
-      const fault = capProviderOnUpstreamExit(agent.provider, e, { cwd: agent.cwd })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
+      const fault = capProviderOnUpstreamExit(agent.provider, e, { cwd: agent.cwd, agentId: id })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
       if ((e.upstream === true || fault === "binary-missing") && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
     }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
@@ -1674,7 +1714,7 @@ export class RunnerBackend {
   async capOnProviderError(id, e) {
     try {
       const agent = this.live.known.get(id) ?? (await bounded(this.fetchAgent(id))).agent;
-      capProviderOnUpstreamExit(agent?.provider, e, { cwd: agent?.cwd });
+      capProviderOnUpstreamExit(agent?.provider, e, { cwd: agent?.cwd, agentId: id });
     } catch { /* best effort: the error event already carries the reason */ }
   }
 

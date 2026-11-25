@@ -7,16 +7,17 @@
 import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  BALANCE_CAP_TTL_MS, BINARY_CAP_TTL_MS, SPAWN_FAIL_WINDOW_MS, UPSTREAM_CAP_TTL_MS,
-  capProviderOnUpstreamExit, providerFaultOf, spawnOutcomeOf,
+  BALANCE_CAP_TTL_MS, BALANCE_CONFIRM_WINDOW_MS, BALANCE_FIRST_TTL_MS, BINARY_CAP_TTL_MS, PROVIDER_ERROR_MAX_CHARS, SPAWN_FAIL_WINDOW_MS, UPSTREAM_CAP_TTL_MS,
+  capProviderOnUpstreamExit, noteBalanceStrike, providerFaultOf, spawnOutcomeOf,
 } from "../server/backend/runner-backend.mjs";
+import { normalizeProviderFamily, readCappedProviders, setProviderCapped } from "../server/provider-failover.mjs";
 import {
   FAIL_STREAK_COOLDOWN_MAX_MS, FAIL_STREAK_COOLDOWN_MS, FAIL_STREAK_MAX,
-  claimHoldNotice, laneSpawnHold, noteLaneSpawnOutcome, spawnStreakPath, stepLaneStreak,
+  claimHoldNotice, holdText, laneSpawnHold, noteLaneSpawnOutcome, releaseHoldNotice, spawnStreakPath, stepLaneStreak,
 } from "../server/spawn-streak.mjs";
 import { spawnErrorMessage } from "../runner/spawn.mjs";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
@@ -72,22 +73,84 @@ test("providerFaultOf: upstream exits keep idea-442; task errors, cancels and ot
 
 // ---- the provider breaker on a balance error event ----
 
-test("an Insufficient Balance ERROR event (agent stays parked) caps the provider for 60 min", () => {
-  const calls = [], logs = [], now = Date.now();
-  const r = capProviderOnUpstreamExit("opencode", { type: "error", message: BALANCE, ts: now }, { cap: (...a) => calls.push(a), readCaps: () => ({}), log: (m) => logs.push(m), now });
+test("an Insufficient Balance ERROR event (agent stays parked) caps 10 min alone; a second agent's confirms it to 60 min", () => {
+  const calls = [], logs = [], now = Date.now(), strikes = new Map();
+  const hit = (agentId, at = now) => capProviderOnUpstreamExit("opencode", { type: "error", message: BALANCE, ts: at }, { agentId, strikes, cap: (...a) => calls.push(a), readCaps: () => ({}), log: (m) => logs.push(m), now });
+  const r = hit("rn-a");
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], "opencode");
-  assert.equal(calls[0][2].ttlMs, BALANCE_CAP_TTL_MS);
-  assert.match(calls[0][2].reason, /^insufficient balance: /);
-  assert.match(logs[0], /opencode capped for 60 min: insufficient balance/);
-  assert.equal(r.kind, "balance");
+  assert.equal(calls[0][2].ttlMs, BALANCE_FIRST_TTL_MS);
+  assert.equal(calls[0][2].keepLonger, true); // the locked never-shorten guard (review M1)
+  assert.match(calls[0][2].reason, /^insufficient balance \(unconfirmed\): /);
+  assert.match(logs[0], /opencode capped for 10 min: insufficient balance \(unconfirmed\)/);
+  assert.deepEqual([r.kind, r.confirmed], ["balance", false]);
+  // The same agent repeating itself never confirms (review H1: one agent's false match must not cost the provider an hour).
+  hit("rn-a", now + 1);
+  assert.equal(calls[1][2].ttlMs, BALANCE_FIRST_TTL_MS);
+  // A different agent within the window confirms: 60 min.
+  assert.equal(hit("rn-b").confirmed, true);
+  assert.equal(calls[2][2].ttlMs, BALANCE_CAP_TTL_MS);
+  assert.match(calls[2][2].reason, /^insufficient balance: /);
+  assert.match(logs[2], /opencode capped for 60 min: insufficient balance:/);
+  assert.equal(BALANCE_FIRST_TTL_MS, 10 * MIN);
+});
+
+test("review H1: one false-positive balance match caps only 10 min; old strikes and unknown agents never confirm", () => {
+  const fam = normalizeProviderFamily("claude"), now = 1_000_000_000;
+  const strikes = new Map();
+  assert.equal(noteBalanceStrike(strikes, fam, "rn-a", now), false);
+  assert.equal(noteBalanceStrike(strikes, fam, "", now + 1), false); // unknown agent: no confirm
+  assert.equal(noteBalanceStrike(strikes, fam, "rn-b", now + BALANCE_CONFIRM_WINDOW_MS + 1), false); // rn-a aged out
+  assert.equal(noteBalanceStrike(strikes, normalizeProviderFamily("opencode"), "rn-c", now + BALANCE_CONFIRM_WINDOW_MS + 2), false); // other family
+  assert.equal(noteBalanceStrike(strikes, fam, "rn-c", now + BALANCE_CONFIRM_WINDOW_MS + 3), true);
+  assert.ok(BALANCE_CONFIRM_WINDOW_MS > BALANCE_FIRST_TTL_MS); // the first spawn after the short cap lapses can confirm
+});
+
+test("review H1: a Claude failed turn's own text (error_* subtype, long prose, bare 'payment required') is not a provider fault", () => {
+  // error_max_turns in a billing codebase: the turn's result text mentions the phrases. Task failure, never a cap.
+  for (const subtype of ["error_max_turns", "error_during_execution", "error_max_budget_usd"]) {
+    assert.equal(providerFaultOf({ type: "error", message: "Insufficient Balance: handle HTTP 402 Payment Required", subtype }), null, subtype);
+  }
+  const prose = `I added the 402 handler. ${"The API returns Insufficient Balance when the wallet is empty. ".repeat(8)}`;
+  assert.ok(prose.length > PROVIDER_ERROR_MAX_CHARS);
+  assert.equal(providerFaultOf({ type: "error", message: prose }), null);
+  assert.equal(providerFaultOf({ type: "error", message: "tests for the payment required screen failed" }), null);
+  // The real provider lines still count: Claude's own is_error result (subtype success), OpenRouter's 402 status line.
+  assert.equal(providerFaultOf({ type: "error", message: "Credit balance is too low", subtype: "success" })?.kind, "balance");
+  assert.equal(providerFaultOf({ type: "error", message: "402 Payment Required" })?.kind, "balance");
+  assert.equal(providerFaultOf({ type: "error", message: 'API Error: 402 {"error":{"message":"Payment Required"}}' }), null); // not adjacent: needs the status-line form or another phrase
+});
+
+test("review M1: the never-shorten guard holds inside the file lock even when the pre-read is stale or throws", () => {
+  const file = path.join(tmp(), "capped.json"), now = Date.now();
+  const cap = (p, c, o) => setProviderCapped(p, c, { ...o, cappedProvidersPath: file });
+  const live = () => readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true, now }).opencode;
+  const e = { type: "exit", upstream: true, error: "Internal service failure", ts: now };
+  // A manual `vs cap` lands between the breaker's read ({}: stale) and its write: it must survive.
+  setProviderCapped("opencode", true, { cappedProvidersPath: file, reason: "manual vs cap", now });
+  assert.equal(capProviderOnUpstreamExit("opencode", e, { cap, readCaps: () => ({}), log() {}, now }), null);
+  assert.equal(live().reason, "manual vs cap");
+  assert.equal(live().resetsAt, undefined);
+  // A longer breaker cap (60 min) with an unreadable pre-read: the 10-min one does not cut it.
+  setProviderCapped("opencode", false, { cappedProvidersPath: file, now });
+  setProviderCapped("opencode", true, { cappedProvidersPath: file, reason: "insufficient balance: x", ttlMs: BALANCE_CAP_TTL_MS, now });
+  assert.equal(capProviderOnUpstreamExit("opencode", e, { cap, readCaps: () => { throw new Error("EIO"); }, log() {}, now }), null);
+  assert.equal(live().resetsAt, now + BALANCE_CAP_TTL_MS);
+  // A shorter live cap is still extended, and a plain (non-keepLonger) write still overwrites (vs cap semantics unchanged).
+  setProviderCapped("opencode", true, { cappedProvidersPath: file, reason: "short", ttlMs: MIN, now });
+  assert.equal(capProviderOnUpstreamExit("opencode", e, { cap, readCaps: () => ({}), log() {}, now })?.kind, "upstream");
+  assert.equal(live().resetsAt, now + UPSTREAM_CAP_TTL_MS);
+  setProviderCapped("opencode", true, { cappedProvidersPath: file, reason: "owner", ttlMs: MIN, now });
+  assert.equal(live().reason, "owner");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).capped.opencode);
 });
 
 test("the breaker never shortens a longer cap: manual (no resetsAt) and later resetsAt are kept; a shorter one is extended", () => {
   const now = Date.now();
   const run = (have) => {
-    const calls = [];
-    const r = capProviderOnUpstreamExit("opencode", { type: "error", message: BALANCE, ts: now }, { cap: (...a) => calls.push(a), readCaps: () => have, log() {}, now });
+    const calls = [], strikes = new Map();
+    noteBalanceStrike(strikes, normalizeProviderFamily("opencode"), "rn-x", now); // confirmed: the 60-min balance cap
+    const r = capProviderOnUpstreamExit("opencode", { type: "error", message: BALANCE, ts: now }, { agentId: "rn-y", strikes, cap: (...a) => calls.push(a), readCaps: () => have, log() {}, now });
     return { r, calls };
   };
   for (const have of [{ opencode: { reason: "manual vs cap" } }, { opencode: { resetsAt: now + 3 * 60 * MIN } }, { opencode: { resetsAt: now + BALANCE_CAP_TTL_MS } }]) {
@@ -169,6 +232,25 @@ test("stepLaneStreak: a failed probe after the cooldown re-trips with a doubled 
   assert.equal(rec.heldUntil - now, FAIL_STREAK_COOLDOWN_MS);
 });
 
+test("review L2b: a worker in flight before the hold ended failing late is not the probe; a post-hold spawn's failure is", () => {
+  let now = 1_000_000_000, rec;
+  for (let i = 1; i <= 3; i++) rec = stepLaneStreak(rec, { agentId: `rn-${i}`, outcome: "failed", bornAt: now - MIN, now }).rec;
+  const held = rec.heldUntil;
+  now = held + MIN;
+  let out = stepLaneStreak(rec, { agentId: "rn-inflight", outcome: "failed", bornAt: held - 5 * MIN, now });
+  assert.equal(out.tripped, false);
+  assert.deepEqual([out.rec.trips, out.rec.heldUntil], [1, held]); // escalation kept for the real probe
+  out = stepLaneStreak(out.rec, { agentId: "rn-probe", outcome: "failed", bornAt: held + 30_000, now: now + 1 });
+  assert.equal(out.tripped, true);
+  assert.equal(out.rec.trips, 2);
+});
+
+test("review L2c: a re-tripped hold with fewer than 3 fails in the window says it was the post-hold probe", () => {
+  const until = Date.now() + 20 * MIN;
+  assert.match(holdText("feat", { streak: 1, trips: 3, until, ids: ["rn-p"], lastError: "x" }), /^SPAWN HOLD lane feat: the first worker spawn after an earlier hold failed at start again \(hold #3, 1 failed in the last hour\)/);
+  assert.match(holdText("feat", { streak: 3, trips: 1, until, ids: ["a", "b", "c"], lastError: "x" }), /^SPAWN HOLD lane feat: last 3 worker spawns failed at start/);
+});
+
 test("noteLaneSpawnOutcome + laneSpawnHold: the hold holds after 3 failures and clears on a success (shared file)", async () => {
   const file = path.join(tmp(), "lane-spawn-streaks.json");
   const now = Date.now();
@@ -195,7 +277,7 @@ test("spawnOutcomeOf: only a fresh worker's turn_ended in a lane feeds the strea
   const now = Date.now();
   const worker = (over = {}) => ({ id: "rn-w", createdAt: new Date(now - MIN).toISOString(), labels: { role: "worker", lane: "feat", team: "mx" }, ...over });
   const ended = (kind, message) => ({ kind: "turn_ended", outcome: kind === "failed" ? { kind, error: { message } } : { kind } });
-  assert.deepEqual(spawnOutcomeOf(worker(), ended("failed", BALANCE), { at: now }), { team: "mx", lane: "feat", agentId: "rn-w", outcome: "failed", error: BALANCE });
+  assert.deepEqual(spawnOutcomeOf(worker(), ended("failed", BALANCE), { at: now }), { team: "mx", lane: "feat", agentId: "rn-w", outcome: "failed", error: BALANCE, bornAt: now - MIN });
   assert.equal(spawnOutcomeOf(worker(), ended("completed"), { at: now }).outcome, "completed");
   assert.equal(spawnOutcomeOf(worker(), ended("cancelled"), { at: now }), null);
   assert.equal(spawnOutcomeOf(worker(), { kind: "turn_started" }, { at: now }), null);
@@ -296,4 +378,19 @@ test("spawnErrorMessage: ENOENT with a gone cwd names the working directory, not
   assert.equal(providerFaultOf({ type: "exit", error: spawnErrorMessage("agy", err, { cwd: gone }) }), null);
   writeFileSync(path.join(live, "f"), "x"); // a cwd that exists stays a binary miss even with content in it
   assert.match(spawnErrorMessage("agy", err, { cwd: live }), /^agy binary not found/);
+});
+
+test("review L1: a needs-you write that fails gives the claim back, so the next refused lead logs it", async () => {
+  const home = tmp();
+  await holdLane(home);
+  const file = spawnStreakPath({ VIBESQUAD_HOME: home });
+  const a = spawnCtx(home, { agentId: "rn-lead1", team: "mx", lane: "feat", role: "lead" });
+  a.ctx.writeLog = async () => { throw new Error("VS server unreachable"); };
+  assert.match((await callError(spawn(a.ctx))) ?? "", /SPAWN HOLD/);
+  assert.equal(laneSpawnHold({ team: "mx", lane: "feat" }, { file }).notified, false);
+  const b = spawnCtx(home, { agentId: "rn-lead1", team: "mx", lane: "feat", role: "lead" });
+  assert.match((await callError(spawn(b.ctx))) ?? "", /SPAWN HOLD/);
+  assert.equal(b.logs.filter((l) => l.type === "needs-you").length, 1);
+  assert.equal(laneSpawnHold({ team: "mx", lane: "feat" }, { file }).notified, true);
+  assert.equal(await releaseHoldNotice({ team: "mx", lane: "other" }, { file }), false); // no hold there: no-op
 });

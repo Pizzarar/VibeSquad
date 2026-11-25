@@ -16,7 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { decideArm, readArmCaps, readPerfectionVerdict } from "../exp6-arm.mjs";
-import { claimHoldNotice, holdText, laneSpawnHold, spawnStreakPath } from "../spawn-streak.mjs";
+import { claimHoldNotice, holdText, laneSpawnHold, releaseHoldNotice, spawnStreakPath } from "../spawn-streak.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -239,10 +239,12 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent, plan, pass }) {
+    async writeLog({ type, text, refs, agent, plan, pass, team, lane }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
-      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
+      // `team`/`lane` override the target only for the owner's shell (no lane identity); an agent always logs to its own.
+      const owner = !agentCallerOf(ctx);
+      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -385,7 +387,9 @@ async function refuseOnLaneHold(ctx, { team, lane }) {
   const callerRole = clean(ctx.identity.role).toLowerCase();
   const canNotify = !callerAgentId(ctx) || callerRole === LEAD_ROLE || callerRole === "brainstorm";
   if (canNotify && (await claimHoldNotice({ team, lane }, { file }))) {
-    try { await ctx.writeLog({ type: "needs-you", text }); } catch { /* the refusal below still carries the reason */ }
+    // The owner's shell has no lane of its own: log against the held lane. (An agent's entry is attributed by the server.)
+    try { await ctx.writeLog({ type: "needs-you", text, ...(callerAgentId(ctx) ? {} : { team, lane }) }); }
+    catch { await releaseHoldNotice({ team, lane }, { file }); } // L1: an unsent notice must not burn the hold's one claim; the refusal below still carries the reason
   }
   throw new Error(text);
 }

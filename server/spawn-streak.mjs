@@ -35,7 +35,7 @@ const cooldownFor = (trips) => Math.min(FAIL_STREAK_COOLDOWN_MS * 2 ** Math.max(
  * Only a worker's FIRST turn counts (an id that already completed a turn is a running worker, not a spawn). Returns
  * { rec, tripped } where tripped = this failure started a new hold.
  */
-export function stepLaneStreak(rec0, { agentId, outcome, error = "", now = Date.now() } = {}) {
+export function stepLaneStreak(rec0, { agentId, outcome, error = "", bornAt, now = Date.now() } = {}) {
   const rec = { fails: [], ok: [], trips: 0, heldUntil: 0, ...asObj(rec0) };
   rec.fails = (Array.isArray(rec.fails) ? rec.fails : []).filter((f) => f && now - f.at <= FAIL_STREAK_WINDOW_MS);
   rec.ok = Array.isArray(rec.ok) ? rec.ok : [];
@@ -51,7 +51,10 @@ export function stepLaneStreak(rec0, { agentId, outcome, error = "", now = Date.
   if (now < heldUntil) return { rec, tripped: false }; // a spawn already in flight when the hold began: no extension
   // Half-open: the first failure after a hold that ended within the window re-trips (the window would otherwise have aged
   // out the failures behind a 40-60 min hold, letting 3 more spawns storm). A hold older than that starts fresh.
+  // Only a worker spawned AFTER the hold ended is the probe: one already in flight before it ended (bornAt < heldUntil)
+  // failing late says nothing about the cure, so it neither re-trips nor resets the escalation (review L2b).
   const probe = (rec.trips || 0) > 0 && now - heldUntil <= FAIL_STREAK_WINDOW_MS;
+  if (probe && Number.isFinite(bornAt) && bornAt < heldUntil) return { rec, tripped: false };
   if (!probe) rec.trips = 0;
   if (!probe && rec.fails.length < FAIL_STREAK_MAX) return { rec, tripped: false };
   rec.trips = (rec.trips || 0) + 1;
@@ -61,14 +64,14 @@ export function stepLaneStreak(rec0, { agentId, outcome, error = "", now = Date.
 }
 
 /** Recorder (server): fold one worker turn outcome into the lane's record. Never rejects; resolves the step result or null. */
-export async function noteLaneSpawnOutcome({ team, lane, agentId, outcome, error, now = Date.now() }, { file = spawnStreakPath() } = {}) {
+export async function noteLaneSpawnOutcome({ team, lane, agentId, outcome, error, bornAt, now = Date.now() }, { file = spawnStreakPath() } = {}) {
   if (!lane || !agentId || (outcome !== "completed" && outcome !== "failed") || offLimits(file)) return null;
   let out = null;
   try {
     await updateJsonFile(file, (doc) => {
       const lanes = asObj(asObj(doc).lanes);
       const key = laneKey(team, lane);
-      out = stepLaneStreak(lanes[key], { agentId, outcome, error, now });
+      out = stepLaneStreak(lanes[key], { agentId, outcome, error, bornAt, now });
       return { lanes: { ...lanes, [key]: out.rec } };
     }, { fallback: { lanes: {} } });
   } catch {
@@ -77,7 +80,7 @@ export async function noteLaneSpawnOutcome({ team, lane, agentId, outcome, error
   return out;
 }
 
-/** The lane's live hold, or null: { streak, until, lastError, ids, notified }. Reads only. */
+/** The lane's live hold, or null: { streak, trips, until, lastError, ids, notified }. Reads only. */
 export function laneSpawnHold({ team, lane, now = Date.now() }, { file = spawnStreakPath() } = {}) {
   if (offLimits(file)) return null;
   let rec;
@@ -88,7 +91,7 @@ export function laneSpawnHold({ team, lane, now = Date.now() }, { file = spawnSt
   }
   if (!rec || !(now < Number(rec.heldUntil))) return null;
   const fails = Array.isArray(rec.fails) ? rec.fails : [];
-  return { streak: fails.length, until: Number(rec.heldUntil), lastError: fails.at(-1)?.error ?? "", ids: fails.slice(-FAIL_STREAK_MAX).map((f) => f.id), notified: !!rec.notifiedAt };
+  return { streak: fails.length, trips: Number(rec.trips) || 1, until: Number(rec.heldUntil), lastError: fails.at(-1)?.error ?? "", ids: fails.slice(-FAIL_STREAK_MAX).map((f) => f.id), notified: !!rec.notifiedAt };
 }
 
 /** Claim the hold's one notice: true for exactly one caller per hold (sets notifiedAt). Never rejects. */
@@ -101,13 +104,33 @@ export async function claimHoldNotice({ team, lane, now = Date.now() }, { file =
       const key = laneKey(team, lane);
       const rec = lanes[key];
       if (!rec || !(now < Number(rec.heldUntil)) || rec.notifiedAt) return doc;
-      claimed = true;
+      claimed = now;
       return { lanes: { ...lanes, [key]: { ...rec, notifiedAt: now } } };
     }, { fallback: { lanes: {} } });
   } catch {
     return false;
   }
-  return claimed;
+  return claimed !== false;
+}
+
+/** Give the notice claim back (review L1: the needs-you write failed), so the next refused lead/Buddy/owner spawn retries it.
+ *  Only clears this hold's claim (notifiedAt still set and the hold still live). Never rejects. */
+export async function releaseHoldNotice({ team, lane, now = Date.now() }, { file = spawnStreakPath() } = {}) {
+  if (offLimits(file)) return false;
+  let released = false;
+  try {
+    await updateJsonFile(file, (doc) => {
+      const lanes = asObj(asObj(doc).lanes);
+      const key = laneKey(team, lane);
+      const rec = lanes[key];
+      if (!rec || !rec.notifiedAt || !(now < Number(rec.heldUntil))) return doc;
+      released = true;
+      return { lanes: { ...lanes, [key]: { ...rec, notifiedAt: undefined } } };
+    }, { fallback: { lanes: {} } });
+  } catch {
+    return false;
+  }
+  return released;
 }
 
 /** "8:00 AM EST" (R15: owner-read times in US Eastern). */
@@ -118,5 +141,7 @@ export function etClock(ms) {
 /** The refusal / needs-you text for a hold. */
 export function holdText(lane, hold) {
   const mins = Math.max(1, Math.ceil((hold.until - Date.now()) / 60_000));
-  return `SPAWN HOLD lane ${lane}: last ${hold.streak} worker spawns failed at start (${hold.ids.join(", ")}; last: ${hold.lastError || "no error text"}). spawn_worker refused until ${etClock(hold.until)} (~${mins} min). Fix the cause (provider cap/balance, cwd, binary) first.`;
+  // After a hold, one failed probe re-trips it (stepLaneStreak), so the window may hold fewer than FAIL_STREAK_MAX fails (L2c).
+  const what = hold.streak >= FAIL_STREAK_MAX ? `last ${hold.streak} worker spawns failed at start` : `the first worker spawn after an earlier hold failed at start again (hold #${hold.trips ?? 2}, ${hold.streak} failed in the last hour)`;
+  return `SPAWN HOLD lane ${lane}: ${what} (${hold.ids.join(", ")}; last: ${hold.lastError || "no error text"}). spawn_worker refused until ${etClock(hold.until)} (~${mins} min). Fix the cause (provider cap/balance, cwd, binary) first.`;
 }
