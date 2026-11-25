@@ -1,6 +1,7 @@
 # PLAN: move the homelab GitHub Actions runners from the dev pp VM to the forge (idea-737)
 
-Status: **PARKED 2026-11-24** (owner: move runners later, not soon; tracked as idea-738). Inventory + plan only; the security review was cancelled before it finished, so re-review §2-§4 before starting. Nothing was registered, installed, removed or changed. Evidence was gathered 2026-11-24 ~02:00-02:30Z
+Status 2026-11-25: **Phase 1 ACTIVE (§7, +2 `homelab-priority` slots on the forge, additive; the VM keeps its 4).** The full move (§5 O8-O10) stays parked as idea-738.
+Earlier status: **PARKED 2026-11-24** (owner: move runners later, not soon; tracked as idea-738). Inventory + plan only; the security review was cancelled before it finished, so re-review §2-§4 before starting. Nothing was registered, installed, removed or changed. Evidence was gathered 2026-11-24 ~02:00-02:30Z
 (9:00-9:30 PM ET on 11-23) from `gh api` / `gh run list`, the local repo checkouts, and read-only listing over `ssh devpc` → `ssh gh-runner`.
 
 ## 1. Inventory
@@ -127,3 +128,39 @@ For the first run after O8: `gh api repos/IdleMinds-Dev/<repo>/actions/runs/<id>
 - V-Pillbille: the O9 dispatch, `ci` job on `forge-`, success.
 - V-all: no job in the 3 repos picked up by `homelab-*` after O8, `ghrunner` slice never hit `MemoryMax` (`systemctl show user-$(id -u ghrunner).slice -p MemoryPeak`).
 Rollback any time before O10: `systemctl --user -M ghrunner@ stop 'forge-runner@*'` and re-enable the VM units.
+
+## 7. Phase 1 (2026-11-25): +2 forge `homelab-priority` runners, additive
+Ask (owner, relayed Rif2 (EFI hub) -> Hub3 -> forge-host, verbatim): "add 2 more forge CI runners, homelab-priority, on top of the VM's existing 2, rootless Podman per PLAN_CI_RUNNERS.md. Security re-review first; the PAT step goes to the owner."
+
+### Decided (Buddy)
+- Additive: VM pool untouched (no O8/O9/O10). EFI gets 4 priority slots (2 VM + 2 forge); `homelab` general pair stays VM-only.
+- Design = §4 unchanged in kind (own `ghrunner` user, rootless Podman, JIT config, nft egress block, capped slice, own LV), sized for 2 slots: slice `CPUQuota=800%`, `MemoryMax=10G`, `MemorySwapMax=4G`, `CPUWeight=20`, `IOWeight=20`, `TasksMax=2048`; per container 4 GB + 2 GB swap, `--cpus 4`. Only two slots (`@priority-3`, `@priority-4`, see Unit names), name prefix `forge-priority`.
+- Disk: `/` was grown 11-25 (936 GB, ~790 GB free) but CI keeps its own capped filesystem: a full CI disk must not take VS down (risk 6).
+  Lead fact (For3, 11-25 21:59Z): `/` took the whole VG (`ubuntu-lv` 950.8G = all of nvme0n1p3), so **O2 `lvcreate` has no free extents** and
+  ext4 `/` cannot shrink online. Replacement **O2'** keeps a separate 80 GB filesystem via a loop-mounted image:
+  `sudo fallocate -l 80G /var/lib/ghrunner.img && sudo mkfs.ext4 -L ghrunner /var/lib/ghrunner.img && sudo mkdir -p /srv/ghrunner`, then
+  `echo '/var/lib/ghrunner.img /srv/ghrunner ext4 loop,nodev,nosuid 0 2' | sudo tee -a /etc/fstab && sudo mount /srv/ghrunner`.
+- Unit names: EFI hub asked for `forge-runner@priority-3` / `@priority-4` (continuing the VM's `priority`/`priority-2`); use those. Name prefix `forge-priority`.
+- Host facts 11-25 21:59Z: no podman, no `ghrunner` user, no `/etc/nftables.d`; `apparmor_restrict_unprivileged_userns=1`; ~35 GB RAM available with VS + 8 Godot slots busy.
+- Open for P0: O4 (`<vs-user> ALL=(ghrunner) NOPASSWD: ALL`) lets any VS agent read the PAT file. Reviewer picks: keep, command allow-list, or owner revokes O4 after P4. §4's nft rule is IPv4-only: P0 must cover IPv6 (ULA fd00::/8, link-local fe80::/10, ::1).
+- Checked primitives: VS has no CI-runner primitive (`vs --help`, MCP tools); this plan + `gh api` job runner_name is the done-check source. Reviewers: Claude + Gemini only (no DeepSeek, owner 11-26 rule).
+- Owner-only: all sudo steps (O1-O6) and O7 PAT (fine-grained, org IdleMinds-Dev, "Self-hosted runners: Read and write" only, 90 days). Agents never see the PAT value; it is pasted straight into the ghrunner-owned file.
+
+| Block | Touches | Clashes with | Kind |
+|---|---|---|---|
+| P0 Security re-review of §3, §4, §7 + O1-O7 commands (Review - Gemini, security focus; Claude second read). Must name: rootless userns escape surface with AppArmor `restrict_unprivileged_userns=1`, JIT token lifetime, nft rule correctness (skuid vs rootless netns via pasta), sudoers O4 scope, PAT scope. FAIL -> fix plan, re-review | this file only | none | Gate |
+| P1 Owner runs O1, O2', O3-O5 (O5 with Phase-1 caps above) | forge /etc, LVM, new user | VS unit (none: separate user slice) | Root cause |
+| P2 A1-A3 as ghrunner (+ A2 nft draft; owner installs O6) | /srv/ghrunner, ~ghrunner units | none | Root cause |
+| P3 Owner O7 PAT into the token file | /srv/ghrunner/.config/forge-runner/token | none | Root cause |
+| P4 Start `@priority-3`, verify a JIT runner appears and takes an EFI job; then `@priority-4` | ghrunner user units | EFI CI queue (benign: more capacity) | Root cause |
+| P5 24 h load watch (A6) + EFI lane told runner count is now 4 (EFI AGENTS.md:73-75 says two) via inbox | none / EFI inbox card | none | Root cause |
+
+### Done-check
+- P0 review PASS (0 high / 0 medium open) on the committed plan.
+- `gh api .../runs/<id>/jobs` for an EFI tests run shows a job with `runner_name` starting `forge-priority-`, conclusion `success`; VM `homelab-priority-*` jobs still succeed in the same window.
+- From inside a job/container as ghrunner: `curl -m5 http://127.0.0.1:4180/` and the LAN/Meshnet IPs fail; `https://api.github.com` works; no PAT in `podman inspect` env.
+- 24 h: ghrunner slice `MemoryPeak` < `MemoryMax`, VS suite time within normal range.
+
+### Out of scope
+Moving or retiring the VM pool, `homelab` general slots on the forge, any workflow/repo/org-setting change (EFI `vars.EFI_CI_RUNNER` stays), Windows runners.
+Rollback: `systemctl --user -M ghrunner@ disable --now 'forge-runner@*'`; delete the two offline runners in org settings if any remain.
