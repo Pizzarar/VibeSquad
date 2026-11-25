@@ -104,7 +104,8 @@ export function adminOnlyProfile(name) {
 // agent-duties.ts read for privilege: role, lane, team, ord, parent, digest, orphan, retirement markers).
 export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
 // idea-629: `schedule` / `scheduleName` mark a schedule-spawned agent (server/schedules.mjs execute); only the VS server sets them.
-export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
+// idea-1046: digestTurn (agent-duties.ts DIGEST_TURN_LABEL) is a digest marker like digestFor, so a meta patch may not set it either.
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'digestTurn', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
 const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
 const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
 // Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.

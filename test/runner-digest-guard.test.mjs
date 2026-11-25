@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Runner, adminOnlyProfile, isDigestMeta, spawnMetaForAgent } from "../runner/runner.mjs";
+import { PROTECTED_LABEL_KEYS, Runner, adminOnlyProfile, isDigestMeta, protectedMetaIn, spawnMetaForAgent } from "../runner/runner.mjs";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { LEGACY_PROFILE_ALIASES } from "../server/profile-aliases.mjs";
 import { LEGACY_PROFILE_ROLES, legacyProfileRole } from "../server/profiles.mjs";
@@ -171,7 +171,7 @@ async function agentSpawnHarness() {
     return { status: r.status, body, text };
   };
   const stop = async () => { await new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }); runner.shutdown(); };
-  return { runner, ids, spawn, stop };
+  return { runner, ids, spawn, stop, port };
 }
 
 test("idea-1046 (a): an agent spawn of role \"Pre-check\" with no labels.digestFor is ALLOWED", async () => {
@@ -217,5 +217,24 @@ test("idea-1046 (b): a spawn that sets labels.digestFor, or uses the exact DIGES
         assert.equal(r.status, 403, `${who} ${JSON.stringify(meta)}: ${r.text}`);
       }
     }
+  } finally { await h.stop(); }
+});
+
+test("idea-1046: labels.digestTurn is a protected label: an agent meta patch setting it is 403 (admin still 202)", async () => {
+  assert.ok(PROTECTED_LABEL_KEYS.includes("digestTurn"));
+  assert.deepEqual(protectedMetaIn({ labels: { digestTurn: "t1", job: "x" } }), ["labels.digestTurn"]);
+  const h = await agentSpawnHarness();
+  try {
+    const child = h.runner.create({ provider: "claude", cwd: process.cwd(), meta: { team: "sq", lane: "art", role: "worker", labels: { "vs.parent": h.ids.lead } } });
+    const patch = async (who, body) => {
+      const r = await fetch(`http://127.0.0.1:${h.port}/agents/${child}/meta`, { method: "POST", headers: { "content-type": "application/json", ...who }, body: JSON.stringify(body) });
+      return r.status;
+    };
+    const asLead = { "x-vs-agent-id": h.ids.lead, "x-vs-agent-token": h.runner.tokensById.get(h.ids.lead) };
+    assert.equal(await patch(asLead, { labels: { job: "x" } }), 202, "control: the lead may patch its own child's plain labels");
+    for (const digestTurn of ["t1", ""]) assert.equal(await patch(asLead, { labels: { digestTurn } }), 403, `digestTurn=${JSON.stringify(digestTurn)}`);
+    assert.equal(h.runner.status(child).meta.labels.digestTurn, undefined);
+    assert.equal(await patch({ authorization: "Bearer adm" }, { labels: { digestTurn: "t1" } }), 202, "the VS server (admin) still may");
+    assert.equal(h.runner.status(child).meta.labels.digestTurn, "t1");
   } finally { await h.stop(); }
 });
