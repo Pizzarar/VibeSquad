@@ -545,6 +545,7 @@ Usage:
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
+  vs inbox reply <idea-N> "<text>"   answer an alpha tester on their card (the only agent text a tester sees; leads/Buddies of the card's Squad)
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
@@ -564,7 +565,7 @@ Usage:
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record
   vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
-  vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ...
+  vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks (pre-push, pre-merge-commit, pre-commit) so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ... Verdict gate (idea-883): a unit merge into master/main (git merge, and push) needs a reviewer's recorded PASS on the merged tip in this repo's Squad log; docs-only/lead-checked units: the lead overrides with git -c vs.verdictOverride=<tip> on the merge AND the push (each use is logged)
   vs slot run --pool <name> [--max <N>] [--timeout <sec>] [--squad <id>] -- <cmd> [args...]   run <cmd> in a machine-wide N-slot pool (idea-267): waits FIFO for a free slot ("waiting for <pool> slot (N ahead)" every ~30s; N counts only waiters that can block you), passes the exit code through; a dead or silent holder is reclaimed. Godot suites: --pool godot (3 slots; VS_SLOT_MAX_GODOT overrides). --timeout: max wait for a slot, then exit 124. Reservations (idea-578): VS_SLOT_RESERVE_<POOL>=<squad>:<n>[,<squad>:<n>] or none; godot defaults to efi:2, so Squad efi may use all 3 slots and every other Squad together at most 1 (a caller takes a slot only if the unused part of each other Squad's reservation stays free). Your Squad is your agent's team label (VS_AGENT_ID); no agent or an unknown one = shared slots only; --squad <id> sets it. FIFO within each class; a waiter the rule blocks never holds up the waiters behind it
   vs storybook check <project> [--json]   report-only Storybook consistency check of a project (Squad id, e.g. efi) at origin/<default>: prints [STORYBOOK] sha=<short> #<check>=<n> ... total=<n> (--json: the snapshot); never gates, exit 0
   vs slot status [--pool <name>] [--json]   holders and waiters of a pool (default godot), with their Squads and the pool's reservations
@@ -1106,7 +1107,22 @@ async function commandInbox(flags) {
     throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
-  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage`);
+  if (sub === "reply") {
+    // PTO v1.2 T: the bug-intake agent's answer to an alpha tester's card, the only agent output a tester reads (its thread).
+    // Agents only (id + token, verified by the server: a lead/Buddy of the card's Squad, tester cards only); never the owner.
+    const cardId = String(flags._.shift() ?? "").trim();
+    const text = flags._.map((s) => String(s)).join(" ").trim();
+    if (!/^idea-\d{1,12}$/.test(cardId) || !text) throw new Error('inbox reply needs a card id and text: vs inbox reply <idea-N> "<text>"');
+    const me = resolveIdentity(flags, { recordWins: true });
+    const ctx = createContext({ env: process.env, identity: callerIdentity(me) });
+    if (!agentCallerOf(ctx)) throw new Error("vs inbox reply is for the Squad's bug-intake agent (needs VS_AGENT_ID + VS_AGENT_TOKEN); the owner answers in the app.");
+    await verifyCaller(ctx);
+    const res = await postToVsServer(ctx, "/__vibesquad/inbox/reply", { cardId, text });
+    process.stdout.write(`replied on ${res.cardId} (tester thread line ${res.seq})\n`);
+    return 0;
+  }
+
+  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage | reply`);
 }
 
 const WHO_TARGETS = new Set(["lead", "brainstorm", "buddy", "workers", "worker", "all"]);
@@ -3210,7 +3226,9 @@ export async function commandPushGuard(flags, { cwd = process.cwd(), env = proce
   if (sub === "install") {
     const res = guard.installHooks({ cwd, force: Boolean(flags.force) });
     const was = res.previous ? ` (was ${res.previous})` : "";
-    out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${was}\n` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})\n`);
+    const hooks = guard.hookNames({ cwd });
+    const active = hooks.length ? `; hooks: ${hooks.join(", ")}` : "";
+    out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${was}${active}\n` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})${active}\n`);
     return 0;
   }
   throw new Error(`unknown push-guard subcommand "${sub}". Use: vs push-guard check [remote] | install [--force]`);

@@ -50,7 +50,7 @@ What the installer puts on the PC (read from the source, not from a run):
   `%APPDATA%\npm` to your user PATH (Settings, search "environment variables", **Edit environment variables for your
   account**, **Path**, **New**), or run `%APPDATA%\npm\vs.cmd` directly.
 - No daemon and no big download: the server starts the built-in runner itself (`server/runner-supervisor.mjs`) and
-  restarts it if it stops. The Setup Checklist only looks for providers and Git (`src/FirstRunModal.tsx:228-254`).
+  restarts it if it stops. The Setup Checklist only looks for providers and Git (`src/FirstRunModal.tsx:217-242`).
 - Quitting VibeSquad stops the server it started (`stop_managed_server`, `src-tauri/src/main.rs:2171-2179`).
 
 ## macOS line
@@ -72,21 +72,21 @@ Skip it, or run `%APPDATA%\npm\vs.cmd --help`.
 
 ## First run (the human's steps)
 1. Open VibeSquad. The **Setup Checklist** opens by itself until a provider is ready, or until it has been
-   closed once (`src/App.tsx:1545`). The component is `FirstRunModal` (`src/FirstRunModal.tsx:186-260`). Its rows,
+   closed once (`src/App.tsx:1570`). The component is `FirstRunModal` (`src/FirstRunModal.tsx:176-249`). Its rows,
    exactly as the app writes them:
-   - **Claude Code** (`:228`): "Installed", then "Logged in" or "Run 'claude' once to log in". If missing, a link to
+   - **Claude Code** (`:217`): "Installed", then "Logged in" or "Run 'claude' once to log in". If missing, a link to
      the installer.
-   - **Gemini / Antigravity** (`:237`): "Installed", plus "Logged in" when it finds a login. If missing, a link to the
+   - **Gemini / Antigravity** (`:226`): "Installed", plus "Logged in" when it finds a login. If missing, a link to the
      installer.
-   - **Git (optional)** (`:246`): "Installed" with a version, or an optional link.
+   - **Git (optional)** (`:235`): "Installed" with a version, or an optional link.
 
-   Buttons: **Check again** (`:213-215`) and **Continue** (`:216`).
+   Buttons: **Check again** (`:203`) and **Continue** (`:206`).
 
    VibeSquad opens in **Normal**; the old pixel-art **Psycho** layout is a legacy toggle in Settings > About
    (see [Normal and Psycho](../../../Concepts/Modes.md)).
-2. **Continue** stays grey until Claude Code or Gemini is detected (`canContinue`, `:199`). The checklist does
+2. **Continue** stays grey until Claude Code or Gemini is detected (`canContinue`, `:189`). The checklist does
    not list Codex or OpenCode. If your provider is one of those, close the checklist with **✕**: closing it
-   also marks it done (`FIRST_RUN_DONE_KEY`, `:210`). Then pick your provider under **⚙ SETTINGS**, **Profiles**.
+   also marks it done (`FIRST_RUN_DONE_KEY`, `:200`). Then pick your provider under **⚙ SETTINGS**, **Profiles**.
    Whether Codex or OpenCode then work in the app needs a clean-PC confirmation. The provider module says how to check.
 3. If you installed your provider after the checklist opened, **Check again** refreshes it. Sign in with **your own**
    account. Never reuse someone else's login.

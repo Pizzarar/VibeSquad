@@ -1,4 +1,5 @@
 // O5: `vs buddy restart --lane <x>` / restart_buddy over the existing brainstorm-restart path. Fake in-memory backend, temp VIBESQUAD_HOME.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

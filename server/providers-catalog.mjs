@@ -1014,7 +1014,8 @@ function parseNumstat(raw) {
 }
 
 /** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, locAdded, locDeleted, filesChanged, subject}.
- * unit = branch from "Merge branch 'x'". One `git log` over recent history joined in memory (no per-merge spawns),
+ * Only first-parent merges on HEAD's mainline count (usa-54); `units.excluded` = Map sha -> reason of the merges that are
+ * provably not units (back-merges, branch-to-branch merges). unit = branch from the merge subject (mergeSubjectBranch). One `git log` over recent history joined in memory (no per-merge spawns),
  * cached by HEAD sha, plus one bounded `--first-parent --numstat` companion pass for LOC (also cached). The merged side
  * of a merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
  * reviewRounds = highest N among "review rN" subjects on that side. Lane code = the merge subject's `(@code)` tag,
@@ -1038,6 +1039,18 @@ export function readMergedUnits(git = defaultGit) {
 const MERGED_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"];
 const NUMSTAT_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat", "--format=%H"];
 
+/** usa-54: a merge OF the default branch (`git pull` on main, "Merge origin/master into unit-x"): never a unit itself. */
+const BACK_MERGE_RE = /^Merge (?:(?:remote-tracking )?branch '(?:origin\/)?(?:main|master)'|(?:origin\/)?(?:main|master)(?=[\s:,(]|$))/i;
+/** Merge subject -> unit branch. "Merge branch 'x'" (git, GitLab "... into 'main'"), the hand-typed "Merge unit-<name>: ..."
+ * form some leads used 11-19..11-20 (usa-44), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
+export function mergeSubjectBranch(subject) {
+  const s = String(subject ?? "");
+  return /Merge branch '([^']+)'/i.exec(s)?.[1]
+    ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(s)?.[1]
+    ?? /^Merge pull request #\d+ from [^/\s]+\/(\S*[^\s.,:;)])/.exec(s)?.[1]
+    ?? null;
+}
+
 /** readMergedUnits() minus the git calls: HEAD sha + the two `git log` outputs -> units. */
 function buildMergedUnits(head, raw, numstatRaw) { return drainSync(mergedUnitsSteps(head, raw, numstatRaw)); }
 function* mergedUnitsSteps(head, raw, numstatRaw) {
@@ -1049,12 +1062,27 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
   yield;
   const numstat = parseNumstat(numstatRaw);
   yield;
+  // Mainline = the first-parent chain from HEAD. usa-54: a back-merge's 2nd parent is always default-branch history (the
+  // master tip it pulled in), wherever the back-merge sits: a `git pull` merge on master, or "Merge origin/master into
+  // unit-x" on a branch that was later fast-forwarded. So each back-merge's 2nd-parent first-parent chain is mainline too;
+  // otherwise unit merges made on master then (or on another clone) would read as side commits and be dropped.
   const mainline = new Set();
-  for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  const starts = [head];
+  for (const c of commits.values()) if (c.parents.length >= 2 && BACK_MERGE_RE.test(c.subject)) starts.push(c.parents[1]);
+  while (starts.length) {
+    for (let c = commits.get(starts.pop()); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  }
   const units = [];
+  // usa-54 (idea-861): only first-parent merges on HEAD's mainline are units (what `git log --first-parent --merges` lists).
+  // The full log is still read because the side walk below needs the merged branch's own commits for review rounds,
+  // lane code and first-commit time. A merge found on some unit's merged side (a back-merge of main into a feature branch,
+  // a branch-to-branch merge) is recorded in `excluded` so the ledger re-fold can mark its stale row. A merge that is
+  // neither on mainline nor on a walked side (log truncated at MAX_COMMITS) is skipped but NOT marked: unknown != excluded.
+  const excluded = new Map(); // sha -> reason
   for (const c of commits.values()) {
-    if (c.parents.length < 2) continue;
+    if (c.parents.length < 2 || !mainline.has(c.sha)) continue;
     if (units.length % 300 === 299) yield;
+    if (BACK_MERGE_RE.test(c.subject)) { excluded.set(c.sha, "back-merge"); continue; }
     const side = [];
     const seen = new Set();
     const stack = [c.parents[1]];
@@ -1065,7 +1093,9 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       const k = commits.get(sha);
       if (!k) continue;
       side.push(k);
-      stack.push(...k.parents);
+      if (k.parents.length >= 2) excluded.set(k.sha, "not-first-parent");
+      // A back-merge's 2nd parent is default-branch history, not this unit's work: don't walk (or exclude) what's behind it.
+      stack.push(...(k.parents.length >= 2 && BACK_MERGE_RE.test(k.subject) ? k.parents.slice(0, 1) : k.parents));
     }
     const mergeParsed = parseSubjectReviewRounds(c.subject);
     let maxR = mergeParsed.maxR;
@@ -1081,11 +1111,12 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const rounds = maxR > 0 ? maxR : fixCount;
-    // usa-44: also the hand-typed "Merge unit-<name>: ..." form some leads used (11-19..11-20); the name is the branch.
-    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(c.subject)?.[1] ?? null;
+    const branch = mergeSubjectBranch(c.subject);
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
+  // A unit's sha is never excluded (mainline and side are disjoint), so the two sets never overlap.
+  units.excluded = excluded;
   return units;
 }
 
@@ -1177,6 +1208,7 @@ function readSquadReposUncached(home) {
  * per hit on the owner's loop). Only the synchronous getUsage() contract (tests, no server caller) keeps spawning. */
 function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = {}) {
   const out = [];
+  const excluded = new Map();
   for (const r of readSquadRepos(home, now)) {
     const key = normRepoKey(r.root);
     const t = now();
@@ -1192,7 +1224,9 @@ function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = 
       const lane = laneOf(u);
       out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
     }
+    for (const [sha, why] of hc?.units?.excluded ?? []) excluded.set(sha, why);
   }
+  out.excluded = excluded; // usa-54: non-unit merges across every repo, for the ledger re-fold
   return out;
 }
 
@@ -1755,6 +1789,7 @@ function readLaneTeams(home) {
 export const PLAN_SCORE_MIN_N = 5;
 const PLAN_SCORE_FRESH_MS = 3 * 86400_000;
 const PLAN_SCORE_STALE_MS = 7 * 86400_000;
+const PLAN_ROWS_MAX = 50;
 const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/i;
 const LEAD_TRANSFER_RE = /^lead\s+(rn-[\w-]+)\s*->\s*(rn-[\w-]+)/;
 const isBuddyHandoff = (e, roleByAgent) => e.role === "brainstorm" || roleByAgent?.get(e.agent) === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
@@ -1785,11 +1820,11 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
     const plan = planOf(e);
     if (!plan) continue;
     const key = `${e.squad ?? ""}\u0000${e.lane}\u0000${plan}`;
-    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null }));
+    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null, buddy: null }));
     if (e.type === "handoff") {
       const tr = LEAD_TRANSFER_RE.exec(e.text ?? "");
       if (tr) g.transfers.push({ ts: e.ts, from: tr[1], to: tr[2] });
-      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) g.startedAt = e.ts;
+      else if (g.startedAt === null && isBuddyHandoff(e, roleByAgent)) { g.startedAt = e.ts; g.buddy = e.agent ?? null; }
     } else if (e.pass === true || /\bPASS\b/.test(e.text ?? "")) {
       g.dones.push({ ts: e.ts, agent: e.agent ?? null });
     }
@@ -1803,6 +1838,7 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
       squad: g.squad, lane: g.lane, plan: g.plan, startedAt: g.startedAt, doneAt: d ? d.ts : null,
       startLead: g.transfers[0]?.from ?? d?.agent ?? null,
       doneLead: d ? (tr?.to ?? d.agent ?? null) : null,
+      buddy: g.buddy, currentLead: tr?.to ?? d?.agent ?? null,
     });
   }
   const group = (keyOf) => { const m = new Map(); for (const p of plans) { const k = keyOf(p); if (k !== null) getOrSet(m, k, () => []).push(p); } return m; };
@@ -1816,7 +1852,13 @@ export function buildPlanScores(entries, { now = Date.now(), squad = null, roleB
     if (p.doneLead) { const l = lead(p.doneLead); l.done += 1; l.lane = p.lane; }
   }
   const byLead = [...leads.values()].sort((a, b) => b.started - a.started || a.lead.localeCompare(b.lead));
-  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, minN: PLAN_SCORE_MIN_N };
+  // usa-51: per-plan drilldown rows, newest first, capped. currentLead = lead holding the plan (last lead->lead transfer, else the done agent).
+  const rows = [...plans].sort((a, b) => b.startedAt - a.startedAt).slice(0, PLAN_ROWS_MAX).map((p) => ({
+    path: p.plan, team: p.squad, lane: p.lane, buddy: p.buddy, currentLead: p.currentLead, startedAt: p.startedAt, doneAt: p.doneAt,
+    status: p.doneAt !== null ? "done" : now - p.startedAt > PLAN_SCORE_STALE_MS ? "stale" : "open",
+    cycleMs: p.doneAt !== null ? Math.max(0, p.doneAt - p.startedAt) : null,
+  }));
+  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, plans: rows, minN: PLAN_SCORE_MIN_N };
 }
 
 // ---------------------------------------------------------------- Autonomy scorecard (usa-24, idea-161)
@@ -2291,6 +2333,26 @@ function cohortOf(units) {
   };
 }
 
+/** usa-51: merged units bucketed by dispatchBurstSize (1 solo, 2-3, 4+). A null/invalid burst counts toward `unjoined`.
+ * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5). */
+export function buildBurstCohorts(merged) {
+  const defs = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
+  const groups = defs.map(() => []);
+  let unjoined = 0;
+  for (const u of merged) {
+    const n = u.dispatchBurstSize;
+    if (!Number.isFinite(n) || n < 1) { unjoined += 1; continue; }
+    groups[defs.findIndex((d) => d.test(n))].push(u);
+  }
+  const buckets = defs.map((d, i) => {
+    const us = groups[i];
+    const insufficient = us.length < PLAN_SCORE_MIN_N;
+    const c = cohortOf(us);
+    return { key: d.key, label: d.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
+  });
+  return { buckets, unjoined, minN: PLAN_SCORE_MIN_N };
+}
+
 /** Last ≤10 merged units (recent) vs the preceding ≤10 (prior); delta = recent - prior per metric. */
 function buildCohorts(merged) {
   const sorted = [...merged].sort((a, b) => (a.mergedAtMs ?? 0) - (b.mergedAtMs ?? 0));
@@ -2386,20 +2448,35 @@ export function readUsageLedger(home) {
  * test runner (isForbiddenRealHome). Returns the number of new lines appended.
  * usa-42 re-fold: a unit already in the ledger without a cost (written while its implementer's agent log was missing, e.g. the
  * forge cutover before runner/agents-archive was imported) is superseded by appending the fresh record once that record has a
- * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent. */
-export function syncUsageLedger(home, snapshot, now = Date.now) {
+ * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent.
+ * usa-54 re-fold: `excluded` (Map sha -> reason, from mergedUnitsSteps) marks a stale unit row that turned out not to be a unit
+ * (back-merge, branch-to-branch merge) by appending a copy with `excluded: <reason>`; rows are never deleted. A unit row
+ * written with `unit: null` (a GitHub PR merge before the subject parse) gets the branch the fresh record names (a row that
+ * already has a cost keeps every other field). Both only fire while the newest row still differs, so re-runs append nothing. */
+export function syncUsageLedger(home, snapshot, now = Date.now, { excluded = null } = {}) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
   const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
   const costless = new Set(existing.filter((r) => r.kind === "unit" && r.sha && ledgerCostMissing(r)).map((r) => r.sha));
+  const unitBySha = new Map(existing.filter((r) => r.kind === "unit" && r.sha).map((r) => [r.sha, r]));
   const lines = [];
+  if (excluded?.size) {
+    for (const r of unitBySha.values()) {
+      const why = excluded.get(r.sha);
+      if (why && r.excluded !== why) lines.push(JSON.stringify({ ...r, excluded: why }) + "\n");
+    }
+  }
   for (const rec of snapshot) {
     if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
     if (keys.has(key)) {
       if (rec.kind === "unit" && costless.has(rec.sha) && !ledgerCostMissing(rec)) { costless.delete(rec.sha); lines.push(JSON.stringify(rec) + "\n"); }
+      else if (rec.kind === "unit" && rec.unit && unitBySha.get(rec.sha)?.unit == null) {
+        const old = unitBySha.get(rec.sha);
+        lines.push(JSON.stringify(ledgerCostMissing(old) ? rec : { ...old, unit: rec.unit }) + "\n"); // a costed row keeps its numbers
+      }
       continue;
     }
     keys.add(key);
@@ -3137,6 +3214,7 @@ export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
   buildPlanScores,
+  buildBurstCohorts,
   usageSteps,
 };
 
@@ -3223,7 +3301,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
   yield;
-  const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now, { spawn: !noSyncGit });
+  const mergedSrc = git ? readMergedUnits(git) : null;
+  const mergedRawAll = mergedSrc ? mergedSrc.map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now, { spawn: !noSyncGit });
+  const mergedExcluded = (mergedSrc ?? mergedRawAll).excluded ?? new Map(); // usa-54: sha -> reason, for the ledger re-fold
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
   const mergedByLane = new Map();
@@ -3419,14 +3499,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
 
   yield;
   // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
-  if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now); // a filtered view would archive partial data
+  if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now, { excluded: mergedExcluded }); // a filtered view would archive partial data
   yield;
   const ledger = readUsageLedger(homeDir);
   const rawShas = new Set(merged.map((u) => u.sha));
   const rawDays = new Set(rows.map((r) => r.day));
   // Fold only when the raw source is present but partial: units when git returned a (non-empty) bounded log whose older
   // merges fell off MAX_COMMITS, days when agent logs were pruned (respect the since/until day filter like rows do).
-  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !rawShas.has(r.sha) && (!squad || r.squad === squad)) : [];
+  // usa-54: a row the re-fold marked `excluded` (a back-merge / branch-to-branch merge, not a unit) stays in the file but never folds.
+  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !r.excluded && !rawShas.has(r.sha) && (!squad || r.squad === squad)) : [];
   const foldedDays = squad ? [] : ledger.filter((r) => r.kind === "day" && r.day && !rawDays.has(r.day) && (!since || r.day >= since) && (!until || r.day <= until));
   for (const r of foldedUnits) {
     merged.push({
@@ -3453,6 +3534,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const byWorkflow = buildByWorkflow(merged, agentById);
   const savings = buildSavings(merged, totalsFinal, lanes, agents, rows);
   const cohorts = buildCohorts(merged);
+  const burstCohorts = buildBurstCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
   const compactEvents = readCompactStepEvents(home, { squad, laneTeams });
   yield;
@@ -3512,6 +3594,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byWorkflow,
     savings,
     cohorts,
+    burstCohorts,
     floor,
   };
   if (!squad) maybeScheduleUsageReview(result, home, usageReview ?? {}); // the periodic review always audits the full rollup

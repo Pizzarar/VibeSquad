@@ -309,3 +309,16 @@ The interim workaround (`LOCALAPPDATA=$HOME/.local/share` and `apt install lsof`
   Environment=TMPDIR=%h/.cache/vibesquad-tmp
   ```
   (and `mkdir -p ~/.cache/vibesquad-tmp`). The old `~/.vibesquad/tmp` stays in the tmpfiles exclusion until the unit is switched.
+
+### Live-agent ceiling (idea-896, 2026-11-25)
+`runner/runner.mjs` caps live agent processes at `VS_RUNNER_MAX_LIVE` (default 16); over it, sends and spawns wait in the
+admission queue (`vs status` shows them `queued`). On forge the cap, not RAM or CPU, was the limit (16/16 live, ~0.4 GB per agent
+tree, 53 GB free). Drop-in `~/.config/systemd/user/vibesquad.service.d/runner.conf`:
+```
+[Service]
+Environment=VS_RUNNER_MAX_LIVE=24
+Environment=VS_RUNNER_TURN_CAP_ANTIGRAVITY=6
+```
+then `systemctl --user daemon-reload`; it takes effect at the next drained restart. Disk is the next limit (EFI worktrees
+290-560 MB each, `/` at 83%): go to 28+ only after the disk is extended. Per-provider turn caps (`VS_RUNNER_TURN_CAP_<FAMILY>`,
+defaults claude 12 / gemini 4 / antigravity 3 / other 4): forge sets `VS_RUNNER_TURN_CAP_ANTIGRAVITY=6` in the same drop-in (owner 11-25, Gemini quota mostly unused; 3 had no recorded reason).

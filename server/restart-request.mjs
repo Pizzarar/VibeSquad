@@ -374,7 +374,7 @@ export function autoDrainVerdicts(leads, held, agents, teams = loadTeamsRegistry
   return out;
 }
 
-const RUNNING = new Set(["running", "initializing", "starting", "working", "queued"]);
+export const RUNNING = new Set(["running", "initializing", "starting", "working", "queued"]); // idea-786: also the runner supervisor's busy gate
 /**
  * B11a: `leads` minus the leads of asleep Squads whose lane has nothing running (no running agent, no runner-held work), so
  * a sleeping Squad gets no drain ask (it counts as drained / gone) and is not woken to lift a hold. An asleep lane that still

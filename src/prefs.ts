@@ -479,6 +479,8 @@ export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string; 
   { id: "token-thresholds", section: "team", label: "Token thresholds" },
   { id: "runner-providers", section: "runner", label: "Runner & Providers" },
   { id: "profiles", section: "profiles", label: "Agent profiles" },
+  { id: "role-editor", section: "profiles", label: "Roles (prompt, tools, modes)", keywords: ["role", "prompt", "tools", "mcp", "mode"] },
+  { id: "ladder-editor", section: "profiles", label: "Tier ladder (model per provider and tier)", keywords: ["tier", "ladder", "model", "effort", "top", "mid", "cheap"] },
   { id: "update-channel", section: "about", label: "Update channel" },
   { id: "start-at-login", section: "about", label: "Start at login (agents run without a window)" },
   { id: "check-updates", section: "about", label: "Check for updates" },

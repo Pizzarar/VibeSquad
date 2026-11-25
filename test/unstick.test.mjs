@@ -185,38 +185,107 @@ test('RunnerBackend.startOwned({force}) bypasses the failure cooldown and a doom
   assert.equal(calls, 2);
 });
 
-test('forceRestartRunner cancels only running turns and never archives', async () => {
-  const cancelled = [];
-  const archived = [];
-  let restarted = 0;
-  const backend = {
-    listAgents: async () => [
-      { id: 'rn-run', status: 'running', archivedAt: null },
-      { id: 'rn-idle', status: 'idle', archivedAt: null },
-      { id: 'rn-closed', status: 'closed', archivedAt: null },
-      { id: 'rn-archived', status: 'running', archivedAt: '2026-11-07T00:00:00Z' },
-    ],
-    cancelAgent: async (id) => cancelled.push(id),
-    archiveAgent: async (id) => archived.push(id),
+// idea-786: 11-24 12:28:46Z the owner's Restart runner cancelled three running workers (rn-980b4f09bcc1 + 2) and hard-killed
+// the runner. A restart must never kill busy agents: busy -> armed for idle, nothing cancelled, nothing killed.
+const be786 = (agents) => {
+  const calls = { cancelled: [], archived: [] };
+  return {
+    calls,
+    backend: {
+      listAgents: async () => agents,
+      cancelAgent: async (id) => calls.cancelled.push(id),
+      archiveAgent: async (id) => calls.archived.push(id),
+    },
   };
-  const r = await forceRestartRunner({ backend, restartRunner: async () => { restarted++; return true; } });
-  assert.deepEqual(cancelled, ['rn-run']); // running + not archived only
-  assert.deepEqual(archived, []);          // never archives anything
-  assert.equal(restarted, 1);
+};
+
+test('idea-786: forceRestartRunner with a running worker never cancels or restarts; it arms restart-when-idle', async () => {
+  const { backend, calls } = be786([
+    { id: 'rn-980b4f09bcc1', status: 'running', archivedAt: null },
+    { id: 'rn-idle', status: 'idle', archivedAt: null },
+    { id: 'rn-archived', status: 'running', archivedAt: '2026-11-07T00:00:00Z' },
+  ]);
+  let restarted = 0;
+  const armed = [];
+  const r = await forceRestartRunner({
+    backend,
+    health: async () => ({ running: 1, held: 0, heldAgents: [] }),
+    restartRunner: async () => { restarted++; return true; },
+    whenIdle: (be) => { armed.push(be); return true; },
+  });
+  assert.equal(restarted, 0, 'a busy runner is never killed');
+  assert.deepEqual(calls.cancelled, [], 'no turn is cancelled');
+  assert.deepEqual(calls.archived, []);
+  assert.deepEqual(armed, [backend]);
   assert.equal(r.ok, true);
-  assert.equal(r.restarted, true);
-  assert.deepEqual(r.cancelled, ['rn-run']);
+  assert.equal(r.restarted, false);
+  assert.equal(r.deferred, true);
+  assert.deepEqual(r.busy, ['rn-980b4f09bcc1']);
+  assert.deepEqual(r.cancelled, []);
 });
 
-test('forceRestartRunner still restarts when the agent list is unreachable (runner down)', async () => {
+test('idea-786: a running agent /health does not count yet (queued/starting) still blocks the restart', async () => {
+  for (const status of ['queued', 'starting', 'initializing', 'working']) {
+    const { backend } = be786([{ id: 'rn-q', status, archivedAt: null }]);
+    let restarted = 0;
+    const r = await forceRestartRunner({ backend, health: async () => ({ running: 0, held: 0, heldAgents: [] }), restartRunner: async () => { restarted++; }, whenIdle: () => true });
+    assert.equal(restarted, 0, status);
+    assert.equal(r.deferred, true, status);
+  }
+});
+
+test('idea-786: an idle agent holding background work blocks the restart (held), named in busy', async () => {
+  const { backend } = be786([{ id: 'rn-suite', status: 'idle', archivedAt: null }]);
+  let restarted = 0;
+  const r = await forceRestartRunner({ backend, health: async () => ({ running: 0, held: 1, heldAgents: ['rn-suite'] }), restartRunner: async () => { restarted++; }, whenIdle: () => true });
+  assert.equal(restarted, 0);
+  assert.equal(r.deferred, true);
+  assert.deepEqual(r.busy, ['rn-suite']);
+  assert.equal(r.held, 1);
+});
+
+test('idea-786: /health open turns block the restart even when the agent list says idle', async () => {
+  const { backend } = be786([{ id: 'rn-a', status: 'idle', archivedAt: null }]);
+  let restarted = 0;
+  const r = await forceRestartRunner({ backend, health: async () => ({ running: 2, held: 0, heldAgents: [] }), restartRunner: async () => { restarted++; }, whenIdle: () => true });
+  assert.equal(restarted, 0);
+  assert.equal(r.running, 2);
+});
+
+test('idea-786: unknown busy count (/health fails, list answers) is busy, never idle', async () => {
+  const { backend } = be786([]);
+  let restarted = 0;
+  const r = await forceRestartRunner({ backend, health: async () => { throw new Error('ECONNRESET'); }, restartRunner: async () => { restarted++; }, whenIdle: () => true });
+  assert.equal(restarted, 0);
+  assert.equal(r.deferred, true);
+  assert.equal(r.unknown, true);
+});
+
+test('idea-786: an idle runner restarts now, nothing cancelled', async () => {
+  const { backend, calls } = be786([{ id: 'rn-idle', status: 'idle', archivedAt: null }, { id: 'rn-closed', status: 'closed', archivedAt: null }]);
+  let restarted = 0;
+  const r = await forceRestartRunner({ backend, health: async () => ({ running: 0, held: 0, heldAgents: [] }), restartRunner: async () => { restarted++; return true; }, whenIdle: () => assert.fail('idle runner must not arm') });
+  assert.equal(restarted, 1);
+  assert.deepEqual(calls.cancelled, []);
+  assert.deepEqual(r, { ok: true, cancelled: [], restarted: true });
+});
+
+test('forceRestartRunner still restarts when the runner is down (neither /health nor the agent list answers)', async () => {
   let restarted = 0;
   const r = await forceRestartRunner({
+    health: async () => { throw new Error('runner down'); },
     listAgents: async () => { throw new Error('runner down'); },
     restartRunner: async () => { restarted++; return true; },
   });
   assert.equal(restarted, 1);
   assert.equal(r.ok, true);
   assert.deepEqual(r.cancelled, []);
+});
+
+test('idea-786: the server no longer cancels turns in forceRestartRunner (source guard)', () => {
+  const src = readFileSync(new URL('../server/unstick.mjs', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export async function forceRestartRunner'));
+  assert.doesNotMatch(body, /cancelAgent/);
 });
 
 test('restart-runner route is owner-only: POST without the local token is 403', async () => {
