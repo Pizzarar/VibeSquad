@@ -309,6 +309,7 @@ The interim workaround (`LOCALAPPDATA=$HOME/.local/share` and `apt install lsof`
   Environment=TMPDIR=%h/.cache/vibesquad-tmp
   ```
   (and `mkdir -p ~/.cache/vibesquad-tmp`). The old `~/.vibesquad/tmp` stays in the tmpfiles exclusion until the unit is switched.
+- **Scratch cleanup (idea-789):** `/tmp` is a size-limited tmpfs and can fill (81% / EDQUOT crashed a full suite on 2026-11-24). Point big scratch at `$TMPDIR` (`~/.cache/vibesquad-tmp`), not `/tmp`. Whoever creates a scratch dir, clone or `*.bundle` over ~100 MB removes it when the unit is done. Check `df -h /tmp` before a full suite, and leads clear their own stale `/tmp/<unit>*` dirs when it passes 50%.
 
 ### Live-agent ceiling (idea-896, 2026-11-25)
 `runner/runner.mjs` caps live agent processes at `VS_RUNNER_MAX_LIVE` (default 16); over it, sends and spawns wait in the
