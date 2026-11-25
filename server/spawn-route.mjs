@@ -16,6 +16,7 @@ import { legacyProfileRole } from "./profiles.mjs";
 import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failover.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
 import { TIERS, loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
+import { armCapped } from "./exp6-arm.mjs";
 
 import { isForeignModel } from "./route-override.mjs";
 export { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, isForeignModel, parseRouteOverride, routeOverrideLabel } from "./route-override.mjs";
@@ -97,7 +98,7 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, override?: {provider?: string, model?: string} | null}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null}} [opts]
  */
 export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override } = {}) {
   let table = roles ?? ROLE_TABLE;
@@ -207,6 +208,38 @@ export function legacyRouteMeta(name, { stakes, caps = [], explicitModel, stakes
   const exModel = String(explicitModel ?? "").trim();
   const probe = exModel ? resolveRoute({ role: name, stakes, caps, stakesLadder: sl, explicit: { model: exModel } }) : null;
   return { route, explicitCapped: Boolean(probe?.reasons?.includes("explicit-capped")) };
+}
+
+/**
+ * Old names that pin a DeepSeek model (A2 idea-986, PLAN_PER_ROLES_LADDER_1125 Amend 11-25 Per3) -> the role spawn they
+ * become while opencode is capped. Their role column in profiles.mjs LEGACY_PROFILE_ROLES (and src/profiles.ts
+ * LEGACY_HEAD_ROLE) stays `work-order`: this reroute is conditional, the static role map is not. Aliases ("Coder") reach
+ * an entry through their canonical name. Workaround: removed with the old names in P5f (R5).
+ */
+export const LEGACY_DEEPSEEK_PIN_ROUTES = Object.freeze({
+  "Work Order - DSP": Object.freeze({ role: "implement", stakes: "mechanical" }),
+  "Mechanical - DSF": Object.freeze({ role: "implement", stakes: "mechanical" }),
+});
+
+/**
+ * The role spawn an old DeepSeek-pinned name runs as instead of its pinned model, or null (route as before).
+ * Fires only when the name (or its alias) is in LEGACY_DEEPSEEK_PIN_ROUTES, the profile it matched still pins opencode
+ * (an owner-edited profile on another provider walks as before), and opencode is capped in the live `vs cap` map, read
+ * like exp6-arm readArmCaps/armCapped (`dsp` families: opencode, deepseek). Quota percentages alone do not count.
+ * `stakes`: the entry's stakes (mechanical) unless the caller asked for tierA-*, which is kept (a Tier A spawn never
+ * drops to the cheap rung because its old name was a DeepSeek one).
+ * @param {string} name   the spawn's profile name or alias
+ * @param {{capped?: Record<string, any> | string[], profile?: {provider?: string, model?: string} | null, stakes?: string}} [opts]
+ * @returns {{name: string, alias: string | null, role: string, stakes: string} | null}
+ */
+export function legacyDeepSeekReroute(name, { capped, profile, stakes } = {}) {
+  const hit = legacyProfileRole(name);
+  const entry = hit ? LEGACY_DEEPSEEK_PIN_ROUTES[hit.name] : null;
+  if (!entry) return null;
+  if (profile && routeProviderFamily(profile.provider || profile.model) !== "opencode") return null;
+  if (!armCapped("dsp", capped ?? {})) return null;
+  const s = normalizeStakes(stakes);
+  return { name: hit.name, alias: hit.alias, role: entry.role, stakes: s.startsWith("tierA-") ? s : entry.stakes };
 }
 
 /**

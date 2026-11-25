@@ -1046,6 +1046,20 @@ export function createRestartRequestLoop({
 
   const logArgs = (req, text) => ["log", "restart-feedback", fitLog(text, FEEDBACK_MAX), ...(req.team && req.lane ? ["--team", req.team, "--lane", req.lane] : [])];
 
+  /** idea-871: the id a notice for asked lead `id` goes to: itself while it is a current lead; else its lane's current lead; else itself (no lead at all: today's behaviour). */
+  async function currentLeadFor(id, asked) {
+    try {
+      const live = liveLeads(await listAgents(), teams());
+      if (live.some((l) => l.leadId === id)) return id;
+      const team = String(asked?.team ?? "").toLowerCase();
+      const lane = String(asked?.lane ?? "").toLowerCase();
+      const same = live.filter((l) => String(l.team).toLowerCase() === team && String(l.lane).toLowerCase() === lane);
+      return same.length === 1 ? same[0].leadId : id;
+    } catch {
+      return id;
+    }
+  }
+
   async function run() {
     let cur;
     try { cur = readRestartRequest(home); } catch (e) {
@@ -1146,6 +1160,12 @@ export function createRestartRequestLoop({
         });
         log(`restart-request ${req.id}: vs restart ${r?.ok ? "launched" : `failed: ${r?.error}`}`);
         continue;
+      }
+      // idea-871: a done/aborted notice goes to the lane's CURRENT lead; an asked lead that handed off since gets nothing.
+      if (a.kind === "send") {
+        const to = await currentLeadFor(a.leadId, req.asked?.[a.leadId]);
+        if (to !== a.leadId) log(`restart-request ${req.id}: notice for ${a.leadId} routed to current lead ${to}`);
+        a.leadId = to;
       }
       const r = await runVs(a.kind === "log" ? logArgs(req, a.text) : ["send", a.leadId, a.text]).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
       if (a.kind === "ask") outcomes[a.leadId] = r;

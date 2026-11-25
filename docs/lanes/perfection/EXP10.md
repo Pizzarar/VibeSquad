@@ -87,3 +87,4 @@ Owner: Per (lane perfection). Plan: `docs/PLAN_PER_ROLES_LADDER_1125.md` block R
   - `flash` — Gemini `cheap` rung (**opt-in only** via `labels.ab="flash"` or `labels.wf="flash"` on role `Implement` spawns; stamped `vs.arm=flash`, `vs.arm-reason=opt-in`; does not join `IMPLEMENTER_ARMS` and respects `ARM_CAP_FAMILIES` fail-open/cap rules).
 - **Sample floor**: >= 10 merged units per arm (VibeSquad repo, where first-try PASS is measurable; EFI / ForgeWirk / RedFrontier remain gated on section 7).
 - **Yardstick**: best result per unit, $ tiebreak; cheap wins only at equal first-try + fam (no arm wins to save quota).
+- **G1 weighting (11-25)**: the `sonnet|neon` alternation is weighted 2:1 Neon:Sonnet (`ARM_WEIGHTS` in `server/exp6-arm.mjs`) from merge; per-arm n is unaffected, ratio revisited at R3.

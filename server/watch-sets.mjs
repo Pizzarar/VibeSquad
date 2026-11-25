@@ -318,6 +318,12 @@ export function classifyItem(item, set, ctx) {
     const selfReported = reps.some((r) => r.type === "done" && r.agent === item.ref);
     const fin = !selfReported && o.finalText ? { final: String(o.finalText) } : {};
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text, ...fin };
+    // idea-631: idle but the runner holds its park on the worker's own background shell (a suite/monitor it ended its turn on):
+    // that final text is not a verdict. waiting-bg until the shell ends and the runner wakes it (bg-wake), bounded by the stall clock.
+    if (!busy && o.bgHeld && !o.archived && o.status !== "closed" && o.status !== "error") {
+      const ps = since("waiting-bg");
+      return t - ps > stallMs ? { phase: "waiting-bg", phaseSince: iso(ps), state: "stalled", reason: "bg-held" } : { phase: "waiting-bg", phaseSince: iso(ps), state: "waiting" };
+    }
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
     if (!busy && (o.archived || o.status !== "closed") && o.status !== "error" && o.finalText && Math.max(o.activeAt ?? -Infinity, o.progressAtMs ?? -Infinity) >= floor) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: o.finalText, ...fin };
@@ -376,8 +382,24 @@ export function classifyItem(item, set, ctx) {
     const errs = (Array.isArray(last.errors) ? last.errors : []).map((e) => (typeof e === "string" ? e : e?.message ?? e?.step ?? JSON.stringify(e)));
     return { phase: "finished", state: "stalled", reason: "restart-failed", report: `restart failed${errs.length ? `: ${errs.join("; ")}` : ""}${stale}` };
   }
-  const ps = since("waiting", created);
+  // idea-996: a restart request queued for a future window cannot have restarted yet: the stall clock starts at the
+  // window (and, once the window opened and the drain runs, at its deadline), not when the watch was armed.
+  const ps = Math.max(since("waiting", created), restartClockStart(ref, ctx.restartRequests));
   return t - ps > stallMs ? { phase: "waiting", state: "stalled", reason: "no-result" } : { phase: "waiting", state: "waiting" };
+}
+
+/** idea-996: earliest moment an open restart request (the ref's id, else any open one) could have produced a restart record; 0 when none. */
+function restartClockStart(ref, requests) {
+  if (!Array.isArray(requests)) return 0;
+  let start = 0;
+  for (const r of requests) {
+    if (!r || typeof r !== "object" || r.state === "done" || r.state === "aborted") continue;
+    if (ref && !(r.id === ref || r.id === `rr-${ref}`)) continue;
+    // queued: the window; opened (requested/draining/ready/firing, also an --urgent promotion that left a future windowAt): the deadline.
+    const at = r.state === "queued" ? timeOf(r.windowAt) || 0 : timeOf(r.deadline) || timeOf(r.windowAt) || 0;
+    start = Math.max(start, at);
+  }
+  return start;
 }
 
 /**
@@ -743,6 +765,7 @@ export function createWatchEngine({
       o.finalChecked = 0;
       o.progressAtMs = prog;
     }
+    o.bgHeld = a.bgHeld === true; // idea-631
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
     o.archived = Boolean(a.archivedAt || a.archived);

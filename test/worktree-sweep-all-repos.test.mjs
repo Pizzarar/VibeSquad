@@ -149,6 +149,130 @@ test("merged: squash merge matches by tree; a cherry-picked unit matches by git 
     assert.equal(mergedStatus(repo, head, ["refs/heads/master"]).merged, false);
   }));
 
+test("idea-978: squash merge after master moved on (tree differs) is merged by squash-patch; partly merged and dirty are kept", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const sq = addWorktree(repo, sanct, "repo", "unit-sq");
+    commitFile(sq, "a.txt", "1\n");
+    commitFile(sq, "a.txt", "1\n2\n");
+    const part = addWorktree(repo, sanct, "repo", "unit-part");
+    commitFile(part, "p1.txt", "p1\n");
+    commitFile(part, "p2.txt", "p2\n");
+    const dirty = addWorktree(repo, sanct, "repo", "unit-dirty");
+    commitFile(dirty, "d.txt", "d\n");
+    commitFile(repo, "pre.txt", "master moved before the squash\n"); // so no squash commit's tree equals a unit's tree
+    // squash-merge unit-sq and only the first commit of unit-part, then move master on so no tree matches
+    git(["merge", "-q", "--squash", "unit-sq"], repo);
+    git(["commit", "-q", "-m", "sq squashed"], repo);
+    commitFile(repo, "p1.txt", "p1\n", "part first half only");
+    git(["merge", "-q", "--squash", "unit-dirty"], repo);
+    git(["commit", "-q", "-m", "dirty squashed"], repo);
+    commitFile(repo, "after.txt", "master moves on\n");
+    writeFile(dirty, "d.txt", "uncommitted edit\n");
+
+    const res = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(res["unit-sq"].mergedBy, "squash-patch");
+    assert.equal(res["unit-sq"].action, "would-remove");
+    assert.equal(res["unit-part"].merged, false);
+    assert.equal(res["unit-part"].reason, "unmerged");
+    assert.equal(res["unit-dirty"].merged, true);
+    assert.equal(res["unit-dirty"].reason, "dirty");
+  }));
+
+test("idea-978 Tier A: a whitespace-only unmerged commit after a squash is NOT merged; squash scan is cached per ref", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    commitFile(repo, "a.py", "def f():\n    pass\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-ws");
+    commitFile(wt, "a.py", "def f():\n    return 1\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-ws"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    commitFile(repo, "after.txt", "y\n");
+    // squashed work is merged...
+    assert.equal(byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-ws"].merged, true);
+    // ...then an unmerged indentation-only commit lands on the branch: same whitespace-insensitive patch-id as the squash
+    commitFile(wt, "a.py", "def f():\n        return 1\n", "reindent");
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-ws"];
+    assert.equal(r.merged, false);
+    assert.equal(r.reason, "unmerged");
+    // the per-ref scan runs once for many worktrees
+    const calls = [];
+    const spy = (args, cwd, o) => (calls.push(args.join(" ")), execFileSync("git", args, { cwd, encoding: "utf8", input: o?.input, stdio: [o?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }).trim());
+    const cache = new Map();
+    const head = git(["rev-parse", "unit-ws"], repo);
+    mergedStatus(repo, head, ["refs/heads/master"], { git: spy, treeCache: cache });
+    mergedStatus(repo, head, ["refs/heads/master"], { git: spy, treeCache: cache });
+    assert.equal(calls.filter((c) => c.startsWith("log -p")).length, 1);
+  }));
+
+test("idea-978 Tier A: post-squash CRLF-only and EOF-newline-only unmerged commits are NOT merged", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    git(["config", "core.autocrlf", "false"], repo);
+    const mk = (name, text, after) => {
+      const wt = addWorktree(repo, sanct, "repo", name);
+      commitFile(wt, `${name}.txt`, text);
+      return () => commitFile(wt, `${name}.txt`, after, `${name} variant`);
+    };
+    const crlf = mk("unit-crlf", "a\nb\n", "a\r\nb\r\n");
+    const eol = mk("unit-eol", "line1\n", "line1");
+    commitFile(repo, "pre.txt", "x\n");
+    for (const n of ["unit-crlf", "unit-eol"]) {
+      git(["merge", "-q", "--squash", n], repo);
+      git(["commit", "-q", "-m", `${n} squashed`], repo);
+    }
+    commitFile(repo, "after.txt", "y\n");
+    assert.equal(byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-crlf"].merged, true);
+    crlf();
+    eol();
+    const res = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(res["unit-crlf"].merged, false);
+    assert.equal(res["unit-eol"].merged, false);
+  }));
+
+test("idea-978: the base scan is chunked (history longer than one chunk is still searched, each chunk is its own git call)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-old");
+    commitFile(wt, "old.txt", "1\n");
+    commitFile(wt, "old.txt", "1\n2\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-old"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    for (let i = 0; i < 260; i++) commitFile(repo, "n.txt", `${i}\n`, `n${i}`); // pushes the squash into the second 250-commit chunk
+    const calls = [];
+    const spy = (args, cwd, o) => (calls.push(args.join(" ")), execFileSync("git", args, { cwd, encoding: "utf8", input: o?.input, stdio: [o?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }).trim());
+    const r = mergedStatus(repo, git(["rev-parse", "unit-old"], repo), ["refs/heads/master"], { git: spy });
+    assert.equal(r.how, "squash-patch");
+    assert.ok(calls.filter((c) => c.startsWith("log -p")).length >= 2);
+  }));
+
+test("idea-999: an empty commit inside the first chunk does not end the squash scan early", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-old");
+    commitFile(wt, "old.txt", "1\n");
+    commitFile(wt, "old.txt", "1\n2\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-old"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    for (let i = 0; i < 260; i++) commitFile(repo, "n.txt", `${i}\n`, `n${i}`); // squash lands in the second 250-commit chunk
+    git(["commit", "-q", "--allow-empty", "-m", "empty in the first chunk"], repo); // no patch-id: the first chunk yields 249 ids for 250 commits
+    const r = mergedStatus(repo, git(["rev-parse", "unit-old"], repo), ["refs/heads/master"], {});
+    assert.equal(r.how, "squash-patch");
+  }));
+
 test("dirty: untracked build output is ignored, tracked edits and other untracked files are not", () =>
   withTmp((root) => {
     const repo = join(root, "repo");

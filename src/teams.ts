@@ -67,12 +67,14 @@ export type TeamDef = {
   leadFlagTokens?: number;
   leadAutoHandoffTokens?: number;
   leadHardCapTokens?: number;
-  /** Per-Squad "Vibe mode": Buddy auto-dispatches routine work. Off when absent. */
+  /** Per-Squad "Crunch mode" (field kept as vibeMode): Buddies and Leads act on their leans. Off when absent. */
   vibeMode?: boolean;
   /** Per-Squad standing lane pointers for header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md). */
   quickLanes?: { bugs?: string; workflows?: string };
   /** B11a: the project folder this Squad sits in (a `FolderDef.name`); none = unfoldered (always awake). */
   folder?: string;
+  /** PLAN_PROJECT_ORDER: the Main project, pinned above the Normal sidebar. At most one team carries it; per install, never in git. */
+  main?: boolean;
 };
 export type TeamConfig = TeamDef;
 

@@ -38,7 +38,7 @@ Each item below shows how a specific finding was caught.
 Needs vision + code reading + a browser (Playwright). Never edits source. A draft note body to add to `server/profiles.mjs` next to `ART_DIRECTOR_NOTE_BODY`:
 
 ```text
-UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots.
+UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_<lane>_R<n>.md and its screenshots (<lane> = your lane code, lowercase; n counts per lane: one more than the highest existing docs/UX_REVIEW_<lane>_R*.md, starting at R1, so two lanes never pick the same file; the old shared docs/UX_REVIEW_R<n>.md files stay where they are).
 1. Read the job list (docs/UX_REVIEW.md §1.3) and the previous round's doc. Do NOT read the unit's plan until after your first pass.
 2. Run the app with ?demo at 3200x1800 (the owner's 4K at 120%), then 1920x1080, dark and light. Drive the standard sequences: open project A then B; Ctrl+J into another project; open a Needs-you item; deep-link ?agent=; expand two projects; open a worker; 10+ alerts. Screenshot each.
 3. Check the invariants: counts agree everywhere they're shown; exactly one selected row; breadcrumb = selected row = open agent; expanded projects share one shape; no agent listed more than twice on screen; nothing that explains WHY is truncated.

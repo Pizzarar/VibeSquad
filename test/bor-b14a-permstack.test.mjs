@@ -45,6 +45,7 @@ const code = transformSync("BoringWorkingNow.tsx", read("src", "BoringWorkingNow
   .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
   .replace(/from "\.\/boringBusts"/, 'from "./boringBusts.mjs"')
   .replace(/import \{ useTheme \} from "\.\/useBotFace";/, 'const useTheme = () => "dark";')
+  .replace(/import \{ etClock \} from "\.\/etTime";/, 'const etClock = (d) => new Date(d).toISOString().slice(11, 16);')
   .replace(/^import type .*$/gm, "");
 writeFileSync(join(dir, "BoringWorkingNow.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + code);
 const { BoringWorkingNow } = await import(pathToFileURL(join(dir, "BoringWorkingNow.mjs")).href);

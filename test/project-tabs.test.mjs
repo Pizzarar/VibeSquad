@@ -103,7 +103,10 @@ test("fix round (UX R22 M1/m1/m2/m3 + review M1): sb-head pill placement, active
   const css = src("storybook.css"), b = src("boring.css"), s = src("StorybookView.tsx");
   assert.match(css, /\.sb-title \{[^}]*flex: 0 1 auto/, "title no longer grows, so the pill follows it");
   assert.match(css, /\.sb-head-right \{[^}]*margin-left: auto/, "right cluster pushed to the end");
-  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped (Psycho) pill base rule");
+  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped layout rule");
+  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{[^}]*font-size: 13px/, "13px in Normal (matches the topbar pill)");
+  assert.match(css, /\nhtml:not\(\[data-vibe="boring"\]\) \.sb-head \.project-tabs \.boring-switch-pill\.on \{/, "Psycho-only colour chrome (L1: Normal takes boring.css)");
+  assert.ok(!/\n\.sb-head \.project-tabs \.boring-switch-pill(:hover|\.on)? \{[^}]*(border-color|background: var\(--sb)/.test(css), "no unscoped sb-head colour rules out-specifying boring.css");
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-root \.sb-head \.project-tabs \.boring-switch-pill \{ min-height: 40px;/, "phone 40px segments");
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-word, \.sb-sep \{ display: none; \}/, "phone keeps the project name, drops the Storybook word and the orphan separator");
   assert.ok(s.includes('<span className="sb-word">Storybook </span>'), "sb-word wrapper");
@@ -123,7 +126,9 @@ test("T2: ⋯ menu entry removed; palette command 'Open Storybook: <project>' fo
   const c = src("CommandPalette.tsx"), p = src("PhoneCockpit.tsx");
   assert.ok(!c.includes('label: "Open Storybook"'), "interim ⋯ item gone");
   assert.ok(c.includes("label: `Open Storybook: ${v.team.name}`"), "palette command label");
-  assert.ok(c.includes("filter((v) => !probeStorybook(v.team.id))"), "hidden when known-missing");
+  assert.ok(c.includes("filter((v) => !isStorybookMissing(v.team.id))"), "hidden when known-missing (pure cache read)");
+  assert.ok(!c.includes("probeStorybook("), "palette does not call probeStorybook during render");
+  assert.ok(c.includes("useStorybookProbes("), "palette probes via effect hook");
   assert.ok(c.includes('id.startsWith("storybook:")') && c.includes("openStorybook(v.team.id, v.team.name)"), "command opens Storybook");
   assert.ok(p.includes('data-testid="phone-storybook-btn"') && p.includes("view && !sbMissing"), "phone ⋯ entry stays (own button, not teamCtxItems)");
 });
