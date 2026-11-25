@@ -73,7 +73,7 @@ func pinned_fingerprint() -> Dictionary:
 func device_refusal() -> String:
 	if auth_mode() == Token.MODE_LOCAL or Token.is_device_egress_allowed(server_url):
 		return ""
-	return "refusing to send the device token to %s: a remote vs_playtest/server_url must be the https:// address of VibeSquad (e.g. https://<forge>.<tailnet>.ts.net:<port>)" % Token.redact_url(server_url)
+	return "refusing to send the device token to %s: a remote vs_playtest/server_url must be the https:// address of VibeSquad (e.g. https://<forge mesh host>:<port>)" % Token.redact_url(server_url)
 
 
 ## Why device calls can't run yet because of a setting (refused path / no CA pin), or "".
@@ -296,7 +296,7 @@ func _response(raw: Dictionary, pairing: bool = false) -> Dictionary:
 		return _fail(-1, "the server answered with a redirect, which is never followed with a token (if it is the VS https listener, set vs_playtest/server_url to its https:// address)")
 	if result == HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
 		if pairing:
-			return _fail(-1, "TLS/CA problem: %s did not present a certificate from the CA you just confirmed, or not for this host name (check server_url, and VIBESQUAD_MESHNET_HOST on the VS host for a MagicDNS name)" % Token.redact_url(server_url))
+			return _fail(-1, "TLS/CA problem: %s did not present a certificate from the CA you just confirmed, or not for this host name (check server_url, and VIBESQUAD_MESHNET_HOST on the VS host for a mesh host name)" % Token.redact_url(server_url))
 		return _fail(-1, "TLS/CA problem: %s did not present a certificate from the pinned VibeSquad CA, or not for this host name. If VibeSquad's CA changed, Unpair and Pair with VS again" % Token.redact_url(server_url))
 	if result != HTTPRequest.RESULT_SUCCESS:
 		return _fail(0, "network error %d" % result)
