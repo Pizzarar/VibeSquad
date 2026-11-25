@@ -39,9 +39,17 @@ const idle = (rec) => { rec.open = false; rec.emit('status', { status: 'idle' })
 const drive = (adapter) => { for (let k = 0; k < 50; k++) { const r = adapter.started.find((x) => !x.killed && x.open); if (!r) return; idle(r); } assert.fail('drive did not settle'); };
 // What the restart script does after a runner restart: the boot replays queued inputs, then every lost agent is resumed.
 const restart = (dir, adapter, opts) => { const r = boot(dir, adapter, opts); r.recoverQueued(); return r; };
-const parts = (texts) => texts.flatMap((t) => t.split('\n\n'));
-const count = (texts, s) => parts(texts).filter((p) => p === s).length;
 const ownPending = (runner, id) => runner._fold(id).pending.filter((p) => p.own === true);
+const C = CONTINUE_PROMPT;
+// point -> kind -> [texts the first runner's processes were handed, texts the runner after the restart handed]. A cut turn
+// (starting/running) continues first, then each owed input as a turn of its own; queued/parked inputs replay as queued.
+const EXPECT = {
+  queued: { plain: [['hi'], ['plain:1']], own: [['hi'], ['/compact', 'own:1']], compact: [['hi'], ['/compact']] },
+  starting: { plain: [['hi', 'work:1', 'plain:1'], [C]], own: [['hi', '/compact'], [C, 'own:1']], compact: [['hi', 'work:1'], [C, '/compact']] },
+  running: { plain: [['hi', 'work:1', 'plain:1'], [C]], own: [['hi', '/compact'], [C, 'own:1']], compact: [['hi', 'work:1'], [C, '/compact']] },
+  parked: { plain: [['hi'], ['plain:1']], own: [['hi'], ['/compact', 'own:1']], compact: [['hi'], ['/compact']] },
+  idle: { plain: [['hi', 'plain:1'], []], own: [['hi', '/compact'], ['own:1']], compact: [['hi', '/compact'], []] },
+};
 
 // Puts agent `a` at `point` with `kind` of input in flight on a fresh runner, then shuts it down keepResumable (restart
 // script). Returns { dir, a, adapter1, inputs }: inputs are the texts that must each be delivered exactly once.
@@ -94,11 +102,12 @@ for (const point of ['queued', 'starting', 'running', 'parked', 'idle']) {
       const runner2 = restart(dir, adapter2);
       assert.equal(runner2.resume(a), true);
       drive(adapter2);
-      const all = [...adapter1.textsOf(a), ...adapter2.textsOf(a)];
-      for (const s of inputs) assert.equal(count(all, s), 1, `${point}/${kind}: "${s}" delivered once (got ${JSON.stringify(all)})`);
-      if (inputs.includes('/compact')) assert.equal(all.filter((t) => t === '/compact').length, 1, `${point}/${kind}: /compact is a whole turn's text`);
-      const cut = point === 'running' || point === 'starting';
-      assert.equal(count(adapter2.textsOf(a), CONTINUE_PROMPT), cut ? 1 : 0, `${point}/${kind}: a cut turn continues, nothing else does`);
+      // Round 3 (rn-863584795900): the exact turns each process was handed, in order. One array entry per handed text (a turn or
+      // a steer into the open one), so turn order and boundaries are checked, never a text split on blank lines.
+      const [want1, want2] = EXPECT[point][kind];
+      assert.deepEqual(adapter1.textsOf(a), want1, `${point}/${kind}: before the restart`);
+      assert.deepEqual(adapter2.textsOf(a), want2, `${point}/${kind}: after the restart`);
+      for (const s of inputs) assert.equal([...want1, ...want2].filter((t) => t === s).length, 1, `${point}/${kind}: "${s}" is one whole handed text, once`);
       assert.deepEqual(runner2._fold(a).pending, [], `${point}/${kind}: nothing left owed`);
       runner2.shutdown({ keepResumable: true });
 
@@ -140,24 +149,60 @@ test('the reviewer repro: a wake queued behind a running /compact survives a kee
   runner2.shutdown();
 });
 
-test('a restart while the continue sits queued (cap held) still delivers the owed input once', () => {
-  const { dir, a, adapter1 } = arrange('running', 'own');
-  const adapter2 = recAdapter();
-  const runner2 = restart(dir, adapter2);
-  const d = mk(runner2, 'd'); // takes the single slot
-  runner2.resume(a);
-  assert.equal(runner2.status(a).status, 'queued', 'the continue waits for the slot');
-  runner2.shutdown({ keepResumable: true });
-  const adapter3 = recAdapter();
-  const runner3 = boot(dir, adapter3);
-  assert.deepEqual(runner3.recoverQueued(), [a]);
-  drive(adapter3);
-  const all = [...adapter1.textsOf(a), ...adapter2.textsOf(a), ...adapter3.textsOf(a)];
-  assert.equal(count(all, 'own:1'), 1, JSON.stringify(all));
-  assert.equal(count(all, CONTINUE_PROMPT), 1, JSON.stringify(all));
-  assert.deepEqual(runner3._fold(a).pending, []);
-  assert.ok(d);
-  runner3.shutdown();
+// Round 3 F2 (rn-863584795900): resume() logs its continue AFTER the owed inputs it queues behind it (higher seq). A restart (or
+// several) while both sit queued must keep the continue first and a turn of its own: exact turn arrays, never a text split.
+for (const [kind, owedText] of [['own', 'own:1'], ['compact', '/compact']]) {
+  for (const restarts of [1, 2, 3]) {
+    test(`${restarts} restart(s) while the continue and an owed ${owedText} sit queued: [continue, ${owedText}], each its own turn`, () => {
+      const { dir, a, adapter1 } = arrange('running', kind);
+      const adapter2 = recAdapter();
+      let runner = restart(dir, adapter2);
+      mk(runner, 'd'); // takes the single slot
+      runner.resume(a);
+      assert.equal(runner.status(a).status, 'queued', 'the continue waits for the slot');
+      const seqs = runner._fold(a).pending.map((p) => ({ text: p.text === C ? 'C' : p.text, resume: p.resume === true, own: p.own === true }));
+      assert.deepEqual(seqs, [{ text: owedText, resume: false, own: true }, { text: 'C', resume: true, own: false }], 'the owed input is logged first (lower seq), the continue tagged resume');
+      const handed = [adapter2];
+      for (let k = 1; k < restarts; k++) { // restart again while still queued (the slot is taken again on each runner)
+        runner.shutdown({ keepResumable: true });
+        const ad = recAdapter();
+        handed.push(ad);
+        runner = boot(dir, ad);
+        mk(runner, `d${k}`); // the slot is taken before the boot replays the queue
+        assert.deepEqual(runner.recoverQueued(), [a]);
+        if (runner.status(a).status !== 'queued') assert.fail(`restart ${k}: a started before the slot was free`);
+      }
+      runner.shutdown({ keepResumable: true });
+      const last = recAdapter();
+      const runnerN = boot(dir, last);
+      assert.deepEqual(runnerN.recoverQueued(), [a]);
+      const r = last.procOf(a);
+      assert.deepEqual(r.texts, [C], 'the cut turn continues first, alone');
+      idle(r);
+      assert.deepEqual(r.texts, [C, owedText], 'then the owed input, as a turn of its own');
+      drive(last);
+      assert.deepEqual(adapter1.textsOf(a), kind === 'own' ? ['hi', '/compact'] : ['hi', 'work:1']);
+      for (const ad of handed) assert.deepEqual(ad.textsOf(a), [], 'nothing ran while queued');
+      assert.deepEqual(last.textsOf(a), [C, owedText]);
+      assert.deepEqual(runnerN._fold(a).pending, []);
+      runnerN.shutdown({ keepResumable: true });
+      const after = recAdapter();
+      const runnerZ = restart(dir, after);
+      runnerZ.resume(a);
+      drive(after);
+      assert.deepEqual(after.textsOf(a), [], 'a later restart replays nothing');
+      runnerZ.shutdown();
+    });
+  }
+}
+
+test('turnGroups: a continue never joins an earlier input, and an owed input never joins the continue', async () => {
+  const { turnGroups } = await import('../runner/runner.mjs');
+  const texts = (items) => turnGroups(items).map((g) => g.text);
+  assert.deepEqual(texts([{ text: C, seq: 9, resume: true }, { text: 'own:1', seq: 7, own: true }]), [C, 'own:1']);
+  assert.deepEqual(texts([{ text: 'own:1', seq: 7, own: true }, { text: C, seq: 9, resume: true }]), ['own:1', C]);
+  assert.deepEqual(texts([{ text: C, seq: 9, resume: true }, { text: 'x', seq: 10 }]), [`${C}\n\nx`], 'a send coalesced into the queued continue job stays with it');
+  assert.deepEqual(texts(['notice', { text: C, seq: 9, resume: true }]), [`notice\n\n${C}`], 'a notice still leads the continue');
 });
 
 test('a send to the lost agent (no resume) carries the owed input ahead of its text, once', () => {

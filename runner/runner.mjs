@@ -49,16 +49,20 @@ const SLASH_RE = /^\s*\/[A-Za-z][\w:.-]*(?=\s|$)/;
 export const isSlashText = (text) => typeof text === 'string' && SLASH_RE.test(text);
 
 // idea-869: texts (in order) grouped into turns: plain texts join with a blank line (one turn, as a coalesced queue job always
-// did), a slash command is always a turn of its own. Returns [{ text, slash }]. An item may be { text, seq, own } (a logged
-// input, from the fold's pending): its group then lists it in `inputs` ([{ seq, own }]) for the delivery bookkeeping (_turnJob).
+// did), a slash command is always a turn of its own. Returns [{ text, slash }]. An item may be { text, seq, own, resume } (a
+// logged input, from the fold's pending): its group then lists it in `inputs` ([{ seq, own }]) for the delivery bookkeeping
+// (_turnJob). A `resume` item (a cut turn's continue) never joins a group carrying an earlier input (only a notice), and an
+// `own` input (owed a turn of its own) never joins the continue's group: the continue stays its own turn, as resume() queued it.
 export function turnGroups(items) {
   const out = [];
   for (const item of items) {
-    const { text, seq, own } = typeof item === 'string' ? { text: item } : item;
+    const { text, seq, own, resume } = typeof item === 'string' ? { text: item } : item;
     const slash = isSlashText(text);
     let last = out.at(-1);
-    if (!last || slash || last.slash) { last = { text, slash }; out.push(last); }
+    const joins = last && !slash && !last.slash && !(resume === true && last.inputs?.length) && !(own === true && last.resume);
+    if (!joins) { last = { text, slash }; out.push(last); }
     else last.text = `${last.text}\n\n${text}`;
+    if (resume === true) last.resume = true;
     if (Number.isSafeInteger(seq)) (last.inputs ??= []).push({ seq, own: own === true });
   }
   return out;
@@ -1546,10 +1550,13 @@ export class Runner {
   // idea-869: the unstarted inputs of `plan` (_unstartedPlan, same fold) one by one as { text, seq, own }, for turnGroups: a
   // slash command among them must stay a turn of its own, and each turn's job must know which logged inputs it delivers.
   // plan.text keeps its full-read shape (idea-307's legacy-spec invariant); this falls back to it (no seqs: legacy bookkeeping).
+  // A cut turn's continue (`resume`) goes first: resume() queued it ahead of the owed inputs logged before it (lower seq), so
+  // a restart while both sit queued must not run an owed input (or a /compact) before the interrupted turn is continued.
   _pendingTexts(id, plan) {
     const inputs = this._fold(id)?.pending;
-    const items = Array.isArray(inputs) ? inputs.map((e) => ({ text: e.text, seq: e.seq, own: e.own === true })) : [];
-    return items.length && items.map((e) => e.text).join('\n\n') === plan.text ? items : [plan.text];
+    const items = Array.isArray(inputs) ? inputs.map((e) => ({ text: e.text, seq: e.seq, own: e.own === true, ...(e.resume === true ? { resume: true } : {}) })) : [];
+    if (!items.length || items.map((e) => e.text).join('\n\n') !== plan.text) return [plan.text];
+    return [...items.filter((e) => e.resume), ...items.filter((e) => !e.resume)];
   }
 
   // idea-869: the delivery bookkeeping of one turn group's job. A job that is a turn of its own (ownTurn), or that carries an
@@ -1674,8 +1681,9 @@ export class Runner {
     plans.sort((a, b) => rank(a) - rank(b) || a.plan.ts - b.plan.ts);
     for (const { id, plan } of plans) {
       // idea-869: one job per turn group, in input order (a queued /compact stays its own turn after the restart too).
+      // A cut turn's continue (g.resume, first: _pendingTexts) keeps _continueJob's unwedge retry, as resume() queued it.
       turnGroups(this._pendingTexts(id, plan)).forEach((g, i) => {
-        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => this._deliverJob(job), ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}), ...this._turnJob(id, g, i > 0) };
+        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => { this._deliverJob(job); const e = g.resume ? this.live.get(id) : null; if (e) e.continueJob = job; }, ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}), ...this._turnJob(id, g, i > 0) };
         this._admit(job);
       });
     }

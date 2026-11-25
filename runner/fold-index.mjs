@@ -110,7 +110,8 @@ export function foldEvent(st, e) {
       st.stopped = null;
       if (typeof e.text === 'string') {
         const seq = Number.isSafeInteger(e.seq) ? { seq: e.seq } : {};
-        st.pending.push({ text: e.text, owner: e.owner, ts: e.ts, ...seq, ...(e.ownTurn === true && seq.seq !== undefined ? { own: true } : {}) });
+        // idea-869: `resume` marks a cut turn's continue (CONTINUE_PROMPT): recovery keeps it first and its own turn (turnGroups).
+        st.pending.push({ text: e.text, owner: e.owner, ts: e.ts, ...seq, ...(e.ownTurn === true && seq.seq !== undefined ? { own: true } : {}), ...(e.resume === true ? { resume: true } : {}) });
       }
     }
   }
@@ -163,7 +164,7 @@ export function loadFold(o) {
   // resume paths decide park/resume/lost/cut from them, so the entry is folded from 0 instead. FOLD_VERSION already drops an
   // index from older fold code wholesale; this is the per-entry backstop. A missing key reads as undefined, which fails here.
   if (typeof o.seqMono !== 'boolean' || typeof o.archived !== 'boolean') throw new Error('bad spec fold');
-  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string' && (p.seq === undefined || Number.isSafeInteger(p.seq)) && (p.own === undefined || p.own === true))) throw new Error('bad spec fold');
+  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string' && (p.seq === undefined || Number.isSafeInteger(p.seq)) && (p.own === undefined || p.own === true) && (p.resume === undefined || p.resume === true))) throw new Error('bad spec fold');
   for (const k of ['park', 'refused', 'stopped', 'lastStatus']) if (o[k] !== null && !isObj(o[k])) throw new Error('bad spec fold');
   if (o.park !== null && typeof o.park.prompt !== 'boolean') throw new Error('bad spec fold');
   if (o.lastState !== null && typeof o.lastState !== 'string') throw new Error('bad spec fold'); // a non-string status already fails o.status
