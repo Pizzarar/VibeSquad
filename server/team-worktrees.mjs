@@ -13,9 +13,10 @@ const PROTECTED_BRANCHES = new Set(["main", "master"]);
 
 /**
  * Run git. Options (R1 retention): `env` extra environment (e.g. GIT_INDEX_FILE), `input` stdin, `buffer` returns the raw
- * stdout Buffer (untrimmed, for blob bytes).
+ * stdout Buffer (untrimmed, for blob bytes). `timeoutMs` lowers the default timeout (idea-1059: the sweep's per-step budget).
  */
-export function defaultGit(args, cwd, { env, input, buffer = false } = {}) {
+export function defaultGit(args, cwd, { env, input, buffer = false, timeoutMs } = {}) {
+  const base = buffer || input !== undefined ? 300_000 : 30_000;
   const out = execFileSync("git", args, {
     cwd,
     ...(buffer ? {} : { encoding: "utf8" }), // no encoding = Buffer out; "buffer" would also be used to encode a string `input` (ERR_UNKNOWN_ENCODING)
@@ -23,7 +24,7 @@ export function defaultGit(args, cwd, { env, input, buffer = false } = {}) {
     ...(input === undefined ? {} : { input }),
     ...(env ? { env: { ...process.env, ...env } } : {}),
     windowsHide: true,
-    timeout: buffer || input !== undefined ? 300_000 : 30_000,
+    timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.min(base, Math.ceil(timeoutMs))) : base,
     maxBuffer: buffer ? 2 ** 31 : 64 << 20, // not `2 << 30`: that overflows int32 to a negative (ERR_OUT_OF_RANGE)
   });
   return buffer ? out : out.trim();
@@ -587,23 +588,82 @@ export function liveAgentCwds(agents) {
   return out;
 }
 
+/** How long an archived agent still holds a worktree with no commit of its own (holdAgentCwds). */
+export const ZERO_COMMIT_HOLD_MS = 24 * 60 * 60_000;
+
+/**
+ * idea-1043 / idea-949: cwds that hold a worktree with no commit of its own (a read-only MEAS / probe unit). Everything
+ * liveAgentCwds holds, plus agents archived less than `holdMs` ago (or at an unreadable time). A done worker is
+ * auto-archived (vs.auto-archived) yet resumable: a follow-up `send` unarchives it and respawns it in the same cwd.
+ * orm-w3 (11-25) was swept in that window: parked 18:45Z, auto-archived 18:47Z, tree removed, follow-up at 18:57Z failed
+ * with "working directory not found". `agents` must include archived records (the roster with includeArchived).
+ */
+export function holdAgentCwds(agents, { now = Date.now(), holdMs = ZERO_COMMIT_HOLD_MS } = {}) {
+  const out = liveAgentCwds(agents);
+  for (const a of Array.isArray(agents) ? agents : []) {
+    if (!a || !(a.archivedAt || a.archived)) continue;
+    const at = typeof a.archivedAt === "number" ? a.archivedAt : Date.parse(String(a.archivedAt ?? ""));
+    if (Number.isFinite(at) && now - at >= holdMs) continue; // archived long ago: done
+    const cwd = String(a.cwd ?? a.config?.cwd ?? "").trim();
+    if (cwd) out.push(cwd);
+  }
+  return out;
+}
+
+/** A reflog message for a commit authored here (not a checkout, reset, branch move or fast-forward). */
+const OWN_COMMIT_MSG = /^(?:commit(?: \([^)]*\))?|cherry-pick(?: \([^)]*\))?|revert(?: \([^)]*\))?|am|rebase(?: -[im])? \((?:pick|squash|fixup|reword|edit|continue)\))(?::|$)/;
+const ownCommitEntry = (msg) => OWN_COMMIT_MSG.test(msg) || (/^(?:merge [^:]*|pull[^:]*):/.test(msg) && !/Fast-forward/i.test(msg));
+
+/**
+ * idea-1043: did anyone ever commit in this worktree? Read from its HEAD reflog (`<gitdir>/logs/HEAD`): a commit, amend,
+ * cherry-pick, revert, am, rebase pick or a real (non fast-forward) merge counts; checkouts, resets and fast-forwards do
+ * not. A tree made at origin/main for a read-only measurement has none, so "merged by ancestry" says nothing about it
+ * being done. Unreadable reflog: null (callers treat it as zero-commit, the stricter side).
+ */
+export function worktreeHasOwnCommit(wtPath) {
+  const gd = worktreeGitDir(wtPath);
+  if (!gd) return null;
+  let text;
+  try {
+    text = readFileSync(resolve(gd, "logs", "HEAD"), "utf8");
+  } catch {
+    return null;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const tab = line.indexOf("\t");
+    if (tab >= 0 && ownCommitEntry(line.slice(tab + 1).trim())) return true;
+  }
+  return false;
+}
+
 /** True when some cwd in `cwds` is `wtPath` or inside it. Conservative: a cwd that cannot be resolved yet
  *  (realpath fails) but is lexically inside still holds the tree, so a live agent's worktree is never removed. */
 export const cwdHoldsWorktree = (wtPath, cwds) => (cwds ?? []).some((c) => c && (isInside(c, wtPath) || lexInside(c, wtPath)));
 
 /**
- * `refs` minus any ref at the same commit as an earlier one (local master == origin/master: test it once). A ref that
+ * `refs` minus any ref at the same commit as an earlier one (local master == origin/master: test it once) and any ref
+ * that is an ancestor of another listed ref. A ref that
  * does not resolve is kept, so mergedStatus still sees it (and fails closed on it).
  */
 function distinctRefs(repoRoot, refs, git) {
   const seen = new Set();
-  return (refs ?? []).filter((ref) => {
+  const out = [];
+  for (const ref of refs ?? []) {
     const id = tryGit(git, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoRoot)?.trim();
-    if (!id) return true;
-    if (seen.has(id)) return false;
+    if (!id) {
+      out.push({ ref, id: null });
+      continue;
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
-    return true;
-  });
+    out.push({ ref, id });
+  }
+  // idea-1059: a ref that is an ancestor of another (a stale local main behind origin/main) adds no merged verdict the newer
+  // ref lacks, but costs a full cherry + squash diff per unmerged worktree against a far-back fork point (EFI: a 5 MB diff
+  // each, ~100 worktrees, minutes). Drop it. Unresolved refs and refs that diverged are kept.
+  return out
+    .filter((a) => !a.id || !out.some((b) => b !== a && b.id && b.id !== a.id && tryGit(git, ["merge-base", "--is-ancestor", a.id, b.id], repoRoot) !== null))
+    .map((a) => a.ref);
 }
 
 /** The worktree's private git dir (from its `.git` file), or null. */
@@ -665,6 +725,11 @@ function assertRealInside(p, wtRoot) {
   }
 }
 
+/** idea-1059: a sweep step past its budget stops here (code ETIMEDOUT); the walk callers fail closed (nothing removed by git). */
+function checkDeadline(deadline) {
+  if (Date.now() > deadline) throw Object.assign(new Error("sweep step timed out"), { code: "ETIMEDOUT" });
+}
+
 /**
  * Delete `abs` without ever following a symlink or junction (a link is unlinked, never recursed into). `wtRoot` is the
  * worktree root as normalized by normPath (realpath). Before acting on any entry its parent folder must resolve inside
@@ -672,7 +737,8 @@ function assertRealInside(p, wtRoot) {
  * (between a readdir and the descent into a child) resolves outside, so the walk aborts (throws EESCAPE) instead of
  * following it. `onListed(abs, names)` is a test seam called right after each readdir.
  */
-function removeTreeNoFollow(abs, wtRoot, onListed) {
+function removeTreeNoFollow(abs, wtRoot, onListed, deadline = Infinity) {
+  checkDeadline(deadline);
   abs = toLongPath(abs);
   assertRealInside(dirname(abs), wtRoot);
   let st;
@@ -699,7 +765,7 @@ function removeTreeNoFollow(abs, wtRoot, onListed) {
   const names = readdirSync(abs);
   onListed?.(abs, names);
   // Each child re-checks its parent (`abs`) at its own entry, so `abs` swapped for a junction now aborts the walk.
-  for (const name of names) removeTreeNoFollow(join(abs, name), wtRoot, onListed);
+  for (const name of names) removeTreeNoFollow(join(abs, name), wtRoot, onListed, deadline);
   rmdirSync(abs);
 }
 
@@ -724,10 +790,11 @@ function unlinkLinkOnly(p) {
  * that listed it resolves outside, so the walk throws EESCAPE instead of collecting (and later unlinking) links outside.
  * `onListed(dir, entries)` is a test seam called right after each readdir.
  */
-function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly, onListed } = {}) {
+function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly, onListed, deadline = Infinity } = {}) {
   const wtRoot = normPath(wtPath);
   const links = [];
   const walk = (dir) => {
+    checkDeadline(deadline);
     assertRealInside(toLongPath(dir), wtRoot);
     const entries = readdirSync(toLongPath(dir), { withFileTypes: true });
     onListed?.(dir, entries);
@@ -785,7 +852,7 @@ function buildOutputTarget(wtPath, rel) {
 export function removeSweptWorktree(
   repoRoot,
   wtPath,
-  { git = defaultGit, buildOutput = [], unlinkLink, force = false, onListed, onLinkWalkListed } = {},
+  { git = defaultGit, buildOutput = [], unlinkLink, force = false, onListed, onLinkWalkListed, deadline = Infinity } = {},
 ) {
   try {
     const wtRoot = normPath(wtPath);
@@ -793,9 +860,9 @@ export function removeSweptWorktree(
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
       // before `git worktree remove` could walk it.
       const abs = buildOutputTarget(wtPath, rel);
-      if (abs) removeTreeNoFollow(abs, wtRoot, onListed); // `onListed`: test seam only
+      if (abs) removeTreeNoFollow(abs, wtRoot, onListed, deadline); // `onListed`: test seam only
     }
-    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink, onListed: onLinkWalkListed });
+    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink, onListed: onLinkWalkListed, deadline });
   } catch (e) {
     return { removed: false, reason: `build output not removed (${e?.code ?? "error"})` };
   }
@@ -979,6 +1046,27 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
   };
 }
 
+/** idea-1059: the per-worktree budget of a sweep (merged check, dirt check, build-output delete). */
+export const SWEEP_STEP_TIMEOUT_MS = 60_000;
+
+/** `git` bounded by `step.deadline`: each call gets the time left as timeoutMs; a timeout (or no time left) sets step.timedOut. */
+function stepGit(git, step) {
+  if (!Number.isFinite(step.deadline)) return git;
+  return (args, cwd, opts) => {
+    const left = step.deadline - Date.now();
+    if (left <= 0) {
+      step.timedOut = true;
+      throw Object.assign(new Error("sweep step timed out"), { code: "ETIMEDOUT" });
+    }
+    try {
+      return git(args, cwd, { ...(opts ?? {}), timeoutMs: left });
+    } catch (e) {
+      if (e?.code === "ETIMEDOUT" || e?.signal === "SIGTERM" || Date.now() >= step.deadline) step.timedOut = true;
+      throw e;
+    }
+  };
+}
+
 /**
  * Sweep one repo's linked worktrees: remove those that are merged (ancestor / cherry / tree, see mergedStatus), clean (build
  * output aside) and not held by a live agent's cwd. The main checkout, default-branch checkouts, locked and prunable
@@ -986,6 +1074,8 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
  *   targetBranch   default branch name; omitted: detectDefaultBranch (main or master). `targetRefs` overrides both.
  *   apply          false (default) reports only.
  *   liveCwds       live agents' cwds (liveAgentCwds). Required to apply: null/undefined keeps every worktree on apply.
+ *   holdCwds       cwds that hold a worktree with no commit of its own (holdAgentCwds: live + archived < 24h); kept as
+ *                  "in-use-no-commits". Omitted: liveCwds.
  *   sanctuaryRoot  when set, worktrees outside it are kept ("outside-sanctuary").
  *   only           optional predicate on the listed worktree (the auto-sweep's merged-unit filter).
  *   sizes          adds `bytes` to each would-remove/removed result.
@@ -993,6 +1083,8 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
  *                  throw keeps the worktree ("live-cwd-unknown").
  *   heartbeat      optional () => bool (the sweep lock's beat): called per worktree; false before a removal keeps it
  *                  ("sweep-lock-lost").
+ *   stepTimeoutMs  per-worktree budget (SWEEP_STEP_TIMEOUT_MS); past it the worktree is kept ("step-timeout"). 0 = none.
+ *   onProgress     optional (event) => void: { type: "repo" | "worktree" | "result", ... } as the sweep goes (CLI progress).
  * Returns { repoRoot, apply, defaultBranch, refs, results }. Branch refs are never deleted.
  */
 export function sweepMergedWorktrees(
@@ -1003,6 +1095,7 @@ export function sweepMergedWorktrees(
     apply = false,
     git = defaultGit,
     liveCwds,
+    holdCwds,
     sanctuaryRoot = null,
     only = null,
     sizes = false,
@@ -1010,64 +1103,95 @@ export function sweepMergedWorktrees(
     now = Date.now(),
     refreshLiveCwds = null,
     heartbeat = null,
+    stepTimeoutMs = SWEEP_STEP_TIMEOUT_MS,
+    onProgress = null,
   } = {},
 ) {
   const repoRootAbs = resolve(repoRoot);
+  const say = (ev) => {
+    try {
+      onProgress?.(ev);
+    } catch {}
+  };
+  say({ type: "start", repoRoot: repoRootAbs }); // before the (throttled, 30s-bounded) fetch in detectDefaultBranch
   const def = targetRefs ? { name: targetBranch ?? null, refs: targetRefs } : detectDefaultBranch(repoRoot, { git, preferred: targetBranch });
   const testRefs = distinctRefs(repoRoot, def.refs, git);
   const wts = listRepoWorktrees(repoRoot, { git });
   const treeCache = new Map();
   const liveKnown = Array.isArray(liveCwds);
+  // Omitted holdCwds = liveCwds (older callers); the CLI and the auto-sweep pass holdAgentCwds of the full roster.
+  if (holdCwds === undefined) holdCwds = liveCwds;
+  const holdKnown = Array.isArray(holdCwds);
   const results = [];
   let removedAny = false;
-  wts.forEach((wt, i) => {
-    // Skip the main checkout: it is listed first, and its path is the repo root.
-    if (i === 0 || wt.bare || normPath(wt.path) === normPath(repoRootAbs)) return;
-    if (only && !only(wt)) return;
+  const todo = wts.filter((wt, i) => !(i === 0 || wt.bare || normPath(wt.path) === normPath(repoRootAbs)) && !(only && !only(wt)));
+  say({ type: "repo", repoRoot: repoRootAbs, defaultBranch: def.name, worktrees: todo.length });
+  todo.forEach((wt, i) => {
     if (heartbeat) heartbeat(); // keep a long sweep's lock fresh (ownership is re-checked before removing)
     const r = { path: wt.path, branch: wt.branch || null, head: wt.head || null };
     results.push(r);
-    const keep = (reason) => Object.assign(r, { action: "kept", reason });
-    if (wt.prunable) return keep("prunable");
-    if (wt.locked) return keep("locked");
-    if (sanctuaryRoot && !isInside(wt.path, sanctuaryRoot)) return keep("outside-sanctuary");
-    if (wt.branch && (PROTECTED_BRANCHES.has(wt.branch.toLowerCase()) || wt.branch === def.name)) return keep("default-branch");
-    if (!def.refs.length) return keep("no-default-branch");
+    // idea-1059: every worktree gets a bounded budget. Its git calls run with the time left (defaultGit timeoutMs) and the
+    // no-follow walks stop at the deadline; past it the worktree is kept ("step-timeout"), never half-judged as merged.
+    const started = Date.now();
+    const step = { deadline: Number.isFinite(stepTimeoutMs) && stepTimeoutMs > 0 ? started + stepTimeoutMs : Infinity, timedOut: false };
+    const sgit = stepGit(git, step);
+    say({ type: "worktree", index: i + 1, total: todo.length, path: wt.path, branch: r.branch });
+    const done = () => say({ type: "result", index: i + 1, total: todo.length, path: wt.path, branch: r.branch, action: r.action, reason: r.reason ?? null, ms: Date.now() - started });
+    const keep = (reason) => Object.assign(r, { action: "kept", reason: step.timedOut ? "step-timeout" : reason });
+    judge();
+    done();
+    function judge() {
+      if (wt.prunable) return keep("prunable");
+      if (wt.locked) return keep("locked");
+      if (sanctuaryRoot && !isInside(wt.path, sanctuaryRoot)) return keep("outside-sanctuary");
+      if (wt.branch && (PROTECTED_BRANCHES.has(wt.branch.toLowerCase()) || wt.branch === def.name)) return keep("default-branch");
+      if (!def.refs.length) return keep("no-default-branch");
 
-    // Cheap checks first; git status (worktreeDirt) runs only on a merged candidate.
-    if (isFreshWorktree(wt.path, now, freshGraceMs)) return keep("fresh");
-    if (liveKnown && cwdHoldsWorktree(wt.path, liveCwds)) return keep("live-cwd");
-    const m = mergedStatus(repoRoot, wt.head, testRefs, { git, treeCache });
-    Object.assign(r, { merged: m.merged, mergedBy: m.how });
-    if (!m.merged) return keep("unmerged");
-    const dirt = worktreeDirt(wt.path, { git });
-    r.clean = dirt.clean;
-    if (dirt.buildOutput.length) r.buildOutput = dirt.buildOutput;
-    if (!dirt.clean) return keep(dirt.error ? "unreadable" : "dirty");
-    if (sizes) r.bytes = dirBytesNoFollow(wt.path);
-    if (!apply) {
-      r.action = "would-remove";
-      if (!liveKnown) r.liveCheck = "unknown";
-      return;
-    }
-    if (!liveKnown) return keep("live-cwd-unknown");
-    if (heartbeat && !heartbeat()) return keep("sweep-lock-lost");
-    if (refreshLiveCwds) {
-      // Re-read the roster right before removing: a long sweep must not act on a roster taken minutes ago.
-      let fresh;
-      try {
-        fresh = refreshLiveCwds();
-      } catch {
-        fresh = null;
+      // Cheap checks first; git status (worktreeDirt) runs only on a merged candidate.
+      if (isFreshWorktree(wt.path, now, freshGraceMs)) return keep("fresh");
+      if (liveKnown && cwdHoldsWorktree(wt.path, liveCwds)) return keep("live-cwd");
+      const m = mergedStatus(repoRoot, wt.head, testRefs, { git: sgit, treeCache });
+      if (step.timedOut) return keep("step-timeout");
+      Object.assign(r, { merged: m.merged, mergedBy: m.how });
+      if (!m.merged) return keep("unmerged");
+      // idea-1043: no commit of its own (a read-only unit at origin/main) is "merged" by ancestry alone; it is done only once
+      // no agent that may come back (holdCwds: live or archived < 24h) points at it.
+      if (worktreeHasOwnCommit(wt.path) !== true) {
+        r.ownCommit = false;
+        if (holdKnown && cwdHoldsWorktree(wt.path, holdCwds)) return keep("in-use-no-commits");
       }
-      if (!Array.isArray(fresh)) return keep("live-cwd-unknown");
-      if (cwdHoldsWorktree(wt.path, fresh)) return keep("live-cwd");
+      const dirt = worktreeDirt(wt.path, { git: sgit });
+      if (step.timedOut) return keep("step-timeout");
+      r.clean = dirt.clean;
+      if (dirt.buildOutput.length) r.buildOutput = dirt.buildOutput;
+      if (!dirt.clean) return keep(dirt.error ? "unreadable" : "dirty");
+      if (sizes) r.bytes = dirBytesNoFollow(wt.path);
+      if (!apply) {
+        r.action = "would-remove";
+        if (!liveKnown) r.liveCheck = "unknown";
+        return;
+      }
+      if (!liveKnown) return keep("live-cwd-unknown");
+      if (heartbeat && !heartbeat()) return keep("sweep-lock-lost");
+      if (refreshLiveCwds) {
+        // Re-read the roster right before removing: a long sweep must not act on a roster taken minutes ago.
+        let fresh;
+        try {
+          fresh = refreshLiveCwds();
+        } catch {
+          fresh = null;
+        }
+        if (!Array.isArray(fresh)) return keep("live-cwd-unknown");
+        if (cwdHoldsWorktree(wt.path, fresh)) return keep("live-cwd");
+      }
+      // The removal itself uses plain git (its own timeout): a `git worktree remove` killed half way would leave a half-deleted
+      // tree that reads dirty forever. The build-output delete and link walk stop at the step deadline (nothing removed then).
+      const res = removeSweptWorktree(repoRoot, wt.path, { git, buildOutput: dirt.buildOutput, deadline: step.deadline });
+      if (res.removed) {
+        r.action = "removed";
+        removedAny = true;
+      } else keep(res.reason);
     }
-    const res = removeSweptWorktree(repoRoot, wt.path, { git, buildOutput: dirt.buildOutput });
-    if (res.removed) {
-      r.action = "removed";
-      removedAny = true;
-    } else keep(res.reason);
   });
 
   if (apply && removedAny) tryGit(git, ["worktree", "prune"], repoRoot); // best-effort

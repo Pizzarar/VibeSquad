@@ -77,6 +77,7 @@ import {
   sweepAllRepos,
   throttledLiveCwds,
   liveAgentCwds,
+  holdAgentCwds,
   cleanupProjectsFolder,
   resolveManagedWorktreeRoot,
   retentionSweep,
@@ -302,9 +303,11 @@ export function parseArgs(argv) {
     "lean",
     "alt",
     "kind",
+    "stepTimeout",
   ]);
   const booleans = new Set([
     "sinceMe",
+    "quiet",
     "peek",
     "pass",
     "digest",
@@ -3374,15 +3377,35 @@ function commandWorktree(flags) {
     // (--here: only the cwd's repo). Merged = ancestor | git cherry | tree match; untracked build output is not dirt.
     // Branch refs are never deleted. --apply needs the agent roster for the live-cwd guard: unreadable roster, nothing removed.
     let liveCwds = null;
+    let holdCwds = null;
     try {
       const agents = listRunnerAgentsSync();
       // [] also means "runner logs unreadable" (the fold returns [] then): treat it as unknown, so --apply removes nothing.
-      if (agents.length) liveCwds = liveAgentCwds(agents);
+      if (agents.length) {
+        liveCwds = liveAgentCwds(agents);
+        holdCwds = holdAgentCwds(agents); // idea-1043: + agents archived < 24h, for worktrees with no commit of their own
+      }
     } catch {}
     const here = path.resolve(repoRoot).toLowerCase();
+    // idea-1059: progress on stderr (stdout stays the JSON report), so a long sweep shows where it is; --quiet silences it.
+    const t0 = Date.now();
+    const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+    const progress = flags.quiet
+      ? null
+      : (ev) => {
+          if (ev.type === "start") process.stderr.write(`sweep ${path.basename(ev.repoRoot)} [${secs(Date.now() - t0)}]\n`);
+          else if (ev.type === "repo") process.stderr.write(`  ${ev.worktrees} worktree(s) vs ${ev.defaultBranch ?? "?"}\n`);
+          else if (ev.type === "result" && (ev.action !== "kept" || ev.ms >= 2000 || ev.reason === "step-timeout"))
+            process.stderr.write(`  ${ev.index}/${ev.total} ${ev.branch ?? path.basename(ev.path)}: ${ev.action}${ev.reason ? ` (${ev.reason})` : ""} ${secs(ev.ms)}\n`);
+        };
+    const stepTimeoutMs = flags.stepTimeout === undefined ? undefined : Number(flags.stepTimeout) * 1000;
+    if (stepTimeoutMs !== undefined && !(stepTimeoutMs > 0)) throw new Error("--step-timeout must be a number of seconds > 0");
     const res = sweepAllRepos({
       apply,
       liveCwds,
+      holdCwds,
+      onProgress: progress,
+      ...(stepTimeoutMs ? { stepTimeoutMs } : {}),
       // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
       refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
       sizes: Boolean(flags.sizes),
