@@ -56,7 +56,7 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
-import { findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
+import { DEFAULT_PACK_PROFILES, findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
 import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
 import { isHiddenRole } from "../server/role-route.mjs";
 import { loadTierLadder } from "../server/stakes-ladder.mjs";
@@ -1471,7 +1471,7 @@ async function commandWhoami(flags) {
 }
 
 function commandProfiles(flags) {
-  const { profiles } = loadProfiles(undefined, { autoSeed: false });
+  const { profiles } = loadProfiles(undefined, { autoSeed: false, listBuiltins: true }); // idea-732: same set GET /api/profiles (and spawn_worker) accepts, read from the same file, so no server needed
   const rawRole = flags.role ? String(flags.role).trim().toLowerCase() : "";
   const wantRole =
     rawRole === "buddy"
@@ -1537,10 +1537,14 @@ function commandProfiles(flags) {
     writeRoleRows(listedRows);
     if (!flags.aliases) {
       // Roles only: custom (non-legacy) profiles are still spawnable by name, so they stay listed; old names are counted.
-      const legacy = matched.filter((p) => aliasOf(p));
-      shown = matched.filter((p) => !aliasOf(p));
-      if (shown.length) process.stdout.write("\nCustom profiles:\n");
-      for (const p of shown) writeProfileRow(p, "", includeNotes);
+      // idea-732: UX Reviewer - Opus maps to the review role for routing but is a distinct, named UX-gate profile: keep it listed.
+      const namedOnly = (p) => /^ux reviewer - /i.test(p.name);
+      const legacy = matched.filter((p) => aliasOf(p) && !namedOnly(p));
+      shown = matched.filter((p) => !aliasOf(p) || namedOnly(p));
+      const builtinNames = new Set(DEFAULT_PACK_PROFILES.map((d) => String(d.name).toLowerCase()));
+      const isBuiltin = (p) => builtinNames.has(String(p.name).toLowerCase());
+      if (shown.length) process.stdout.write("\nOther profiles (spawn by exact name; [built-in] ships with the server, no role label):\n");
+      for (const p of shown) writeProfileRow(p, isBuiltin(p) ? " [built-in]" : "", includeNotes);
       process.stdout.write(`\n${legacy.length} legacy alias${legacy.length === 1 ? "" : "es"} hidden (--aliases)\n`);
       return 0;
     }
