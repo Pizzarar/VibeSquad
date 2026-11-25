@@ -71,10 +71,10 @@ test("ops persist the new array order through save, serialized, and roll back on
   assert.deepEqual(ids(cur), ["c", "a", "b"]);
   assert.equal(cur.find((t) => t.main).id, "b");
   assert.equal(rolled, 0);
-  await ops.drop("b", "c", "before", known);
-  assert.deepEqual(ids(cur), ["b", "c", "a"]);
+  await ops.drop("a", "c", "before", known); // b is Main now: hidden, so the visible list is c, a
+  assert.deepEqual(ids(cur), ["a", "c", "b"]);
   ok = false;
-  assert.equal(await ops.move("a", "up", known), false);
+  assert.equal(await ops.move("c", "up", known), false);
   assert.equal(rolled, 1, "failed save rolls back to disk");
 });
 
@@ -90,7 +90,7 @@ test("menu labels flip and disable at the ends (source)", () => {
   assert.match(src("projectOrderActions.ts"), /saveTeams\(\(cur\) => update\(cur\) as TeamDef\[\]\)[\s\S]*rollback: resetTeamsToDisk/);
 });
 
-test("sidebar sources its order from teams.json via buildTeamViews, then orderViews", () => {
+test("sidebar sources its order from teams.json via buildTeamViews; Main is lifted out by mainView", () => {
   assert.match(src("teams.ts"), /const all = \[\.\.\.TEAMS, UNASSIGNED\]/);
   assert.match(src("BoringAde.tsx"), /partitionViews\(mainV \? allViews\.filter\(\(v\) => v !== mainV\) : allViews, folders, stat\)/);
 });
@@ -105,7 +105,7 @@ test("O2: Main row is pinned outside the scrolling tree, compact, with an Open t
   assert.match(block, /\.boring-main-pin \{[^}]*border: 1px solid var\(--accent\)/);
   assert.match(block, /\.boring-main-line \{[^}]*min-height: 54px/, "~1.5x the 36px row");
   assert.ok(!/opacity: 0\./.test(block) && !/image-rendering: auto/.test(block), "dim by colour, no fractional opacity");
-  assert.match(css, /\.boring-project-line:focus-within \.boring-drag-grip/, "grip shows on hover/focus/active row (a touch tap sticks :hover); phones also have Move up/down");
+  assert.match(css, /\.boring-project-line:focus-within \.boring-drag-grip/, "grip shows on hover/focus/active row (a touch tap sticks :hover); the keyboard path is ⋯ → Move up/down");
 });
 
 test("O2: drag uses pointer events (mouse + touch), same-list guard, drop persists through projectOrder.drop", () => {
@@ -116,4 +116,57 @@ test("O2: drag uses pointer events (mouse + touch), same-list guard, drop persis
   assert.match(css, /\.boring-drag-grip \{[^}]*touch-action: none/);
   assert.match(css, /drop-before \{ box-shadow: inset 0 2px 0 var\(--accent\)/, "visible drop indicator");
   assert.ok(!/boring-drag-grip/.test(src("App.tsx")), "Psycho gets no new UI");
+});
+
+test("r1: Main sharing a list is never a visible neighbour (Move up/down, drop)", () => {
+  const M = (id, folder) => T(id, folder, true);
+  // Main first in the list: the first visible row's Move up is disabled, not a hidden swap
+  let teams = [M("m"), T("a"), T("b")];
+  assert.equal(po.canMove(teams, "a", "up", known), false);
+  assert.equal(po.moveTeam(teams, "a", "up", known), teams);
+  assert.equal(po.canMove(teams, "a", "down", known), true);
+  // Main last: the last visible row's Move down is disabled
+  teams = [T("a"), T("b"), M("m")];
+  assert.equal(po.canMove(teams, "b", "down", known), false);
+  assert.equal(po.moveTeam(teams, "b", "down", known), teams);
+  // Main between two visible rows: one click moves one visible step, Main keeps its slot
+  teams = [T("a"), M("m"), T("b")];
+  assert.deepEqual(ids(po.moveTeam(teams, "a", "down", known)), ["b", "m", "a"]);
+  assert.deepEqual(ids(po.moveTeam(teams, "b", "up", known)), ["b", "m", "a"]);
+  // Main has no Move of its own
+  assert.equal(po.canMove(teams, "m", "up", known), false);
+  assert.equal(po.canMove(teams, "m", "down", known), false);
+  assert.equal(po.moveTeam(teams, "m", "down", known), teams);
+  // Same list only: a Main in another folder never interferes
+  teams = [T("a"), M("m", "Work"), T("b")];
+  assert.deepEqual(ids(po.moveTeam(teams, "a", "down", known)), ["b", "m", "a"]);
+  // drop: never onto/with Main; a drop that only hops the hidden Main slot is not a write
+  teams = [T("a"), M("m"), T("b")];
+  assert.equal(po.dropTeam(teams, "a", "m", "after", known), teams);
+  assert.equal(po.dropTeam(teams, "m", "a", "before", known), teams);
+  assert.equal(po.dropTeam(teams, "a", "b", "before", known), teams, "visibly identical = no write");
+  assert.deepEqual(ids(po.dropTeam(teams, "b", "a", "before", known)), ["b", "a", "m"].sort((x, y) => 0) && ["b", "a", "m"]);
+});
+
+test("r1: the Main menu has no Move items; the drag cancels on Escape; the chevron toggles from the shown state", () => {
+  const cp = src("CommandPalette.tsx"), ade = src("BoringAde.tsx");
+  assert.match(cp, /if \(!isMain\) \{\s*items\.push\(\{ label: "Move up"/);
+  assert.match(ade, /e\.key === "Escape"[\s\S]{0,60}dragCancel\(\)/);
+  assert.match(ade, /releasePointerCapture/);
+  assert.match(ade, /const setDragNow = \(d: typeof drag\) => \{ dragRef\.current = d;/, "ref set synchronously so pointerup after Escape commits nothing");
+  assert.match(ade, /\[v\.team\.id\]: !open \}\)\), v\.team\.name/, "Main chevron negates the shown state, not projectIsOpen");
+  assert.ok(!/className="boring-drag-grip" role=/.test(ade), "pointer-only grip is not a fake button");
+  const css = src("boring.css"), block = css.slice(css.indexOf("PLAN_PROJECT_ORDER O2"), css.indexOf("end PLAN_PROJECT_ORDER O2"));
+  assert.match(block, /\.boring-main-pin \{ flex: 0 1 auto; min-height: 54px; overflow-y: auto;/, "sized by content, shrinks only to keep the footer");
+  assert.ok(!/max-height: 40%/.test(block));
+  assert.match(block, /\.boring-drag-grip \{ position: absolute;/, "grip takes no row width");
+});
+
+test("r1: phone project picker lists Main first, then teams.json order (no drag, no Move)", () => {
+  const ph = src("PhoneCockpit.tsx");
+  assert.match(ph, /import \{ orderViews \} from "\.\/projectOrder"/);
+  assert.match(ph, /orderViews\(views\)\.map\(\(v\) =>/);
+  assert.ok(!/projectOrder\.|Move up|boring-drag-grip/.test(ph));
+  const views = [T("a"), T("b"), T("c", null, true)].map((team) => ({ team }));
+  assert.deepEqual(po.orderViews(views).map((v) => v.team.id), ["c", "a", "b"]);
 });

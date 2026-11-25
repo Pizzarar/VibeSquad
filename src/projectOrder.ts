@@ -28,10 +28,11 @@ const groupOf = (t: Ordered, known: ReadonlySet<string>): string => (t.folder &&
 /** Index of the neighbour a Move up/down would swap with (same folder/list), or -1 at the end. */
 function neighbour(teams: Ordered[], id: string, dir: OrderDir, known: ReadonlySet<string>): number {
   const i = teams.findIndex((t) => t.id === id);
-  if (i < 0) return -1;
+  // The Main project is pinned above the tree, so it is never a visible neighbour and has no Move of its own.
+  if (i < 0 || teams[i].main === true) return -1;
   const g = groupOf(teams[i], known);
   const step = dir === "up" ? -1 : 1;
-  for (let j = i + step; j >= 0 && j < teams.length; j += step) if (groupOf(teams[j], known) === g) return j;
+  for (let j = i + step; j >= 0 && j < teams.length; j += step) if (teams[j].main !== true && groupOf(teams[j], known) === g) return j;
   return -1;
 }
 
@@ -51,11 +52,13 @@ export function moveTeam<T extends Ordered>(teams: T[], id: string, dir: OrderDi
 export function dropTeam<T extends Ordered>(teams: T[], id: string, targetId: string, where: "before" | "after", known: ReadonlySet<string>): T[] {
   const from = teams.find((t) => t.id === id);
   const to = teams.find((t) => t.id === targetId);
-  if (!from || !to || id === targetId || groupOf(from, known) !== groupOf(to, known)) return teams;
+  if (!from || !to || from.main === true || to.main === true || id === targetId || groupOf(from, known) !== groupOf(to, known)) return teams;
   const rest = teams.filter((t) => t.id !== id);
   const at = rest.findIndex((t) => t.id === targetId) + (where === "after" ? 1 : 0);
   const out = [...rest.slice(0, at), from, ...rest.slice(at)];
-  return out.every((t, k) => t === teams[k]) ? teams : out;
+  // Compare what the sidebar shows (Main is lifted out): a drop that only hops the hidden Main slot is not a write.
+  const shown = (ts: T[]) => ts.filter((t) => t.main !== true).map((t) => t.id).join();
+  return shown(out) === shown(teams) ? teams : out;
 }
 
 export type OrderDeps = {

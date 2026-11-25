@@ -361,8 +361,10 @@ export function teamCtxItems(view: TeamView, opts?: { folders?: FolderDef[] }): 
     const order = getTeams();
     const isMain = view.team.main === true;
     items.push({ label: isMain ? "Unset main project" : "Make main project", separatorBefore: true, run: () => void projectOrder.setMain(view.team.id, !isMain) });
-    items.push({ label: "Move up", disabled: !canMove(order, view.team.id, "up", known), run: () => void projectOrder.move(view.team.id, "up", known) });
-    items.push({ label: "Move down", disabled: !canMove(order, view.team.id, "down", known), run: () => void projectOrder.move(view.team.id, "down", known) });
+    if (!isMain) {
+      items.push({ label: "Move up", disabled: !canMove(order, view.team.id, "up", known), run: () => void projectOrder.move(view.team.id, "up", known) });
+      items.push({ label: "Move down", disabled: !canMove(order, view.team.id, "down", known), run: () => void projectOrder.move(view.team.id, "down", known) });
+    }
     if (cur) items.push({ label: "Remove from folder", run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then((r) => { if (r.ok) setLastFolder(view.team.id, cur); fail(r); }) });
   }
   return items;

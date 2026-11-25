@@ -29,6 +29,7 @@ import { openStorybook, useStorybookMissing } from "./StorybookView";
 import { openPhoneUsage } from "./phoneUsageStore";
 import { CrunchToggle } from "./CrunchToggle";
 import { PhoneUsageView } from "./PhoneUsageView";
+import { orderViews } from "./projectOrder";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -342,7 +343,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
       </header>
       {squadMenu && (
         <div className="phone-squad-menu" role="listbox" data-testid="phone-squad-menu">
-          {views.map((v) => (
+          {orderViews(views).map((v) => ( // Main first, then teams.json order (PLAN_PROJECT_ORDER); no reorder UI on the phone
             <button
               key={v.team.id}
               type="button"

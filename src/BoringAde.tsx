@@ -947,24 +947,45 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   /** O2 drag-reorder: a grip drag (pointer events, so mouse and touch behave the same) over rows of the same folder/list. */
   const [drag, setDrag] = useState<{ id: string; over: string | null; where: "before" | "after" } | null>(null);
   const dragRef = useRef(drag);
-  dragRef.current = drag;
+  /** Ref is set synchronously so a cancel (Escape) beats the pointerup that follows it. */
+  const setDragNow = (d: typeof drag) => { dragRef.current = d; setDrag(d); };
+  const gripRef = useRef<{ el: HTMLElement; pid: number } | null>(null);
+  const dragCancel = () => { const g = gripRef.current; gripRef.current = null; setDragNow(null); try { g?.el.releasePointerCapture(g.pid); } catch {} };
+  useEffect(() => {
+    if (!drag) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); dragCancel(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [drag !== null]); // eslint-disable-line react-hooks/exhaustive-deps
   const orderGroup = (v: TeamView) => (v.team.folder && knownF.has(v.team.folder) ? v.team.folder : "");
   const dragMove = (e: PointerEvent<HTMLElement>, v: TeamView) => {
     if (!dragRef.current) return;
     const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-order-id]");
-    if (!hit || hit.dataset.orderId === v.team.id || hit.dataset.orderGroup !== orderGroup(v)) { setDrag({ id: v.team.id, over: null, where: "before" }); return; }
+    if (!hit || hit.dataset.orderId === v.team.id || hit.dataset.orderGroup !== orderGroup(v)) { setDragNow({ id: v.team.id, over: null, where: "before" }); return; }
     const r = hit.getBoundingClientRect();
-    setDrag({ id: v.team.id, over: hit.dataset.orderId ?? null, where: e.clientY < r.top + r.height / 2 ? "before" : "after" });
+    setDragNow({ id: v.team.id, over: hit.dataset.orderId ?? null, where: e.clientY < r.top + r.height / 2 ? "before" : "after" });
   };
   const dragEnd = (commit: boolean) => {
     const d = dragRef.current;
-    setDrag(null);
+    gripRef.current = null;
+    setDragNow(null);
     if (commit && d?.over) void projectOrder.drop(d.id, d.over, d.where, knownF);
   };
   const awakeViews = filterAwakeViews(allViews, folders);
   const activeAsleep = view ? isViewAsleep(view, folders) : false;
   // B13b: the living sky reacts to Squad state; an asleep project is always idle.
   const squadState: "idle" | "busy" = view && !activeAsleep && (view.running ?? 0) > 0 ? "busy" : "idle";
+  const projectLanes = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
+    const active = v.team.id === activeTeamId;
+    return (
+          <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
+          {trinityCard(v, m)}
+          <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
+          {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
+          {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+        </div>
+    );
+  };
   const renderProject = (v: TeamView, isMain = false) => {
     const active = v.team.id === activeTeamId;
     const open = isMain ? (projectOpen[v.team.id] ?? false) : projectIsOpen(v.team.id); // the pinned Main row starts compact
@@ -975,9 +996,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       <div key={v.team.id} className={`${open ? "boring-project-block open" : "boring-project-block"}${isMain ? " is-main" : ""}${drag?.over === v.team.id ? ` drop-${drag.where}` : ""}${drag?.id === v.team.id ? " dragging" : ""}`} data-order-id={isMain ? undefined : v.team.id} data-order-group={orderGroup(v)} data-testid={isMain ? "boring-main-project" : undefined}>
         <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}${isMain ? " boring-main-line" : ""}`} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
           {!isMain && (
-            <span className="boring-drag-grip" role="button" aria-label={`Drag to reorder ${v.team.name}`} title="Drag to reorder (or ⋯ → Move up / Move down)" data-testid={`boring-project-grip-${v.team.id}`} onPointerDown={(e) => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); setDrag({ id: v.team.id, over: null, where: "before" }); }} onPointerMove={(e) => dragMove(e, v)} onPointerUp={() => dragEnd(true)} onPointerCancel={() => dragEnd(false)} onLostPointerCapture={() => { if (dragRef.current) dragEnd(false); }}>⠿</span>
+            <span className="boring-drag-grip" aria-hidden="true" title="Drag to reorder (or ⋯ → Move up / Move down)" data-testid={`boring-project-grip-${v.team.id}`} onPointerDown={(e) => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); gripRef.current = { el: e.currentTarget, pid: e.pointerId }; setDragNow({ id: v.team.id, over: null, where: "before" }); }} onPointerMove={(e) => dragMove(e, v)} onPointerUp={() => dragEnd(true)} onPointerCancel={() => dragEnd(false)} onLostPointerCapture={() => { if (dragRef.current) dragEnd(false); }}>⠿</span>
           )}
-          {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
+          {chevronCol(open, () => setProjectOpen((o) => ({ ...o, [v.team.id]: !open })), v.team.name, `boring-project-toggle-${v.team.id}`)}
           <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
             <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
             {isMain && <img className="boring-bust-img boring-main-bust" src={bustUrl("riffbot", theme)} alt="" width={28} height={28} aria-hidden="true" />}
@@ -990,14 +1011,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>
           )}
         </div>
-        {open && (
-          <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
-            {trinityCard(v, m)}
-            <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
-            {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
-            {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
-          </div>
-        )}
+        {open && projectLanes(v, m)}
       </div>
     );
   };
