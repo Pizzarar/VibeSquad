@@ -5,6 +5,7 @@ import { snapshotProcesses, shellCmdTail } from './background.mjs';
 import { PROVIDER_ALIASES } from './adapters/acp.mjs';
 
 export const HEALTH_SNAPSHOT_TTL_MS = 15_000;
+export const HEALTH_SNAPSHOT_FAIL_TTL_MS = 5_000;
 export const HEALTH_SNAPSHOT_TIMEOUT_MS = 3_000;
 export const HELD_CMD_MAX = 120;
 export const ORPHAN_CMD_MAX = 160;
@@ -26,8 +27,27 @@ function firstToken(cmd) {
   return s.split(/\s+/)[0] ?? '';
 }
 
+/** Redacts common secret patterns from command lines before exposing them on /health. */
+export function redactCmdSecrets(text) {
+  let s = String(text ?? '');
+  if (!s) return '';
+  // Leading NAME=value env prefixes (at start, after `env`, or after shell separators && / || / ;).
+  s = s.replace(
+    /(^|(?:&&|\|\||;|\benv)\s+)((?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"';|&]*)(?:\s+|$))+)/g,
+    (_m, prefix, assigns) => prefix + assigns.replace(/([A-Za-z_][A-Za-z0-9_]*=)(?:"[^"]*"|'[^']*'|[^\s"';|&]*)/g, '$1[REDACTED]'),
+  );
+  // --*token|key|secret|password[= ]X
+  s = s.replace(
+    /(^|[\s"'(=,;])(--[\w-]*(?:token|key|secret|password))(\s*=\s*|\s+)("[^"]*"|'[^']*'|[^\s"';|&]+)/gi,
+    '$1$2$3[REDACTED]',
+  );
+  // Bearer <token>
+  s = s.replace(/\b(Bearer\s+)([^\s"';|&]+)/gi, '$1[REDACTED]');
+  return s;
+}
+
 function cleanCmd(text, max) {
-  const s = String(text ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const s = redactCmdSecrets(String(text ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim());
   if (!s) return '';
   return s.length > max ? `${s.slice(0, Math.max(0, max - 3)).trimEnd()}...` : s;
 }
@@ -37,7 +57,7 @@ export function formatHeldCmd(shells, max = HELD_CMD_MAX) {
   if (!Array.isArray(shells) || !shells.length) return null;
   const parts = [];
   for (const w of shells) {
-    const raw = shellCmdTail(w?.cmd || w?.name || '', max * 2);
+    const raw = shellCmdTail(redactCmdSecrets(w?.cmd || w?.name || ''), max * 2);
     const cleaned = cleanCmd(raw, max);
     if (cleaned) parts.push(cleaned);
   }
@@ -195,24 +215,35 @@ export function buildHealthLiveDiag(runner, { heldAgents = null, heldWork = null
 
 /**
  * On-demand single-flight cached process snapshot (no polling loop). Returns null on error/timeout so /health stays 200 OK.
+ * Note: with the 15 s snapshot TTL, a just-exited agent that left `runner.live` after the snapshot was taken can show up
+ * as a transient false orphan until the cached snapshot expires. Failures are cached briefly (`failTtlMs`, default 5 s)
+ * so a broken `ps`/CIM probe does not make every /health poll retry immediately.
  */
-export function createHealthSnapshotCache({ snapshot = () => snapshotProcesses({ timeoutMs: HEALTH_SNAPSHOT_TIMEOUT_MS }), ttlMs = HEALTH_SNAPSHOT_TTL_MS, now = () => Date.now() } = {}) {
+export function createHealthSnapshotCache({
+  snapshot = () => snapshotProcesses({ timeoutMs: HEALTH_SNAPSHOT_TIMEOUT_MS }),
+  ttlMs = HEALTH_SNAPSHOT_TTL_MS,
+  failTtlMs = HEALTH_SNAPSHOT_FAIL_TTL_MS,
+  now = () => Date.now(),
+} = {}) {
   if (snapshot === null) return async () => null;
-  let cached = null; // { at, procs }
+  let cached = null; // { at, procs, ttl }
   let inflight = null;
   return async () => {
     const t = now();
-    if (cached && t - cached.at < ttlMs) return cached.procs;
+    if (cached && t - cached.at < cached.ttl) return cached.procs;
     if (inflight) return inflight;
     inflight = Promise.resolve()
       .then(() => snapshot())
       .then(
         (procs) => {
           const list = Array.isArray(procs) ? procs : null;
-          if (list) cached = { at: now(), procs: list };
+          cached = { at: now(), procs: list, ttl: list ? ttlMs : failTtlMs };
           return list;
         },
-        () => null,
+        () => {
+          cached = { at: now(), procs: null, ttl: failTtlMs };
+          return null;
+        },
       )
       .finally(() => { inflight = null; });
     return inflight;

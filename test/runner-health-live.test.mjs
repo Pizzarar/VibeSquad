@@ -14,6 +14,7 @@ import {
   createHealthSnapshotCache,
   formatHeldCmd,
   matchProviderProcess,
+  redactCmdSecrets,
 } from '../runner/health-diag.mjs';
 
 const dirs = [];
@@ -155,9 +156,54 @@ test('createHealthSnapshotCache: coalesces concurrent calls, caches within TTL, 
   assert.deepEqual(await get(), fakeProcs);
   assert.equal(calls, 2);
 
-  // Failure returns null without throwing.
-  const failing = createHealthSnapshotCache({ snapshot: async () => { throw new Error('boom'); } });
+  // Failure is cached for failTtlMs so a broken ps doesn't retry on every /health call, then retries after failTtlMs.
+  let failClock = 1_000;
+  let failCalls = 0;
+  const failing = createHealthSnapshotCache({
+    snapshot: async () => {
+      failCalls += 1;
+      throw new Error('boom');
+    },
+    failTtlMs: 5_000,
+    now: () => failClock,
+  });
   assert.equal(await failing(), null);
+  assert.equal(failCalls, 1);
+  failClock += 2_000;
+  assert.equal(await failing(), null);
+  assert.equal(failCalls, 1, 'failure cached within failTtlMs');
+  failClock += 4_000;
+  assert.equal(await failing(), null);
+  assert.equal(failCalls, 2, 'retries after failTtlMs');
+});
+
+test('redactCmdSecrets: redacts flags, leading env prefixes, and Bearer tokens in heldCmd and orphan cmd', () => {
+  assert.equal(
+    redactCmdSecrets('API_KEY=sk-123 DB_PASS="p@ss word" curl -H "Authorization: Bearer tok_abc.xyz" --auth-token=secret1 --api-key secret2 --client-secret=\'s3\' --password mypw https://example.test'),
+    'API_KEY=[REDACTED] DB_PASS=[REDACTED] curl -H "Authorization: Bearer [REDACTED]" --auth-token=[REDACTED] --api-key [REDACTED] --client-secret=[REDACTED] --password [REDACTED] https://example.test',
+  );
+
+  const held = formatHeldCmd([{ pid: 10, name: 'bash', cmd: 'TOKEN=abc123 curl -H "Authorization: Bearer live_tok" --api-key=k999 http://127.0.0.1' }]);
+  assert.ok(!held.includes('abc123') && !held.includes('live_tok') && !held.includes('k999'), `heldCmd leaked secret: ${held}`);
+  assert.ok(held.includes('TOKEN=[REDACTED]') && held.includes('Bearer [REDACTED]') && held.includes('--api-key=[REDACTED]'));
+
+  const fakeRunner = {
+    live: new Map([
+      ['rn-1', { provider: 'claude', status: 'idle', inflight: 0, handle: { pid: 100 }, heldSince: Date.now() - 1000, perms: new Set() }],
+    ]),
+    _bgHeldNow: () => true,
+    heldWork: () => ({ 'rn-1': [{ pid: 101, name: 'bash', cmd: 'SECRET_KEY=topsecret npm test -- --token=t123' }] }),
+  };
+  const diag = buildHealthLiveDiag(fakeRunner, {
+    procs: [
+      { pid: 100, ppid: 1, name: 'claude', cmd: 'claude -p --input-format stream-json' },
+      { pid: 26246, ppid: 1, name: 'opencode', cmd: 'OPENCODE_API_KEY=sk-orphan opencode serve --api-key sk-flag --token="Bearer b999"' },
+    ],
+  });
+  assert.ok(!diag.liveAgents[0].heldCmd.includes('topsecret') && !diag.liveAgents[0].heldCmd.includes('t123'));
+  const orphanCmd = diag.orphanProviderProcs[0].cmd;
+  assert.ok(!orphanCmd.includes('sk-orphan') && !orphanCmd.includes('sk-flag') && !orphanCmd.includes('b999'), `orphan cmd leaked secret: ${orphanCmd}`);
+  assert.ok(orphanCmd.includes('OPENCODE_API_KEY=[REDACTED]') && orphanCmd.includes('--api-key [REDACTED]'));
 });
 
 test('GET /health on runner server exposes liveByProvider, liveAgents, and orphanProviderProcs', async (t) => {
