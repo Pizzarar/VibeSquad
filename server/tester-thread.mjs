@@ -27,10 +27,25 @@ export function getTesterThreadPath(baseHome) {
  * gets a content-free tick ({ seq }) after each line stored under it, never the intake agent's raw timeline activity.
  */
 const threadListeners = new Map();
-/** Call `cb({ seq })` after each line appended to `deviceId`'s thread; returns the unsubscribe function. */
+/**
+ * Backstop (review rn-630d32bc8390): listeners one device id may hold. The runner caps a tester's SSE streams per device
+ * (runner-api.mjs TESTER_STREAMS_PER_DEVICE, 4) before it gets here; this is twice that, so a future caller that forgets
+ * the stream cap still cannot grow one device's fan-out without bound.
+ */
+export const TESTER_THREAD_LISTENERS_MAX = 8;
+/** Live listeners for `deviceId` (tests and diagnostics). */
+export const testerThreadListenerCount = (deviceId) => threadListeners.get(deviceId)?.size ?? 0;
+/**
+ * Call `cb({ seq })` after each line appended to `deviceId`'s thread; returns the unsubscribe function. Past
+ * TESTER_THREAD_LISTENERS_MAX for that device the registration is refused (a no-op unsubscribe, never a throw).
+ */
 export function onTesterThreadLine(deviceId, cb) {
   if (!validDeviceId(deviceId) || typeof cb !== "function") return () => {};
   let set = threadListeners.get(deviceId);
+  if (set && set.size >= TESTER_THREAD_LISTENERS_MAX) {
+    console.warn(`[vibesquad] tester thread: listener cap (${TESTER_THREAD_LISTENERS_MAX}) reached for one device; new listener refused`);
+    return () => {};
+  }
   if (!set) threadListeners.set(deviceId, (set = new Set()));
   set.add(cb);
   return () => {

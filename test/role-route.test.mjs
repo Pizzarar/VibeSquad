@@ -156,7 +156,7 @@ test("role names keep today's third failover hop (two providers capped)", () => 
     ["Implement", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
     ["Work Order", [O, C], row(A, "gemini-4-neon", "medium", "accept-edits")],
     ["Review", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
-    ["Pre-check", [A, C], row(O, "deepseek/deepseek-v4-pro", "default", "plan")],
+    ["Pre-check", [A, C], row(O, "deepseek/deepseek-flash", "default", "plan")], // cheap tier on opencode = Flash (R7)
     ["Art Director", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
     ["Art Painter", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
   ];
@@ -208,6 +208,31 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
   assert.equal(resolveRoute({ role: "Pre-check", stakes: "tierA-security" }).model, "gemini-4-neon");
   const lm = resolveRoute({ role: "lead", stakes: "mechanical" });
   assert.deepEqual([lm.model, lm.effort, lm.tier], ["claude-sonnet-5-5", "low", "cheap"]);
+});
+
+test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles); top/mid stay v4-pro; claude/gemini rungs unchanged", () => {
+  assert.deepEqual(DEFAULT_TIER_LADDER.opencode, {
+    top: { model: "deepseek/deepseek-v4-pro", effort: "high" },
+    mid: { model: "deepseek/deepseek-v4-pro" },
+    cheap: { model: "deepseek/deepseek-flash" },
+  });
+  assert.deepEqual(DEFAULT_TIER_LADDER.claude, {
+    top: { model: "claude-opus-5-5", effort: "high" },
+    mid: { model: "claude-sonnet-5-5", effort: "medium" },
+    cheap: { model: "claude-sonnet-5-5", effort: "low" },
+  });
+  assert.deepEqual(DEFAULT_TIER_LADDER[A], {
+    top: { model: "gemini-4-neon", effort: "high" },
+    mid: { model: "gemini-4-neon" },
+    cheap: { model: "gemini-3.8-flash" },
+  });
+  const wo = (stakes) => resolveRoute({ role: "work-order", stakes, caps: [] });
+  assert.deepEqual([wo("mechanical").provider, wo("mechanical").model, wo("mechanical").tier], [O, "deepseek/deepseek-flash", "cheap"]);
+  assert.deepEqual([wo("normal").model, wo("normal").tier], ["deepseek/deepseek-v4-pro", "mid"]);
+  assert.deepEqual([wo("tierA-invariant").model, wo("tierA-invariant").effort, wo("tierA-invariant").tier], ["deepseek/deepseek-v4-pro", "high", "top"]);
+  // legacy name Work Order - DSP + mechanical lands on Flash too (the 38 mechanical DSP spawns in EXP6.md)
+  const legacy = resolveRoute({ role: "Work Order - DSP", stakes: "mechanical", caps: [] });
+  assert.deepEqual([legacy.provider, legacy.model], [O, "deepseek/deepseek-flash"]);
 });
 
 test("role table: 8 roles, every preferred provider has a ladder and a mode; lookup order", () => {
@@ -299,7 +324,7 @@ test("a deepseek key in the ladder file maps to opencode", () => {
     writeFileSync(f, JSON.stringify({ deepseek: { top: { model: "deepseek/deepseek-v5" }, mechanical: { effort: "low" } } }));
     const l = loadTierLadder(f);
     assert.deepEqual(l.opencode.top, { model: "deepseek/deepseek-v5", effort: "high" });
-    assert.deepEqual(l.opencode.cheap, { model: "deepseek/deepseek-v4-pro", effort: "low" });
+    assert.deepEqual(l.opencode.cheap, { model: "deepseek/deepseek-flash", effort: "low" }); // legacy mechanical key folds onto cheap, model kept
     assert.equal(l.deepseek, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });

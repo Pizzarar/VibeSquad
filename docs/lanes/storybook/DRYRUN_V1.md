@@ -195,6 +195,61 @@ fixes):
    word-subset clause in `server/storybook/checks/structural.mjs` (`word "... is a name and also part of another name"`)
    could be limited to mixed kinds. No change made.
 
+## SB6b re-run
+
+Re-ran the engine read-only at the same pinned sha (`fd4f8c37`) on branch `sb6b-tighten-7`, through the same pinned-sha
+reader (`git show` / `git ls-tree`, no fetch, no EFI worktree read, no write). Only `server/storybook/checks/structural.mjs`
+changed: the #7 word-subset clause now reports a word only when **every** name sharing it is a character-like kind
+(`trader`, `squad`, `enemy`). Exact-name and id clashes are unchanged.
+
+The brief's "character vs item → finding" shape cannot coexist with this target on EFI: the `scav` group
+(`Scav` vs `Scav Boots`…) and the `map` group (`Map` vs `Map Room Guard`) are character-vs-item overlaps and are exactly
+two of the 15 rows that must drop to reach 4. The implemented rule keeps the two character-vs-character word clashes
+(`Tank` vs `Tank Diver`, `The Foreman` vs `Line Foreman`) and quiets every group that involves an item or room.
+
+Summary line after the change:
+
+```
+[STORYBOOK] sha=fd4f8c37 #3=11 #4=4 #5=2 #6=6 #7=4 #8=89 #11=6 total=122
+```
+
+### #7 after (4: 2 word clashes + 1 exact name + 1 id)
+
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| 1 | info | word "foreman": enemy `boss_sublevel5_guardian` (The Foreman) + enemy `line_foreman` (Line Foreman) | **real** (INV: "Foreman") |
+| 2 | info | word "tank": squad `tank` (Tank) + enemy `tank_diver` (Tank Diver) | **real** (INV: "Tank") |
+| 3 | info | name "wrench" is shared by item `tool_wrench` (Wrench) + squad `wrench` (Wrench) | **real** (INV: "Wrench") |
+| 4 | warn | id "doc" is used by squad `doc` (Saint) + trader `doc` (Doc) | **real** (INV: "doc") |
+
+Raw:
+
+```
+[info]  enemy:boss_sublevel5_guardian word "foreman" is a name and also part of another name: enemy boss_sublevel5_guardian (The Foreman), enemy line_foreman (Line Foreman)
+[info]  enemy:tank_diver word "tank" is a name and also part of another name: enemy tank_diver (Tank Diver), squad tank (Tank)
+[info]  item:tool_wrench name "wrench" is shared by item tool_wrench (Wrench), squad wrench (Wrench)
+[warn]  squad:doc id "doc" is used by squad + trader (Saint / Doc)
+```
+
+The 15 former rows are gone, including all 10 item-vs-item chains (`Coffee`/`Coffee Beans`, `Kevlar`/`Kevlar Boots`, …),
+the 3 item-vs-room overlaps (`Barrel`/`Barrel Fire`, `Generator`/`Generator`, `Intel`/`Intel Table`) and the 2
+character-vs-item theme overlaps (`Scav`/`Scav Boots`, `Map`/`Map Room Guard`). No other check count changed; `#1`, `#2`,
+`#9`, `#10` remain 0.
+
+### SB6b minors re-run (character filter before the every() check)
+
+The word-subset clause now filters owners and hits to character kinds (registry `character: true`) before requiring two
+distinct entities, so an item sharing the word no longer silences a real character-vs-character clash. One group surfaces
+that the item had been hiding: the `scav` word, shared by three enemies (`Scav`, `Armored Scav`, `Depot Scav`; the item
+`Scav Boots` used to mask it). Same pinned sha:
+
+```
+[STORYBOOK] sha=fd4f8c37 #1=0 #2=0 #5=2 #7=5 #8=89 total=123
+[info]  enemy:armored_scav word "scav" is a name and also part of another name: enemy armored_scav (Armored Scav), enemy depot_scav (Depot Scav), enemy scav (Scav)
+```
+
+#7 is 5 (the 4 above + `scav`); the `scav` row is an enemy-variant chain, so triage it as a likely real-but-benign row.
+
 ## Public-release hygiene
 
 This file names the project "EFI" and uses repo-relative paths only; no absolute paths, IPs, or personal identifiers.

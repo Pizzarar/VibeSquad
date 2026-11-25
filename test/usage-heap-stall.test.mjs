@@ -533,6 +533,9 @@ function attributeImplementerOld(unit, agents) {
       if (impls.length > 1) {
         const profiles = new Set(impls.map((a) => `${a.provider}|${a.profile}`));
         if (profiles.size === 1) return impls.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
+        // usa-55: several profiles -> the costliest run that did work (ties: earliest created)
+        const worked = impls.filter((x) => x.turns > 0);
+        return (worked.length ? worked : impls).slice().sort((x, y) => (y.costUsd ?? 0) - (x.costUsd ?? 0) || (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
       }
       return null;
     }

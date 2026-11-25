@@ -2,6 +2,7 @@
 // Covers resolveManagedWorktreeRoot/Path, createManagedWorktree, sweepMergedWorktrees,
 // cleanupProjectsFolder (server/team-worktrees.mjs), and the managed-path fallback in
 // server/identity.mjs (extractManagedWorktreeRepoName + matchPathInRegistry).
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
