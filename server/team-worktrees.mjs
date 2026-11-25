@@ -352,7 +352,9 @@ export function worktreeDirt(wtPath, { git = defaultGit } = {}) {
   // core.longpaths=true: a >260-char untracked file must not read as clean (idea-514); without it
   // `ls-files --others` silently omits deep paths and a dry-run sweep would say "would-remove".
   const longpaths = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
-  const tracked = tryGit(git, [...longpaths, "status", "--porcelain", "--untracked-files=no"], wtPath);
+  // --no-optional-locks: status must not refresh (rewrite) the index. The sweep runs it with the step budget as its timeout;
+  // a status killed mid-refresh would leave a stale .git/worktrees/<n>/index.lock that blocks every later git write there.
+  const tracked = tryGit(git, [...longpaths, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"], wtPath);
   const others = tryGit(git, [...longpaths, "ls-files", "-z", "--others", "--exclude-standard", "--directory", "--no-empty-directory"], wtPath);
   if (tracked === null || others === null) return { clean: false, error: true, tracked: 0, untracked: [], buildOutput: [] };
   const trackedCount = tracked.split(/\r?\n/).filter((l) => l.trim()).length;
@@ -1049,9 +1051,14 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
 /** idea-1059: the per-worktree budget of a sweep (merged check, dirt check, build-output delete). */
 export const SWEEP_STEP_TIMEOUT_MS = 60_000;
 
-/** `git` bounded by `step.deadline`: each call gets the time left as timeoutMs; a timeout (or no time left) sets step.timedOut. */
+/**
+ * `git` bounded by `step.deadline`: each call gets the time left as timeoutMs; a timeout (or no time left) sets step.timedOut.
+ * Every call through it is a read-only judgement call that a timeout may kill, so it runs with GIT_OPTIONAL_LOCKS=0: git
+ * takes no optional lock (the index refresh of status/diff), and a kill leaves no stale index.lock behind (Review-Gemini 1043 r1).
+ */
 function stepGit(git, step) {
-  if (!Number.isFinite(step.deadline)) return git;
+  const withEnv = (opts) => ({ ...(opts ?? {}), env: { ...(opts?.env ?? {}), GIT_OPTIONAL_LOCKS: "0" } });
+  if (!Number.isFinite(step.deadline)) return (args, cwd, opts) => git(args, cwd, withEnv(opts));
   return (args, cwd, opts) => {
     const left = step.deadline - Date.now();
     if (left <= 0) {
@@ -1059,7 +1066,7 @@ function stepGit(git, step) {
       throw Object.assign(new Error("sweep step timed out"), { code: "ETIMEDOUT" });
     }
     try {
-      return git(args, cwd, { ...(opts ?? {}), timeoutMs: left });
+      return git(args, cwd, { ...withEnv(opts), timeoutMs: left });
     } catch (e) {
       if (e?.code === "ETIMEDOUT" || e?.signal === "SIGTERM" || Date.now() >= step.deadline) step.timedOut = true;
       throw e;

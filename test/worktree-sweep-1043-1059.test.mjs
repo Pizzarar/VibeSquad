@@ -5,7 +5,7 @@
 // budget, progress events and CLI progress on stderr. Temp repos only.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import {
   liveAgentCwds,
   removeSweptWorktree,
   sweepMergedWorktrees,
+  worktreeDirt,
   worktreeHasOwnCommit,
 } from "../server/team-worktrees.mjs";
 import { createWorktreeAutoSweep } from "../server/worktree-autosweep.mjs";
@@ -282,4 +283,50 @@ test("idea-1059: `vs worktree sweep` prints progress on stderr (stdout stays JSO
     assert.equal(quiet.status, 0, quiet.stderr);
     assert.doesNotMatch(quiet.stderr, /sweep repo/);
     assert.ok(existsSync(wt), "dry run removes nothing");
+  }));
+
+test("Review-Gemini 1043 r1 #1: sweep git reads take no optional lock (status never rewrites the index; step calls run with GIT_OPTIONAL_LOCKS=0)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "unit-m");
+    commitFile(wt, "m.txt", "m\n");
+    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-m'", "unit-m"], repo);
+    const index = resolve(wt, git(["rev-parse", "--git-path", "index"], wt));
+    const stale = () => {
+      const t = new Date(Date.now() + 60_000); // stat info no longer matches the index: a plain status would refresh it
+      utimesSync(join(wt, "m.txt"), t, t);
+    };
+    stale();
+    const before = readFileSync(index);
+    const dirt = worktreeDirt(wt);
+    assert.equal(dirt.clean, true, JSON.stringify(dirt));
+    assert.ok(readFileSync(index).equals(before), "worktreeDirt left the index untouched (no lock, no rewrite)");
+    git(["status", "--porcelain"], wt); // control: without the flag git does rewrite it, so the check above means something
+    assert.ok(!readFileSync(index).equals(before), "control: plain status refreshes the index");
+
+    // Every judgement call of the sweep (bounded or not) carries GIT_OPTIONAL_LOCKS=0; status also passes --no-optional-locks.
+    for (const stepTimeoutMs of [60_000, 0]) {
+      stale();
+      const idx0 = readFileSync(index);
+      const calls = [];
+      const rec = (args, cwd, opts) => {
+        calls.push({ args, env: opts?.env ?? {} });
+        return defaultGit(args, cwd, opts);
+      };
+      const res = byBranch(sweepMergedWorktrees(repo, { git: rec, sanctuaryRoot: sanct, freshGraceMs: 0, stepTimeoutMs, targetBranch: "main", targetRefs: ["refs/heads/main"] }));
+      assert.equal(res["unit-m"].action, "would-remove", JSON.stringify(res["unit-m"]));
+      const judged = calls.filter((c) => ["merge-base", "status", "ls-files", "rev-parse", "log", "cherry"].some((v) => c.args.includes(v)) && !c.args.includes("--verify"));
+      assert.ok(judged.some((c) => c.args.includes("status")) && judged.some((c) => c.args.includes("merge-base")), JSON.stringify(calls.map((c) => c.args)));
+      for (const c of judged.filter((c) => c.args.includes("status") || c.args.includes("merge-base") || c.args.includes("ls-files")))
+        assert.equal(c.env.GIT_OPTIONAL_LOCKS, "0", `${c.args.join(" ")} (stepTimeoutMs=${stepTimeoutMs})`);
+      const st = calls.find((c) => c.args.includes("status"));
+      assert.ok(st.args.indexOf("--no-optional-locks") >= 0 && st.args.indexOf("--no-optional-locks") < st.args.indexOf("status"), st.args.join(" "));
+      assert.ok(readFileSync(index).equals(idx0), `index untouched by the sweep (stepTimeoutMs=${stepTimeoutMs})`);
+    }
+    const idxBefore = readFileSync(index);
+    stale();
+    sweepMergedWorktrees(repo, { sanctuaryRoot: sanct, freshGraceMs: 0, targetBranch: "main", targetRefs: ["refs/heads/main"] });
+    assert.ok(readFileSync(index).equals(idxBefore), "a dry-run sweep with the real git leaves the worktree index as it was");
   }));
