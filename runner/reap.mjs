@@ -23,11 +23,15 @@ import { redactHostPathTokens } from '../server/redact-host-paths.mjs';
 
 export const sha256 = (s) => createHash('sha256').update(String(s), 'utf8').digest('hex');
 const LINK_SLACK_MS = 50; // background.mjs: a child created before its parent is a stale ParentProcessId (pid reuse)
+// A coarse row (ps etimes: whole seconds, each row read at its own instant) says so with createdTolMs; the link check then
+// allows that much, as background.mjs backgroundWork does (idea-697 review M2): a child read a second "before" its parent
+// is still its child, so an in-tree shell never falls out of its CLI's tree and reads as detached.
+const linkSlack = (p, q) => Math.max(LINK_SLACK_MS, Number(p.createdTolMs) || 0, Number(q.createdTolMs) || 0);
 const MAX_DEPTH = 64;
 const SYSTEM_PIDS = new Set([0, 4]);
 // Defense in depth: the VS runtime never carries an agent token (scripts/restart-runtime.mjs AGENT_ENV_KEYS scrub), but a
 // process that looks like it is never reaped either.
-const VS_RUNTIME = /(?:^|[\\/\s"'])(?:scripts[\\/]serve|scripts[\\/]restart-runtime|runner[\\/]server|runner[\\/]runner)\.mjs\b/i;
+export const VS_RUNTIME = /(?:^|[\\/\s"'])(?:scripts[\\/]serve|scripts[\\/]restart-runtime|runner[\\/]server|runner[\\/]runner)\.mjs\b/i;
 
 /** A reaped command fit for runner.log and the team log: Claude's wrapper stripped, host paths redacted to their script name, tail kept. */
 export function reapCmdText(cmd, max = 160) {
@@ -39,7 +43,7 @@ export function reapCmdText(cmd, max = 160) {
 function parentOf(p, byPid) {
   const q = byPid.get(p.ppid);
   if (!q || q.pid === p.pid) return null;
-  if (!(q.createdMs > 0) || !(p.createdMs > 0) || p.createdMs + LINK_SLACK_MS < q.createdMs) return null;
+  if (!(q.createdMs > 0) || !(p.createdMs > 0) || p.createdMs + linkSlack(p, q) < q.createdMs) return null;
   return q;
 }
 
@@ -192,7 +196,7 @@ export function parsePsEtimes(text, now = Date.now()) {
   const out = [];
   for (const line of String(text).split(/\r?\n/)) {
     const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s?(.*)$/.exec(line);
-    if (m) out.push({ pid: Number(m[1]), ppid: Number(m[2]), createdMs: now - Number(m[3]) * 1000, name: m[4], cmd: m[5] || m[4] });
+    if (m) out.push({ pid: Number(m[1]), ppid: Number(m[2]), createdMs: now - Number(m[3]) * 1000, createdTolMs: 2000, name: m[4], cmd: m[5] || m[4] });
   }
   return out;
 }

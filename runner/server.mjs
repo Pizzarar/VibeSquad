@@ -20,6 +20,7 @@ import { FOLD_INDEX_FILE } from './fold-index.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { createDevServerReaper } from './reap.mjs';
+import { DETACHED_FILE, createDetachedProbe, detachedSupported } from './detached.mjs';
 import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
 import { buildHealthLiveDiag, createHealthSnapshotCache } from './health-diag.mjs';
 
@@ -425,6 +426,20 @@ export function reapReporter(teamLog, log = (o) => console.log(JSON.stringify(o)
     }
   };
 }
+// idea-697: what a detached-work scan did (runner/detached.mjs, Runner.scanDetached / reapBootLedger), as one runner.log line
+// ({ detached: ... }) and, per refused / reaped / newly found / left root, a team-log metric in the agent's lane. Skips are
+// runner.log only (fail-closed reasons, nothing killed).
+export function detachedReporter(teamLog, log = (o) => console.log(JSON.stringify(o))) {
+  const brief = (r) => ({ agent: r.agentId, root: r.root ?? r.pid, ...(r.pids ? { pids: r.pids.length } : {}), cmd: r.cmd });
+  return ({ why, refused = [], found = [], reaped = [], left = [], skipped = [] }) => {
+    log({ detached: { why, ...(refused.length ? { refused: refused.map(brief) } : {}), ...(found.length ? { found: found.map(brief) } : {}), ...(reaped.length ? { reaped: reaped.map(brief) } : {}), ...(left.length ? { left: left.map(brief) } : {}), ...(skipped.length ? { skipped } : {}) } });
+    const metric = (r, text) => { try { teamLog({ team: r.team || 'vibesquad', lane: r.lane, agent: 'runner', type: 'metric', text, refs: [r.agentId] }); } catch (err) { console.error('detached team log failed', err); } };
+    for (const r of refused) metric(r, `detached: ${r.agentId} started detached background work during a restart drain (nohup / & / setsid): killed tree root ${r.root} (${r.pids?.length ?? 0} pids): ${r.cmd}`);
+    for (const r of found) metric(r, `detached: ${r.agentId} has detached background work running outside its CLI (${why}): tree root ${r.root} (${r.pids?.length ?? 0} pids), kept in the ledger: ${r.cmd}`);
+    for (const r of reaped) metric(r, `detached: ${r.agentId} left detached background work across a runner restart: killed tree root ${r.root} (${r.pids?.length ?? 0} pids): ${r.cmd}`);
+    for (const r of left) metric(r, `detached: unattributed work carrying agent id ${r.agentId} outside every live CLI (pid ${r.pid}), not in the ledger: left running: ${r.cmd}`);
+  };
+}
 export const reapSupported = (platform = process.platform, env = process.env) => (platform === 'win32' || platform === 'linux') && env.VS_RUNNER_REAP !== '0';
 
 // lockStartedAt = the startedAt of the runner.lock this runner holds: it ties runner.json to that exact holder, so a stale
@@ -487,8 +502,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const teamLog = teamLogWriter(path.dirname(home));
-  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog) });
-  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog });
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog), detachedProbe: detachedSupported() ? createDetachedProbe() : null, detachedFile: path.join(home, DETACHED_FILE), onDetached: detachedReporter(teamLog) });
+  // idea-697: /shutdown (vs restart) records the agents' detached work in the ledger first (bounded 5 s); the next runner reaps it.
+  const server = createServer(runner, { token, onShutdown: () => runner.recordDetached(5000).finally(() => stop({ keepResumable: true })), teamLog });
   phase('init');
   // A cold fold (no fold-index entry: first boot, a fold-code change) runs on worker threads first; the boot pass then serves
   // those logs from their entries (runner/fold-cold.mjs). Part of the 'fold' phase; foldIndex.cold says what it did.
@@ -518,6 +534,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const port = server.address().port;
     if (!publishIfHolding(home, { port, token, me, onLost: lockLost })) return;
     console.log(JSON.stringify({ listening: port, dir, home }));
+    runner.armBootReap(30_000); // idea-697: the previous lifetime's detached-work ledger, after the boot grace (only the lock holder)
   });
   const lockCheckMs = Number(process.env.VS_RUNNER_LOCK_CHECK_MS) > 0 ? Number(process.env.VS_RUNNER_LOCK_CHECK_MS) : 5000;
   const lockCheck = setInterval(() => { if (!holding()) lockLost('check'); }, lockCheckMs);

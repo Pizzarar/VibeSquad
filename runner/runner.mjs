@@ -8,6 +8,8 @@ import { LogStore } from './log.mjs';
 import { LimitStore, createAgyUsagePoller } from './limits.mjs';
 import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
+import { sha256 } from './reap.mjs';
+import { readDetachedLedger, writeDetachedLedger } from './detached.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
 import { LEGACY_PROFILE_ALIASES } from '../server/profile-aliases.mjs';
@@ -323,6 +325,10 @@ function drainTtl(ttlMs) {
 // What an agent whose new background work a drain refused reads at the start of its next input.
 export function drainNoticeText(drain, work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  if (drain?.detached) { // idea-697: it left the shell at once (nohup / & / setsid), so no hold ever saw it; refused by the drain scan
+    const why = drain.kind === 'request' ? `a restart drain was open (${drain.reason || `restart request ${drain.request?.id ?? ''}`.trim()})` : `the runtime was draining for a restart (${drain.reason || 'vs restart'})`;
+    return `[VibeSquad runtime] Detached background work you started (${cmds || 'a shell'}: nohup / & / setsid) was stopped: ${why}, which refuses new background work, detached or not. Run it in the foreground (no &, no nohup) only if it is short; otherwise rerun it after restart-done.`;
+  }
   if (drain?.kind === 'request') { // idea-476: a restart request is (or was) open; a background rerun is refused until restart-done
     return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: a restart drain was open (${drain.reason || `restart request ${drain.request?.id ?? ''}`.trim()}), which refuses new background work. If it is still needed, run it in the foreground, or rerun it in the background after restart-done.`;
   }
@@ -410,7 +416,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS, detachedProbe = null, detachedFile = null, detachedScanMs = 15_000, onDetached = null }) {
     this.store = new LogStore(dir);
     this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
@@ -476,6 +482,21 @@ export class Runner {
     this._restartGate = null; // idea-870: { until } while the VS server holds the restart gate (POST /restart-gate); new turns queue
     this._restartGateTimer = null;
     this._removeDrainFile(); // a drain file a crashed runner left behind
+    // idea-697: detached background work (runner/detached.mjs): work an agent's tool call started that left its CLI's tree at
+    // once (`nohup x &`, setsid). detachedProbe null (tests, non-Linux) = off. While a drain is open it is scanned every
+    // detachedScanMs: work started after the drain began is refused (killed, the agent told), and what is left is kept in
+    // detachedFile (<runner home>/detached.json), which the NEXT runner reaps after its boot grace (reapBootLedger).
+    this.detachedProbe = detachedProbe;
+    this.detachedFile = detachedFile;
+    this.detachedScanMs = detachedScanMs;
+    this.onDetached = onDetached; // (report) -> runner.log line + team-log metric (runner/server.mjs detachedReporter)
+    this.detached = []; // the last scan's detached work (what the ledger holds)
+    this._detachedTimer = null;
+    this._detachedScan = null; // the scan in flight (scans never overlap)
+    this._detachedSeen = new Set(); // roots already reported (a drain scan reports each root once)
+    this._ledgerWritten = false;
+    this._bootLedger = detachedProbe ? readDetachedLedger(detachedFile) : []; // the previous lifetime's ledger, read before any scan of ours rewrites it
+    this._bootReapTimer = null;
     // Persisted boot fold (runner/fold-index.mjs): the real server passes <runner home>/fold-index.json; null (tests) = none.
     this.foldIndexFile = foldIndexFile;
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
@@ -534,6 +555,7 @@ export class Runner {
     this._drainTimer = setTimeout(() => this.clearDrain(), ttl);
     this._drainTimer.unref?.();
     this._writeDrainFile();
+    this._armDetachedScan();
     return this.drainState();
   }
 
@@ -544,6 +566,7 @@ export class Runner {
     this._drainTimer = null;
     this._drain = null;
     this._writeDrainFile();
+    if (!this._reqDrain) this._disarmDetachedScan();
     return was;
   }
 
@@ -565,6 +588,7 @@ export class Runner {
     this._reqDrainTimer = setTimeout(() => this.clearRequestDrain(), ttl);
     this._reqDrainTimer.unref?.();
     this._writeDrainFile();
+    this._armDetachedScan();
     return this.drainState();
   }
 
@@ -577,6 +601,7 @@ export class Runner {
     this._reqDrainTimer = null;
     this._reqDrain = null;
     this._writeDrainFile();
+    if (!this._drain) this._disarmDetachedScan();
     return was;
   }
 
@@ -623,10 +648,118 @@ export class Runner {
   }
 
   // A hold the drain refuses: every background shell was started after the drain began. A shell without a start time
-  // (POSIX ps) is treated as older work and keeps holding: the drain never stops what it cannot date.
+  // (macOS ps; Linux ps carries etimes since idea-697) is treated as older work and keeps holding: the drain never stops what it cannot date.
   _drainRefusesHold(work) {
     const d = this.drainState();
     return !!d && work.length > 0 && work.every((w) => Number.isFinite(w.createdMs) && w.createdMs >= d.since);
+  }
+
+  // ---- Detached background work (idea-697, runner/detached.mjs) ----
+  _armDetachedScan() {
+    if (!this.detachedProbe || this._shutDown || this._detachedTimer) return;
+    this._detachedTimer = setInterval(() => this._detachedTick(), this.detachedScanMs);
+    this._detachedTimer.unref?.();
+    this._detachedTick();
+  }
+
+  _disarmDetachedScan() {
+    clearInterval(this._detachedTimer);
+    this._detachedTimer = null;
+  }
+
+  _detachedTick() {
+    if (!this.drainState()) { this._disarmDetachedScan(); return; }
+    this.scanDetached({ why: 'drain' }).catch((err) => console.error('detached scan failed', err));
+  }
+
+  _liveCliPids() { return [...this.live.values()].map((e) => e.handle?.pid).filter((p) => Number.isInteger(p) && p > 0); }
+
+  _teamLane(id) {
+    const e = this.live.get(id);
+    if (e) return { team: e.team ?? null, lane: e.lane ?? null };
+    try { const m = this._fold(id)?.meta ?? {}; return { team: m.team ?? m.labels?.team ?? null, lane: m.lane ?? m.labels?.lane ?? null }; } catch { return { team: null, lane: null }; }
+  }
+
+  _reportDetached(rep) { try { this.onDetached?.(rep); } catch { /* reporting is best effort */ } }
+
+  /**
+   * One scan for detached work of this lifetime's agents (outside every live CLI tree, carrying a current token). why 'drain':
+   * work started after the drain began is refused like a new hold (_drainRefusesHold): killed, logged as park-drain-refused
+   * (drain.detached) and the agent told on its next input. ps dates to the second, so only work started 1 s or more after
+   * the drain began is refused: what may predate the drain keeps running. Everything still running goes to the ledger.
+   * Scans never overlap (a second caller shares the one in flight). Resolves { why, found, refused, skipped } or null (off).
+   */
+  async scanDetached({ why = 'drain' } = {}) {
+    if (!this.detachedProbe) return null;
+    if (this._detachedScan) return this._detachedScan;
+    const run = (async () => {
+      const agents = new Map();
+      let since = Infinity;
+      for (const [id, tok] of this.tokensById) { agents.set(sha256(tok), id); since = Math.min(since, this._tokenAt.get(id) ?? 0); }
+      if (!agents.size) return { why, found: [], refused: [], skipped: [] };
+      const found = await this.detachedProbe.scan({ agents, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], selfPid: process.pid, since: Number.isFinite(since) ? since : 0 });
+      const d = why === 'drain' && !this._shutDown ? this.drainState() : null;
+      const late = d ? found.filter((w) => Number.isFinite(w.createdMs) && w.createdMs >= d.since + 1000) : [];
+      let refused = [];
+      let skipped = [];
+      if (late.length) ({ killed: refused, skipped } = await this.detachedProbe.kill(late));
+      for (const e of refused) this._noticeDetachedRefused(e, d);
+      const keep = found.filter((w) => !refused.includes(w));
+      this.detached = keep;
+      try { await writeDetachedLedger(this.detachedFile, keep); this._ledgerWritten = true; } catch (err) { console.error('detached ledger write failed', err); }
+      const fresh = keep.filter((w) => !this._detachedSeen.has(`${w.root}:${w.createdMs}`));
+      for (const w of fresh) this._detachedSeen.add(`${w.root}:${w.createdMs}`);
+      const tag = (w) => ({ ...w, ...this._teamLane(w.agentId) });
+      if (refused.length || skipped.length || fresh.length) this._reportDetached({ why, refused: refused.map(tag), found: fresh.map(tag), skipped, ...(d ? { drain: d } : {}) });
+      return { why, found: keep, refused, skipped };
+    })();
+    this._detachedScan = run;
+    try { return await run; } finally { if (this._detachedScan === run) this._detachedScan = null; }
+  }
+
+  // A refused detached launch: the log keeps it (the parked path's notice reads park-drain-refused from the fold), and a live
+  // agent carries the notice on its entry for its next input (as bgStopNotice), the same way a stopped hold is told.
+  _noticeDetachedRefused(e, d) {
+    const work = [{ pid: e.root, name: 'detached', cmd: e.cmd, createdMs: e.createdMs }];
+    const drain = { ...d, detached: true };
+    try { this.store.append(e.agentId, 'park-drain-refused', { work, drain }); } catch { /* log gone */ }
+    const live = this.live.get(e.agentId);
+    if (live) { const t = drainNoticeText(drain, work); live.bgStopNotice = live.bgStopNotice ? `${live.bgStopNotice}\n\n${t}` : t; }
+  }
+
+  /** Right before a /shutdown: one last scan into the ledger (no refusal), bounded by timeoutMs. Never rejects. */
+  recordDetached(timeoutMs = 5000) {
+    if (!this.detachedProbe || this._shutDown) return Promise.resolve(null);
+    let t;
+    const cap = new Promise((resolve) => { t = setTimeout(() => resolve(null), timeoutMs); t.unref?.(); });
+    return Promise.race([this.scanDetached({ why: 'shutdown' }).catch(() => null), cap]).finally(() => clearTimeout(t));
+  }
+
+  /** Boot: reap the previous lifetime's ledger reapBootLedger(), graceMs from now (runner/server.mjs, after listen). */
+  armBootReap(graceMs) {
+    if (!this.detachedProbe || this._shutDown) return;
+    clearTimeout(this._bootReapTimer);
+    this._bootReapTimer = setTimeout(() => { this._bootReapTimer = null; this.reapBootLedger().catch((err) => console.error('detached boot reap failed', err)); }, graceMs);
+    this._bootReapTimer.unref?.();
+  }
+
+  /**
+   * The orphan rule for a restart: the previous runner's ledger entries still provably that work (same root pid, same start
+   * time, env still that agent id + token sha) are tree-killed; anything else outside every live CLI tree that carries one
+   * of this store's agent ids but no current token is logged as `left`, never killed. Once per boot.
+   */
+  async reapBootLedger() {
+    const ledger = this._bootLedger ?? [];
+    this._bootLedger = null;
+    if (!this.detachedProbe || this._shutDown) return null;
+    const currentShas = new Set([...this.tokensById.values()].map((t) => sha256(t)));
+    let knownIds = null;
+    try { knownIds = new Set(this.store.ids()); } catch { /* unknown: any agent id counts */ }
+    const res = await this.detachedProbe.reapLedger({ ledger, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], selfPid: process.pid, currentShas, knownIds });
+    if (!this._ledgerWritten) { try { await writeDetachedLedger(this.detachedFile, []); } catch { /* the next boot re-verifies it */ } }
+    const tag = (w) => ({ ...w, ...this._teamLane(w.agentId) });
+    if (res.reaped.length || res.skipped.length || res.left.length) this._reportDetached({ why: 'boot', reaped: res.reaped.map(tag), skipped: res.skipped, left: res.left.map(tag) });
+    return res;
   }
 
   create({ provider, model, cwd, prompt, systemPrompt, meta = {} }) {
@@ -2300,6 +2433,9 @@ export class Runner {
     this._pollAgy?.shutdown();
     this.closeRosterWatch(); // closes the handle and stops the guard timer (idea-594)
     clearInterval(this._quietSweep);
+    this._disarmDetachedScan();
+    clearTimeout(this._bootReapTimer);
+    this._bootReapTimer = null;
     if (keepDrainFile) {
       clearTimeout(this._drainTimer);
       this._drainTimer = null;
