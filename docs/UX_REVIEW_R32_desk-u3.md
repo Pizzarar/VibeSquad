@@ -145,3 +145,67 @@ ok 4 - U3: Needs-you rows at 307px (dark) …
   - `head-dark-3200-window.png`
 
 **Verdict: PASS 0/0/3**
+
+## r2 re-check (2789ec41)
+
+Date: 2026-11-25 · Build: `desk-u3-needs-loc` @ `2789ec41` (`npx vite build --outDir /tmp/r32/head2`, served by the R31 harness) · Change under review: `src/boring.css:1260-1263` (the lane is `flex: 0 0 auto; max-width: calc(100% - 6ch)`, the project is `flex: 0 1 auto`) and `test/desk-u3-needs-loc.test.mjs` (rewritten).
+
+**Verdict: PASS 0/0/0** (critical/major/minor). m1, m2 and m3 are all closed and nothing regressed. One nit is noted below and not counted.
+
+### Re-drive
+- **Name passes:** `drive/runall.sh 5832 r2`, with the same 6 name passes as before (stock, long, xl, longlane, xllane, shortlane).
+- **Coverage:** window widths 1280, 1920 and 3200, in dark and light. That is 36 runs, with 0 page errors.
+  - The measured sidebar widths were 290, 307 and 380px.
+  - Logs: `logs/r2-*.json`.
+- **Sub-pixel detail:** `drive/detail.mjs` on the R32 real-name and stress pairs.
+- **Psycho:** `drive/psycho.mjs`, in dark and light.
+- **Full window:** `drive/full.mjs` at 1280 light, 1920 dark and light, and 3200 @1.2 dark.
+
+### Status vs R32
+
+| R32 item | Status at `2789ec41` | Evidence |
+|---|---|---|
+| **m1** · the lane loses its last glyph when the project overflows; "UI" became "U…" | **Closed.** <br>• "Standing Teams": the lane box is 90.08px with `scrollWidth` 90. Before it was 89.69px and clipped. It renders "Standing Teams · Windows · Vi…". <br>• "UI" + a long project: the lane box is 11.48px with `scrollWidth` 11. Before it was 11.44/17. It renders "UI · Escape From Idle Definitiv…". <br>• "Playtest Overlay · Escape Fro…" also keeps the whole lane. <br>• In the shortlane pass, `laneTrunc` is false at all 3 widths in both themes. | `r2-detail-lane-proj.png` (panels d1–d3), `r2-dark-1280-shortlane.png`, `logs/r2-*-shortlane.json` |
+| **m2** · a long lane hid the project at 0px | **Closed.** The lane caps at `100% - 6ch` and ends in an ellipsis. The project keeps a 52.7px floor (the "·" separator plus about 4 glyphs) at all three widths. <br>• 290px: "Main Game Overwor… · Main …" <br>• 307px: "Main Game Overworld … · Main …" <br>• In the long, xl, longlane and xllane passes, `projW` = 53 in all 24 runs. Before it was 0 at 290/307 and 23 at 380. <br>• The location box never overflows the row (`whereOverflow` false in every run). | `r2-detail-lane-proj.png` (d4, d6), `r2-light-1280-xllane.png`, `logs/r2-*-{long,xl,longlane,xllane}.json` |
+| **m3** · the probe never ran at 307px, used stock names only, and had assertions that couldn't fail | **Closed.** <br>• **Gap 1:** widths now come from the viewport (1280 → 290, 1920 → 307.2; `test/desk-u3-needs-loc.test.mjs:14-19`). Each case asserts the real sidebar width (`:60-62`), and test 5 asserts that 307 − 290 ≥ 15px. The committed artifacts now differ: 290 dark `0003552f…` vs 307 dark `3415a1b9…`, and 290 light `2b08e1dc…` vs 307 light `65650139…`. A local run regenerated them byte-identical. <br>• **Gap 2:** four stress rows are injected into the live DOM (`:94-153`): a medium lane with a long project, "UI" with a long project, a 27+ character lane, and an empty lane. <br>• **Gap 3:** the separator is now read through `getComputedStyle(…, "::before")` (`:88`, `:157`). The lane is checked against a sub-pixel text `Range` (`laneW >= laneTextW - 0.25`, `:140`, `:147`). That check catches the old "U…" case (11.44px box vs 17px text). The project floor is asserted `> 0` (`:151`), which catches the old 0px case. | test run below |
+
+### Regression checks
+
+| Check | Result | Evidence |
+|---|---|---|
+| Titles keep ≥ 20ch | **Pass.** The minimum title box is 178px at 290, 195px at 307 and 268px at 380 in all 36 runs. That matches R32 and BASE, and no title CSS changed. | `logs/r2-*.json` `whoW` |
+| Desk/hub rows (Normal) | **Pass.** They read "Desk · VibeSquad" with the separator, unchanged. | `r2-dark-1920-window.png` |
+| Psycho rows | **Pass. Unchanged from R32.** Psycho uses `src/styles.css`, which r2 did not touch. <br>• Desk rows show "VibeSquad" with `::before` = `none`. <br>• Lane rows have the " · " separator, in dark and light. <br>• Output matched R32 exactly. | `r2-psycho-{dark,light}.png` |
+| Counts and selection | **Pass at 1280, 1920 and 3200.** <br>• The header reads `6`, which is 5 rows plus "▸ 1 more". <br>• "▸ Done recently · 4" is present. <br>• Project badges: Desk 4 + Bug Chaser 1 + Main Game 1 = 6, matching the Overview pills. <br>• Exactly one selected row (`sel: 1`). | `r2-{dark,light}-1920-window.png`, `r2-dark-3200-window.png`, `r2-light-1280-window.png` |
+
+### Findings
+**Critical:** none. **Major:** none. **Minor:** none.
+
+**Nit, not counted:** the probe's floor assertion is `projW > 0` (`test/desk-u3-needs-loc.test.mjs:151`).
+- **Risk:** a 1px "…" project would still pass. The real floor is 52.7px.
+- **Optional tightening:** `projW >= 5 * chPx` would pin the 6ch cap.
+- **Effort:** XS. No card.
+
+### Spec follow-up (lead)
+The R32 recommendation still stands, and r2 now delivers it. Amend SPEC R3 #3 to say that the project elides first, the lane stays whole when it fits (capped at `100% - 6ch`), and the project keeps a small floor.
+
+### Worker probe run (this worktree, `2789ec41`, Chromium via `PLAYWRIGHT_DIR`)
+```
+ok 1 - U3: Needs-you rows at 290px (light): real sidebar width, stock geometry, long-name elision + project floor, empty-lane separator
+ok 2 - U3: Needs-you rows at 307px (light): …
+ok 3 - U3: Needs-you rows at 290px (dark): …
+ok 4 - U3: Needs-you rows at 307px (dark): …
+ok 5 - U3: 290px and 307px runs actually exercised distinct sidebar widths
+# tests 5  # pass 5  # fail 0  # skipped 0
+```
+Without `PLAYWRIGHT_DIR`, all 5 tests skip ("no Playwright found"). CI needs that variable set, or the probe is silent there.
+
+### r2 artifacts (`docs/ux-review-r32/`)
+- `r2-detail-lane-proj.png`: d1 Standing Teams, d2 UI, d3 Playtest Overlay and d4 long lane, all at 1280; d6 long lane at 1920.
+- `r2-dark-1280-shortlane.png`
+- `r2-light-1280-xllane.png`
+- `r2-{dark,light}-1920-window.png`, `r2-dark-3200-window.png`, `r2-light-1280-window.png`
+- `r2-psycho-{dark,light}.png`
+- `logs/r2-*.json`: 36 runs
+
+**Verdict (r2): PASS 0/0/0**
