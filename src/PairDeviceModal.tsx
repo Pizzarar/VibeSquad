@@ -417,7 +417,7 @@ export function PairDeviceModal({
     activeQrSvg,
   } = resolvePairModalUrls({ pair, meta, networkMode, useIpMode });
 
-  // P1 (pto v1.2b): the Godot dock's server URL. Prefer the Meshnet host (the .nord name) for remote;
+  // P1 (pto v1.2b): the Godot dock's server URL. Prefer the Meshnet host for remote;
   // fall back to LAN only when no Meshnet host/IP exists. Same host/port data the rest of the dialog uses.
   const playtestServerUrl = host ? `https://${host}:${port}` : lanIp ? `https://${lanIp}:${port}` : "";
 
@@ -621,8 +621,11 @@ export function PairDeviceModal({
                 </div>
               </>
             ) : (
-              <div className="muted small" style={{ marginTop: 2 }}>
-                {busy ? "Generating 6-digit pairing code…" : "Pairing code expired."}
+              <div className="muted small" style={{ marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span>{busy ? "Generating 6-digit pairing code…" : "Pairing code expired."}</span>
+                <button type="button" className="btn ok small" disabled={busy} onClick={mintCurrent}>
+                  {busy ? "…" : "↻ New Code"}
+                </button>
               </div>
             )}
 
@@ -930,6 +933,7 @@ export function PairDeviceModal({
         </div>
         )}
 
+        {!isPlaytestRole && (
         <div className="preview" style={{ marginBottom: 0 }}>
           <div className="field-label">ACTIVE SERVER ADDRESSES (HOME LAN + MESHNET)</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 4 }} data-testid="pair-server-addresses">
@@ -958,6 +962,7 @@ export function PairDeviceModal({
             Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
           </div>
         </div>
+        )}
 
         {pair?.requiresApproval && (
           <div className="preview pair-pending" data-testid="pair-pending">

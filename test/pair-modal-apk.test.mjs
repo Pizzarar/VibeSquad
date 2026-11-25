@@ -295,14 +295,14 @@ describe("P1 (pto v1.2b): Playtest (Godot addon) compact panel", () => {
       lanPairUrl: null,
       lanQrSvg: null,
       lanAndroidApkUrl: null,
-      meshnetHost: "home-pc.nord",
+      meshnetHost: "home-pc.example",
       meshnetIp: "100.64.0.10",
     });
 
   test("playtest mode renders the dock URL, CA fingerprint, 6-digit code (with expiry + New Code) and the three steps", () => {
     const html = renderModal(playtestPair(), "owner-playtest");
     assert.match(html, /data-testid="playtest-panel"/);
-    assert.match(html, /data-testid="playtest-server-url"[^>]*>https:\/\/home-pc\.nord:4180</);
+    assert.match(html, /data-testid="playtest-server-url"[^>]*>https:\/\/home-pc\.example:4180</);
     assert.match(html, /Copy URL/);
     assert.match(html, /data-testid="playtest-fingerprint"[^>]*>aaaa:aaaa</);
     assert.match(html, /data-testid="pairing-code-display"[^>]*>123456</);
@@ -334,9 +334,37 @@ describe("P1 (pto v1.2b): Playtest (Godot addon) compact panel", () => {
 
   test("playtest URL prefers the Meshnet host and falls back to LAN only when no Meshnet host/IP exists", () => {
     const mesh = renderModal(playtestPair(), "owner-playtest");
-    assert.match(mesh, /data-testid="playtest-server-url"[^>]*>https:\/\/home-pc\.nord:4180</);
+    assert.match(mesh, /data-testid="playtest-server-url"[^>]*>https:\/\/home-pc\.example:4180</);
     const lanOnly = renderModal(basePair({ meshnetHost: "", meshnetIp: "" }), "owner-playtest");
     assert.match(lanOnly, /data-testid="playtest-server-url"[^>]*>https:\/\/192\.0\.2\.10:4180</);
-    assert.doesNotMatch(lanOnly, /home-pc\.nord/);
+    assert.doesNotMatch(lanOnly, /home-pc\.example/);
+  });
+
+  test("playtest URL still prefers the Meshnet host when LAN IP and Meshnet host are both present (default lan mode)", () => {
+    const html = renderModal(basePair({ lanIp: "192.0.2.10", meshnetHost: "home-pc.example" }), "owner-playtest");
+    assert.match(html, /data-testid="playtest-server-url"[^>]*>https:\/\/home-pc\.example:4180</);
+    assert.doesNotMatch(html, /data-testid="playtest-server-url"[^>]*>https:\/\/192\.0\.2\.10/);
+  });
+
+  test("expired playtest code still offers a New Code button", () => {
+    const html = renderModal(basePair({ expiresAt: Date.now() - 1000 }), "owner-playtest");
+    assert.match(html, /Pairing code expired\./);
+    assert.match(html, /↻ New Code/);
+    assert.doesNotMatch(html, /data-testid="pairing-code-display"/);
+  });
+
+  test("playtest hides the Desktop App active-addresses hint; owner and tester keep it", () => {
+    assert.doesNotMatch(renderModal(basePair(), "owner-playtest"), /pair-server-addresses|Type either address/);
+    assert.match(renderModal(basePair(), "owner"), /data-testid="pair-server-addresses"/);
+    assert.match(renderModal(basePair(), "bug-tester"), /data-testid="pair-server-addresses"/);
+  });
+
+  test("Alpha Tester (bug-tester) render keeps QR, /ca.crt and desktop sections and no playtest panel", () => {
+    const html = renderModal(basePair(), "bug-tester");
+    assert.doesNotMatch(html, /data-testid="playtest-panel"/);
+    assert.match(html, /INSTALL ROOT CA/);
+    assert.match(html, /Download \/ca\.crt/);
+    assert.match(html, /data-testid="desktop-pair-hero"/);
+    assert.match(html, /SCAN QR TO PAIR|<svg/);
   });
 });
