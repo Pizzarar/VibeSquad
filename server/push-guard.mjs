@@ -17,15 +17,16 @@
 //
 // idea-883 verdict gate (same hooks dir): every unit merge (`Merge unit-…` / `Merge branch 'unit-…'`) in a guarded push, and
 // every `git merge` of a unit branch into master/main (.githooks/pre-merge-commit; .githooks/pre-commit for a conflicted
-// merge's final commit), needs a recorded PASS on the merged tip: the latest team-log `done` entry naming that tip's hash
-// (server/verdict.mjs latestRecordedVerdict). FAIL or none refuses. Override (owner/lead only):
-// `git -c vs.verdictOverride=<sha> merge|push ...` or VS_VERDICT_OVERRIDE=<sha>[,<sha>].
+// merge's final commit), needs a recorded PASS on the merged tip: the latest server-attested reviewer `done` entry in this
+// repo's own Squad log(s) (teams.json paths, repoSquads) whose hash resolves here to that tip (server/verdict.mjs
+// latestRecordedVerdict). FAIL, none, or no owning Squad refuses. Override (owner/lead only; each use is logged as a `decision`
+// entry and printed): `git -c vs.verdictOverride=<sha> merge|push ...` or VS_VERDICT_OVERRIDE=<sha>[,<sha>].
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "./verdict.mjs";
+import { evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "./verdict.mjs";
 
 export const GUARDED_REFS = Object.freeze(["refs/heads/master", "refs/heads/main"]);
 export const HOOKS_PATH = ".githooks";
@@ -206,24 +207,62 @@ export function verdictHome({ home, env = process.env } = {}) {
   return path.resolve(home || env.VIBESQUAD_HOME || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
 }
 
+/** A Squad id as its log directory name (the same mapping as appendVsLogEntry's safeSegment in server/brainstorm.mjs). */
+const squadDir = (id) => String(id ?? "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "vibesquad";
+
+/** idea-883: the repo's main checkout dir (a linked worktree resolves to its main repo through the common git dir). */
+export function repoRoot({ cwd = process.cwd(), git = defaultGit } = {}) {
+  const common = path.resolve(cwd, git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd).trim());
+  return path.basename(common) === ".git" ? path.dirname(common) : common;
+}
+
 /**
- * idea-883: `recorded(tip)` over every Squad's team log under the VS home (VIBESQUAD_HOME or ~/.vibesquad). Only lines that
- * mention one of `tips`' 7-char prefixes are parsed (a verdict hash is 7+ hex chars of the tip). A missing/unreadable log
- * records nothing, so the gate refuses (fail closed).
+ * idea-883: the Squads that own this repo: every teams.json Squad whose `paths` (or one of its lanes' `paths`) match the main
+ * checkout's path by whole segments (identity.mjs pathHasSegments, as matchPathInRegistry). matchPathInRegistry itself returns
+ * null for a Squad-level path on a multi-lane Squad (it must name a lane), which is every real Squad; the gate needs only the
+ * Squad. [] = no owner, and the gate fails closed.
  */
-export function readRecordedVerdicts({ tips = [], home = verdictHome() } = {}) {
+export async function repoSquads({ cwd = process.cwd(), git = defaultGit, teams } = {}) {
+  let root = "";
+  try {
+    root = repoRoot({ cwd, git });
+  } catch {
+    return [];
+  }
+  const { pathHasSegments } = await import("./identity.mjs");
+  const norm = root.replace(/\\/g, "/").toLowerCase();
+  const pats = (list) => (Array.isArray(list) ? list : []).map((p) => String(p ?? "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
+  return (teams ?? [])
+    .filter((t) => t?.id && [...pats(t.paths), ...(t.lanes ?? []).flatMap((l) => pats(l?.paths))].some((p) => pathHasSegments(norm, p)))
+    .map((t) => String(t.id));
+}
+
+/** idea-883: `git rev-parse <hash>^{commit}` in the repo: the one commit a short hash names here, "" when none or ambiguous. */
+export function resolveInRepo({ cwd = process.cwd(), git = defaultGit } = {}) {
+  return (hash) => {
+    try {
+      return git(["rev-parse", "--verify", "--quiet", `${hash}^{commit}`], cwd).trim();
+    } catch {
+      return "";
+    }
+  };
+}
+
+/**
+ * idea-883: `recorded(tip)` over the team logs of `squads` (the repo's own Squads, repoSquads) under the VS home. Other Squads'
+ * logs are never read: a PASS recorded elsewhere cannot satisfy this repo's gate. Only lines that mention one of `tips`' 7-char
+ * prefixes are parsed; only server-attested reviewer entries count (verdict.mjs entryVerdict), and `resolve` (resolveInRepo)
+ * must map the entry's hash to exactly the tip. No Squad, or a missing/unreadable log, records nothing (fail closed).
+ */
+export function readRecordedVerdicts({ tips = [], home = verdictHome(), squads = [], resolve } = {}) {
   const want = [...new Set(tips.map((t) => String(t ?? "").toLowerCase()).filter((t) => /^[0-9a-f]{7,64}$/.test(t)))];
   const byTip = new Map(want.map((t) => [t, []]));
   const keys = [...new Set(want.map((t) => t.slice(0, 7)))];
-  let teams = [];
-  try {
-    teams = fs.readdirSync(path.join(home, "teams"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
-  } catch { /* no VS home: nothing recorded */ }
   if (keys.length) {
-    for (const team of teams) {
+    for (const dir of [...new Set((squads ?? []).map(squadDir))]) {
       let text = "";
       try {
-        text = fs.readFileSync(path.join(home, "teams", team, "log.jsonl"), "utf8");
+        text = fs.readFileSync(path.join(home, "teams", dir, "log.jsonl"), "utf8");
       } catch {
         continue;
       }
@@ -240,9 +279,36 @@ export function readRecordedVerdicts({ tips = [], home = verdictHome() } = {}) {
       }
     }
   }
-  // Each Squad's log is in append order; across Squads, order by ts so "latest" is the newest entry anywhere.
+  // Each Squad's log is in append order; across a repo's Squads, order by ts so "latest" is the newest of them.
   for (const list of byTip.values()) list.sort((a, b) => (Date.parse(a?.ts ?? "") || 0) - (Date.parse(b?.ts ?? "") || 0));
-  return (tip) => latestRecordedVerdict(byTip.get(String(tip ?? "").toLowerCase()) ?? [], tip);
+  return (tip) => latestRecordedVerdict(byTip.get(String(tip ?? "").toLowerCase()) ?? [], tip, { resolve });
+}
+
+/**
+ * idea-883: the durable audit of a verdict-gate override: one `decision` entry per overridden unit merge in each of the repo's
+ * Squad logs (team + lane log, appendVsLogEntry), naming the action, tip, merge and who ran it. Returns the Squads logged to.
+ * Only the hooks call this (not `vs push-guard check`, a dry run). A failed write is reported, never thrown.
+ */
+export async function logVerdictOverrides({ verdict, action, squads = [], env = process.env, cwd = process.cwd(), git = defaultGit } = {}) {
+  const ov = verdict?.overridden ?? [];
+  if (!ov.length || !squads.length) return [];
+  let who = String(env.VS_AGENT_ID ?? "").trim();
+  if (!who) who = gitConfigAll("user.name", cwd, git).at(-1) || "owner shell";
+  const lane = String(env.VS_LANE ?? "").trim();
+  const { appendVsLogEntry } = await import("./brainstorm.mjs");
+  const logged = [];
+  for (const squad of squads) {
+    try {
+      for (const m of ov) {
+        const text = `verdict override (${action}) by ${who}: tip ${m.tip.slice(0, 8)}${m.sha ? ` merge ${m.sha.slice(0, 8)}` : ""} ${String(m.subject ?? "").slice(0, 120)} [idea-883 vs.verdictOverride]`;
+        appendVsLogEntry({ teamId: squad, laneId: lane || squad, agent: who, type: "decision", text, refs: [m.tip, ...(m.sha ? [m.sha] : [])] });
+      }
+      logged.push(squad);
+    } catch (err) {
+      process.stderr.write(`vs verdict gate: could not log the override to Squad ${squad}: ${String(err?.message ?? err).split("\n")[0]}\n`);
+    }
+  }
+  return logged;
 }
 
 async function defaultTeams() {
@@ -262,6 +328,7 @@ export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd
   const shared = isSharedRemote(remote, url, { cwd, git });
   const results = [];
   let message = "";
+  let squads = null; // idea-883: this repo's Squads, resolved once on the first unit merge
   for (const u of guarded) {
     const branch = u.remoteRef.replace("refs/heads/", "");
     let listed;
@@ -274,16 +341,20 @@ export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd
       continue;
     }
     const result = evaluatePush({ merges: listed.merges, pusherLane: who.lane, pusherTeam: who.team, includes: who.includes, teams, findLane });
-    // idea-883: a pushed unit merge needs a recorded PASS on its merged tip. vs.pushInclude (whose lane) never waives it.
+    // idea-883: a pushed unit merge needs a recorded PASS on its merged tip, from this repo's own Squad log(s) only.
+    // vs.pushInclude (whose lane) never waives it.
     const unit = listed.merges.filter((m) => isUnitMergeSubject(m.subject));
-    const recorded = unit.length ? readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }) }) : () => null;
+    if (unit.length && !squads) squads = await repoSquads({ cwd, git, teams });
+    const recorded = unit.length
+      ? readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }) })
+      : () => null;
     const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
     results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict });
     message += formatRefusal(result, { ref: u.remoteRef });
-    message += formatVerdictRefusal(verdict, { action: "push" });
+    message += formatVerdictRefusal(verdict, { action: "push", squads: squads ?? [] });
   }
   const ok = results.every((r) => r.result?.ok && (r.verdict?.ok ?? true));
-  return { ok, message, results };
+  return { ok, message, results, squads: squads ?? [] };
 }
 
 /**
@@ -352,8 +423,8 @@ export function isUnitBranchName(name, remotes = [SHARED_REMOTE]) {
  * origin/master`: nothing unreviewed comes in, though a fresh unit branch may point there). Each needs a recorded PASS.
  * Returns { ok, message, verdict }.
  */
-export function checkMergeCommit({ cwd = process.cwd(), env = process.env, git = defaultGit, home } = {}) {
-  const pass = { ok: true, message: "", verdict: null };
+export async function checkMergeCommit({ cwd = process.cwd(), env = process.env, git = defaultGit, home, registry } = {}) {
+  const pass = { ok: true, message: "", verdict: null, squads: [] };
   let ref = "";
   try {
     ref = git(["symbolic-ref", "-q", "HEAD"], cwd).trim();
@@ -398,9 +469,11 @@ export function checkMergeCommit({ cwd = process.cwd(), env = process.env, git =
     if (subject) unit.push({ sha: "", subject, tip });
   }
   if (!unit.length) return pass;
-  const recorded = readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }) });
+  const { teams } = registry ?? (await defaultTeams());
+  const squads = await repoSquads({ cwd, git, teams });
+  const recorded = readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }) });
   const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
-  return { ok: verdict.ok, message: formatVerdictRefusal(verdict, { action: "merge" }), verdict };
+  return { ok: verdict.ok, message: formatVerdictRefusal(verdict, { action: "merge", squads }), verdict, squads };
 }
 
 /** `vs push-guard check`: what the hook would decide for pushing HEAD to <remote>/<branch> now. */
@@ -459,7 +532,7 @@ export function summarize(results) {
     for (const m of result.own) lines.push(`  own       ${m.sha.slice(0, 8)} ${String(m.subject).slice(0, 80)}`);
     for (const m of result.included) lines.push(`  included  ${m.sha.slice(0, 8)} ${String(m.subject).slice(0, 80)}`);
     for (const m of verdict?.passed ?? []) lines.push(`  verdict   ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: ${m.line.slice(0, 60)}`);
-    for (const m of verdict?.overridden ?? []) lines.push(`  OVERRIDE  ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: verdict gate overridden (vs.verdictOverride)`);
+    for (const m of verdict?.overridden ?? []) lines.push(`  OVERRIDE  ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: verdict gate overridden (vs.verdictOverride; the hook logs it)`);
     if (direct.length) lines.push(`  note: ${ref} also carries ${direct.length} direct (non-merge) commit(s); check they are yours: git log --first-parent --no-merges <remote>..HEAD`);
   }
   return lines.length ? `${lines.join("\n")}\n` : "";
@@ -481,13 +554,23 @@ export async function main(argv = process.argv.slice(2)) {
       return 1;
     }
     process.stderr.write(summarize(res.results));
+    // idea-883: an override is allowed only with a durable audit entry plus a stderr notice.
+    for (const r of res.results) {
+      if (!r.verdict?.overridden?.length) continue;
+      const logged = await logVerdictOverrides({ verdict: r.verdict, action: "push", squads: res.squads });
+      process.stderr.write(formatVerdictOverrides(r.verdict, { action: "push", logged }));
+    }
     return 0;
   }
   if (mode === "pre-merge-commit") {
-    const res = checkMergeCommit();
+    const res = await checkMergeCommit();
     if (!res.ok) {
       process.stderr.write(res.message);
       return 1;
+    }
+    if (res.verdict?.overridden?.length) {
+      const logged = await logVerdictOverrides({ verdict: res.verdict, action: "merge", squads: res.squads });
+      process.stderr.write(formatVerdictOverrides(res.verdict, { action: "merge", logged }));
     }
     return 0;
   }

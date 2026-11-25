@@ -2981,6 +2981,15 @@ test("idea-883 itemVerdict: the agent's own verdict line, a FAIL anywhere wins, 
   assert.equal(itemVerdict(agent("**VERDICT: PASS 0/0/1 abcdef12**")), "PASS 0/0/1 abcdef12");
   assert.equal(itemVerdict(agent("tests 3/3 pass, 65/65 pass, all good")), null, "test counts are not a verdict");
   assert.equal(itemVerdict({ kind: "suite", ref: "", state: "done", report: "PASS 3/3 pass" }), null, "only agent items carry reviewer verdicts");
+  // Review Low: an orphan-sweep report with no final still reads its verdict under the UNVERIFIED prefix.
+  assert.equal(itemVerdict(agent("UNVERIFIED (digest failed): FAIL 1/0/3 4c288c19 reviewer=Review - Gemini: High")), "FAIL 1/0/3 4c288c19");
+  assert.equal(itemVerdict(agent("UNVERIFIED (digest orphaned): PASS 0/0/1 9aa9be4e")), "PASS 0/0/1 9aa9be4e");
+});
+
+test("idea-883 maskVerdictWords masks Title-case verdict words too; lowercase test counts stay", () => {
+  assert.equal(maskVerdictWords("- w-3: Pass | Passed review; Fail, Failed, Fails; No verdict"), "- w-3: [verdict↑] | [verdict↑] review; [verdict↑], [verdict↑], [verdict↑]; [verdict↑]");
+  assert.equal(maskVerdictWords("count: 3/3 pass, 65 passed, 0 failed, 1 fail"), "count: 3/3 pass, 65 passed, 0 failed, 1 fail");
+  assert.equal(maskVerdictWords("Passport and Failover stay"), "Passport and Failover stay", "whole words only");
 });
 
 test("idea-883 completion ping: a FAIL on a long review's last line leads its item line and the head tally; no verdict reads NO VERDICT", async () => {

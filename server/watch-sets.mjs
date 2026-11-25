@@ -21,7 +21,7 @@ import { checkTestLockDir, testLockDir } from "../cli/fifo-queue.mjs";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
-import { VERDICT_PREFIX_SRC, extractVerdictLine, parseVerdictLine } from "./verdict.mjs";
+import { VERDICT_PREFIX_SRC, extractVerdictLine, parseVerdictLine, stripUnverifiedPrefix } from "./verdict.mjs";
 
 export const WATCH_KINDS = Object.freeze(["agent", "suite", "restart"]);
 export const DEFAULT_STALL_MIN = 15;
@@ -390,7 +390,8 @@ function itemLabel(item) {
  */
 export function itemVerdict(item) {
   if (item?.kind !== "agent") return null;
-  const line = extractVerdictLine([item.final, item.report].filter(Boolean).map(String).join("\n"));
+  // An orphan-sweep report ("UNVERIFIED (digest failed): FAIL 1/0/3 <sha>") still carries the final's verdict line.
+  const line = extractVerdictLine(stripUnverifiedPrefix([item.final, item.report].filter(Boolean).map(String).join("\n")));
   const v = line ? parseVerdictLine(line) : null;
   if (!v) return null;
   return `${v.verdict} ${v.severity ?? `${v.high}/${v.medium}/${v.low}`} ${v.hash}`;
@@ -421,9 +422,16 @@ export function verdictBlock(set) {
   ].join("\n");
 }
 
-/** idea-883: an LLM merge digest may not state verdicts; any verdict word it wrote is masked (the code block above is the source). */
+/**
+ * idea-883: an LLM merge digest may not state verdicts; any verdict word it wrote is masked (the code block above is the source).
+ * All-caps and Title-case (`PASS`, `Pass`, `Passed`, `FAILS`, `Failed`, `No verdict`) are masked; all-lowercase is kept, since
+ * that is how test counts read (`3/3 pass`, `65 passed, 0 failed`).
+ */
 export function maskVerdictWords(text) {
-  return String(text ?? "").replace(/\b(?:PASS(?:ED)?|FAIL(?:ED|S)?|NO[- ]VERDICT)\b/g, "[verdict↑]");
+  return String(text ?? "").replace(
+    /\b(?:PASS(?:ED|ES)?|FAIL(?:ED|S|URE)?|NO[- ]VERDICT|Pass(?:ed|es)?|Fail(?:ed|s|ure)?|No[- ][Vv]erdict)\b/g,
+    "[verdict↑]",
+  );
 }
 
 function itemLine(item) {

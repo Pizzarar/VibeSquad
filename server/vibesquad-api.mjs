@@ -9,7 +9,7 @@ import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readR
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
-import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
+import { attestedVerdict, digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
@@ -473,7 +473,16 @@ export async function drainedFeedbackGate(caller, type, text, backend, teams = n
  * reviewer with no verdict line logs NO-VERDICT. Any other entry is unchanged. An unreadable worker report is marked UNVERIFIED.
  */
 export async function verbatimDigestText(caller, type, text, backend) {
-  if (!caller?.digest || type !== "done" || !caller.digestFor) return text;
+  return (await digestLogRecord(caller, type, text, backend)).text;
+}
+
+/**
+ * idea-883: verbatimDigestText's text plus the server-attested `verdict` ({ reviewer, profile, line }) a digest's `done` entry
+ * stores when the digested worker is a reviewer with a verdict line (attestedVerdict). The merge/push verdict gate trusts only
+ * that field; it is set here, never read from a request body, so a non-reviewer's report(done) cannot produce one.
+ */
+export async function digestLogRecord(caller, type, text, backend) {
+  if (!caller?.digest || type !== "done" || !caller.digestFor) return { text, verdict: null };
   const id = String(caller.digestFor);
   try {
     const b = backend ?? sharedRunnerBackend();
@@ -482,9 +491,12 @@ export async function verbatimDigestText(caller, type, text, backend) {
     const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
     const profile = String(worker?.labels?.profile ?? worker?.profile ?? "").trim() || null;
-    return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
+    const workerText = lastAssistantText(tl, Infinity);
+    const out = digestVerdictText({ workerText, digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
+    const verdict = attestedVerdict({ worker: { ...worker, id: worker?.id ?? id }, workerText });
+    return { text: out, verdict };
   } catch {
-    return `UNVERIFIED (worker report unreadable): ${text}`;
+    return { text: `UNVERIFIED (worker report unreadable): ${text}`, verdict: null };
   }
 }
 
@@ -813,12 +825,14 @@ async function handleLog(req, res, opts = {}) {
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
       const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
       await drainedFeedbackGate(caller, who.type, t, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
+      const rec = await digestLogRecord(caller, who.type, t, opts.backend); // idea-883: text + server-attested reviewer verdict
       const { entry } = appendVsLogEntry({
         teamId: String(team),
         laneId: String(lane || team),
         agent: who.agent,
         type: who.type,
-        text: await verbatimDigestText(caller, who.type, t, opts.backend),
+        text: rec.text,
+        verdict: rec.verdict,
         refs: who.refs,
         plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: pass === true,
@@ -1216,12 +1230,14 @@ async function handleVsLog(req, res, opts = {}) {
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
       const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
       await drainedFeedbackGate(caller, who.type, text, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
+      const rec = await digestLogRecord(caller, who.type, text, opts.backend); // idea-883: text + server-attested reviewer verdict
       const resEntry = appendVsLogEntry({
         teamId,
         laneId,
         agent: who.agent,
         type: who.type,
-        text: await verbatimDigestText(caller, who.type, text, opts.backend),
+        text: rec.text,
+        verdict: rec.verdict,
         refs: who.refs,
         plan: body.plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: body.pass === true,

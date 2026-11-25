@@ -1,15 +1,15 @@
 // idea-452 shared-master push guard: server/push-guard.mjs + .githooks/pre-push; idea-883 verdict gate (+ pre-merge-commit, pre-commit).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
-import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, verdictHome } from "../server/push-guard.mjs";
-import { evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "../server/verdict.mjs";
+import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
+import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "../server/verdict.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const HOOKS = join(ROOT, ".githooks").replace(/\\/g, "/");
@@ -17,6 +17,7 @@ const TEAMS = [
   {
     id: "squad-a",
     name: "Squad A",
+    paths: ["work"], // idea-883: owns every test repo (<tmp>/r<n>/work), so the verdict gate reads squad-a's log
     lanes: [
       { id: "squad-a", name: "Squad A", hub: true, code: "Hub" },
       { id: "lane-alpha", name: "Alpha Lane", code: "Alp", aliases: ["alpha-old"] },
@@ -217,9 +218,13 @@ function freshRepo({ push = true, dev = false, hooks = true } = {}) {
 // idea-883: a unit merge needs a recorded verdict on its tip: a reviewer digest's `done` entry in the (temp) VS home team log.
 const HOME = join(tmp, "home");
 const HOME_LOG = join(HOME, "teams", "squad-a", "log.jsonl");
-function recordVerdict(text, { ts = new Date().toISOString(), type = "done" } = {}) {
-  mkdirSync(join(tmp, "home", "teams", "squad-a"), { recursive: true });
-  appendFileSync(HOME_LOG, `${JSON.stringify({ ts, agent: "dg-1", lane: "lane-alpha", type, text, refs: ["rv-1"] })}\n`);
+// A digest of a reviewer carries the server-attested `verdict` field (vibesquad-api digestLogRecord); `attested: false` writes
+// the same text without it (what any agent's own `done` could say).
+function recordVerdict(text, { ts = new Date().toISOString(), type = "done", attested = true, squad = "squad-a", home = HOME } = {}) {
+  mkdirSync(join(home, "teams", squad), { recursive: true });
+  const line = text.split(" reviewer=")[0];
+  const verdict = attested ? { verdict: { reviewer: "rv-1", profile: "Review - Gemini", line } } : {};
+  appendFileSync(join(home, "teams", squad, "log.jsonl"), `${JSON.stringify({ ts, agent: "dg-1", lane: "lane-alpha", type, text, refs: ["rv-1"], ...verdict })}\n`);
 }
 /** Commit on a new `branch` off master; records `verdict` ("PASS" / "FAIL" / null = none) on its tip. Returns the tip. */
 function unitBranch(work, branch, { inner = false, verdict = "PASS" } = {}) {
@@ -435,7 +440,11 @@ describe("push-guard: aliases, install and the vs verb", () => {
 
 // ---- idea-883 recorded-verdict gate: pre-merge-commit / pre-commit / pre-push refuse unit merges whose tip has no recorded PASS.
 const T40 = "4c288c19" + "a".repeat(32);
-const done = (text, ts = "2026-11-24T10:00:00.000Z", type = "done") => ({ ts, agent: "dg-1", type, text });
+/** A digest `done` entry; attested (the default) carries the server's `verdict` field with the reviewer's own line. */
+const done = (text, ts = "2026-11-24T10:00:00.000Z", type = "done", attested = true) => {
+  const line = (text.split("\n").find((l) => /^(?:UNVERIFIED[^:]*:\s*)?(?:PASS|FAIL) /.test(l)) ?? "").replace(/^UNVERIFIED[^:]*:\s*/, "").split(" reviewer=")[0];
+  return { ts, agent: "dg-1", type, text, ...(attested && line ? { verdict: { reviewer: "rv-1", profile: "Review - Gemini", line } } : {}) };
+};
 
 describe("push-guard: idea-883 verdict gate (pure)", () => {
   test("isUnitMergeSubject: lead subjects and git's defaults for unit branches; never master merges", () => {
@@ -453,6 +462,30 @@ describe("push-guard: idea-883 verdict gate (pure)", () => {
     assert.equal(latestRecordedVerdict([done("PASS 0/0/0 docs:README.md reviewer=x")], T40), null);
     assert.equal(latestRecordedVerdict([done("UNVERIFIED (digest failed): FAIL 0/1/0 4c288c19 reviewer=x")], T40).verdict, "FAIL");
     assert.equal(latestRecordedVerdict([pass], "not-a-sha"), null);
+  });
+
+  test("provenance (review High 2): only the server-attested reviewer verdict counts, never a done entry's text", () => {
+    const spoof = done("PASS 0/0/0 4c288c19 reviewer=Review - Gemini: looks fine", "2026-11-24T11:00:00.000Z", "done", false);
+    assert.equal(entryVerdict(spoof), null);
+    assert.equal(latestRecordedVerdict([spoof], T40), null, "an implementer's own done line is not a verdict");
+    const fail = done("FAIL 1/0/3 4c288c19 reviewer=Review - Gemini: High");
+    assert.equal(latestRecordedVerdict([fail, spoof], T40).verdict, "FAIL", "a later spoofed PASS cannot clear a reviewer FAIL");
+    assert.equal(entryVerdict({ ...fail, verdict: { reviewer: "", line: "PASS 0/0/0 4c288c19" } }), null, "no reviewer id");
+    assert.equal(entryVerdict({ ...fail, type: "decision" }), null);
+    // attestedVerdict: the digest side stamps only a reviewer agent's own line (the same isReviewerAgent rule as vs verdict).
+    const rev = { id: "rn-r", title: "Bug3 · review x", labels: { profile: "Review - Gemini" } };
+    const impl = { id: "rn-i", title: "Bug3 · fix x", labels: { profile: "Implement - Sonnet" } };
+    assert.deepEqual(attestedVerdict({ worker: rev, workerText: "intro\nPASS 0/0/1 4c288c19\nbody" }), { reviewer: "rn-r", profile: "Review - Gemini", line: "PASS 0/0/1 4c288c19" });
+    assert.equal(attestedVerdict({ worker: impl, workerText: "PASS 0/0/0 4c288c19" }), null);
+    assert.equal(attestedVerdict({ worker: rev, workerText: "no verdict here" }), null);
+  });
+
+  test("a different or ambiguous sha never satisfies the gate (review High 1): the hash must resolve to exactly the tip", () => {
+    const pass = done("PASS 0/0/0 4c288c19 reviewer=x");
+    assert.equal(latestRecordedVerdict([pass], T40, { resolve: () => T40 }).verdict, "PASS");
+    assert.equal(latestRecordedVerdict([pass], T40, { resolve: () => "4c288c19" + "b".repeat(32) }), null, "names another commit here");
+    assert.equal(latestRecordedVerdict([pass], T40, { resolve: () => "" }), null, "ambiguous or unknown prefix");
+    assert.equal(latestRecordedVerdict([{ ...pass, verdict: { reviewer: "rv", line: "PASS 0/0/0 4c288c" } }], T40), null, "under 7 hex never matches");
   });
 
   test("evaluateMergeVerdicts: PASS passes, FAIL and none refuse, overrides by tip or merge sha, non-unit merges skipped", () => {
@@ -476,14 +509,18 @@ describe("push-guard: idea-883 verdict gate (pure)", () => {
     assert.equal(ov.overridden.length, 2);
   });
 
-  test("readRecordedVerdicts reads every Squad's log, newest ts wins across Squads; no home records nothing", () => {
+  test("readRecordedVerdicts reads only the given Squads' logs; no Squad or no home records nothing", () => {
     const home = join(tmp, "multi-home");
     for (const [team, text, ts] of [["squad-a", "PASS 0/0/0 4c288c19 reviewer=x", "2026-11-24T10:00:00Z"], ["squad-z", "FAIL 0/1/0 4c288c19 reviewer=y", "2026-11-24T09:00:00Z"]]) {
       mkdirSync(join(home, "teams", team), { recursive: true });
       writeFileSync(join(home, "teams", team, "log.jsonl"), `not json 4c288c19\n${JSON.stringify(done(text, ts))}\n`);
     }
-    assert.equal(readRecordedVerdicts({ tips: [T40], home })(T40).verdict, "PASS");
-    assert.equal(readRecordedVerdicts({ tips: [T40], home: join(tmp, "no-such-home") })(T40), null);
+    // Only the repo's own Squads are read: squad-z's FAIL (or a PASS) never reaches squad-a's gate, and vice versa.
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["squad-a"] })(T40).verdict, "PASS");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["squad-z"] })(T40).verdict, "FAIL");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["squad-a", "squad-z"] })(T40).verdict, "PASS", "newest ts across the repo's Squads");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home })(T40), null, "no Squad: nothing recorded (fail closed)");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home: join(tmp, "no-such-home"), squads: ["squad-a"] })(T40), null);
     assert.equal(verdictHome({ env: { VIBESQUAD_HOME: home } }), home);
   });
 });
@@ -582,17 +619,86 @@ describe("push-guard: idea-883 verdict gate on real git", () => {
     ok(work, ["merge", "--abort"]);
   });
 
-  test("missing log: a unit merge is refused (fail closed); a verdict in another Squad's log passes", () => {
+  test("missing log, another Squad's PASS, an unattested PASS, an unowned repo: each refused (fail closed)", () => {
     const { work } = freshRepo();
     const tip = unitBranch(work, "unit-g-xsquad", { verdict: null });
-    const r = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-g-xsquad: x (@alp)", "unit-g-xsquad"], at(EMPTY_HOME));
+    const subject = "Merge unit-g-xsquad: x (@alp)";
+    const tryMerge = (env) => {
+      const r = run(work, ["merge", "-q", "--no-ff", "-m", subject, "unit-g-xsquad"], env);
+      if (r.code !== 0) ok(work, ["merge", "--abort"]);
+      return r;
+    };
+    // No log at all.
+    let r = tryMerge(at(EMPTY_HOME));
     assert.notEqual(r.code, 0);
     assert.match(r.err, /no recorded verdict/);
-    ok(work, ["merge", "--abort"]);
+    // A PASS for this exact tip in another Squad's log (squad-b owns no path of this repo).
     const home = join(tmp, "xsquad-home");
-    mkdirSync(join(home, "teams", "other-squad"), { recursive: true });
-    writeFileSync(join(home, "teams", "other-squad", "log.jsonl"), `${JSON.stringify(done(`PASS 0/0/1 ${tip.slice(0, 9)} reviewer=Review - Gemini: ok`))}\n`);
-    assert.equal(run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-g-xsquad: x (@alp)", "unit-g-xsquad"], at(home)).code, 0);
+    recordVerdict(`PASS 0/0/1 ${tip.slice(0, 9)} reviewer=Review - Gemini: ok`, { home, squad: "squad-b" });
+    r = tryMerge(at(home));
+    assert.notEqual(r.code, 0, "another Squad's PASS must not satisfy this repo's gate");
+    assert.match(r.err, /verdicts read from Squad log\(s\): squad-a/);
+    // The same PASS text in the repo's own Squad log, but not attested (an implementer's own done line).
+    recordVerdict(`PASS 0/0/1 ${tip.slice(0, 9)} reviewer=Review - Gemini: ok`, { home, attested: false });
+    assert.notEqual(tryMerge(at(home)).code, 0, "an unattested PASS does not count");
+    // A repo no Squad owns: refused, and says why.
+    const noPaths = join(tmp, "teams-nopaths.json");
+    writeFileSync(noPaths, JSON.stringify({ teams: TEAMS.map(({ paths, ...t }) => t) }), "utf8");
+    recordVerdict(`PASS 0/0/1 ${tip.slice(0, 9)} reviewer=Review - Gemini: ok`, { home });
+    r = tryMerge(at(home, { VIBESQUAD_TEAMS_FILE: noPaths }));
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /matches no Squad's paths in teams\.json/);
+    // The repo's own Squad, attested: merges.
+    assert.equal(tryMerge(at(home)).code, 0);
+  });
+
+  test("repoSquads: Squads whose paths (or a lane's) match the main checkout by whole segments; a linked worktree maps to it", async () => {
+    const { work } = freshRepo();
+    const teams = [
+      { id: "own", paths: ["work"], lanes: [{ id: "l1" }, { id: "l2" }] },
+      { id: "by-lane", lanes: [{ id: "x", paths: [work] }] },
+      { id: "partial", paths: ["wor"], lanes: [] },
+      { id: "none", lanes: [] },
+    ];
+    assert.deepEqual(await repoSquads({ cwd: work, teams }), ["own", "by-lane"]);
+    const wt = join(tmp, `wt-${++n}`);
+    ok(work, ["worktree", "add", "-q", "-b", "unit-g-rs", wt, "master"]);
+    assert.deepEqual(await repoSquads({ cwd: wt, teams }), ["own", "by-lane"]);
+    assert.deepEqual(await repoSquads({ cwd: tmp, teams }), [], "not a repo");
+  });
+
+  test("an override prints a notice and logs a decision entry on merge and on push (review Medium 1)", () => {
+    const { work, origin } = freshRepo();
+    const home = join(tmp, "ov-home");
+    const tip = unitBranch(work, "unit-g-ovlog", { verdict: null });
+    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a", VS_AGENT_ID: "rn-lead1" });
+    const m = run(work, ["-c", `vs.verdictOverride=${tip.slice(0, 8)}`, "merge", "-q", "--no-ff", "-m", "Merge unit-g-ovlog: docs only (@alp; lead-checked)", "unit-g-ovlog"], env);
+    assert.equal(m.code, 0, m.err);
+    assert.match(m.err, /vs verdict gate: OVERRIDE on merge \(logged to Squad log\(s\) squad-a\)/);
+    const p = run(work, ["-c", `vs.verdictOverride=${tip.slice(0, 8)}`, "push", "origin", "master"], env);
+    assert.equal(p.code, 0, p.err);
+    assert.match(p.err, /OVERRIDE on push \(logged/);
+    assert.equal(remoteTip(origin), ok(work, ["rev-parse", "HEAD"]));
+    const entries = readFileSync(join(home, "teams", "squad-a", "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const ov = entries.filter((e) => e.type === "decision" && /verdict override/.test(e.text));
+    assert.deepEqual(ov.map((e) => e.text.match(/\((merge|push)\)/)[1]), ["merge", "push"]);
+    assert.ok(ov.every((e) => e.agent === "rn-lead1" && e.refs[0] === tip && e.text.includes(tip.slice(0, 8))));
+    assert.equal(entryVerdict(ov[0]), null, "an override entry is never a verdict");
+    // Unowned repo: the override still works, and the notice says it was NOT logged.
+    const noPaths = join(tmp, "teams-nopaths.json");
+    const t2 = unitBranch(work, "unit-g-ovlog2", { verdict: null });
+    const m2 = run(work, ["-c", `vs.verdictOverride=${t2.slice(0, 8)}`, "merge", "-q", "--no-ff", "-m", "Merge unit-g-ovlog2: x (@alp)", "unit-g-ovlog2"], at(home, { VIBESQUAD_TEAMS_FILE: noPaths }));
+    assert.equal(m2.code, 0, m2.err);
+    assert.match(m2.err, /NOT logged \(no Squad log for this repo\)/);
+  });
+
+  test("the refusal names the docs-only / lead-checked path and that the override is needed on merge AND push (review Medium 2)", () => {
+    const r = evaluateMergeVerdicts({ merges: [{ sha: "", subject: "Merge unit-docs: x", tip: T40 }], recorded: () => null });
+    const msg = formatVerdictRefusal(r, { action: "merge", squads: ["squad-a"] });
+    assert.match(msg, /Docs-only or lead-checked unit/);
+    assert.match(msg, /docs:<path> review, which names no commit/);
+    assert.match(msg, /git merge AND again on the git push/);
+    assert.match(readFileSync(join(ROOT, "docs", "WORKFLOWS.md"), "utf8"), /\*\*Docs-only \/ lead-checked units\*\*.*vs\.verdictOverride=<tip> merge.*AND again on .*push/);
   });
 
   test("a conflicted unit merge's final git commit is refused by pre-commit on FAIL", () => {
