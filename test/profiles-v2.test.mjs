@@ -538,18 +538,36 @@ test("v2 prompt upgrade: a v1 file still migrates as before (stored text = the v
   assert.deepEqual(data.profiles, FIXTURE_DATA.profiles);
 });
 
-test("v2 prompt upgrade: a stored shipped role missing its prompt is filled from the current default", (t) => {
+test("v2 prompt upgrade: a role missing from a migrated file is filled from the current default", (t) => {
+  // the R1 planner path: the role is built from the file's own (old default) profile, then upgraded like a stored one
   const f = migratedFixture(t, (data) => {
-    delete data.roles.lead.prompt;
-    delete data.roles.review.prompt;
-    data.roles.review.modes["antigravity-cli"].prompt = "kept"; // other fields of the stored role still win
+    delete data.roles.review;
   });
   const { roles } = loadRoles(f);
-  assert.equal(roles.lead.prompt, packNote("Lead - Claude"));
   assert.equal(roles.review.prompt, packNote("Review - Gemini"));
-  assert.equal(roles.review.modes[A].prompt, "kept");
-  // no profiles list (hand-written block): the shipped pack fills it
-  const bare = normalizeRoles({ planner: { tier: "top" } });
-  assert.equal(bare.planner.prompt, packNote("Planner - Sonnet"));
-  assert.equal(bare.planner.tier, "top");
+  assert.equal(roles.review.modes[C].prompt, packNote("Review - Sonnet"));
+});
+
+test("v2 prompt upgrade: text equal to another role's or provider's CURRENT default is a deliberate copy and kept", (t) => {
+  const shipped = buildRolesFromProfiles([]).roles;
+  // reviewer repro 1: Lead's prompt pasted into Planner
+  const a = normalizeRoles({ ...shipped, planner: { ...shipped.planner, prompt: shipped.lead.prompt } });
+  assert.equal(a.planner.prompt, shipped.lead.prompt);
+  // reviewer repro 2: one prompt for both providers (Gemini mode set to the role prompt)
+  const lead = { ...shipped.lead, modes: { ...shipped.lead.modes, [A]: { ...shipped.lead.modes[A], prompt: shipped.lead.prompt } } };
+  const b = normalizeRoles({ ...shipped, lead });
+  assert.equal(b.lead.modes[A].prompt, shipped.lead.prompt);
+  // another shipped note outside the role table (Scout) is current too
+  assert.equal(normalizeRoles({ ...shipped, review: { ...shipped.review, prompt: packNote("Scout - Flash") } }).review.prompt, packNote("Scout - Flash"));
+  // the same files through loadRoles (the Settings PUT reply and spawns read this)
+  const f = migratedFixture(t, (data) => {
+    data.roles.planner.prompt = packNote("Lead - Claude");
+    data.roles.lead.modes[A].prompt = packNote("Lead - Claude");
+  });
+  const { roles } = loadRoles(f);
+  assert.equal(roles.planner.prompt, packNote("Lead - Claude"));
+  assert.equal(roles.lead.modes[A].prompt, packNote("Lead - Claude"));
+  // its own old default still upgrades (fixture: lead prompt and review's Claude prompt are retired text)
+  assert.equal(roles.lead.prompt, packNote("Lead - Claude"));
+  assert.equal(roles.review.modes[C].prompt, packNote("Review - Sonnet"));
 });

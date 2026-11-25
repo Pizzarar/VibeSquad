@@ -23,6 +23,7 @@ import {
   LEGACY_PROFILE_ALIASES,
   PROFILES_SCHEMA_VERSION,
   getProfilesPath,
+  hashNote,
   isKnownDefaultNote,
   legacyProfileRole,
   profilesFileBody,
@@ -224,6 +225,7 @@ function normalizeMode(v, fb) {
 }
 
 let shippedPrompts = null;
+let currentNoteHashes = null;
 /**
  * The prompts the current shipped pack gives each ROLE_TABLE role: {[role]: {prompt?, modes: {[family]: text}}}.
  * `prompt` only when the role has a primary same-role pack profile; `modes[fam]` only for a provider fed by a same-role
@@ -243,18 +245,31 @@ function shippedRolePrompts() {
   return (shippedPrompts = deepFreeze(out));
 }
 
+/** hashNote of every note the current pack ships (any profile, any role). */
+function currentShippedNoteHashes() {
+  return (currentNoteHashes ??= new Set(DEFAULT_PACK_PROFILES.map((p) => hashNote(p.notes))));
+}
+
 /**
  * v2 prompt upgrade (@per R1 follow-up): a shipped role's stored prompt (role-level or per-provider) that is still
  * exactly a previously shipped default note (hash in server/profile-note-history.json, the same history the v1
  * upgradeStaleDefaultNotes uses) becomes the current shipped default. A user-edited prompt never hashes to a shipped
- * note, so it is kept byte-for-byte; a value already current is left alone (idempotent). Mutates `role`; returns it.
+ * note, so it is kept byte-for-byte; a value already current is left alone (idempotent). The history is one flat list
+ * with no role attached, so text equal to ANY current shipped note (e.g. Lead's prompt pasted into Planner, or one
+ * prompt for both providers) is a deliberate choice and kept; only retired text is upgraded. Mutates `role`.
  */
 export function upgradeStaleRolePrompts(key, role) {
   const ship = Object.hasOwn(ROLE_TABLE, key) ? shippedRolePrompts()[key] : null;
   if (!ship || !role) return role;
   const stale = (text, current) =>
-    typeof current === "string" && current && typeof text === "string" && text !== current && isKnownDefaultNote(text);
+    typeof current === "string" &&
+    current &&
+    typeof text === "string" &&
+    text !== current &&
+    isKnownDefaultNote(text) &&
+    !currentShippedNoteHashes().has(hashNote(text));
   if (stale(role.prompt, ship.prompt)) role.prompt = ship.prompt;
+  // A mode with no own prompt is not upgraded (it inherits role.prompt) even if a newer pack gives that provider its own note.
   for (const [fam, m] of Object.entries(role.modes ?? {})) {
     if (stale(m.prompt, ship.modes[fam])) m.prompt = ship.modes[fam];
   }
@@ -265,9 +280,8 @@ export function upgradeStaleRolePrompts(key, role) {
  * Stored roles block -> clean roles: every ROLE_TABLE role present (defaults for a missing one), stored fields win,
  * user-added roles kept when valid. Pure. `profiles` (the same file's v1 list): a shipped role the stored block lacks
  * (one added after the file was migrated, e.g. planner in R1) is built from them like the migration would, so it gets
- * its old profile's prompt/tools instead of an empty prompt. A stored shipped role with no `prompt` string gets it the
- * same way (the shipped pack when there is no list). Prompts still equal to an older shipped default are upgraded
- * (upgradeStaleRolePrompts); load-time only, the next role save writes the upgraded text.
+ * its old profile's prompt/tools instead of an empty prompt. Prompts still equal to an older shipped default are
+ * upgraded (upgradeStaleRolePrompts); load-time only, the next role save writes the upgraded text.
  */
 export function normalizeRoles(rawRoles, { profiles } = {}) {
   const src = isObj(rawRoles) ? rawRoles : {};
@@ -278,11 +292,9 @@ export function normalizeRoles(rawRoles, { profiles } = {}) {
   }
   const out = {};
   let built = null;
-  const fromProfiles = () => (built ??= buildRolesFromProfiles(Array.isArray(profiles) ? profiles : []).roles);
   for (const [key, def] of Object.entries(ROLE_TABLE)) {
     let fill = byKey[key];
-    if (fill === undefined && Array.isArray(profiles)) fill = fromProfiles()[key];
-    else if (isObj(fill) && typeof fill.prompt !== "string") fill = { ...fill, prompt: fromProfiles()[key].prompt };
+    if (fill === undefined && Array.isArray(profiles)) fill = (built ??= buildRolesFromProfiles(profiles).roles)[key];
     out[key] = upgradeStaleRolePrompts(key, normalizeRole(fill, def) ?? normalizeRole({}, def));
   }
   for (const [key, v] of Object.entries(byKey)) {
@@ -394,7 +406,8 @@ function pickBackupPath(path, originalBytes) {
 
 /**
  * Roles for resolveRoute(…, {roles}) from a profiles.json path: v2 = the stored roles normalized over ROLE_TABLE;
- * v1 = built in memory from its profiles (same result the migration would store); missing/unreadable = ROLE_TABLE.
+ * v1 = built in memory from its profiles (what the migration would store) with the same load-time prompt upgrade as v2
+ * (the migration itself stores the v1 notes as-is); missing/unreadable = ROLE_TABLE.
  * Read-only: never writes, never scrubs a BOM. Returns {schemaVersion, roles, source: "v2"|"v1"|"default"}.
  */
 export function loadRoles(filePath) {
