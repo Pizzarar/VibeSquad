@@ -49,14 +49,17 @@ const SLASH_RE = /^\s*\/[A-Za-z][\w:.-]*(?=\s|$)/;
 export const isSlashText = (text) => typeof text === 'string' && SLASH_RE.test(text);
 
 // idea-869: texts (in order) grouped into turns: plain texts join with a blank line (one turn, as a coalesced queue job always
-// did), a slash command is always a turn of its own. Returns [{ text, slash }].
-export function turnGroups(texts) {
+// did), a slash command is always a turn of its own. Returns [{ text, slash }]. An item may be { text, seq, own } (a logged
+// input, from the fold's pending): its group then lists it in `inputs` ([{ seq, own }]) for the delivery bookkeeping (_turnJob).
+export function turnGroups(items) {
   const out = [];
-  for (const text of texts) {
+  for (const item of items) {
+    const { text, seq, own } = typeof item === 'string' ? { text: item } : item;
     const slash = isSlashText(text);
-    const last = out.at(-1);
-    if (!last || slash || last.slash) out.push({ text, slash });
+    let last = out.at(-1);
+    if (!last || slash || last.slash) { last = { text, slash }; out.push(last); }
     else last.text = `${last.text}\n\n${text}`;
+    if (Number.isSafeInteger(seq)) (last.inputs ??= []).push({ seq, own: own === true });
   }
   return out;
 }
@@ -1215,6 +1218,7 @@ export class Runner {
     try {
       const id = job.id;
       this.store.append(id, 'error', { message: err.message });
+      this._consumed(job, 'failed'); // idea-869: a job that failed to start owes nothing after a restart (the status below says so for untagged inputs)
       if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
       else if (job.spec?.resume) {
         this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
@@ -1539,12 +1543,32 @@ export class Runner {
     };
   }
 
-  // idea-869: the unstarted inputs of `plan` (_unstartedPlan, same fold) one by one, for turnGroups: a slash command among them
-  // must stay a turn of its own. plan.text keeps its full-read shape (idea-307's legacy-spec invariant); this falls back to it.
+  // idea-869: the unstarted inputs of `plan` (_unstartedPlan, same fold) one by one as { text, seq, own }, for turnGroups: a
+  // slash command among them must stay a turn of its own, and each turn's job must know which logged inputs it delivers.
+  // plan.text keeps its full-read shape (idea-307's legacy-spec invariant); this falls back to it (no seqs: legacy bookkeeping).
   _pendingTexts(id, plan) {
     const inputs = this._fold(id)?.pending;
-    const texts = Array.isArray(inputs) ? inputs.map((e) => e.text) : [];
-    return texts.length && texts.join('\n\n') === plan.text ? texts : [plan.text];
+    const items = Array.isArray(inputs) ? inputs.map((e) => ({ text: e.text, seq: e.seq, own: e.own === true })) : [];
+    return items.length && items.map((e) => e.text).join('\n\n') === plan.text ? items : [plan.text];
+  }
+
+  // idea-869: the delivery bookkeeping of one turn group's job. A job that is a turn of its own (ownTurn), or that carries an
+  // input logged as owed to one (`own`), names the last input seq it delivers (`upTo`): _deliverJob/_failJob log an
+  // `inputs-consumed` marker for it, the only thing that takes such inputs off the fold's pending (a status of another turn
+  // never does). Untagged inputs re-admitted as a later turn of their own (an older runner's coalesced queue split here)
+  // are tagged now with one `inputs-held` line, so the turn before them does not read as their delivery.
+  _turnJob(id, g, ownTurn) {
+    const inputs = g.inputs ?? [];
+    if (!inputs.length || !(ownTurn || inputs.some((i) => i.own))) return {};
+    const untagged = ownTurn ? inputs.filter((i) => !i.own).map((i) => i.seq) : [];
+    if (untagged.length) this.store.append(id, 'inputs-held', { seqs: untagged });
+    return { upTo: Math.max(...inputs.map((i) => i.seq)) };
+  }
+
+  // idea-869: logs that the job's inputs left the queue (delivered, failed or dropped), for the fold's pending (_turnJob).
+  _consumed(job, how) {
+    if (job.upTo === undefined) return;
+    try { this.store.append(job.id, 'inputs-consumed', { upTo: job.upTo, ...(how ? { how } : {}) }); } catch { /* log gone */ }
   }
 
   // A lead/Buddy whose replacement was spawned while it sat queued is superseded, whatever became of the replacement (it may have
@@ -1612,7 +1636,7 @@ export class Runner {
     for (const { id, plan } of plans) {
       // idea-869: one job per turn group, in input order (a queued /compact stays its own turn after the restart too).
       turnGroups(this._pendingTexts(id, plan)).forEach((g, i) => {
-        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => this._deliverJob(job), ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}) };
+        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => this._deliverJob(job), ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}), ...this._turnJob(id, g, i > 0) };
         this._admit(job);
       });
     }
@@ -1890,7 +1914,10 @@ export class Runner {
 
     // Texts join in order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     if (queued) {
-      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
+      // idea-869: a text joining a job that tracks its inputs (_turnJob) is owed to that job's turn: tagged, and the job's upTo moves.
+      const tracked = queued.ownTurn === true || queued.upTo !== undefined;
+      const seq = this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...(tracked ? { ownTurn: true } : {}), ...senderId }).seq;
+      if (tracked && Number.isSafeInteger(seq)) queued.upTo = seq;
       queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
       queued.needsTurn = true; // a create without a prompt now has one
       queued.images = [...(queued.images ?? []), ...images];
@@ -1906,18 +1933,25 @@ export class Runner {
     const bgStopNotice = spec?.bgStopNotice ?? live?.bgStopNotice ?? null; // idea-230: a live idle agent carries it on its entry, a parked one folds it from the log
     if (live) live.bgStopNotice = null;
     if (bgStopNotice) this.store.append(id, 'bg-stop-notice', { text: bgStopNotice });
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
     const lead = [spec?.drainNotice, bgStopNotice, ...(pending ? this._pendingTexts(id, pending) : [])].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
     // idea-869: one job per turn: plain texts join as always, a slash command is a job of its own (images ride with this text).
-    // A job behind another job of this agent, or sent while its open turn is a slash command's, must be a turn of its own.
+    // A job behind another job of this agent, or sent while its agent's turn is open and either side is a slash command (a
+    // running /compact takes no other text; a /compact is never steered into a running plain turn), must be a turn of its own.
     const groups = turnGroups([...lead, text]);
-    const behind = mine.length > 0 || (live?.inflight > 0 && live.slashTurn === true);
+    const behind = mine.length > 0 || (live?.inflight > 0 && (live.slashTurn === true || slash));
+    const mineAt = groups.length - 1; // the group this text lands in
+    // An input that waits for a turn of its own is tagged (the fold keeps it owed through the turn before it: _turnJob).
+    const own = behind || mineAt > 0;
+    const seq = this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...(own ? { ownTurn: true } : {}), ...senderId }).seq;
+    if (Number.isSafeInteger(seq)) (groups[mineAt].inputs ??= []).push({ seq, own });
     const jobs = groups.map((g, i) => {
+      const ownTurn = i > 0 || behind;
       const job = {
         id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: g.text, images: i === groups.length - 1 ? images : [],
         run: () => this._deliverJob(job),
         ...(g.slash ? { slash: true } : {}),
-        ...(i > 0 || behind ? { ownTurn: true } : {}),
+        ...(ownTurn ? { ownTurn: true } : {}),
+        ...this._turnJob(id, g, ownTurn),
         ...(i === 0 && opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
         ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
       };
@@ -1965,6 +1999,7 @@ export class Runner {
   _deliverJob(job) {
     const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false, owner: job.owner === true });
     this._noteOverCap(job, entry);
+    this._consumed(job); // idea-869: before the hand-off (a send that throws goes to _failJob, which drops them all the same)
     this._deliver(entry, job.text, job.images ?? []);
   }
 
@@ -2040,6 +2075,7 @@ export class Runner {
   // cancel and parks as soon as its turn ends. kill() (which logs an exit) is only for agents that can't park.
   archive(id) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    for (const j of this.queue) if (j.id === id) this._consumed(j, 'dropped'); // idea-869: never replayed after an unarchive + restart
     this.queue = this.queue.filter((j) => j.id !== id); // an archived agent's waiting prompts are dropped
     this._announceQueue();
     const e = this.live.get(id);

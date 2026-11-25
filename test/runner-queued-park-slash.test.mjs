@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Runner, isSlashText, turnGroups } from '../runner/runner.mjs';
 import { reduceTurn } from '../server/backend/runner-backend.mjs';
+import { newFold, foldEvent, saveFold, loadFold } from '../runner/fold-index.mjs';
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -219,4 +220,122 @@ test('869: queued inputs with a /compact among them are re-enqueued after a runn
   idle(r);
   assert.deepEqual(r.texts, ['wake: one', '/compact', 'wake: two']);
   runner2.shutdown();
+});
+
+// ---- fix round 1 (Tier A Review-Gemini rn-e34b88a9f4e9, FAIL 2/0/0 af24b8af) ----
+// F1: an input that waits for a turn of its own (behind a /compact) is still owed after an unrelated turn's status events: the
+//     fold drops it only when ITS job is delivered (a `consumed` marker), so a runner restart re-enqueues it.
+// F2: a slash command sent while a plain turn is open waits for that turn's idle and runs as a turn of its own.
+
+test('869 F1: a follow-up sent while /compact runs, then pushed behind another agent, survives a runner restart (and runs once)', () => {
+  const { dir, adapter, runner, a, b, ra, rb } = setup();
+  idle(rb); // b idle: the single slot is free
+  assert.equal(runner.send(a, '/compact').queued, false, 'the /compact runs at once');
+  assert.equal(runner.send(b, 'b2').queued, true, 'b waits for the slot');
+  assert.equal(runner.send(a, 'wake: must not be lost').queued, true, 'waits behind the /compact turn');
+  idle(ra); // the /compact turn ends; b2 takes the slot, a's wake now waits in the family queue
+  assert.deepEqual(adapter.textsOf(b), ['b', 'b2']);
+  assert.equal(runner.status(a).status, 'queued');
+  assert.deepEqual(ra.texts, ['hi', '/compact']);
+  runner.shutdown();
+  const adapter2 = recAdapter();
+  const runner2 = boot(dir, adapter2);
+  assert.deepEqual(runner2.recoverQueued(), [a], 'the wake is still owed after the restart');
+  const r2 = adapter2.procOf(a);
+  assert.deepEqual(r2.texts, ['wake: must not be lost'], 'and runs alone');
+  idle(r2);
+  runner2.shutdown();
+  const runner3 = boot(dir, recAdapter());
+  assert.deepEqual(runner3.recoverQueued(), [], 'delivered once: a later restart does not replay it');
+  runner3.shutdown();
+});
+
+test('869 F1: a follow-up queued behind a queued /compact with another agent between them survives a runner restart', () => {
+  const { dir, adapter, runner, a, ra, rb } = setup();
+  assert.equal(runner.send(a, '/compact').queued, true);
+  const c = mk(runner, 'c'); // queued between a's /compact and a's wake
+  assert.equal(runner.send(a, 'wake: two').queued, true);
+  idle(rb); // a's /compact runs
+  assert.deepEqual(ra.texts, ['hi', '/compact']);
+  idle(ra); // c takes the slot; a's wake waits
+  assert.deepEqual(adapter.textsOf(c), ['c']);
+  assert.equal(runner.status(a).status, 'queued');
+  runner.shutdown();
+  const adapter2 = recAdapter();
+  const runner2 = boot(dir, adapter2);
+  assert.deepEqual(runner2.recoverQueued(), [a]);
+  assert.deepEqual(adapter2.textsOf(a), ['wake: two']);
+  runner2.shutdown();
+});
+
+test('869 F1: a legacy coalesced queue (/compact + wake, untagged inputs) keeps the wake owed through the /compact turn', () => {
+  const { dir, runner, a, rb } = setup();
+  idle(rb);
+  runner.park(a);
+  // What an older runner wrote: both inputs coalesced into one queued job, no per-input tags.
+  runner.store.append(a, 'input', { text: '/compact' });
+  runner.store.append(a, 'input', { text: 'wake: legacy' });
+  runner.store.append(a, 'status', { status: 'queued', ahead: 0, family: 'claude' });
+  runner.shutdown();
+  const adapter2 = recAdapter();
+  const runner2 = boot(dir, adapter2);
+  const d = mk(runner2, 'd'); // takes the single slot first
+  assert.deepEqual(runner2.recoverQueued(), [a]);
+  idle(adapter2.procOf(d));
+  const r2 = adapter2.procOf(a);
+  assert.deepEqual(r2.texts, ['/compact'], 'the /compact runs as its own turn');
+  runner2.send(d, 'd2', { owner: true }); // an owner job jumps a's waiting wake
+  idle(r2); // d2 runs; a's wake waits in the family queue
+  assert.deepEqual(adapter2.textsOf(d), ['d', 'd2']);
+  assert.equal(runner2.status(a).status, 'queued');
+  runner2.shutdown();
+  const adapter3 = recAdapter();
+  const runner3 = boot(dir, adapter3);
+  assert.deepEqual(runner3.recoverQueued(), [a], 'the wake is still owed after a second restart');
+  assert.deepEqual(adapter3.textsOf(a), ['wake: legacy']);
+  runner3.shutdown();
+});
+
+test('869 F2: a slash command sent while a plain turn runs waits for its idle and runs as its own turn', () => {
+  const { runner, a, ra } = setup({ turnCaps: { claude: 2 } });
+  assert.equal(runner.send(a, 'plain work').queued, false);
+  assert.equal(runner.send(a, '/compact').queued, true, 'not steered into the open plain turn');
+  assert.deepEqual(ra.texts, ['hi', 'plain work']);
+  assert.equal(runner.live.get(a).slashTurn, false);
+  idle(ra);
+  assert.deepEqual(ra.texts, ['hi', 'plain work', '/compact'], 'its own turn once the plain turn ends');
+  assert.equal(runner.live.get(a).slashTurn, true);
+  idle(ra);
+  assert.deepEqual(serverTurns(runner, a).filter((k) => k === 'turn_ended').length, 3);
+  runner.shutdown();
+});
+
+test('869 F1 fold: untagged inputs keep the legacy rule; tagged ones leave only by inputs-consumed; inputs-held tags; state round-trips', () => {
+  const fold = (events) => { const st = newFold(); events.forEach((e, i) => foldEvent(st, { seq: i + 1, ts: i, ...e })); return st; };
+  const created = { type: 'created', provider: 'claude', meta: {} };
+  // An older runner's log: a status after an input is that input's delivery (unchanged).
+  assert.deepEqual(fold([created, { type: 'input', text: 'a' }, { type: 'status', status: 'running' }, { type: 'input', text: 'b' }, { type: 'status', status: 'idle' }, { type: 'status', status: 'queued' }]).pending, []);
+  // A tagged input survives another turn's statuses and is consumed by its own job's marker only.
+  const tagged = [created, { type: 'input', text: '/compact' }, { type: 'status', status: 'running' }, { type: 'input', text: 'wake', ownTurn: true }, { type: 'status', status: 'idle' }, { type: 'status', status: 'queued' }];
+  const st = fold(tagged);
+  assert.deepEqual(st.pending.map((p) => [p.text, p.seq, p.own]), [['wake', 4, true]]);
+  assert.deepEqual(loadFold(JSON.parse(JSON.stringify(saveFold({ ...st, offset: 10 })))).pending, JSON.parse(JSON.stringify(st.pending)), 'saved and loaded as is');
+  assert.deepEqual(fold([...tagged, { type: 'inputs-consumed', upTo: 3 }]).pending.length, 1, 'a marker below its seq leaves it owed');
+  assert.deepEqual(fold([...tagged, { type: 'inputs-consumed', upTo: 4 }]).pending, []);
+  // inputs-held tags untagged inputs (an older runner's coalesced queue split into turns).
+  const held = fold([created, { type: 'input', text: '/compact' }, { type: 'input', text: 'wake' }, { type: 'status', status: 'queued' }, { type: 'inputs-held', seqs: [3] }, { type: 'status', status: 'starting' }, { type: 'status', status: 'running' }, { type: 'status', status: 'idle' }]);
+  assert.deepEqual(held.pending.map((p) => [p.text, p.own]), [['wake', true]]);
+});
+
+test('869 F1: a queued job that fails to start logs inputs-consumed, so its tagged input is not replayed after a restart', () => {
+  const { runner, a, rb } = setup();
+  runner.send(a, '/compact');
+  runner.send(a, 'wake: x');
+  const job = runner.queue.find((j) => j.id === a && j.text === 'wake: x');
+  assert.ok(Number.isSafeInteger(job.upTo));
+  runner._failJob(job, new Error('boom'));
+  const tl = runner.timeline(a);
+  assert.deepEqual(tl.filter((e) => e.type === 'inputs-consumed').map((e) => [e.upTo, e.how]), [[job.upTo, 'failed']]);
+  idle(rb);
+  runner.shutdown();
 });
