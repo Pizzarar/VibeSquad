@@ -454,6 +454,16 @@ function primaryUnitRef(st) {
   return worked;
 }
 
+/** usa-58: a run that implemented several units in turn (one session, `cd <worktree B>` after finishing A) is credited ONE primary
+ * unit by primaryUnitRef; the rest of its units used to miss as no-worker-cwd-match. Units it ran >= SECONDARY_UNIT_CALLS tool
+ * calls inside (real worktree activity, not a prose mention) are its secondary units. Only used as a last resort, see resolveImplementer. */
+const SECONDARY_UNIT_CALLS = 5;
+function secondaryUnitRefs(st) {
+  if (!st.unitWorked || st.unitWorkedOverflow) return [];
+  const primary = primaryUnitRef(st);
+  return [...st.unitWorked].filter(([n, c]) => c >= SECONDARY_UNIT_CALLS && n !== primary && /^unit-/.test(n)).map(([n]) => n);
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -1366,6 +1376,7 @@ function agentV2(st, agentId) {
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
     unitRef: primaryUnitRef(st),
+    unitSecondary: secondaryUnitRefs(st), // usa-58: other units this run demonstrably worked in (>= SECONDARY_UNIT_CALLS calls)
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1562,6 +1573,7 @@ function indexWorkers(agents) {
   const byUnit = new Map();
   const byAlias = new Map(); // usa-55: `unit-<worktree name>` -> workers in a unit-less-named worktree
   const byLane = new Map();
+  const bySecondary = new Map(); // usa-58: unit name -> implementer runs that also worked in that unit's worktree
   const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
@@ -1572,8 +1584,9 @@ function indexWorkers(agents) {
     if (wt && !wt.startsWith("unit-") && isWorktreeCwd(a.cwd)) getOrSet(byAlias, `unit-${wt}`, () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
     if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
+    for (const n of a.unitSecondary ?? []) getOrSet(bySecondary, n, () => []).push(a);
   }
-  return { byUnit, byAlias, byLane, byRef };
+  return { byUnit, byAlias, byLane, byRef, bySecondary };
 }
 
 /** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
@@ -1636,6 +1649,20 @@ function resolveImplementer(unit, agents, index) {
       if (picked) return hit(picked);
       return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // never fall back to the lane guess (R1 M2)
     }
+    // usa-58: no primary-evidence run. A run that implemented this unit as its 2nd/3rd unit is credited (identity only: its cost
+    // stays with its primary unit, `shared`), under the same one-merge-per-run rule as above.
+    const secondary = (index.bySecondary?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !ownsMergedWorktree(index, a)
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (secondary.length && cwdMatches.length === 0) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = secondary.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
+      if (picked) return { implementer: picked, miss: null, shared: true };
+    }
     if (cwdMatches.length === 1) return hit(cwdMatches[0]); // unchanged legacy behaviour: a lone non-implementer worktree run
     if (cwdMatches.length > 1) return miss("no-implementer-in-worktree");
     if (!unit.lane) evidenceMiss = "no-worker-cwd-match";
@@ -1648,7 +1675,7 @@ function resolveImplementer(unit, agents, index) {
 }
 
 /** usa-55: enumerated reasons a merged unit has no implementer (set by resolveImplementer). */
-export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match"];
+export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match", "ledger-archived-no-agent", "ledger-archived-unattributed"];
 
 /** usa-55: attributed/total over the raw merged units (ledger-folded rows are added later), split by lane, repo and miss reason. */
 function buildAttributionCoverage(merged) {
@@ -3385,7 +3412,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
-    const { implementer, miss: attributionMiss } = resolveImplementer(u, agents, workerIndex);
+    const { implementer: found, miss: attributionMiss, shared } = resolveImplementer(u, agents, workerIndex);
+    const implementer = found;
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
@@ -3407,10 +3435,11 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerAgentId: implementer ? implementer.agentId : null,
       attributionMiss: implementer ? null : attributionMiss,
       reviewerAgentId: reviewer ? reviewer.agentId : null,
-      costUsd: implementer ? implementer.costUsd : null,
-      inputTokens: implementer ? implementer.inputTokens : 0,
-      outputTokens: implementer ? implementer.outputTokens : 0,
-      turns: implementer ? implementer.turns : 0,
+      implementerShared: !!shared, // usa-58: the run's primary unit owns its cost; this merge is credited identity only
+      costUsd: implementer && !shared ? implementer.costUsd : null,
+      inputTokens: implementer && !shared ? implementer.inputTokens : 0,
+      outputTokens: implementer && !shared ? implementer.outputTokens : 0,
+      turns: implementer && !shared ? implementer.turns : 0,
       reviewerFamily,
       workflowMode: workflow.mode,
       wfSource: workflow.source,
@@ -3571,6 +3600,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
+      attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
       implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
