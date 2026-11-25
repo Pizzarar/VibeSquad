@@ -2561,7 +2561,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             ladderSpawns.set(`${title}::${cwd}`, at);
             if (reqAgentId) ladderSpawns.set(reqAgentId, at);
           }
-          const reason = route.reason === "default" && failoverProfileName ? "failover" : route.reason;
+          // R10 fu2: an explicit model/effort on a route that walked past a capped family still failed over: the metric says so
+          // too (`explicit+failover`, like `override+failover`), matching the `why=failover` label.
+          const walkedPast = Boolean(roleRoute && !roleRoute.override && roleRoute.route.reasons.includes("failover"));
+          const baseReason = route.reason === "default" && failoverProfileName ? "failover" : route.reason;
+          const reason = walkedPast && /^explicit/.test(baseReason) ? `${baseReason}+failover` : baseReason;
           // P5c stamps: tier + role from resolveRoute. Old names/aliases: today's walk above decided the route; resolveRoute
           // replays it as a shadow (tier/role stamp, `legacy-name`, `shadow=` on any disagreement). Never the authority.
           let routeTier = "";

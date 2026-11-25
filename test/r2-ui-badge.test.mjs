@@ -7,7 +7,7 @@ import test from "node:test";
 import { getRolesState } from "../server/roles-api.mjs";
 import { routeWhy } from "../server/spawn-reason.mjs";
 import { SPAWN_REASONS } from "../server/spawn-reason.mjs";
-import { SPAWN_REASON_GLOSS, allCappedNote, landingPick, spawnChipTitle, spawnReasonLabel } from "../src/roleSpawn.ts";
+import { SPAWN_REASON_GLOSS, allCappedNote, buildRoleSpawn, effectiveWalkOrder, ladderPick, landingPick, spawnChipTitle, spawnReasonLabel } from "../src/roleSpawn.ts";
 
 const ladder = {
   claude: { top: { model: "claude-opus-5-5" }, mid: { model: "claude-sonnet-5-5" }, cheap: { model: "claude-haiku-5-5" } },
@@ -115,7 +115,7 @@ test("seam: landingPick lands on the same provider (and model) as the hook's rol
         for (const override of [null, ...roleRow.providers.map((provider) => ({ provider }))]) {
           const srv = roleSpawnProfile(roleRow.name, { stakes, caps: capped, ladder: DEFAULT_TIER_LADDER, ...(override ? { override } : {}) });
           if (!srv) continue;
-          const ui = landingPick(roleRow, DEFAULT_TIER_LADDER, stakes, { capped, override });
+          const ui = landingPick(roleRow, DEFAULT_TIER_LADDER, stakes, { capped, override, roleKey: key });
           const at = `${roleRow.name} ${stakes} caps=[${capped}] ov=${override?.provider ?? "-"}`;
           assert.equal(ui.provider, srv.route.provider, `${at}: provider`);
           assert.equal(ui.model, String(srv.profile.model ?? ""), `${at}: model`);
@@ -185,4 +185,38 @@ test("L1 all-capped (UX m3): New Agent / Add Buddy show the warning note and a w
   assert.equal(l.allCapped, true);
   assert.equal(allCappedNote(l.provider), "All providers capped: will start on Claude and wait or fail over.");
   assert.equal(landingPick(role, ladder, "normal", { capped: ["claude"] }).allCapped, false, "one capped = failover, no warning");
+});
+
+test("R10 fu1: effectiveWalkOrder keeps empty provider list empty without splicing agy-claude (matches server resolveRoute)", async () => {
+  const { resolveRoute } = await import("../server/role-route.mjs");
+  const { DEFAULT_TIER_LADDER } = await import("../server/stakes-ladder.mjs");
+  const emptyRole = { name: "Custom", tier: "mid", providers: [] };
+  assert.deepEqual(effectiveWalkOrder(emptyRole, DEFAULT_TIER_LADDER, "normal", "custom"), []);
+  const srv = resolveRoute({ role: "custom", stakes: "normal", ladder: DEFAULT_TIER_LADDER }, { roles: { custom: emptyRole } });
+  assert.equal(srv.provider, undefined, "server has empty walk order and no agy-claude splice");
+  // Neither ladderPick nor landingPick splices agy-claude when providers is empty.
+  assert.notEqual(ladderPick(emptyRole, DEFAULT_TIER_LADDER, "normal", "custom").provider, "agy-claude");
+  assert.notEqual(landingPick(emptyRole, DEFAULT_TIER_LADDER, "normal", { roleKey: "custom" }).provider, "agy-claude");
+});
+
+test("R10 fu1: agy-claude exclusion uses role key (lead/brainstorm), not lowercased role.name (matches server resolveRoute)", async () => {
+  const { resolveRoute } = await import("../server/role-route.mjs");
+  const { DEFAULT_TIER_LADDER } = await import("../server/stakes-ladder.mjs");
+  const customNamedLead = { name: "lead", tier: "mid", providers: ["claude", "antigravity-cli"] };
+  const leadRenamedBoss = { name: "Boss", tier: "top", providers: ["claude", "antigravity-cli"] };
+  const roles = { "custom-worker": customNamedLead, lead: leadRenamedBoss };
+
+  // Custom role renamed "lead" -> key is "custom-worker" -> NOT excluded -> walks agy-claude first.
+  const srvCustom = resolveRoute({ role: "custom-worker", stakes: "normal", ladder: DEFAULT_TIER_LADDER }, { roles });
+  assert.equal(srvCustom.provider, "agy-claude");
+  assert.deepEqual(effectiveWalkOrder(customNamedLead, DEFAULT_TIER_LADDER, "normal", "custom-worker"), ["agy-claude", "claude", "antigravity-cli"]);
+  assert.equal(landingPick(customNamedLead, DEFAULT_TIER_LADDER, "normal", { roleKey: "custom-worker" }).provider, "agy-claude");
+  assert.equal(buildRoleSpawn({ roleKey: "custom-worker", role: customNamedLead, ladder: DEFAULT_TIER_LADDER }).provider, "antigravity-cli");
+
+  // Lead role renamed "Boss" -> key is "lead" -> excluded -> stays direct claude.
+  const srvLead = resolveRoute({ role: "lead", stakes: "normal", ladder: DEFAULT_TIER_LADDER }, { roles });
+  assert.equal(srvLead.provider, "claude");
+  assert.deepEqual(effectiveWalkOrder(leadRenamedBoss, DEFAULT_TIER_LADDER, "normal", "lead"), ["claude", "antigravity-cli"]);
+  assert.equal(landingPick(leadRenamedBoss, DEFAULT_TIER_LADDER, "normal", { roleKey: "lead" }).provider, "claude");
+  assert.equal(buildRoleSpawn({ roleKey: "lead", role: leadRenamedBoss, ladder: DEFAULT_TIER_LADDER }).provider, "claude");
 });
