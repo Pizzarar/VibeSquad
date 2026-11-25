@@ -94,10 +94,10 @@ test("B3 m3: the Needs-you line 1 keeps the location bounded (title elides first
   assert.match(main.body, /flex:\s*1 1 auto/);
 
   // title: the flexible filler — zero flex-basis so line-breaking ignores its content (it elides to make
-  // room for the location), with a readable min(18ch,100%) floor so the location wraps before the title is crushed
+  // room for the location), with a readable min(20ch,100%) floor so the location wraps before the title is crushed
   const who = lastRule(/\.boring-needs-open \.boring-needs-who\b/);
   assert.match(who.body, /flex:\s*1 1 0/);
-  assert.match(who.body, /min-width:\s*min\(18ch,\s*100%\)/);
+  assert.match(who.body, /min-width:\s*min\(20ch,\s*100%\)/);
   assert.match(who.body, /max-width:\s*none/);
 
   // location: bounded — can shrink (flex 0 1 auto) but never exceed the row (max-width 100%, overflow hidden)
@@ -126,4 +126,9 @@ test("B3 m3: the Needs-you line 1 keeps the location bounded (title elides first
   assert.match(inbox, /className="boring-needs-main"/);
   assert.match(inbox, /<span className="boring-needs-who">\{roleOnlyWho\(r\.who, r\.lane\)\}<\/span>/);
   assert.match(inbox, /<span className="boring-needs-lane">\{sidebarMenu && r\.lane === "Desk" \? null : r\.lane\}<\/span>/);
+});
+
+test("B3 round 2: the location tooltip is always set (it can ellipsize)", () => {
+  const src = readFileSync(new URL("../src/BoringInbox.tsx", import.meta.url), "utf8");
+  assert.match(src, /data-testid="boring-needs-where" title=\{`\$\{r\.lane\} · \$\{r\.project\}`\}/);
 });
