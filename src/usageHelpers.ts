@@ -1071,18 +1071,19 @@ export type QualitySummary = {
   fixAfterMergeRate: number | null;
 };
 
-/** Overall first-try review PASS % and fix-after-merge % over merged units with a known review outcome. */
+/** Overall first-try PASS % (over known-review units) and fix-after-merge % (over ALL merged units). */
 export function buildQualitySummary(units: readonly MergedUnit[] | null | undefined): QualitySummary {
   const list = Array.isArray(units) ? units : [];
   let knownReviewUnits = 0;
   let firstTryPassCount = 0;
   let fixAfterMergeCount = 0;
   for (const u of list) {
+    // fix-after-merge does not depend on review: counted over ALL merged units (same denominator as server byProfile/cohorts).
+    if (u?.fixAfterMerge) fixAfterMergeCount += 1;
     const ft = unitFirstTry(u);
     if (ft === null) continue;
     knownReviewUnits += 1;
     if (ft) firstTryPassCount += 1;
-    if (u.fixAfterMerge) fixAfterMergeCount += 1;
   }
   return {
     totalUnits: list.length,
@@ -1091,12 +1092,16 @@ export function buildQualitySummary(units: readonly MergedUnit[] | null | undefi
     firstTryPassCount,
     firstTryPassRate: knownReviewUnits > 0 ? firstTryPassCount / knownReviewUnits : null,
     fixAfterMergeCount,
-    fixAfterMergeRate: knownReviewUnits > 0 ? fixAfterMergeCount / knownReviewUnits : null,
+    fixAfterMergeRate: list.length > 0 ? fixAfterMergeCount / list.length : null,
   };
 }
 
+/** Minimum known-review units before a model's PASS % ranks normally (plan-score minN convention is 5; quality uses 10). */
+export const QUALITY_MIN_N = 10;
+
 export type ModelQualityRow = {
   model: string;
+  lowN: boolean;
   units: number;
   firstTryPassCount: number;
   firstTryKnown: number;
@@ -1112,7 +1117,7 @@ export type ModelQualityRow = {
 
 /** Per-model quality rollup from merged.units (grouped by implementerModel || implementerProfile).
  * Excludes reviewSource="none" from PASS% (tracks firstTryKnown for n) and excludes implementerShared from $/unit.
- * Sorted by first-try PASS % desc (nulls last), then $/unit asc (nulls last), then units desc, then model name. */
+ * Rows with firstTryKnown >= QUALITY_MIN_N sort first; then by first-try PASS % desc (nulls last), then $/unit asc (nulls last), then units desc, then model name. */
 export function buildQualityByModel(units: readonly MergedUnit[] | null | undefined): ModelQualityRow[] {
   if (!Array.isArray(units) || units.length === 0) return [];
   const groups = new Map<string, {
@@ -1121,11 +1126,12 @@ export function buildQualityByModel(units: readonly MergedUnit[] | null | undefi
   }>();
   for (const u of units) {
     if (!u) continue;
-    const model = (u.implementerModel || u.implementerProfile || "").trim();
-    if (!model) continue;
+    const label = String(u.implementerModel || u.implementerProfile || "").trim().replace(/-(?:low|medium|high|xhigh|max)$/i, "");
+    if (!label) continue;
+    const model = label.toLowerCase();
     let g = groups.get(model);
     if (!g) {
-      g = { model, units: 0, firstTryPassCount: 0, firstTryKnown: 0, fixRounds: 0, fixAfterMergeCount: 0, costUnits: 0, costUsd: 0 };
+      g = { model: label, units: 0, firstTryPassCount: 0, firstTryKnown: 0, fixRounds: 0, fixAfterMergeCount: 0, costUnits: 0, costUsd: 0 };
       groups.set(model, g);
     }
     g.units += 1;
@@ -1144,6 +1150,7 @@ export function buildQualityByModel(units: readonly MergedUnit[] | null | undefi
   return [...groups.values()]
     .map((g): ModelQualityRow => ({
       model: g.model,
+      lowN: g.firstTryKnown < QUALITY_MIN_N,
       units: g.units,
       firstTryPassCount: g.firstTryPassCount,
       firstTryKnown: g.firstTryKnown,
@@ -1157,6 +1164,7 @@ export function buildQualityByModel(units: readonly MergedUnit[] | null | undefi
       costPerUnit: g.costUnits > 0 ? g.costUsd / g.costUnits : null,
     }))
     .sort((a, b) => {
+      if (a.lowN !== b.lowN) return a.lowN ? 1 : -1;
       if (a.firstTryPassRate !== b.firstTryPassRate) {
         if (a.firstTryPassRate === null) return 1;
         if (b.firstTryPassRate === null) return -1;

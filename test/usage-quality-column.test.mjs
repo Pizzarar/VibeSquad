@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { unitFirstTry, buildQualitySummary, buildQualityByModel } from "../src/usageHelpers.ts";
+import { unitFirstTry, buildQualitySummary, buildQualityByModel, QUALITY_MIN_N } from "../src/usageHelpers.ts";
 
 const src = readFileSync(new URL("../src/UsageDashboard.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -16,7 +16,7 @@ test("usa-64: unitFirstTry matches server rules (reviewSource none -> null, verd
   assert.equal(unitFirstTry({ reviewRounds: 0 }), true);
 });
 
-test("usa-64: buildQualitySummary computes overall 1st-try PASS % and fix-after-merge % over known review outcomes only", () => {
+test("usa-64: buildQualitySummary computes overall 1st-try PASS % and fix-after-merge % (PASS over known review; fix-after-merge over all merged)", () => {
   const empty = buildQualitySummary([]);
   assert.equal(empty.totalUnits, 0);
   assert.equal(empty.knownReviewUnits, 0);
@@ -37,8 +37,8 @@ test("usa-64: buildQualitySummary computes overall 1st-try PASS % and fix-after-
   assert.equal(s.unknownReviewUnits, 2);
   assert.equal(s.firstTryPassCount, 3);
   assert.equal(s.firstTryPassRate, 0.75);
-  assert.equal(s.fixAfterMergeCount, 1);
-  assert.equal(s.fixAfterMergeRate, 0.25);
+  assert.equal(s.fixAfterMergeCount, 3);
+  assert.equal(s.fixAfterMergeRate, 0.5); // 3 of all 6 merged units
 });
 
 test("usa-64: buildQualityByModel aggregates per model, excludes reviewSource=none from PASS% and implementerShared from $/unit, sorts by PASS desc then $/unit asc", () => {
@@ -106,4 +106,16 @@ test("usa-64: UI places usage-saving-quality next to usage-saving-routing and re
   assert.ok(start > 0);
   const block = css.slice(start);
   assert.match(block, /\[data-testid="usage-quality-by-model"\] td\[data-label\]::before/);
+});
+
+test("usa-64: low-n 100% row sorts below a high-n row; model key normalizes casing and effort suffix", () => {
+  const hi = Array.from({ length: QUALITY_MIN_N + 5 }, (_, i) => ({ implementerModel: i % 2 ? "Claude-Sonnet-5-5" : "claude-sonnet-5-5-high", reviewSource: "verdict-log", firstReviewVerdict: i < 8 ? "FAIL" : "PASS", costUsd: 3 }));
+  const lo = [1, 2].map(() => ({ implementerModel: "tiny", reviewSource: "verdict-log", firstReviewVerdict: "PASS", costUsd: 1 }));
+  const rows = buildQualityByModel([...lo, ...hi]);
+  assert.equal(rows.length, 2, "casing/alias variants merge into one row");
+  assert.equal(rows[0].units, hi.length);
+  assert.equal(rows[0].lowN, false);
+  assert.equal(rows[1].model, "tiny");
+  assert.equal(rows[1].lowN, true);
+  assert.equal(rows[1].firstTryPassRate, 1);
 });
