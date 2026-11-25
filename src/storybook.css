@@ -102,6 +102,7 @@
   .sb-back { order: 0; }
   .sb-title { order: 1; flex: 1 1 0; }
   .sb-head .project-tabs { order: 1; }
+  .sb-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
   .sb-head-right { order: 2; }
   .sb-head { padding: 8px 10px; }
   .sb-body { padding: 10px 10px 40px; }
