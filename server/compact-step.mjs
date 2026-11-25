@@ -1,7 +1,9 @@
 // K2 (PLAN_COMPACT_IN_PLACE_1108): the compact-before-handoff step shared by the Buddy watcher (token-watch.mjs) and the lead ladder
-// (lead-handoff.mjs). Claude agents only: the runner keeps one long-lived `claude -p` child, so a `/compact <focus>` user turn shrinks the
-// context in place (same id, labels, worktree). Anything else -- non-Claude, busy, already tried, failed, timed out, still over the cap --
-// returns a non-"ok" outcome and the caller runs its existing handoff ladder unchanged. Reuses runner.sendAgentPrompt; no new route.
+// (lead-handoff.mjs). Providers with a working in-place compaction (COMPACT_PROVIDERS): the runner keeps one long-lived child, so a
+// `/compact` user turn shrinks the context in place (same id, labels, worktree). Claude takes a focus (`/compact <focus>`); agy (K2b,
+// docs/lanes/perfection/K2B.md) gets a bare `/compact` and its ACP adapter synthesizes the `compacted` boundary on that turn's end.
+// Anything else -- other providers, busy, already tried, failed, timed out, still over the cap -- returns a non-"ok" outcome and the
+// caller runs its existing handoff ladder unchanged. Reuses runner.sendAgentPrompt; no new route.
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LEAD_COMPACT_FOCUS, leadUsedTokens } from "./lead-handoff.mjs";
@@ -95,6 +97,26 @@ export function readAgentLogTail(id, maxBytes = 512 * 1024) {
 
 export function isClaudeAgent(agent) {
   return String(agent?.provider ?? "").toLowerCase() === "claude";
+}
+
+/**
+ * K2b: providers whose /compact compacts in place AND ends in a `compacted` boundary the step can wait on. opencode compacts and
+ * marks it too (the adapter emits the boundary), but runs no lead or Buddy and its meter stays stale until the next turn: not enabled.
+ * Value: whether `/compact` takes a focus argument (agy's is unverified, and its adapter only trusts a bare `/compact`).
+ */
+export const COMPACT_PROVIDERS = Object.freeze({ claude: { focus: true }, "antigravity-cli": { focus: false } });
+const PROVIDER_ALIASES = { agy: "antigravity-cli", antigravity: "antigravity-cli" };
+const compactProvider = (agent) => {
+  const p = String(agent?.provider ?? "").toLowerCase();
+  return COMPACT_PROVIDERS[PROVIDER_ALIASES[p] ?? p] ?? null;
+};
+/** True when the agent's provider has a working /compact (the callers' crossing trackers only arm for these). */
+export function canCompact(agent) {
+  return !!compactProvider(agent);
+}
+/** The /compact line for this agent: with the focus where the provider takes one. */
+export function compactCommand(agent, focus) {
+  return compactProvider(agent)?.focus ? `/compact ${focus ?? ""}`.trim() : "/compact";
 }
 
 /** Idle = not mid-turn. A `/compact` while running would steer into the live turn, so the caller defers or skips. */
@@ -283,7 +305,7 @@ export function createCompactor({
    */
   async function run(agent, opts = {}) {
     const id = agent?.id;
-    if (!id || !isClaudeAgent(agent)) return { outcome: "skipped", reason: "non-claude" };
+    if (!id || !canCompact(agent)) return { outcome: "skipped", reason: "no-compact" };
     if (pending.has(id)) return { outcome: "skipped", reason: "busy" }; // a run for this agent is already in flight
     pending.add(id);
     try {
@@ -326,7 +348,7 @@ export function createCompactor({
       return finish("failed", { reason: "label-write" }); // without the label a replay could loop: do not compact
     }
 
-    const text = `/compact ${focus ?? ""}`.trim();
+    const text = compactCommand(agent, focus);
     const w = watchAgent(id);
     let got;
     let capRaw; // the raw meter reading that stopped the run at the hard cap (no refetch: a later read can be stale or missing)

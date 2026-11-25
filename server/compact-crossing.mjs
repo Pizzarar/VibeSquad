@@ -28,9 +28,20 @@ export const COMPACT_REARM_MIN_DROP = 0.25; // re-arm only once the meter is 25%
 /** Shared across coordinators (token-watch's and the HTTP route's): agent ids with a compaction in flight (compact-step run()). */
 export const compactPending = new Set();
 
-/** compact-step outcomes that leave no attempt behind: busy (retry at the next idle, K2a) and non-claude (no compact path, K2b). */
+/** compact-step outcomes that leave no attempt behind: busy (retry at the next idle, K2a) and no-compact (provider without one, K2b). */
 export function compactNotAttempted(res) {
-  return res?.outcome === "skipped" && (res.reason === "busy" || res.reason === "non-claude");
+  return res?.outcome === "skipped" && (res.reason === "busy" || res.reason === "no-compact");
+}
+
+/**
+ * K2b: no turn will ever come to compact in (errored / closed / lost / exited). compact-step reports any non-idle status as busy,
+ * so without this check the caller would defer every time; the meter of a dead agent does not grow, so the hard cap never fires either.
+ * The lead path skips compaction for these and runs its pre-K2 ladder. A deny-list, not an idle/running allow-list: a lead
+ * that is queued / starting must still defer (falling through could write the 250k packet and rule out compaction for that crossing).
+ */
+const DEAD_FOR_COMPACT = new Set(["error", "errored", "closed", "lost", "exited"]);
+export function isDeadForCompact(agent) {
+  return Boolean(agent?.lost) || DEAD_FOR_COMPACT.has(String(agent?.status ?? "").trim().toLowerCase());
 }
 
 /** True for a busy skip: the caller defers to the next idle evaluation (no handoff step, no stamp). */

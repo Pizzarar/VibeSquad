@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
-import { createCompactor, compactLanding, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { createCompactor, compactLanding, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { compactNotAttempted } from "../server/compact-crossing.mjs";
 import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../server/lead-handoff.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
@@ -123,9 +124,9 @@ test("buddy: a failed send -> handoff proceeds", async () => {
   w.stop();
 });
 
-test("non-Claude (agy / opencode) agents: no /compact, old ladder untouched", async () => {
+test("providers without a working /compact (codex / opencode): no /compact, old ladder untouched", async () => {
   const { r, restarts, watch } = setup("ok");
-  r.agents.set("rn-b", buddy("rn-b", "antigravity-cli"));
+  r.agents.set("rn-b", buddy("rn-b", "codex"));
   r.agents.set("rn-l", lead("rn-l", "opencode"));
   const w = watch();
   r.usage("rn-b", 160_000);
@@ -134,6 +135,89 @@ test("non-Claude (agy / opencode) agents: no /compact, old ladder untouched", as
   assert.equal(compacts(r).length, 0);
   assert.equal(restarts.length, 1);
   assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE]);
+  w.stop();
+});
+
+// ---- K2b (docs/lanes/perfection/K2B.md): agy compacts in place with a bare /compact ----
+
+test("K2b agy Buddy over the cap: bare /compact (no focus), compacted -> no restart, same id", async () => {
+  const { r, restarts, watch, laneLog } = setup("ok");
+  r.agents.set("rn-ab", buddy("rn-ab", "antigravity-cli"));
+  const w = watch();
+  r.usage("rn-ab", 160_000);
+  await tick(250);
+  assert.deepEqual(compacts(r).map((s) => s.text), ["/compact"]);
+  assert.equal(restarts.length, 0);
+  assert.match(laneLog(), /compact-step buddy agent=rn-ab outcome=ok before=160000 after=40000/);
+  w.stop();
+});
+
+test("K2b agy Buddy: second crossing without a drop under the re-arm line -> no second compaction, the restart runs", async () => {
+  const { r, restarts, watch } = setup("ok");
+  r.agents.set("rn-ab", buddy("rn-ab", "agy")); // alias spelling
+  const w = watch();
+  r.usage("rn-ab", 151_000);
+  await tick(250);
+  r.usage("rn-ab", 140_000);
+  await tick(50);
+  r.usage("rn-ab", 152_000);
+  await tick(150);
+  assert.equal(compacts(r).length, 1);
+  assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+test("K2b agy Buddy still over after /compact (meter not lowered) -> restart proceeds", async () => {
+  const { r, restarts, watch } = setup("over");
+  r.agents.set("rn-ab", buddy("rn-ab", "antigravity-cli"));
+  const w = watch();
+  r.usage("rn-ab", 160_000);
+  await tick(300);
+  assert.equal(compacts(r).length, 1);
+  assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+test("K2b agy Buddy busy (runner says running): no /compact, no restart, compacted at the next idle", async () => {
+  const { r, restarts, watch } = setup("ok");
+  r.agents.set("rn-ab", buddy("rn-ab", "antigravity-cli"));
+  const realFetch = r.fetchAgent;
+  let busy = true;
+  r.fetchAgent = async (id) => ({ agent: { ...(await realFetch(id)).agent, ...(busy && id === "rn-ab" ? { status: "running" } : {}) } });
+  const w = watch();
+  r.usage("rn-ab", 160_000); // snapshot idle, runner running (C1)
+  await tick(150);
+  assert.equal(compacts(r).length, 0);
+  assert.equal(restarts.length, 0);
+  busy = false;
+  r.emit({ kind: "turn_ended", agentId: "rn-ab", agent: { ...r.agents.get("rn-ab") } });
+  await tick(250);
+  assert.equal(compacts(r).length, 1);
+  assert.equal(restarts.length, 0);
+  w.stop();
+});
+
+test("K2b agy lead past the soft flag: bare /compact, compacted -> no nudge, no handoff", async () => {
+  const { r, watch, laneLog } = setup("ok");
+  r.agents.set("rn-al", lead("rn-al", "antigravity-cli"));
+  const w = watch();
+  r.usage("rn-al", LEAD_FLAG_DEFAULT + 35_000 + 5); // G2: agy working tokens = meter - 35k preamble
+  await tick(300);
+  assert.deepEqual(r.sent.map((s) => s.text), ["/compact"]);
+  assert.equal(r.created.length, 0);
+  assert.match(laneLog(), /compact-step lead agent=rn-al outcome=ok/);
+  w.stop();
+});
+
+test("K2b agy lead past the hard cap: forced handoff at once, no compaction first", async () => {
+  const { r, watch } = setup("ok");
+  r.agents.set("rn-al", lead("rn-al", "antigravity-cli"));
+  const w = watch();
+  r.usage("rn-al", LEAD_HARD_CAP_DEFAULT + 1);
+  await tick(300);
+  assert.equal(compacts(r).length, 0);
+  assert.equal(r.created.length, 1);
+  assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
   w.stop();
 });
 
@@ -228,6 +312,36 @@ test("lead: past the hard cap -> forced handoff at once, no compaction attempt f
   assert.equal(compacts(r).length, 0);
   assert.equal(r.created.length, 1);
   assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
+  w.stop();
+});
+
+for (const [label, extra] of [["errored", { status: "error" }], ["lost", { status: "idle", lost: true }]]) {
+  test(`K2b lead ${label} past the soft flag: no /compact, no stamp, the pre-K2 ladder runs (nudge) instead of deferring forever`, async () => {
+    const { r, watch } = setup("ok");
+    r.agents.set("rn-le", { ...lead("rn-le"), ...extra });
+    const w = watch();
+    r.usage("rn-le", LEAD_FLAG_DEFAULT + 5);
+    await tick(150);
+    assert.equal(compacts(r).length, 0);
+    const l = r.agents.get("rn-le").labels;
+    assert.equal(l["vs.compacted-at"], undefined);
+    assert.equal(l["handoff-nudged"] ?? l["handoff-flagged"], "1", "the 150k soft stage ran");
+    w.stop();
+  });
+}
+
+test("K2b lead queued past the soft flag still defers (not dead): no nudge, compacted on the idle upsert", async () => {
+  const { r, watch } = setup("ok");
+  r.agents.set("rn-lq", { ...lead("rn-lq"), status: "queued" });
+  const w = watch();
+  r.usage("rn-lq", LEAD_FLAG_DEFAULT + 5);
+  await tick(100);
+  assert.equal(r.sent.length, 0);
+  assert.equal(r.agents.get("rn-lq").labels["handoff-nudged"], undefined);
+  r.agents.get("rn-lq").status = "idle";
+  r.usage("rn-lq", LEAD_FLAG_DEFAULT + 6);
+  await tick(250);
+  assert.equal(compacts(r).length, 1);
   w.stop();
 });
 
@@ -637,6 +751,39 @@ test("K2 tail A2: a hard-cap stop from awaitIdle reports the raw value it saw, e
   assert.equal(res.reason, "hard-cap");
   assert.equal(res.rawUsed, 310_000);
   assert.equal(fetched, 2);
+  assert.equal(sends.length, 1);
+});
+
+test("K2b compact-step: agy gets a bare /compact (focus dropped); codex / opencode skip no-compact (no label, no send, not an attempt)", async () => {
+  const a = { ...K("rn-k2b"), provider: "antigravity-cli" };
+  const { c, sends, labelWrites } = scripted(a, { onSend: (_n, later) => { later(5, COMPACTED); return { ok: true, queued: false }; }, events: DIRECT_LOG });
+  const res = await c.run(a, { focus: "keep the plan", cap: 200_000, armed: true, labels: {} });
+  assert.equal(res.outcome, "ok");
+  assert.deepEqual(sends.map((x) => x.text), ["/compact"]);
+  assert.equal(labelWrites.length, 1);
+  for (const provider of ["codex", "opencode", "", undefined]) {
+    const o = { ...K(`rn-${provider}`), provider };
+    const s2 = scripted(o);
+    const r2 = await s2.c.run(o, { focus: "x", cap: 1, armed: true });
+    assert.deepEqual(r2, { outcome: "skipped", reason: "no-compact" });
+    assert.equal(compactNotAttempted(r2), true);
+    assert.equal(s2.sends.length + s2.labelWrites.length, 0);
+  }
+  assert.equal(compactCommand({ provider: "claude" }, "keep it"), "/compact keep it");
+  assert.equal(compactCommand({ provider: "agy" }, "keep it"), "/compact");
+  assert.deepEqual(["claude", "antigravity-cli", "agy", "Antigravity", "opencode", "codex"].map((p) => canCompact({ provider: p })), [true, true, true, true, false, false]);
+});
+
+test("K2b compact-step: agy /compact turn running past the hard cap stops with reason=hard-cap (the forced handoff wins)", async () => {
+  const a = { ...K("rn-k2bh"), provider: "antigravity-cli" };
+  const { c, sends } = scripted(a, {
+    onSend: () => ({ ok: true, queued: false }),
+    fresh: (n) => (n === 1 ? { status: "idle" } : { status: "running", usedTokens: 302_000 }),
+    events: DIRECT_LOG,
+  });
+  const res = await c.run(a, { cap: 150_000, hardCap: 300_000, armed: true, labels: {} });
+  assert.equal(res.reason, "hard-cap");
+  assert.equal(res.rawUsed, 302_000);
   assert.equal(sends.length, 1);
 });
 

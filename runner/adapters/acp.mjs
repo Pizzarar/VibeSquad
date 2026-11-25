@@ -60,6 +60,16 @@ export function parseAcpUsage(u) {
   return { inputTokens: inT + cachedReadTokens + cachedWriteTokens, outputTokens: outT + (thoughtOutside ? thought : 0), cachedReadTokens, cachedWriteTokens };
 }
 
+// K2b (docs/lanes/perfection/K2B.md): in-place compaction. Both ACP CLIs advertise a `compact` slash command and run it when a
+// prompt turn's whole text is `/compact` (a /compact merged behind a steer or the first-turn system text is plain text to them).
+// opencode marks it: session_info_update _meta["opencode/compaction"] {status: started|completed, reason}. agy marks nothing: its
+// /compact turn just ends (end_turn) after a real summarizing call, so the boundary is synthesized there, and only for a BARE
+// `/compact` (a focus argument is unverified on agy: an unparsed "/compact <text>" would be an ordinary prompt and a false boundary).
+const COMPACT_PROMPT_RE = /^\s*\/compact\b/i;
+const BARE_COMPACT_RE = /^\s*\/compact\s*$/i;
+const SYNTH_COMPACT_PROVIDERS = new Set(['antigravity-cli']);
+export const compactMarker = (u) => u?._meta?.['opencode/compaction'] ?? null;
+
 // Provider ids are the ones profiles use (server/profiles.mjs). Codex has no ACP mode of its own: Zed's
 // codex-acp wraps it (Paseo drives `codex app-server` natively instead; we stay on ACP until it measurably fails).
 export const ACP_PROVIDERS = {
@@ -124,6 +134,10 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
       let costKnown = false;
       let lastError = null; // latest session/prompt (or handshake) failure: the agent often exits right after it, so the exit must carry it
+      let compacting = false; // a /compact prompt is in flight: its usage_update is the summarizer call's prompt, not the new context
+      let compactSeen = false; // the agent's own compaction-completed marker arrived during that prompt (opencode)
+      let compactHeld = null; // the usage_update held back during that prompt: applied if the prompt did not compact after all
+      const synthCompact = SYNTH_COMPACT_PROVIDERS.has(PROVIDER_ALIASES[provider] ?? provider);
 
       lineReader(child.stdout, (line) => {
         let m;
@@ -140,11 +154,18 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
             case 'agent_thought_chunk': if (u.content?.type === 'text') emit('thought', { text: u.content.text }); break;
             case 'tool_call': emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
             case 'usage_update':
-              if (Number.isFinite(u.used)) { ctxNow = u.used; emit('usage', { contextTokens: u.used, contextMax: u.size }); }
+              // K2b: during a /compact turn the reading is the summarizer call (agy: above the pre-compact size), never the new context.
+              if (Number.isFinite(u.used) && compacting) compactHeld = u;
+              else if (Number.isFinite(u.used)) { ctxNow = u.used; emit('usage', { contextTokens: u.used, contextMax: u.size }); }
               // some agents report a cumulative session cost here; it beats our price-table estimate
               if (Number.isFinite(u.cost?.amount) && (u.cost.currency ?? 'USD') === 'USD') reportedCost = u.cost.amount;
               break;
             case 'tool_call_update': emit('tool', { phase: 'update', id: u.toolCallId, status: u.status }); break;
+            case 'session_info_update': {
+              const c = compactMarker(u);
+              if (compacting && c?.status === 'completed' && !compactSeen) { compactSeen = true; emit('compacted', { before: ctxNow || undefined, trigger: c.reason ?? 'manual' }); }
+              break;
+            }
             default: break;
           }
         } else if (m.method && m.id !== undefined) {
@@ -269,26 +290,47 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           emit('stderr', { line: 'agent does not advertise promptCapabilities.image; images dropped' });
         }
         const prompt = [{ type: 'text', text }, ...(imageCapable ? images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) : [])];
+        const compactPrompt = COMPACT_PROMPT_RE.test(text);
+        compacting = compactPrompt;
+        compactSeen = false;
+        compactHeld = null;
         try {
           const ctxStart = ctxPrev;
           const r = await request('session/prompt', { sessionId, prompt });
+          compacting = false;
           // Real per-turn tokens from PromptResponse.usage; else estimate from context-size growth (marked estimated).
           let tok = parseAcpUsage(r?.usage);
-          let estimated = false;
-          if (!tok && ctxNow > 0 && ctxStart !== null) {
-            const promptTokens = Math.ceil(text.length / 4);
-            const grew = ctxNow - ctxStart;
-            tok = { inputTokens: ctxStart + promptTokens, outputTokens: Math.max(0, grew - promptTokens), cachedReadTokens: 0 };
-            estimated = true;
+          const compacted = compactPrompt && (compactSeen || (synthCompact && r?.stopReason === 'end_turn' && BARE_COMPACT_RE.test(text)));
+          let usage = null;
+          if (compacted) {
+            // K2b: no reading of the new context exists until the next real turn, so the meter shows the summary (this turn's
+            // output) as an estimate now: the stale pre-compact figure would read as still over the cap and hand off right after
+            // a good compaction. The next turn's usage_update / transcript reading replaces it; its delta baseline is unknown.
+            const after = tok?.outputTokens > 0 ? tok.outputTokens : undefined;
+            if (!compactSeen) emit('compacted', { before: ctxNow || undefined, after, trigger: 'manual', synthesized: true });
+            ctxNow = 0;
+            ctxPrev = null;
+            if (after !== undefined) usage = { contextTokens: after, estimated: true, compacted: true };
+          } else {
+            if (compactHeld) { ctxNow = compactHeld.used; emit('usage', { contextTokens: compactHeld.used, contextMax: compactHeld.size }); } // an ordinary turn after all
+            let estimated = false;
+            if (!tok && ctxNow > 0 && ctxStart !== null) {
+              const promptTokens = Math.ceil(text.length / 4);
+              const grew = ctxNow - ctxStart;
+              tok = { inputTokens: ctxStart + promptTokens, outputTokens: Math.max(0, grew - promptTokens), cachedReadTokens: 0 };
+              estimated = true;
+            }
+            ctxPrev = ctxNow;
+            // agy: exact last-call context from its transcript. Fallback (provider not agy, or no transcript file yet): the
+            // turn's summed input+output, an UPPER BOUND that overstates by the number of model calls in the loop.
+            const ctxAgy = ctxNow > 0 || (PROVIDER_ALIASES[provider] ?? provider) !== 'antigravity-cli' || !sessionId ? undefined : lastPlannerContext(agyTranscriptPath(sessionId));
+            // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
+            if (tok) usage = { contextTokens: ctxNow > 0 ? ctxNow : (ctxAgy ?? tok.inputTokens + tok.outputTokens), ...(estimated ? { estimated: true } : {}) };
           }
-          ctxPrev = ctxNow;
-          // agy: exact last-call context from its transcript. Fallback (provider not agy, or no transcript file yet): the
-          // turn's summed input+output, an UPPER BOUND that overstates by the number of model calls in the loop.
-          const ctxAgy = ctxNow > 0 || (PROVIDER_ALIASES[provider] ?? provider) !== 'antigravity-cli' || !sessionId ? undefined : lastPlannerContext(agyTranscriptPath(sessionId));
           let turnCost = null;
           if (tok) {
-            // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
-            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : (ctxAgy ?? tok.inputTokens + tok.outputTokens), inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            // A compacted turn without a token count emits no usage: the meter keeps its pre-compact value (compact-step: still-over).
+            if (usage) emit('usage', { contextTokens: usage.contextTokens, inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(usage.estimated ? { estimated: true } : {}), ...(usage.compacted ? { compacted: true } : {}) });
             turnCost = estimateCostUsd(activeModel, tok);
           }
           const done = { stopReason: r?.stopReason };
@@ -297,7 +339,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           if (costKnown) done.costUsd = costTotal;
           lastError = null;
           emit('turn_done', done);
-        } catch (e) { if (!cancelling && !stopped) lastError = e.message; emit('error', { message: e.message }); }
+        } catch (e) { compacting = false; if (!cancelling && !stopped) lastError = e.message; emit('error', { message: e.message }); }
         promptInFlight = false;
         dropOrphanSteers(); // the prompt ended: a steer-only item with no real prompt behind it must not start the next one
         if (queue.length && !stopped) {

@@ -28,7 +28,7 @@ import { listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 import { reownWatchesAsync } from "./watch-sets.mjs";
-import { compactBusy, compactNotAttempted, COMPACTED_AT, compactPending, createCrossingTracker, lifeCapMetric } from "./compact-crossing.mjs";
+import { compactBusy, compactNotAttempted, COMPACTED_AT, compactPending, createCrossingTracker, isDeadForCompact, lifeCapMetric } from "./compact-crossing.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
@@ -1440,7 +1440,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       return { stage: "compact-deferred", triggered: false, usedTokens: used };
     }
 
-    // K2c: compaction is the default path. Before each soft stage (150k nudge, 250k packet) a Claude lead gets one compaction
+    // K2c: compaction is the default path. Before each soft stage (150k nudge, 250k packet) a lead whose provider can compact (compact-step COMPACT_PROVIDERS; others skip as no-compact) gets one compaction
     // attempt per crossing (server/compact-crossing.mjs: re-armed once the meter is back under min(90% of the lowest stage,
     // 75% of the stage tried), at most COMPACT_LIFE_CAP per life). Busy = defer to the next idle upsert. Anything else but a clean "ok" under the stage
     // threshold falls through to the unchanged ladder, and that crossing is not tried again. The hard cap (raw meter) is never
@@ -1462,7 +1462,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
       if (labels["needs-you"] === SOFT_FLAG_REASON) Object.assign(patch, { "needs-you": "", "needs-you-reason": "", "needs-you-at": "" });
       return patch;
     };
-    if (typeof deps.compactStep === "function" && rawUsed < hardCapTokens && !handoffUnderway) {
+    // K2b: an errored / closed / lost lead has no turn to compact in (compact-step would answer busy at every evaluation and the
+    // ladder would never run): it skips compaction and walks the ladder as before K2 (same rule as token-watch's Buddy path).
+    if (typeof deps.compactStep === "function" && rawUsed < hardCapTokens && !handoffUnderway && !isDeadForCompact(lead)) {
       const plan = compactCrossing.decide(lead, used, [flagTokens, autoHandoffTokens]);
       if (plan.action === "rearm") {
         compactCrossing.rearm(lead.id, plan.count);
