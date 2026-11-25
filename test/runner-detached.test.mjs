@@ -10,8 +10,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
-import { sha256 } from '../runner/reap.mjs';
-import { createDetachedProbe, DETACHED_FILE, detachedCandidates, detachedSupported, parsePsDetached, planDetached, planLedgerReap, readDetachedLedger, writeDetachedLedger } from '../runner/detached.mjs';
+import { liveSubtree, parsePsEtimes, sha256 } from '../runner/reap.mjs';
+import { createDetachedProbe, DETACHED_FILE, detachedCandidates, detachedSupported, parsePsDetached, parseStatStart, planDetached, planLedgerReap, readDetachedLedger, readStartIds, writeDetachedLedger } from '../runner/detached.mjs';
 import { drainDetachRefusalText, drainHookDecision, selfBackgrounds } from '../runner/drain-hook.mjs';
 import { backgroundWork, parsePs, snapshotProcesses } from '../runner/background.mjs';
 import { detachedReporter } from '../runner/server.mjs';
@@ -53,7 +53,8 @@ test('planDetached: unknown token, mismatched id, unreadable env, protected pid 
   assert.deepEqual(planDetached({ ...base, agents, markers: only([[500, { agentId: 'w1', tokenSha: sha256('old') }], [501, { agentId: 'w1', tokenSha: sha256('old') }]]) }), [], 'a token not of this lifetime');
   assert.deepEqual(planDetached({ ...base, agents, markers: only([[500, { ...W1, agentId: 'w2' }], [501, { ...W1, agentId: 'w2' }]]) }), [], 'id does not match the token');
   assert.deepEqual(planDetached({ ...base, agents, markers: only([[500, { error: 'open' }], [501, { error: 'env' }]]) }), [], 'env unreadable');
-  assert.deepEqual(planDetached({ ...base, agents, markers: marks(), protectedPids: [500] }), [], 'a protected root and what is under it');
+  const pr = planDetached({ ...base, agents, markers: marks(), protectedPids: [500] }); // review M1: protection keeps the pid itself, not what is under it
+  assert.deepEqual(pr.map((e) => [e.root, e.pids.map((x) => x.pid)]), [[501, [501]]], 'a protected pid is never a root nor in a kill tree');
   const rt = table().map((p) => (p.pid === 500 ? { ...p, cmd: 'node /x/runner/server.mjs --home h' } : p));
   assert.deepEqual(planDetached({ ...base, procs: rt, agents, markers: marks() }), [], 'the VS runtime');
   // The CLI tree's shell carries the token too but is background.mjs's (park hold), not detached.
@@ -133,9 +134,9 @@ test('ledger file: round trip, mode 600, an empty ledger removes it, a broken on
 test('parsePsDetached + createDetachedProbe.kill: a root whose start time moved is never killed', async () => {
   const now = 10_000_000;
   const rows = parsePsDetached(' 500   900   500    12 bash ./run suite.sh\nbogus\n', now);
-  assert.deepEqual(rows, [{ pid: 500, ppid: 900, pgid: 500, createdMs: now - 12_000, name: 'bash', cmd: 'bash ./run suite.sh' }]);
+  assert.deepEqual(rows, [{ pid: 500, ppid: 900, pgid: 500, createdMs: now - 12_000, createdTolMs: 2000, name: 'bash', cmd: 'bash ./run suite.sh' }]);
   const killed = [];
-  const probe = createDetachedProbe({ snapshot: async () => [], markers: async () => new Map(), inspect: async () => new Map([[500, { createdMs: T + 1000 + 30_000 }], [700, { createdMs: T + 1500 }]]), killTree: (pid) => { killed.push(pid); return true; } });
+  const probe = createDetachedProbe({ snapshot: async () => [], markers: async () => new Map(), starts: async () => new Map(), inspect: async () => new Map([[500, { createdMs: T + 1000 + 30_000 }], [700, { createdMs: T + 1500 }]]), killTree: (pid) => { killed.push(pid); return true; } });
   const res = await probe.kill([ledgerOf(), ledgerOf({ root: 700, createdMs: T + 1500 }), ledgerOf({ root: 800 })]);
   assert.deepEqual(killed, [700]);
   assert.deepEqual(res.skipped.map((s) => [s.root, s.reason]), [[500, 'pid-changed'], [800, 'gone']]);
@@ -255,6 +256,7 @@ test('boot reap: the previous ledger is verified against a fake table; only the 
     snapshot: async () => procs,
     markers: async (pids) => new Map(pids.filter((p) => env.has(p)).map((p) => [p, env.get(p)])),
     inspect: async (pids) => new Map(pids.map((p) => [p, { createdMs: procs.find((q) => q.pid === p).createdMs }])),
+    starts: async () => new Map(),
     killTree: (pid) => { killed.push(pid); return true; },
   });
   const h = harness({ dir, detachedProbe: probe, detachedFile: file });
@@ -291,13 +293,114 @@ test('detachedReporter: one runner.log line, a team-log metric per refused / fou
   assert.match(metrics[3].text, /left running/);
 });
 
+// ---- review fixes: M1 (runner ppid = subreaper), M2 (coarse links), L4 (exact start ids) ----------------------------
+
+// The unit host shape: systemd --user (900) is the subreaper AND the runner's parent; the runner (950) runs the CLI (100).
+const unitTable = () => [
+  { pid: 900, ppid: 1, name: 'systemd', cmd: '/usr/lib/systemd/systemd --user', createdMs: 2000 },
+  { pid: 950, ppid: 900, name: 'node', cmd: 'node /x/runner/server.mjs --home h', createdMs: T - 100_000 },
+  { pid: 100, ppid: 950, name: 'opencode', cmd: 'opencode run', createdMs: T },
+  { pid: 101, ppid: 100, name: 'bash', cmd: 'bash -c npm test', createdMs: T + 100 },
+  { pid: 960, ppid: 950, name: 'ps', cmd: 'ps -U 1000', createdMs: T + 5000 },
+  { pid: 500, ppid: 900, name: 'bash', cmd: 'bash ./run-suite.sh', createdMs: T + 1000 },
+  { pid: 501, ppid: 500, name: 'godot', cmd: 'godot --headless -s suite.gd', createdMs: T + 1100 },
+];
+const unitMarks = () => new Map([[100, W1], [101, W1], [500, W1], [501, W1], [960, W1], [900, { agentId: null, tokenSha: null }], [950, { agentId: null, tokenSha: null }]]);
+
+test('M1: the runner\'s parent being the subreaper (systemd --user or pid 1) never hides detached work, and is never killed', () => {
+  for (const ppid of [900, 1]) {
+    const procs = unitTable().map((p) => (ppid === 1 && p.ppid === 900 ? { ...p, ppid: 1 } : p)).filter((p) => ppid !== 1 || p.pid !== 900);
+    const args = { procs, markers: unitMarks(), agents, cliPids: [100], protectedPids: [950, ppid], selfPid: 950 };
+    const out = planDetached(args);
+    assert.deepEqual(out.map((e) => e.root), [500], `ppid ${ppid}`);
+    assert.ok(!out[0].pids.some((x) => x.pid === ppid || x.pid === 950), 'the runner and its parent are never in a kill tree');
+    assert.deepEqual(detachedCandidates(args).sort(), [500, 501], 'runner tree (950, 960), CLI tree and protected pids are not candidates');
+    const r = planLedgerReap({ ...args, ledger: [ledgerOf()], currentShas: new Set(), knownIds: new Set(['w1']) });
+    assert.deepEqual(r.reap.map((e) => e.root), [500], `boot reap, ppid ${ppid}`);
+    assert.deepEqual(r.skipped, []);
+    const n = planLedgerReap({ ...args, ledger: [], currentShas: new Set(), knownIds: new Set(['w1']) });
+    assert.deepEqual(n.left.map((l) => l.pid), [500], `left, ppid ${ppid}`);
+  }
+  // Under the runner itself (a marked helper, 960) is the runner's work, not detached.
+  assert.ok(!planDetached({ procs: unitTable(), markers: unitMarks(), agents, cliPids: [100], protectedPids: [950, 900], selfPid: 950 }).some((e) => e.root === 960));
+  // A ledger entry naming the runner's parent itself is still refused (prot.has).
+  const pr = planLedgerReap({ procs: unitTable(), markers: new Map([...unitMarks(), [900, W1]]), ledger: [ledgerOf({ root: 900, createdMs: 2000 })], cliPids: [100], protectedPids: [950, 900], selfPid: 950, knownIds: new Set(['w1']) });
+  assert.deepEqual(pr.reap, []);
+  assert.deepEqual(pr.skipped.map((s) => s.reason), ['in-live-tree']);
+});
+
+test('M2: coarse (ps etimes) rows keep a child read a second "before" its parent in the CLI tree, so it is never detached', () => {
+  const now = 90_000_000;
+  // CLI read at etimes 10, its shell read a moment later at etimes 11 (same second of birth): a 1 s inversion.
+  const text = ' 900 1 900 5000 systemd --user\n 100 900 100 10 opencode run\n 101 100 100 11 bash -c npm test\n';
+  const procs = parsePsDetached(text, now);
+  assert.ok(procs.every((p) => p.createdTolMs === 2000));
+  assert.deepEqual(liveSubtree(100, procs).map((p) => p.pid), [100, 101]);
+  const markers = new Map([[100, W1], [101, W1], [900, { agentId: null, tokenSha: null }]]);
+  assert.deepEqual(planDetached({ procs, markers, agents, cliPids: [100], protectedPids: [], selfPid: null }), [], 'the in-tree shell is not detached');
+  // parsePsEtimes (the dev-server reaper's table) is coarse too.
+  assert.deepEqual(liveSubtree(100, parsePsEtimes(' 100 900 10 opencode run\n 101 100 11 bash -c x\n', now)).map((p) => p.pid), [100, 101]);
+  // Precise rows keep the 50 ms rule: a child a second older than its parent is a stale link (pid reuse).
+  const precise = procs.map(({ createdTolMs, ...p }) => p);
+  assert.deepEqual(liveSubtree(100, precise).map((p) => p.pid), [100]);
+  // Beyond the tolerance the link is stale even for coarse rows.
+  assert.deepEqual(liveSubtree(100, parsePsDetached(' 100 900 100 10 opencode\n 101 100 100 13 bash\n', now)).map((p) => p.pid), [100]);
+});
+
+test('L4: parseStatStart / readStartIds read the exact start (boot id + starttime ticks)', async () => {
+  const stat = (comm, start) => `4242 (${comm}) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 ${start} 1000 10 18446744073709551615`;
+  assert.equal(parseStatStart(stat('bash', 123456)), '123456');
+  assert.equal(parseStatStart(stat('we ird) (x', 777)), '777', 'comm with spaces and parens');
+  assert.equal(parseStatStart('garbage'), null);
+  assert.equal(parseStatStart('1 (x) S 1'), null);
+  const files = { '/proc/sys/kernel/random/boot_id': '0b5c1e2a-1111-2222-3333-444455556666\n', '/proc/500/stat': stat('bash', 1000), '/proc/501/stat': stat('godot', 1001) };
+  const readFileImpl = async (f) => { if (f in files) return files[f]; throw Object.assign(new Error('nope'), { code: 'ENOENT' }); };
+  const ids = await readStartIds([500, 501, 502, 1], { readFileImpl });
+  assert.deepEqual([...ids], [[500, '0b5c1e2a-1111-2222-3333-444455556666/1000'], [501, '0b5c1e2a-1111-2222-3333-444455556666/1001']]);
+  assert.equal((await readStartIds([500], { readFileImpl: async () => { throw new Error('no proc'); } })).size, 0, 'no boot id: nothing exact');
+  // This process, for real (read only): two reads agree.
+  if (process.platform === 'linux') {
+    const a = await readStartIds([process.pid]);
+    const b = await readStartIds([process.pid]);
+    assert.equal(a.get(process.pid), b.get(process.pid));
+    assert.match(a.get(process.pid), /^[\w-]+\/\d+$/);
+  }
+});
+
+test('L4: kill re-dates with the exact start id when both sides have one; otherwise the etimes tolerance', async () => {
+  const B = 'bootbootboot';
+  const killed = [];
+  let inspected = null;
+  const probe = createDetachedProbe({
+    snapshot: async () => [], markers: async () => new Map(),
+    starts: async () => new Map([[500, `${B}/1000`], [600, `${B}/2000`]]),
+    inspect: async (pids) => { inspected = pids; return new Map([[500, { createdMs: T + 1000 + 60_000 }], [600, { createdMs: T + 1000 }], [700, { createdMs: T + 1000 }]]); },
+    killTree: (pid) => { killed.push(pid); return true; },
+  });
+  const res = await probe.kill([
+    ledgerOf({ start: `${B}/1000` }), // exact match: killed (its coarse date, 60 s off, is not consulted)
+    ledgerOf({ root: 600, start: `${B}/1999` }), // exact mismatch: pid reuse, even though the coarse date agrees
+    ledgerOf({ root: 700, start: `${B}/5` }), // no exact read now (hidden /proc): falls back to the coarse check
+  ]);
+  assert.deepEqual(killed, [500, 700]);
+  assert.deepEqual(res.skipped.map((s) => [s.root, s.reason]), [[600, 'pid-changed']]);
+  assert.deepEqual(inspected, [700], 'only roots without an exact pair are re-dated by ps');
+  // scan attaches the root's start id; the ledger keeps it (and drops a malformed one).
+  const scanProbe = createDetachedProbe({ snapshot: async () => table(), markers: async () => marks(), starts: async () => new Map([[500, `${B}/1000`]]) });
+  const found = await scanProbe.scan({ agents, cliPids: [100] });
+  assert.deepEqual(found.map((e) => [e.root, e.start]), [[500, `${B}/1000`]]);
+  const f = path.join(tmp(), DETACHED_FILE);
+  await writeDetachedLedger(f, [...found, ledgerOf({ root: 510, start: 'bad value!' })]);
+  assert.deepEqual(readDetachedLedger(f).map((e) => [e.root, e.start]), [[500, `${B}/1000`], [510, null]]);
+});
+
 // ---- drain hook: a foreground command that backgrounds itself ---------------------------------------------------------
 
 test('selfBackgrounds (Bash): &, nohup, setsid, disown count; quoted, escaped, commented, &&, 2>&1, &>, |& do not', () => {
-  for (const c of ['nohup npm test > /tmp/x.log 2>&1 &', 'npm test &', 'npm test & echo started', '(godot -s suite.gd &)', 'setsid ./run.sh', 'x & disown', 'a&&b&', 'cd x && ./suite.sh > log &\n', 'cat <<EOF > f &\nbody\nEOF', 'sleep 9 & wait']) {
+  for (const c of ['nohup npm test > /tmp/x.log 2>&1 &', 'npm test &', 'npm test & echo started', '(godot -s suite.gd &)', 'setsid ./run.sh', 'x & disown', 'a&&b&', 'cd x && ./suite.sh > log &\n', 'cat <<EOF > f &\nbody\nEOF', 'sleep 9 & wait', 'nohup x', 'cd a && nohup x > l', 'a; setsid b', '(setsid x)', 'FOO=1 nohup x', 'sudo nohup x', '$(nohup x)', 'if a; then nohup x; fi', 'x | nohup y', 'echo $((3 & 1)) &']) {
     assert.equal(selfBackgrounds(c), true, c);
   }
-  for (const c of ['npm test && npm run build', 'npm test 2>&1 | tail', 'npm test &> log', 'npm test &>> log', 'cmd >&2', 'a |& b', 'echo "a & b"', "grep -c '&' file", 'echo a \\& b', 'ls # nohup &', 'echo "nohup x &"', 'git commit -F - <<\'EOF\'\nR&D work &\nnohup\nEOF', "echo 'setsid'", '', 'nohupx', 'echo $#', '[[ a ]] && b || c']) {
+  for (const c of ['npm test && npm run build', 'npm test 2>&1 | tail', 'npm test &> log', 'npm test &>> log', 'cmd >&2', 'a |& b', 'echo "a & b"', "grep -c '&' file", 'echo a \\& b', 'ls # nohup &', 'echo "nohup x &"', 'git commit -F - <<\'EOF\'\nR&D work &\nnohup\nEOF', "echo 'setsid'", '', 'nohupx', 'echo $#', '[[ a ]] && b || c', 'cat nohup.out', 'tail -f nohup.out', 'git checkout fix/nohup-leak', 'ls ./setsid', 'echo nohup', 'man disown', 'echo $((3 & 1))', 'x=$(( a & 0xff ))', '(( a & 1 )) && b']) {
     assert.equal(selfBackgrounds(c), false, JSON.stringify(c));
   }
 });

@@ -662,7 +662,7 @@ export class Runner {
       let since = Infinity;
       for (const [id, tok] of this.tokensById) { agents.set(sha256(tok), id); since = Math.min(since, this._tokenAt.get(id) ?? 0); }
       if (!agents.size) return { why, found: [], refused: [], skipped: [] };
-      const found = await this.detachedProbe.scan({ agents, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], since: Number.isFinite(since) ? since : 0 });
+      const found = await this.detachedProbe.scan({ agents, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], selfPid: process.pid, since: Number.isFinite(since) ? since : 0 });
       const d = why === 'drain' && !this._shutDown ? this.drainState() : null;
       const late = d ? found.filter((w) => Number.isFinite(w.createdMs) && w.createdMs >= d.since + 1000) : [];
       let refused = [];
@@ -720,7 +720,7 @@ export class Runner {
     const currentShas = new Set([...this.tokensById.values()].map((t) => sha256(t)));
     let knownIds = null;
     try { knownIds = new Set(this.store.ids()); } catch { /* unknown: any agent id counts */ }
-    const res = await this.detachedProbe.reapLedger({ ledger, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], currentShas, knownIds });
+    const res = await this.detachedProbe.reapLedger({ ledger, cliPids: this._liveCliPids(), protectedPids: [process.pid, process.ppid], selfPid: process.pid, currentShas, knownIds });
     if (!this._ledgerWritten) { try { await writeDetachedLedger(this.detachedFile, []); } catch { /* the next boot re-verifies it */ } }
     const tag = (w) => ({ ...w, ...this._teamLane(w.agentId) });
     if (res.reaped.length || res.skipped.length || res.left.length) this._reportDetached({ why: 'boot', reaped: res.reaped.map(tag), skipped: res.skipped, left: res.left.map(tag) });

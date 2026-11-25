@@ -16,7 +16,7 @@
 //               and no current token is unattributed: logged (`left`), never killed.
 // Linux only (the unit hosts). Fail closed everywhere: no snapshot, an env that cannot be read, an undated pid: nothing killed.
 import { readFileSync } from 'node:fs';
-import { rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnCaptureOffLoop } from './spawn-off-loop.mjs';
 import { liveAncestors, liveSubtree, readEnvMarkers, reapCmdText, redatePids, VS_RUNTIME } from './reap.mjs';
@@ -26,6 +26,31 @@ export const DETACHED_FILE = 'detached.json';
 // ps etimes is whole seconds counted back from "now": two reads of one process can differ by ~1 s (reap.mjs START_MATCH_MS).
 export const DETACHED_START_TOL_MS = 2500;
 const MAX_LEDGER = 200;
+const START_ID = /^[\w-]{8,64}\/\d{1,20}$/;
+
+// Review L4: the exact start of a process, `<boot_id>/<starttime>` (starttime = /proc/<pid>/stat field 22, clock ticks since
+// boot; the boot id makes a value from before a reboot never match). Two reads of one live process are equal; a reused pid
+// is not. comm (field 2) may hold spaces and parens, so the fields are counted after its LAST ')'.
+export function parseStatStart(text) {
+  const t = String(text ?? '');
+  const i = t.lastIndexOf(')');
+  if (i < 0) return null;
+  const f = t.slice(i + 1).trim().split(/\s+/); // f[0] = field 3 (state) ... f[19] = field 22 (starttime)
+  return /^\d+$/.test(f[19] ?? '') ? f[19] : null;
+}
+
+/** Map<pid, startId> for the pids whose /proc/<pid>/stat could be read (none if the boot id cannot be). Never throws. */
+export async function readStartIds(pids, { readFileImpl = readFile } = {}) {
+  const out = new Map();
+  let boot;
+  try { boot = String(await readFileImpl('/proc/sys/kernel/random/boot_id', 'utf8')).trim(); } catch { return out; }
+  if (!/^[\w-]{8,64}$/.test(boot)) return out;
+  for (const pid of new Set(pids)) {
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    try { const st = parseStatStart(await readFileImpl(`/proc/${pid}/stat`, 'utf8')); if (st) out.set(pid, `${boot}/${st}`); } catch { /* gone or hidden */ }
+  }
+  return out;
+}
 
 // Linux: `ps -U <uid> -o pid= -o ppid= -o pgid= -o etimes= -o args=` (no comm: it may hold spaces). createdMs to ~1 s.
 export function parsePsDetached(text, now = Date.now()) {
@@ -34,7 +59,7 @@ export function parsePsDetached(text, now = Date.now()) {
     const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (!m) continue;
     const cmd = m[5].trim();
-    out.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), createdMs: now - Number(m[4]) * 1000, name: path.basename(cmd.split(/\s+/)[0] ?? ''), cmd });
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), createdMs: now - Number(m[4]) * 1000, createdTolMs: 2000, name: path.basename(cmd.split(/\s+/)[0] ?? ''), cmd });
   }
   return out;
 }
@@ -45,17 +70,21 @@ export async function snapshotDetachedTable({ uid = process.getuid?.(), run = sp
   return parsePsDetached(await run('ps', [...sel, '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'etimes=', '-o', 'args='], { timeoutMs: 20_000 }), now);
 }
 
-// Every pid inside a live agent CLI's tree (valid parent links only): that work is background.mjs's, not detached.
-function treePids(procs, byPid, cliPids) {
+// Every pid inside a live agent CLI's tree or the runner's own (selfPid) tree (valid parent links only): that work is
+// background.mjs's or the runner's, not detached.
+// Review M1: protectedPids (the runner and its PARENT) are never killed and stop a root climb, but only these trees make
+// what is under them "not detached". The runner's parent may be the very subreaper detached work lands under (systemd
+// --user, or pid 1 once the launcher exits): counting its descendants as protected would hide every detached root.
+function treePids(procs, byPid, cliPids, selfPid = null) {
   const out = new Set();
-  for (const c of cliPids) if (Number.isInteger(c) && c > 0) for (const p of liveSubtree(c, procs, byPid)) out.add(p.pid);
+  for (const c of [...cliPids, selfPid]) if (Number.isInteger(c) && c > 0) for (const p of liveSubtree(c, procs, byPid)) out.add(p.pid);
   return out;
 }
 
 /** Pids whose env must be read: outside every live CLI tree, not protected, created since `since` (the oldest live token). */
-export function detachedCandidates({ procs, cliPids = [], protectedPids = [], since = 0 }) {
+export function detachedCandidates({ procs, cliPids = [], protectedPids = [], since = 0, selfPid = null }) {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const inTree = treePids(procs, byPid, cliPids);
+  const inTree = treePids(procs, byPid, cliPids, selfPid);
   const prot = new Set(protectedPids);
   return procs.filter((p) => p.pid > 1 && !inTree.has(p.pid) && !prot.has(p.pid) && p.createdMs > 0 && p.createdMs + 1000 >= since).map((p) => p.pid);
 }
@@ -86,12 +115,13 @@ function topmost(entries) {
 /**
  * Pure. Detached work of this runner lifetime's agents.
  *   procs: [{ pid, ppid, pgid, createdMs, name, cmd }]   markers: Map<pid, { agentId, tokenSha } | { error }>
- *   agents: Map<tokenSha, agentId> (this lifetime's tokens)   cliPids: live agent CLI pids   protectedPids: runner + ancestors
+ *   agents: Map<tokenSha, agentId> (this lifetime's tokens)   cliPids: live agent CLI pids   selfPid: the runner (its tree is
+ *   never detached)   protectedPids: the runner + its parent (never killed, a climb stops there; NOT an exclusion of what is under them)
  * Returns [{ agentId, tokenSha, root, pgid, createdMs, cmd, pids: [{ pid, createdMs }] }], one per topmost root.
  */
-export function planDetached({ procs, markers, agents, cliPids = [], protectedPids = [] }) {
+export function planDetached({ procs, markers, agents, cliPids = [], protectedPids = [], selfPid = null }) {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const inTree = treePids(procs, byPid, cliPids);
+  const inTree = treePids(procs, byPid, cliPids, selfPid);
   const prot = new Set(protectedPids);
   const ownerOf = (pid) => { const m = markers.get(pid); if (!m || m.error || !m.tokenSha) return null; const id = agents.get(m.tokenSha); return id && id === m.agentId ? { agentId: id, tokenSha: m.tokenSha } : null; };
   const roots = new Map();
@@ -100,7 +130,7 @@ export function planDetached({ procs, markers, agents, cliPids = [], protectedPi
     const own = ownerOf(p.pid);
     if (!own) continue;
     const ancestors = liveAncestors(p.pid, byPid);
-    if (ancestors.some((a) => inTree.has(a.pid) || prot.has(a.pid))) continue;
+    if (ancestors.some((a) => inTree.has(a.pid))) continue;
     const root = climb(p, byPid, (pid) => ownerOf(pid)?.tokenSha === own.tokenSha, inTree, prot);
     if (roots.has(root.pid)) continue;
     const e = entryFor(root, procs, byPid, own);
@@ -117,9 +147,9 @@ export function planDetached({ procs, markers, agents, cliPids = [], protectedPi
  *   knownIds: agent ids with a log in this runner's store (what "a VS agent" means here)
  * Returns { reap: [entry + pids], gone: [entry], skipped: [{ root, agentId, reason }], left: [{ pid, agentId, createdMs, cmd }] }.
  */
-export function planLedgerReap({ procs, markers, ledger, cliPids = [], protectedPids = [], currentShas = new Set(), knownIds = null }) {
+export function planLedgerReap({ procs, markers, ledger, cliPids = [], protectedPids = [], selfPid = null, currentShas = new Set(), knownIds = null }) {
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const inTree = treePids(procs, byPid, cliPids);
+  const inTree = treePids(procs, byPid, cliPids, selfPid);
   const prot = new Set(protectedPids);
   const reap = [];
   const gone = [];
@@ -136,7 +166,7 @@ export function planLedgerReap({ procs, markers, ledger, cliPids = [], protected
     if (m.agentId !== rec.agentId || !rec.tokenSha || m.tokenSha !== rec.tokenSha) { skip('marker-mismatch'); continue; }
     if (inTree.has(rec.root) || prot.has(rec.root)) { skip('in-live-tree'); continue; }
     const ancestors = liveAncestors(rec.root, byPid);
-    if (ancestors.some((a) => inTree.has(a.pid) || prot.has(a.pid))) { skip('in-live-tree'); continue; }
+    if (ancestors.some((a) => inTree.has(a.pid))) { skip('in-live-tree'); continue; }
     const tree = liveSubtree(rec.root, procs, byPid);
     if (tree.some((t) => inTree.has(t.pid) || prot.has(t.pid))) { skip('live-tree-inside'); continue; }
     if ([...tree, ...ancestors].some((t) => VS_RUNTIME.test(String(t.cmd ?? '')))) { skip('vs-runtime'); continue; }
@@ -151,7 +181,7 @@ export function planLedgerReap({ procs, markers, ledger, cliPids = [], protected
     if (p.pid <= 1 || claimed.has(p.pid) || inTree.has(p.pid) || prot.has(p.pid)) continue;
     const m = orphanOf(p.pid);
     if (!m) continue;
-    if (liveAncestors(p.pid, byPid).some((a) => inTree.has(a.pid) || prot.has(a.pid))) continue;
+    if (liveAncestors(p.pid, byPid).some((a) => inTree.has(a.pid))) continue;
     const root = climb(p, byPid, (pid) => { const o = orphanOf(pid); return !!o && o.agentId === m.agentId && !claimed.has(pid); }, inTree, prot);
     if (!left.has(root.pid)) left.set(root.pid, { pid: root.pid, agentId: m.agentId, createdMs: root.createdMs, cmd: reapCmdText(root.cmd || root.name) });
   }
@@ -164,14 +194,15 @@ export function readDetachedLedger(file) {
   try {
     const j = JSON.parse(readFileSync(file, 'utf8'));
     const list = Array.isArray(j?.entries) ? j.entries : [];
-    return list.filter((r) => r && Number.isInteger(r.root) && r.root > 1 && typeof r.agentId === 'string' && typeof r.tokenSha === 'string' && Number.isFinite(r.createdMs)).slice(0, MAX_LEDGER);
+    return list.filter((r) => r && Number.isInteger(r.root) && r.root > 1 && typeof r.agentId === 'string' && typeof r.tokenSha === 'string' && Number.isFinite(r.createdMs)).slice(0, MAX_LEDGER)
+      .map((r) => ({ ...r, start: typeof r.start === 'string' && START_ID.test(r.start) ? r.start : null }));
   } catch { return []; }
 }
 
 /** Replaces the ledger (async tmp + rename; mode 600: it holds token hashes). An empty ledger removes the file. */
 export async function writeDetachedLedger(file, entries, { fs = { writeFile, rename, rm } } = {}) {
   if (!file) return;
-  const list = entries.slice(0, MAX_LEDGER).map((e) => ({ agentId: e.agentId, tokenSha: e.tokenSha, root: e.root, pgid: e.pgid ?? null, createdMs: e.createdMs, cmd: e.cmd, recordedAt: Date.now() }));
+  const list = entries.slice(0, MAX_LEDGER).map((e) => ({ agentId: e.agentId, tokenSha: e.tokenSha, root: e.root, pgid: e.pgid ?? null, createdMs: e.createdMs, start: e.start ?? null, cmd: e.cmd, recordedAt: Date.now() }));
   if (!list.length) { await fs.rm(file, { force: true }); return; }
   const tmp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify({ v: 1, entries: list }), { mode: 0o600 });
@@ -180,41 +211,55 @@ export async function writeDetachedLedger(file, entries, { fs = { writeFile, ren
 
 /**
  * The runner's probe (Linux): { scan, kill, reapLedger }. Every seam is injectable (tests use a fake process table).
- *   scan({ agents, cliPids, protectedPids, since }) -> [entry]                    (planDetached on a fresh snapshot)
+ *   scan({ agents, cliPids, protectedPids, selfPid, since }) -> [entry]          (planDetached on a fresh snapshot; entry.start
+ *                                                                                = the root's exact start id when readable)
  *   kill(entries) -> { killed: [entry], skipped: [{ root, reason }] }            (root re-dated first; tree kill)
- *   reapLedger({ ledger, cliPids, protectedPids, currentShas, knownIds }) -> { reaped, gone, skipped, left }
- * kill: a root whose start time moved since its snapshot (gone, or pid reuse) is skipped. The tree kill is killPidTree
- * (SIGKILL: the process group when the root leads one, else a leaf-first descendant walk; never the runner or its group).
+ *   reapLedger({ ledger, cliPids, protectedPids, selfPid, currentShas, knownIds }) -> { reaped, gone, skipped, left }
+ * kill re-dates each root right before its kill (review L4): with an exact start id on both sides (entry.start and a fresh
+ * /proc/<pid>/stat read) they must be equal; otherwise the ps etimes date must be within DETACHED_START_TOL_MS. A root that
+ * moved (pid reuse) or is gone is skipped. The tree kill is killPidTree (SIGKILL: the process group when the root leads
+ * one, else a leaf-first descendant walk; never the runner or its group).
  */
-export function createDetachedProbe({ snapshot = () => snapshotDetachedTable(), markers = (pids) => readEnvMarkers(pids, { platform: 'linux' }), inspect = (pids) => redatePids(pids, { platform: 'linux' }), killTree = (pid) => killPidTree(pid) } = {}) {
+export function createDetachedProbe({ snapshot = () => snapshotDetachedTable(), markers = (pids) => readEnvMarkers(pids, { platform: 'linux' }), inspect = (pids) => redatePids(pids, { platform: 'linux' }), starts = (pids) => readStartIds(pids), killTree = (pid) => killPidTree(pid) } = {}) {
+  const startsOf = async (pids) => { try { return (await starts(pids)) ?? new Map(); } catch { return new Map(); } };
   const kill = async (entries) => {
     const killed = [];
     const skippedK = [];
     if (!entries.length) return { killed, skipped: skippedK };
-    let now;
-    try { now = await inspect(entries.map((e) => e.root)); } catch { now = new Map(); }
+    const exact = await startsOf(entries.map((e) => e.root));
+    const coarse = entries.filter((e) => !(e.start && exact.has(e.root))).map((e) => e.root);
+    let now = new Map();
+    if (coarse.length) { try { now = await inspect(coarse); } catch { now = new Map(); } }
     for (const e of entries) {
-      const i = now.get(e.root);
-      if (!i || Math.abs(i.createdMs - e.createdMs) > DETACHED_START_TOL_MS) { skippedK.push({ root: e.root, agentId: e.agentId, reason: i ? 'pid-changed' : 'gone' }); continue; }
+      const skip = (reason) => skippedK.push({ root: e.root, agentId: e.agentId, reason });
+      if (e.start && exact.has(e.root)) {
+        if (exact.get(e.root) !== e.start) { skip('pid-changed'); continue; }
+      } else {
+        const i = now.get(e.root);
+        if (!i || Math.abs(i.createdMs - e.createdMs) > DETACHED_START_TOL_MS) { skip(i ? 'pid-changed' : 'gone'); continue; }
+      }
       let ok = false;
       try { ok = killTree(e.root) !== false; } catch { ok = false; }
-      if (ok) killed.push(e); else skippedK.push({ root: e.root, agentId: e.agentId, reason: 'kill-refused' });
+      if (ok) killed.push(e); else skip('kill-refused');
     }
     return { killed, skipped: skippedK };
   };
   return {
-    async scan({ agents, cliPids = [], protectedPids = [], since = 0 }) {
+    async scan({ agents, cliPids = [], protectedPids = [], selfPid = null, since = 0 }) {
       if (!agents?.size) return [];
       const procs = await snapshot();
-      const want = detachedCandidates({ procs, cliPids, protectedPids, since });
+      const want = detachedCandidates({ procs, cliPids, protectedPids, selfPid, since });
       const env = await markers(want);
-      return planDetached({ procs, markers: env, agents, cliPids, protectedPids });
+      const found = planDetached({ procs, markers: env, agents, cliPids, protectedPids, selfPid });
+      if (!found.length) return found;
+      const st = await startsOf(found.map((e) => e.root));
+      return found.map((e) => ({ ...e, start: st.get(e.root) ?? null }));
     },
     kill,
-    async reapLedger({ ledger = [], cliPids = [], protectedPids = [], currentShas = new Set(), knownIds = null }) {
+    async reapLedger({ ledger = [], cliPids = [], protectedPids = [], selfPid = null, currentShas = new Set(), knownIds = null }) {
       const procs = await snapshot();
-      const env = await markers(detachedCandidates({ procs, cliPids, protectedPids, since: 0 }));
-      const plan = planLedgerReap({ procs, markers: env, ledger, cliPids, protectedPids, currentShas, knownIds });
+      const env = await markers(detachedCandidates({ procs, cliPids, protectedPids, selfPid, since: 0 }));
+      const plan = planLedgerReap({ procs, markers: env, ledger, cliPids, protectedPids, selfPid, currentShas, knownIds });
       const { killed, skipped } = await kill(plan.reap);
       return { reaped: killed, gone: plan.gone, skipped: [...plan.skipped, ...skipped], left: plan.left };
     },

@@ -116,7 +116,7 @@ test('parsers: env-reader lines, ss, ps etimes; reapCmdText strips Claude\'s wra
   assert.deepEqual(m.get(13), { agentId: null, tokenSha: null });
   assert.deepEqual(m.get(14), { error: 'open' });
   assert.deepEqual(parseSs('LISTEN 0 511 127.0.0.1:5173 0.0.0.0:* users:(("node",pid=1234,fd=20))\nLISTEN 0 4096 [::]:22 [::]:* users:(("sshd",pid=9,fd=3))'), [{ pid: 1234, port: 5173, addr: '127.0.0.1' }, { pid: 9, port: 22, addr: '[::]' }]);
-  assert.deepEqual(parsePsEtimes('  10   1   5 node node vite --port 1\n', 100_000), [{ pid: 10, ppid: 1, createdMs: 95_000, name: 'node', cmd: 'node vite --port 1' }]);
+  assert.deepEqual(parsePsEtimes('  10   1   5 node node vite --port 1\n', 100_000), [{ pid: 10, ppid: 1, createdMs: 95_000, createdTolMs: 2000, name: 'node', cmd: 'node vite --port 1' }]);
   const t = reapCmdText(`bash -c -l "source /tmp/snap && eval 'npx vite --port 5199 &' < /dev/null && pwd -P >| /tmp/claude-1-cwd"`);
   assert.ok(!t.includes('pwd -P') && t.includes('npx vite'), t);
   // idea-526 L1: the redacted path keeps its script name (the metric says which dev server), never the directories.

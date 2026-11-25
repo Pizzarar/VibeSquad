@@ -37,7 +37,12 @@ const BASH_STRIP = /\\[\s\S]|'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g;
 const PS_STRIP = /`[\s\S]|'(?:[^']|'')*'|"(?:[^"`]|`[\s\S])*"/g;
 const COMMENT = /(^|\s)#.*$/gm;
 const BASH_AMP = /(?:^|[^&|<>])&(?![&>])/m;
-const BASH_DETACH = /\b(?:nohup|setsid|disown)\b/;
+// Review L3: nohup / setsid / disown count only in COMMAND position (line start, or after ; & | && || ( { ` $( and an
+// optional `then`/`do`/`else`, `sudo`/`exec`/`command`/`time`/`env`, and VAR=value prefixes), so an argument such as
+// `cat nohup.out` or `git checkout fix/nohup-leak` passes.
+const BASH_DETACH = /(?:^|[;&|({`]|\$\()\s*(?:(?:then|do|else|sudo|exec|command|time|env)\s+)*(?:[A-Za-z_]\w*=\S*\s+)*(?:nohup|setsid|disown)(?=$|[\s;&|)])/m;
+// Arithmetic ($(( a & b )), (( x & 1 ))) is not a control operator: dropped before the & check.
+const ARITH = /\$?\(\((?:[^()]|\([^()]*\))*\)\)/g;
 // A heredoc body is data (`git commit -F - <<'EOF' ... R&D ... EOF`): dropped, its opening line kept.
 const HEREDOC = /<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?^\s*\2\s*$/gm;
 export function selfBackgrounds(command, tool = 'Bash') {
@@ -49,7 +54,7 @@ export function selfBackgrounds(command, tool = 'Bash') {
     if (/&\s*(?:$|;|\r?\n)/m.test(t.replace(/&&/g, ' '))) return true;
     return t.split(/[;\r\n|]/).some((seg) => /\bStart-Process\b|\bsaps\b/i.test(seg) && !/-Wait\b/i.test(seg));
   }
-  const t = raw.replace(HEREDOC, '<<_$3\n').replace(BASH_STRIP, ' _ ').replace(COMMENT, '$1');
+  const t = raw.replace(HEREDOC, '<<_$3\n').replace(BASH_STRIP, ' _ ').replace(COMMENT, '$1').replace(ARITH, ' _ ');
   return BASH_AMP.test(t) || BASH_DETACH.test(t);
 }
 
