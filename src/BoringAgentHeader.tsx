@@ -1,3 +1,4 @@
+import { drawerSpawnWhy } from "./roleSpawn";
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import { archiveAgent, markAgentRead, markAgentUnread, sendMessage, stopAgent } from "./paseo";
@@ -176,10 +177,10 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const { roles: storedRoles } = useProfiles();
   const roleModelName = roleNameFor(labels.profile, storedRoles) ?? roleNameFor(labels.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
   const roleModelModel = shortModel(cfg.staged?.model ?? agent.model);
-  const roleModel = roleModelName && roleModelModel ? `${roleModelName} · ${roleModelModel}` : roleModelName || roleModelModel || "";
+  const roleModel = [roleModelName && roleModelModel ? `${roleModelName} · ${roleModelModel}` : roleModelName || roleModelModel || "", drawerSpawnWhy(labels, agent.model, !!cfg.staged)].filter(Boolean).join(" · ");
   // UX r2: the chip truncates in narrow headers, so the hover shows the full role and untruncated model id.
   const roleModelFull = cfg.staged?.model ?? agent.model ?? "";
-  const roleModelTitle = `${roleModelName ? `${roleModelName} · ` : ""}${roleModelFull || roleModelModel}${cfg.staged ? " (staged switch)" : ""}`;
+  const roleModelTitle = `${roleModelName ? `${roleModelName} · ` : ""}${roleModelFull || roleModelModel}${cfg.staged ? " (staged switch)" : ""}${labels["vs.route"] ? ` (${labels["vs.route"]})` : ""}`;
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
   // R6-2: a closed/retired agent shows no Needs-you banner (it cannot be acted on).

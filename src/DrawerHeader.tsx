@@ -1,4 +1,5 @@
 import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
+import { drawerSpawnWhy } from "./roleSpawn";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "./agentTypes";
@@ -711,7 +712,9 @@ export function DrawerHeader({
   const labelsOf = (agent.labels ?? {}) as Record<string, string>;
   const roleName = roleNameFor(labelsOf.profile, storedRoles) ?? roleNameFor(labelsOf.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
   const modelName = shortModel(staged?.model ?? agent.model);
-  const roleModel = roleName && modelName ? `${roleName} · ${modelName}` : roleName || modelName || "";
+  // R2: ` · <reason>` from the spawn hook's vs.route why=. A staged switch hides it; a live model switch since spawn shows override.
+  const spawnWhy = drawerSpawnWhy(labelsOf, agent.model, !!staged);
+  const roleModel = [roleName && modelName ? `${roleName} · ${modelName}` : roleName || modelName || "", spawnWhy].filter(Boolean).join(" · ");
   const roleModelChip = roleModel ? (
     <span
       className="role-model-chip"

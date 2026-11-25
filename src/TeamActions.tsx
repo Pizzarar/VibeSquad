@@ -20,8 +20,8 @@ import { useDraft } from "./drafts";
 import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
-import { DEMO_LADDER, DEMO_ROLES, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
-import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, parseOverrideValue, providerName } from "./roleSpawn";
+import { DEMO_LADDER, DEMO_ROLES, fetchRoles, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
+import { STAKES_CHOICES, buildRoleSpawn, landingPick, overrideGroups, parseOverrideValue, providerName, type Override } from "./roleSpawn";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -102,10 +102,10 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
   </label>
 );
 
-/** Which model a role row will run: the ladder's pick for these stakes, or the override ("via" says which). */
-function roleBadges(roleSpawn: { provider: string; model?: string }, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof ladderPick>[1], stakes: string, hasOverride: boolean): [string, string][] {
-  const picked = ladderPick({ ...roleDef, providers: [roleSpawn.provider] }, ladder, stakes).model;
-  return [["provider/model", `${providerName(roleSpawn.provider)}/${roleSpawn.model ?? picked}`], ["via", roleSpawn.model ? "override" : hasOverride ? "override (provider rung)" : "ladder"], ["stakes", stakes]];
+/** Which model a role row will run: the ladder's pick for these stakes (after capped/not-installed failover), or the override. */
+function roleBadges(roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, capped: readonly string[], installed: readonly string[]): [string, string][] {
+  const l = landingPick(roleDef, ladder, stakes, { capped, installed, override });
+  return [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]];
 }
 
 /** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> rung" | "<provider> · <model>". */
@@ -131,7 +131,9 @@ function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: 
 
 export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; onClose: () => void; onCreated: (id: string) => void }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles, installedProviders, roles: rolesState, ladder: ladderState } = useProfiles();
+  const { profiles, installedProviders, roles: rolesState, ladder: ladderState, capped: cappedState } = useProfiles();
+  const capped = cappedState ?? [];
+  useEffect(() => void fetchRoles(), []); // R2: fresh caps each time the modal opens
   const roles = rolesState ?? DEMO_ROLES;
   const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
@@ -271,7 +273,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
   const isProviderInstalled = installedProviders.includes(spawnProvider);
   const badges: [string, string][] = roleSpawn && roleDef
-    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!override)
+    ? roleBadges(roleDef, ladder, stakes, override, capped, installedProviders)
     : [["provider/model", `${profile.provider}/${profile.model}`]];
   if (modeId) badges.push(["modeId", modeId]);
   if (!roleSpawn && profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
@@ -683,7 +685,9 @@ export function AddBuddyModal({
   onOpenExisting?: (id: string) => void;
 }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles, roles: rolesState, ladder: ladderState } = useProfiles();
+  const { profiles, installedProviders, roles: rolesState, ladder: ladderState, capped: cappedState } = useProfiles();
+  const capped = cappedState ?? [];
+  useEffect(() => void fetchRoles(), []);
   const roles = rolesState ?? DEMO_ROLES;
   const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
@@ -779,7 +783,7 @@ export function AddBuddyModal({
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
   const buddyBadges: [string, string][] = roleSpawn && roleDef
-    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!parseOverrideValue(ovValue))
+    ? roleBadges(roleDef, ladder, stakes, parseOverrideValue(ovValue), capped, installedProviders)
     : [["provider/model", `${profile.provider}/${profile.model}`]];
 
   const submit = async () => {

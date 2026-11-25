@@ -4,9 +4,20 @@
 //   - no model unless the spawner picked an override; stakes go in labels.stakes (as spawn_worker does);
 //   - an override sends provider (+ model) AND the `vs.route-override` label (same shape spawn_worker stamps).
 
+import { routeWhy } from "../server/spawn-reason.mjs";
+
 /** Same shape as routeOverrideLabel in server/route-override.mjs (no .d.ts for it; test/r1-fix-ui-r2-spawn.test.mjs pins parity). */
 const routeOverrideLabel = ({ provider, model }: { provider?: string; model?: string }) =>
   [provider && !/\s/.test(provider) ? `provider=${provider}` : "", model && !/\s/.test(model) ? `model=${model}` : ""].filter(Boolean).join(" ");
+
+/** R2: the ` · <reason>` a drawer role chip shows: the hook's vs.route why=; "override" once the live model no longer matches
+ *  vs.model (a switch since spawn); "" while a switch is staged (the chip already shows the staged model). */
+export function drawerSpawnWhy(labels: Record<string, string>, liveModel: string | null | undefined, staged: boolean): string {
+  if (staged) return "";
+  const spawned = labels["vs.model"];
+  if (spawned && liveModel && liveModel !== spawned) return "override";
+  return routeWhy(labels["vs.route"]);
+}
 
 /** Provider id -> the name the role editor shows. */
 export const PROVIDER_NAME: Record<string, string> = { claude: "Claude", "antigravity-cli": "Gemini", opencode: "OpenCode" };
@@ -30,6 +41,37 @@ export function tierFor(role: RoleLike, stakes: string): string {
 export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stakes: string): { provider: string; model: string } {
   const provider = role.providers[0] ?? "claude";
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
+}
+
+/** R2: where a role row will actually land: the first role provider that is neither capped nor missing (the hook's failover),
+ *  or the override. `via` is the badge text. All providers capped = the first provider (the hook queues/warns there). */
+export function landingPick(
+  role: RoleLike,
+  ladder: LadderLike | undefined,
+  stakes: string,
+  opts: { capped?: readonly string[]; installed?: readonly string[]; override?: Override | null } = {},
+): { provider: string; model: string; via: string } {
+  const ov = opts.override ?? null;
+  if (ov) {
+    const model = ov.model ?? ladder?.[ov.provider]?.[tierFor(role, stakes)]?.model ?? "";
+    return { provider: ov.provider, model, via: ov.model ? "override" : "override (provider rung)" };
+  }
+  const capped = opts.capped ?? [];
+  const installed = opts.installed;
+  const providers = role.providers.length ? role.providers : ["claude"];
+  const skipped: string[] = [];
+  for (const provider of providers) {
+    const isCapped = capped.includes(provider);
+    const missing = !!installed && !installed.includes(provider);
+    if (isCapped || missing) {
+      skipped.push(`${providerName(provider)} ${isCapped ? "capped" : "not installed"}`);
+      continue;
+    }
+    const model = ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "";
+    return { provider, model, via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder" };
+  }
+  const first = ladderPick(role, ladder, stakes);
+  return { ...first, via: `all capped (${skipped.join(", ")})` };
 }
 
 /** Override choices grouped by provider: the role's provider list, each with its ladder models (top > mid > cheap). */
