@@ -13,6 +13,7 @@ export const QUOTA_FAILOVER_THRESHOLD = 95;
 export const ROLE_PROVIDER_CHAINS = Object.freeze({
   lead: Object.freeze(["claude", "antigravity-cli", "opencode"]),
   brainstorm: Object.freeze(["claude", "antigravity-cli", "opencode"]),
+  planner: Object.freeze(["claude", "antigravity-cli", "opencode"]),
   implement: Object.freeze(["claude", "antigravity-cli", "opencode"]),
   "work-order": Object.freeze(["opencode", "claude", "antigravity-cli"]),
   review: Object.freeze(["antigravity-cli", "claude", "opencode"]),

@@ -21,11 +21,13 @@ import {
 export { routeProviderFamily };
 
 /**
- * The 8 roles (from the 12 profiles in use 2026-11-17). `providers` is the preference order walked on cap/quota, read
+ * The 9 roles (8 from the 12 profiles in use 2026-11-17, + planner in R1). `providers` is the preference order walked on cap/quota, read
  * from the role-keyed chain table (server/provider-failover.mjs ROLE_PROVIDER_CHAINS, R1): the same three hops the old
  * names' COUNTERPART_PROFILES + ROLE_FAILOVER_CHAINS land on.
  * `modes[provider]` = {modeId, effort}: copied from the profile today's failover lands on for that role + provider;
  * effort is the fallback used only when the tier rung has none.
+ * `hidden: true` = resolves and routes as usual but is left out of role listings (`vs profiles`, Settings pickers):
+ * work-order is the old DSP-first lane kept for old names and explicit requests (R1); new spawns pick implement.
  */
 export const ROLE_TABLE = deepFreeze({
   lead: {
@@ -48,6 +50,17 @@ export const ROLE_TABLE = deepFreeze({
       opencode: { modeId: "build", effort: "high" }, // Senior Reasoning - DSP
     },
   },
+  planner: {
+    // R1: planning/spec work (old Planner - Sonnet, Spec - Opus) gets its own role instead of riding implement.
+    name: "Planner",
+    tier: "mid",
+    providers: roleChain("planner"),
+    modes: {
+      claude: { modeId: "auto", effort: "medium" }, // Planner - Sonnet
+      "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Lead - Gemini
+      opencode: { modeId: "build", effort: "high" }, // Senior Reasoning - DSP
+    },
+  },
   implement: {
     name: "Implement",
     tier: "mid",
@@ -61,6 +74,7 @@ export const ROLE_TABLE = deepFreeze({
   "work-order": {
     name: "Work Order",
     tier: "mid",
+    hidden: true,
     providers: roleChain("work-order"),
     modes: {
       opencode: { modeId: "build", effort: "high" }, // Work Order - DSP
@@ -184,6 +198,15 @@ function roleChain(key) {
   const chain = ROLE_PROVIDER_CHAINS[key];
   if (!chain?.length) throw new Error(`role-route: no failover chain for role "${key}"`);
   return [...chain];
+}
+
+/** Role keys a listing shows: hidden roles (ROLE_TABLE `hidden`, or a stored role marked hidden) are left out. */
+export function isHiddenRole(key, roles = ROLE_TABLE) {
+  return Boolean(roles?.[key]?.hidden ?? ROLE_TABLE[key]?.hidden);
+}
+
+export function listedRoleKeys(roles = ROLE_TABLE) {
+  return Object.keys(roles ?? {}).filter((k) => !isHiddenRole(k, roles));
 }
 
 function deepFreeze(o) {

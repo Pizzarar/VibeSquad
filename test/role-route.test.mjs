@@ -199,6 +199,7 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
   assert.deepEqual(tiers, {
     lead: "top",
     brainstorm: "top",
+    planner: "mid",
     implement: "mid",
     "work-order": "mid",
     review: "mid",
@@ -211,8 +212,8 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
   assert.deepEqual([lm.model, lm.effort, lm.tier], ["claude-sonnet-5-5", "low", "cheap"]);
 });
 
-test("role table: 8 roles, every preferred provider has a ladder and a mode; lookup order", () => {
-  assert.equal(Object.keys(ROLE_TABLE).length, 8);
+test("role table: 9 roles, every preferred provider has a ladder and a mode; lookup order", () => {
+  assert.equal(Object.keys(ROLE_TABLE).length, 9);
   for (const [k, r] of Object.entries(ROLE_TABLE)) {
     assert.ok(TIERS.includes(r.tier), k);
     for (const p of r.providers) {
@@ -318,4 +319,23 @@ test("a deepseek key in the ladder file maps to opencode", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("R1: planner role (mid, claude first) and work-order hidden from listings but still routing DSP-first", async () => {
+  const { isHiddenRole, listedRoleKeys } = await import("../server/role-route.mjs");
+  assert.deepEqual([ROLE_TABLE.planner.tier, ROLE_TABLE.planner.providers], ["mid", [C, A, O]]);
+  for (const n of ["Planner", "planner", " PLANNER "]) assert.equal(lookupRole(n)?.key, "planner", n);
+  const r = resolveRoute({ role: "Planner" });
+  assert.deepEqual([r.provider, r.model, r.reason], [C, "claude-sonnet-5-5", "default"]);
+  assert.equal(resolveRoute({ role: "Planner", caps: [C] }).provider, A);
+  // old names keep their exact routing; only the role stamp moved implement -> planner
+  assert.equal(resolveRoute({ role: "Spec - Opus" }).role, "planner");
+  assert.equal(resolveRoute({ role: "Spec - Opus" }).model, "claude-opus-5-5");
+  assert.equal(resolveRoute({ role: "Planner - Sonnet", caps: [C] }).hop, "Lead - Gemini");
+  // work-order: still resolves opencode-first, but a listing leaves it out
+  assert.equal(resolveRoute({ role: "Work Order" }).provider, O);
+  assert.equal(isHiddenRole("work-order"), true);
+  assert.equal(isHiddenRole("implement"), false);
+  assert.deepEqual(listedRoleKeys(), Object.keys(ROLE_TABLE).filter((k) => k !== "work-order"));
+  assert.equal(isHiddenRole("work-order", { "work-order": { name: "Work Order" } }), true, "a stored role keeps the shipped flag");
 });

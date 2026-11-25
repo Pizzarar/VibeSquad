@@ -41,7 +41,8 @@ const ARM_SOURCES = {
 };
 // R1: the ROLE name `Implement` (role key "implement", any case/spacing) joins too; its requested arm is the ladder
 // default (claude mid rung = Sonnet). Matched by the spawn name only, never by LEGACY_PROFILE_ROLES: old planning/spec
-// names that map to the implement role (Planner - Sonnet, Spec - Opus, Senior Reasoning - DSP, D1b) stay out.
+// names (Planner - Sonnet, Spec - Opus: planner role since R1; Senior Reasoning - DSP: implement role; D1b) and the
+// Planner role stay out.
 const ROLE_ARM_SOURCES = { implement: "sonnet" };
 const roleArmKey = (name) => String(name ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
 // Provider families whose cap blocks picking that arm. Keys as readCappedProviders normalizes them (claude,

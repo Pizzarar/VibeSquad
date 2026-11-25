@@ -43,6 +43,7 @@ export const ROLE_MODE_SOURCES = deepFreeze({
     "antigravity-cli": ["Brainstorm - Gemini"],
     opencode: ["Senior Reasoning - DSP"],
   },
+  planner: { claude: ["Planner - Sonnet"], "antigravity-cli": ["Lead - Gemini"], opencode: ["Senior Reasoning - DSP"] },
   implement: {
     claude: ["Implement - Sonnet"],
     "antigravity-cli": ["Implement - Gemini (trial)", "Lead - Gemini"],
@@ -223,9 +224,11 @@ function normalizeMode(v, fb) {
 
 /**
  * Stored roles block -> clean roles: every ROLE_TABLE role present (defaults for a missing one), stored fields win,
- * user-added roles kept when valid. Pure.
+ * user-added roles kept when valid. Pure. `profiles` (the same file's v1 list): a shipped role the stored block lacks
+ * (one added after the file was migrated, e.g. planner in R1) is built from them like the migration would, so it gets
+ * its old profile's prompt/tools instead of an empty prompt.
  */
-export function normalizeRoles(rawRoles) {
+export function normalizeRoles(rawRoles, { profiles } = {}) {
   const src = isObj(rawRoles) ? rawRoles : {};
   const byKey = {};
   for (const [k, v] of Object.entries(src)) {
@@ -233,8 +236,11 @@ export function normalizeRoles(rawRoles) {
     if (key && !byKey[key]) byKey[key] = v;
   }
   const out = {};
+  let built = null;
   for (const [key, def] of Object.entries(ROLE_TABLE)) {
-    out[key] = normalizeRole(byKey[key], def) ?? normalizeRole({}, def);
+    let fill = byKey[key];
+    if (fill === undefined && Array.isArray(profiles)) fill = (built ??= buildRolesFromProfiles(profiles).roles)[key];
+    out[key] = normalizeRole(fill, def) ?? normalizeRole({}, def);
   }
   for (const [key, v] of Object.entries(byKey)) {
     if (out[key]) continue;
@@ -361,7 +367,7 @@ export function loadRoles(filePath) {
   }
   const version = parsed ? profilesSchemaVersion(parsed) : 0;
   if (version >= PROFILES_SCHEMA_VERSION && hasRoles(parsed.roles)) {
-    return { schemaVersion: version, roles: normalizeRoles(parsed.roles), source: "v2" };
+    return { schemaVersion: version, roles: normalizeRoles(parsed.roles, { profiles: parsed.profiles }), source: "v2" };
   }
   const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.profiles) ? parsed.profiles : null;
   if (list?.length) return { schemaVersion: 1, roles: buildRolesFromProfiles(list).roles, source: "v1" };
