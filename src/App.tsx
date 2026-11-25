@@ -51,7 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
-import { urlSyncDecision } from "./urlSync";
+import { urlSyncAgent, urlSyncDecision } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { isPhoneShell } from "./phoneCockpitLogic";
@@ -100,7 +100,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
 import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
@@ -1875,7 +1875,9 @@ export function App() {
     if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
+    // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
+    const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId });
+    const next = serializeUrlState({ team: activeTeamId || null, agent, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);

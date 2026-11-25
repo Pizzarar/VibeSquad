@@ -1,4 +1,4 @@
-// @desk B1 e2e (docs/UX_REVIEW_R22.md M1): App's URL-sync effect must not pushState while a popstate is settling,
+// @desk B1 e2e (docs/UX_REVIEW_R22.md M1) + B2 one-entry-per-navigation e2e/unit (end of file): App's URL-sync effect must not pushState while a popstate is settling,
 // so Forward keeps its entry and Back never traps. Drives the real app (?demo, bundled teams) in a headless browser.
 // Skips (like deeplink-playwright) when no Playwright/Chromium is available.
 import { test, before, after } from "node:test";
@@ -81,7 +81,7 @@ async function drive(t, theme) {
   assert.match(chatState.url, /agent=demo-aud/, `chat URL names the agent: ${chatState.url}`);
   assert.equal(chatState.chat, true, "chat shown");
 
-  // Cross-project navigation: click "Main Game Project" (pushes 2 entries — the B2 coalesce is a later block).
+  // Cross-project navigation: click "Main Game Project" (one entry since B2).
   await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click();
   await page.waitForTimeout(900);
   const projState = await take();
@@ -165,7 +165,9 @@ test("B1 e2e: pop to an unknown agent, then a user navigation, still pushes", as
 async function mixedChat(page, take) {
   await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
   await page.waitForTimeout(900);
-  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); // pushes a mixed team=efi&agent=demo-aud entry (B2) then ?team=efi
+  // B2 stopped the app writing mixed entries; seed the pre-B2 one (a legacy entry still in a tab's history), then ?team=efi on top of it.
+  await page.evaluate(() => history.pushState(null, "", "?demo=&team=efi&agent=demo-aud"));
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click();
   await page.waitForTimeout(900);
   await take();
 }
@@ -180,7 +182,7 @@ test("B1 e2e (a,d): Back onto a mixed team=A&agent=<B's agent> entry: 0 pushes w
   assert.match(back.url, /agent=demo-aud/);
   const len0 = back.hlen;
   const urls = [];
-  const names = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => x && !/Audit - token scout/.test(x) && /· VibeSquad/.test(x)); // same-project rows: one push each (cross-project picks push a mixed entry first, B2)
+  const names = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => x && !/Audit - token scout/.test(x) && /· VibeSquad/.test(x)); // same-project rows: one push each
   assert.ok(names.length >= 3, `demo has >=3 other Needs-you rows (${JSON.stringify(names)})`);
   await page.evaluate(() => { window.__u = []; const o = history.pushState.bind(history); history.pushState = (...a) => { window.__u.push(String(a[2])); return o(...a); }; });
   let pushed = 0;
@@ -262,7 +264,8 @@ test("B1 e2e: go(-2) over a mixed entry, Forward x2, Back x3 never pushes and ne
   const { context, page, take } = await openChat("dark");
   await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
   await page.waitForTimeout(900);
-  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); // pushes mixed team=efi&agent=demo-aud, then ?team=efi
+  await page.evaluate(() => history.pushState(null, "", "?demo=&team=efi&agent=demo-aud")); // seed the pre-B2 mixed entry (the app no longer writes one)
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); // then ?team=efi
   await page.waitForTimeout(900);
   await take();
   const len0 = await page.evaluate(() => history.length);
@@ -316,4 +319,93 @@ test("B1: urlSyncDecision never pushes while a pop is active; takeStorybookRepla
   const before = taken;
   D({ next: "?x", current: "?p", popActive: true });
   assert.equal(taken, before + 1, "drained during a pop write");
+});
+
+// ── B2: one history entry per navigation (docs/PLAN_DESK_NAV_HISTORY.md B2; R21 BASE sequences, artifacts/desk-b2/) ──────────────
+// From a chat in project A (VibeSquad · Audit - token scout), open project B (Main Game Project) by each route. Each must grow
+// history.length by exactly 1, write no interim URL (no mixed team=<x>&agent=<y> entry), and one Back must return to the chat.
+const B2_ROUTES = {
+  "a Ctrl+K agent pick": async (page) => { await page.keyboard.press("Control+k"); await page.waitForTimeout(400); await page.keyboard.type("UI Lab"); await page.waitForTimeout(400); await page.keyboard.press("Enter"); },
+  "b Needs-you row": (page) => page.locator(".boring-sidebar .boring-needs-open", { hasText: "Main Game Project" }).first().click(),
+  "c sidebar agent row": async (page) => {
+    await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).locator("xpath=..").locator(".boring-chevron-btn").first().click();
+    await page.waitForTimeout(400);
+    await page.locator(".boring-sidebar .boring-conv-title", { hasText: "UI Lab" }).locator("xpath=..").locator(".boring-chevron-btn").first().click();
+    await page.waitForTimeout(400);
+    await page.locator(".boring-sidebar .boring-worker-row", { hasText: /^Lead/ }).first().click();
+  },
+  "d project row": (page) => page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(),
+  "e notification click": (page) => page.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui" }, "*")),
+};
+const B2_FINAL = { "a Ctrl+K agent pick": "?demo=&team=efi&agent=demo-lead-ui", "b Needs-you row": "?demo=&team=efi&agent=demo-lead-efi", "c sidebar agent row": "?demo=&team=efi&agent=demo-lead-ui", "d project row": "?demo=&team=efi", "e notification click": "?demo=&team=efi&agent=demo-lead-ui" };
+for (const [route, act] of Object.entries(B2_ROUTES)) {
+  test(`B2 e2e (${route}): cross-project nav from a chat = exactly 1 entry, no mixed entry, one Back returns to the chat`, async (t) => {
+    if (unavailable) return t.skip(unavailable);
+    const { context, page, take } = await openChat("dark");
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.evaluate(() => { window.__w = []; for (const k of ["pushState", "replaceState"]) { const o = history[k].bind(history); history[k] = (...a) => { window.__w.push([k, String(a[2]).replace(/^.*\?/, "?")]); return o(...a); }; } });
+    await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+    await page.waitForTimeout(900);
+    const s0 = await take();
+    assert.equal(s0.url, "?demo=&team=vibesquad&agent=demo-aud");
+    await page.evaluate(() => { window.__w = []; });
+    await act(page);
+    await page.waitForTimeout(900);
+    const s1 = await take();
+    const writes = await page.evaluate(() => window.__w.splice(0));
+    assert.equal(s1.url, B2_FINAL[route], `lands on project B (${s1.url})`);
+    assert.equal(s1.hlen - s0.hlen, 1, `history.length grows by exactly 1 (${s0.hlen} -> ${s1.hlen}; writes ${JSON.stringify(writes)})`);
+    assert.deepEqual(writes.map(([, u]) => u).filter((u) => u !== s1.url), [], `no interim/mixed URL written (${JSON.stringify(writes)})`);
+    assert.equal(pushes(s1), 1, `one pushState (${JSON.stringify(writes)})`);
+    await page.goBack();
+    await page.waitForTimeout(900);
+    const s2 = await take();
+    assert.equal(s2.url, s0.url, "one Back returns to the chat's URL");
+    assert.equal(s2.chat, true, "one Back shows the chat again (not a dead Back)");
+    assert.equal(pushes(s2), 0, `Back never pushes (${JSON.stringify(s2.h)})`);
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  });
+}
+
+// B2 unit: App's URL sync names the agent BoringApp published THIS commit (read live at effect time), so team + agent are one push.
+test("B2: urlSyncAgent reads the live shown agent in Normal; one commit = one push, no mixed entry", async () => {
+  const { transformSync } = await import("rolldown/utils");
+  const { readFileSync } = await import("node:fs");
+  const pal = readFileSync(path.join(REPO_ROOT, "src", "CommandPalette.tsx"), "utf8");
+  const ser = pal.slice(pal.indexOf("export function serializeUrlState"), pal.indexOf("\n}\n", pal.indexOf("export function serializeUrlState")) + 3);
+  assert.match(ser, /^export function serializeUrlState[\s\S]*\n\}\n$/, "extracted the real serializeUrlState");
+  const code = transformSync("urlSync.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8") + "\n" + ser, { lang: "ts" }).code;
+  const { urlSyncAgent, urlSyncDecision, serializeUrlState } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+
+  // Helper contract.
+  assert.equal(urlSyncAgent({ boring: true, liveShown: "new", activeAgentId: "tab", rendered: "old" }), "new", "Normal: the live published agent, not the stale render value");
+  assert.equal(urlSyncAgent({ boring: true, liveShown: null, activeAgentId: "tab", rendered: "old" }), null, "Normal Overview/usage: no ?agent=");
+  assert.equal(urlSyncAgent({ boring: true, liveShown: undefined, activeAgentId: "tab", rendered: "old" }), "tab", "BoringApp not mounted: the active tab stands in");
+  assert.equal(urlSyncAgent({ boring: false, liveShown: "new", activeAgentId: "tab", rendered: "psycho" }), "psycho", "Psycho/phone: App's render-time value, untouched");
+
+  // Simulate App's URL sync over the commits of a cross-project nav from a chat (A=vibesquad/demo-aud -> B=efi/<agent>).
+  // Commit 1: team flips to efi and BoringApp's child effect publishes the new agent; App's render-time value is still demo-aud.
+  // Commit 2: the store re-render; render value catches up. `agentOf(commit)` picks which value the sync names.
+  const run = (final, agentOf) => {
+    let search = "?demo=&team=vibesquad&agent=demo-aud";
+    const entries = [search];
+    const commits = [{ team: "efi", rendered: "demo-aud", live: final }, { team: "efi", rendered: final, live: final }];
+    for (const c of commits) {
+      const next = serializeUrlState({ team: c.team, agent: agentOf(c) }, search);
+      const d = urlSyncDecision({ next, current: search, popActive: false, storybookReplace: () => false });
+      if (!d.write) continue;
+      if (d.replace) entries[entries.length - 1] = next; else entries.push(next);
+      search = next;
+    }
+    return entries;
+  };
+  const live = (c) => urlSyncAgent({ boring: true, liveShown: c.live, activeAgentId: c.live, rendered: c.rendered });
+  const stale = (c) => c.rendered; // pre-B2: App's render-time useBoringShownAgent()
+  for (const final of ["demo-lead-ui", null]) {
+    const want = final ? `?demo=&team=efi&agent=${final}` : "?demo=&team=efi";
+    assert.deepEqual(run(final, live), ["?demo=&team=vibesquad&agent=demo-aud", want], `B2 (${final}): exactly one new entry, the final URL`);
+    assert.deepEqual(run(final, stale), ["?demo=&team=vibesquad&agent=demo-aud", "?demo=&team=efi&agent=demo-aud", want], `pre-B2 (${final}): the mixed interim entry the fix removes`);
+  }
 });
