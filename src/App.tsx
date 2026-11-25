@@ -51,6 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
+import { urlSyncDecision } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { isPhoneShell } from "./phoneCockpitLogic";
@@ -1620,6 +1621,13 @@ export function App() {
     return () => window.removeEventListener(OPEN_USAGE_EVENT, onOpenUsage);
   }, []);
 
+  // B1: App owns the pop alone. onPop sets popActive; while it is set every URL-sync write is replace-if-differs (never a pushState()).
+  // A pop ends only on the first capture-phase pointerdown / keydown (or a vs:select-agent notification click, via stopPop), or is
+  // retargeted by a newer pop; reaching the popped URL never ends it. Nothing depends on BoringApp being mounted (Storybook, phone, Psycho).
+  const popActive = useRef(false);
+  const popDisarm = useRef<(() => void) | null>(null);
+  const stopPop = useCallback(() => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; }, []);
+
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1643,6 +1651,7 @@ export function App() {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "vs:select-agent") {
+        stopPop(); // a notification click is a new navigation: end any active pop so the URL sync pushes instead of overwriting the popped entry
         if (typeof data.agentId === "string" && data.agentId) {
           openAgent(data.agentId);
         }
@@ -1664,17 +1673,26 @@ export function App() {
 
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
+  // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
+  const [navGen, setNavGen] = useState(0);
   useEffect(() => {
     const onPop = () => {
+      popActive.current = true;
+      popDisarm.current?.(); // a second pop retargets: drop the previous input listeners, arm fresh ones
+      const end = stopPop;
+      window.addEventListener("pointerdown", end, { capture: true, once: true });
+      window.addEventListener("keydown", end, { capture: true, once: true });
+      popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       const act = popAction(location.search);
       if (act === "agent" && u.agent) openAgent(u.agent);
       else if (act === "squads-home") enterSquadsHome();
       else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
+      setNavGen((g) => g + 1);
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => { window.removeEventListener("popstate", onPop); popDisarm.current?.(); popDisarm.current = null; };
   }, []);
 
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
@@ -1858,7 +1876,8 @@ export function App() {
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    if (next !== (location.search || "")) history[takeStorybookReplace() ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+    const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
+    if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
@@ -2181,6 +2200,7 @@ export function App() {
         onSettings={openSettings}
         onSuccessor={paneSuccessor}
         banners={topBanners}
+        navGen={navGen}
       >
         {overlays}
       </BoringApp>
