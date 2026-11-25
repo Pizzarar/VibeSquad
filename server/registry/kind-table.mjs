@@ -1,12 +1,14 @@
 // Registry kind table (F1). A kind is one file in a kinds directory whose default export is a KindDef; the loader reads
 // every *.mjs there and builds a frozen table. Adding a kind = dropping one file in server/registry/kinds/.
 //
-// KindDef = { kind, label, order, reserved, lane, required[], slots[] }
+// KindDef = { kind, label, order, reserved, lane, required[], slots[], character? }
 //   kind      /^[a-z][a-z0-9_]*$/, unique across the table
 //   order     sort key (v1 kinds 10..130, reserved 1010..); ties break on kind name
 //   reserved  schema only: entities of this kind are valid but must carry empty data
 //   lane      owning lane handle (e.g. "storybook"), or null while unclaimed; drives cross-lane link detection
 //   required  data keys an entity of this kind must carry ([] = free-form)
+//   character optional boolean (default false): names of this kind read as people, so a shared word between two of them
+//             is a real naming clash (Storybook check #7)
 //   slots     production slots an entity of this kind can have (text, portrait, voice, ...); slots[0] is the primary
 //             slot, the one the entity-level `production` field describes
 import fs from "node:fs";
@@ -28,8 +30,9 @@ function checkDef(d, where) {
   if (d.lane !== null && (typeof d.lane !== "string" || !d.lane)) bad("lane must be a non-empty string or null");
   if (!isStrArr(d.required)) bad("required must be string[]");
   if (d.reserved && d.required.length) bad("a reserved kind cannot require data keys");
+  if (d.character !== undefined && typeof d.character !== "boolean") bad("character must be a boolean when set");
   if (!isStrArr(d.slots) || !d.slots.length || new Set(d.slots).size !== d.slots.length) bad("slots must be a non-empty string[] without repeats");
-  return Object.freeze({ kind: d.kind, label: d.label, order: d.order, reserved: d.reserved, lane: d.lane, required: Object.freeze([...d.required]), slots: Object.freeze([...d.slots]) });
+  return Object.freeze({ kind: d.kind, label: d.label, order: d.order, reserved: d.reserved, lane: d.lane, required: Object.freeze([...d.required]), slots: Object.freeze([...d.slots]), character: d.character === true });
 }
 
 /**

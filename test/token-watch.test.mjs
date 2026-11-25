@@ -363,7 +363,8 @@ test("idea-353: idle lead with an armed watch: notice held (no wake), then steer
 
 // G1 (unit-buddy-midturn-restart): Usage's agy Buddy went 21k->158k in ONE turn and was restarted mid-reply 3x in 26 min.
 // Warned at 80k already (the usual path); the jump-past-the-warn case is its own test below.
-const agyBuddy = (id, status = "running") => { const b = { ...buddy(id), provider: "antigravity-cli", status }; b.labels = { ...b.labels, [WARN_LABEL]: "1" }; return b; };
+// K2b: agy compacts now (compact-step COMPACT_PROVIDERS), so the no-compaction G1 path is pinned on codex; the errored case stays agy.
+const agyBuddy = (id, status = "running", provider = "codex") => { const b = { ...buddy(id), provider, status }; b.labels = { ...b.labels, [WARN_LABEL]: "1" }; return b; };
 
 test("G1: a non-Claude Buddy over the cap mid-turn is NOT restarted until its turn ends, then exactly once", async () => {
   const rootDir = makeRoot();
@@ -410,7 +411,7 @@ test("G1: a stale idle snapshot does not restart a Buddy the runner reports runn
 test("G1: an errored (not running) non-Claude Buddy over the cap still restarts", async () => {
   const rootDir = makeRoot();
   const r = makeRunner();
-  r.agents.set("rn-agy", agyBuddy("rn-agy", "error"));
+  r.agents.set("rn-agy", agyBuddy("rn-agy", "error", "antigravity-cli")); // K2b: a compacting provider too (no turn to compact in)
   const restarts = [];
   const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
   r.usage("rn-agy", 160_000);
@@ -418,6 +419,63 @@ test("G1: an errored (not running) non-Claude Buddy over the cap still restarts"
   assert.equal(restarts.length, 1);
   w.stop();
 });
+
+test("K2b: an errored Claude Buddy over the cap restarts too (no turn to compact in; it used to wait in the compaction branch forever)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-cle", agyBuddy("rn-cle", "error", "claude"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  r.usage("rn-cle", 160_000);
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(r.sent.filter((x) => x.text.startsWith("/compact")).length, 0);
+  w.stop();
+});
+
+// K2b r1 (Review-Gemini + Review-Sonnet M1): the Buddy compaction gate is a deny-list (isDeadForCompact), like the lead's. A queued /
+// starting / parked Buddy over the cap defers (no restart, no /compact) and compacts once idle; a lost / errored one restarts.
+for (const provider of ["claude", "antigravity-cli"]) {
+  for (const status of ["queued", "starting", "parked"]) {
+    test(`K2b r1: a ${status} ${provider} Buddy over the cap defers (no restart, no /compact), then compacts once idle`, async () => {
+      const rootDir = makeRoot();
+      const r = makeRunner();
+      r.agents.set("rn-b", agyBuddy("rn-b", status, provider));
+      const restarts = [];
+      const tries = [];
+      const compactor = { run: async (a, o) => { tries.push({ status: a.status, cap: o.cap }); return { outcome: "ok" }; } };
+      const w = startTokenWatcher({ runner: r, rootDir, compactor, restartBuddy: async (b) => { restarts.push(b); } });
+      r.usage("rn-b", 160_000);
+      await tick();
+      assert.equal(restarts.length, 0, `a ${status} Buddy is never restarted (its queued turn would be lost)`);
+      assert.equal(tries.length, 0, `nor compacted while ${status}`);
+      assert.equal(r.sent.filter((x) => x.text.startsWith("/compact")).length, 0);
+      r.agents.get("rn-b").status = "idle";
+      r.usage("rn-b", 160_500);
+      await tick();
+      assert.deepEqual(tries, [{ status: "idle", cap: 150_000 }], "compacted once idle");
+      assert.equal(restarts.length, 0, "a good compaction keeps the same id");
+      w.stop();
+    });
+  }
+  for (const [name, patch] of [["lost", { status: "idle", lost: true }], ["errored", { status: "error" }]]) {
+    test(`K2b r1: a ${name} ${provider} Buddy over the cap restarts (no /compact: no turn to compact in)`, async () => {
+      const rootDir = makeRoot();
+      const r = makeRunner();
+      r.agents.set("rn-b", { ...agyBuddy("rn-b", "idle", provider), ...patch });
+      const restarts = [];
+      const tries = [];
+      const compactor = { run: async () => { tries.push(1); return { outcome: "ok" }; } };
+      const w = startTokenWatcher({ runner: r, rootDir, compactor, restartBuddy: async (b) => { restarts.push(b); } });
+      r.usage("rn-b", 160_000);
+      await tick();
+      assert.equal(tries.length, 0, `a ${name} Buddy is not compacted`);
+      assert.equal(r.sent.filter((x) => x.text.startsWith("/compact")).length, 0);
+      assert.equal(restarts.length, 1);
+      w.stop();
+    });
+  }
+}
 
 test("G1: an unrelated turn_ended (no deferred restart) evaluates nothing", async () => {
   const rootDir = makeRoot();
@@ -452,10 +510,10 @@ test("G1: a Claude Buddy already compacted once and still over the cap waits for
   w.stop();
 });
 
-test("G1 R2: an agy Buddy that jumps past the warn in ONE turn gets the brief nudge at turn end, then restarts after that brief turn", async () => {
+test("G1 R2: a non-compacting Buddy that jumps past the warn in ONE turn gets the brief nudge at turn end, then restarts after that brief turn", async () => {
   const rootDir = makeRoot();
   const r = makeRunner();
-  const b = { ...buddy("rn-agy"), provider: "antigravity-cli", status: "running" };
+  const b = { ...buddy("rn-agy"), provider: "codex", status: "running" };
   r.agents.set("rn-agy", b);
   const restarts = [];
   const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (x) => { restarts.push(x); } });
@@ -487,7 +545,7 @@ test("G1 R2: an agy Buddy that jumps past the warn in ONE turn gets the brief nu
 test("G1 R2: the brief turn never comes -> the restart still runs once briefWaitMs is up (idle)", async () => {
   const rootDir = makeRoot();
   const r = makeRunner();
-  r.agents.set("rn-agy", { ...buddy("rn-agy"), provider: "antigravity-cli", status: "idle" });
+  r.agents.set("rn-agy", { ...buddy("rn-agy"), provider: "codex", status: "idle" });
   const restarts = [];
   const w = startTokenWatcher({ runner: r, rootDir, briefWaitMs: 60, restartBuddy: async (x) => { restarts.push(x); } });
   r.usage("rn-agy", 160_000);
@@ -503,12 +561,17 @@ test("G2: an agy lead is measured in working tokens (meter minus the fixed pream
   const rootDir = makeRoot();
   const r = makeRunner();
   r.agents.set("rn-agy-lead", { ...lead("rn-agy-lead"), provider: "antigravity-cli" });
-  const w = startTokenWatcher({ runner: r, rootDir });
+  // K2b: agy compacts first now; a failed compaction falls through to the nudge, so the stub pins the working-token gate.
+  const tries = [];
+  const compactor = { run: async (a, o) => { tries.push(o.cap); return { outcome: "failed", reason: "test" }; } };
+  const w = startTokenWatcher({ runner: r, rootDir, compactor });
   r.usage("rn-agy-lead", LEAD_FLAG_DEFAULT + 10); // raw over the flag, working tokens under it: no nudge
   await tick();
   assert.equal(r.sent.length, 0, "agy lead under the preamble-adjusted flag is not nudged");
+  assert.equal(tries.length, 0, "nor compacted");
   r.usage("rn-agy-lead", LEAD_FLAG_DEFAULT + PROVIDER_PREAMBLE_TOKENS["antigravity-cli"] + 10);
   await tick();
+  assert.deepEqual(tries, [LEAD_FLAG_DEFAULT]);
   assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE], "nudged once working tokens pass the flag");
   w.stop();
 });
