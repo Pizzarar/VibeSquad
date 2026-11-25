@@ -5,7 +5,8 @@
 import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -13,6 +14,7 @@ import { createServer } from '../runner/server.mjs';
 import { RunnerHttpError } from '../server/backend/runner-client.mjs';
 import { closeRestartGate, pendingIdleRestart, restartIfStillIdle, restartWhenIdle, superviseRunner } from '../server/runner-supervisor.mjs';
 import { forceRestartRunner } from '../server/unstick.mjs';
+import { createRestartRequestLoop, formatRequestStatus, PROGRESS_FILE, readRestartProgress, readRestartRequest } from '../server/restart-request.mjs';
 import { budget } from "./helpers/load-budget.mjs";
 
 const dirs = [];
@@ -248,4 +250,75 @@ test('idea-870: forceRestartRunner idle but raced at the gate -> deferred + race
   assert.equal(killed, 0);
   assert.equal(armed, 1);
   assert.deepEqual(r, { ok: true, cancelled: [], restarted: false, deferred: true, alreadyArmed: false, raced: true, busy: ['rn-new'], running: 1, held: 0, unknown: false });
+});
+
+// ---- idea-653: a firing request says what its script is doing, and ends when the script died without a result ----
+// rr-20261123160405-c410 sat in `firing` for ~10 min with nothing to show (the script was waiting for idle), abort was refused,
+// and a script that crashed without a result file would have kept it firing for FIRING_TIMEOUT_MS (3 h).
+
+const FIRED = Date.parse('2026-11-23T16:04:05.000Z');
+const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid; // a real pid that has exited
+function firingHome({ firedAt = FIRED, asked = {} } = {}) {
+  const home = tmp('vs-rc-home-');
+  const current = { id: 'rr-test-0001', tip: 'abc1234', state: 'firing', requestedBy: 'rn-ove', team: 'vibesquad', lane: 'vibesquad', needs: 'server-restart', scope: 'all', createdAt: new Date(firedAt - 60_000).toISOString(), deadline: new Date(firedAt + 1800_000).toISOString(), deadlineMin: 30, firedAt: new Date(firedAt).toISOString(), launch: { ok: true, at: new Date(firedAt + 2000).toISOString(), out: 'launched' }, asked, drained: {}, gone: {}, events: [] };
+  writeFileSync(path.join(home, 'restart-request.json'), JSON.stringify({ version: 1, current, history: [] }));
+  return home;
+}
+const writeProgressFile = (home, rec) => writeFileSync(path.join(home, PROGRESS_FILE), JSON.stringify(rec));
+const writeResultFile = (home, startMs, rec) => { const at = new Date(startMs).toISOString(); writeFileSync(path.join(home, `restart-${at.replace(/[:.]/g, '-')}.json`), JSON.stringify({ startedAt: at, finishedAt: at, dryRun: false, errors: [], ...rec })); };
+function requestLoop(home, { now = FIRED + 5 * 60_000 } = {}) {
+  const calls = [];
+  const loop = createRestartRequestLoop({ home, teams: () => [], asleepTeams: () => null, now: () => now, listAgents: async () => [], runVs: async (args) => { calls.push(args); return { ok: true }; }, fire: async () => assert.fail('never fires again') });
+  return { loop, calls };
+}
+
+test('idea-653: readRestartProgress: only this fire\'s progress, with the pid checked', () => {
+  const home = firingHome();
+  const req = readRestartRequest(home);
+  assert.equal(readRestartProgress(home, req), null, 'no file');
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED - 3600_000).toISOString(), phase: 'waiting' });
+  assert.equal(readRestartProgress(home, req), null, 'an earlier run');
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting' });
+  assert.equal(readRestartProgress(home, req).alive, true);
+  writeProgressFile(home, { pid: deadPid(), startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting' });
+  assert.equal(readRestartProgress(home, req).alive, false);
+  assert.equal(readRestartProgress(home, req, { alive: () => { throw new Error('EPERM'); } }).alive, true, 'an unknown pid check is never read as dead');
+  writeFileSync(path.join(home, PROGRESS_FILE), '{"pid":');
+  assert.equal(readRestartProgress(home, req), null, 'corrupt');
+  assert.equal(readRestartProgress(home, { ...req, firedAt: undefined }), null, 'not fired');
+});
+
+test('idea-653: a firing request whose script pid died with no result is aborted at once (not after 3 h), leads told', async () => {
+  const home = firingHome({ asked: { 'rn-ui': { team: 'vibesquad', lane: 'ui', title: 'ui lead', sentAt: new Date(FIRED - 30_000).toISOString() } } });
+  writeProgressFile(home, { pid: deadPid(), startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', at: new Date(FIRED + 60_000).toISOString() });
+  const { loop, calls } = requestLoop(home);
+  assert.equal((await loop.tick()).state, 'aborted');
+  const req = readRestartRequest(home);
+  assert.match(req.abortReason, /vs restart script \(pid \d+\) exited without a result \(last phase: waiting/);
+  assert.ok(calls.some((c) => c[0] === 'send' && c[1] === 'rn-ui' && /was aborted/.test(c[2])), JSON.stringify(calls));
+  assert.ok(calls.some((c) => c[0] === 'log' && /aborted/.test(c[2])));
+});
+
+test('idea-653: a result written before the script exited wins over the dead pid; a live script keeps the request firing', async () => {
+  const home = firingHome();
+  writeProgressFile(home, { pid: deadPid(), startedAt: new Date(FIRED + 3000).toISOString(), phase: 'finished', ok: true });
+  writeResultFile(home, FIRED + 3000, { ok: true });
+  assert.equal((await requestLoop(home).loop.tick()).state, 'done');
+  const live = firingHome();
+  writeProgressFile(live, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting' });
+  assert.equal((await requestLoop(live).loop.tick()).state, 'firing');
+  const none = firingHome();
+  assert.equal((await requestLoop(none).loop.tick()).state, 'firing', 'no progress file (an older script): the 3 h timeout as before');
+});
+
+test('idea-653: vs restart status shows the firing script\'s phase, wait deadline and holders', () => {
+  const home = firingHome();
+  const req = readRestartRequest(home);
+  const now = FIRED + 5 * 60_000;
+  const p = { pid: 4242, alive: true, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', at: new Date(now - 2000).toISOString(), waitDeadline: new Date(FIRED + 3000 + 600_000).toISOString(), running: 1, held: 2, heldAgents: ['rn-a', 'rn-b'] };
+  const text = formatRequestStatus(req, now, { progress: p });
+  assert.match(text, /vs restart pid 4242: waiting for runner idle \(1 running, 2 held: rn-a, rn-b\), wait deadline .* \(in 5 min; then held work defers/);
+  assert.match(formatRequestStatus(req, now), /vs restart progress: none yet/);
+  assert.match(formatRequestStatus(req, now, { progress: { ...p, alive: false, phase: 'restarting' } }), /pid 4242 \(EXITED\): restarting/);
+  assert.doesNotMatch(formatRequestStatus({ ...req, state: 'done' }, now), /progress/, 'only while firing');
 });

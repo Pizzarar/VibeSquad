@@ -35,6 +35,7 @@ import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
+import { pidAlive } from "../runner/lock.mjs";
 import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { execOffLoop } from "./git-spawn.mjs";
@@ -456,6 +457,40 @@ export function restartResults(home, max = 8) {
   }).filter(Boolean);
 }
 
+/**
+ * idea-653: the running vs restart script's own progress (scripts/restart-runtime.mjs PROGRESS_FILE, mirrored: the script
+ * imports built-ins only) for the firing request `req`: { pid, startedAt, phase, at, waitDeadline?, running?, held?,
+ * heldAgents?, alive }. null when there is no progress file, it is unreadable, or it belongs to an earlier run (started
+ * before this fire). `alive` is read here, before the caller reads the results: a script that has exited wrote its result
+ * file first, so a dead pid with no result is a script that died without one.
+ */
+export const PROGRESS_FILE = "vs-restart-progress.json";
+export function readRestartProgress(home, req, { alive = pidAlive } = {}) {
+  if (!req?.firedAt) return null;
+  let p;
+  try { p = JSON.parse(fs.readFileSync(path.join(vsHomeOf(home), PROGRESS_FILE), "utf8")); } catch { return null; }
+  if (!p || typeof p !== "object" || !Number.isInteger(p.pid) || p.pid <= 0) return null;
+  const fired = Date.parse(req.firedAt);
+  if (!((Date.parse(p.startedAt ?? "") || 0) >= fired - RESULT_SLACK_MS)) return null;
+  let up = false;
+  try { up = Boolean(alive(p.pid)); } catch { up = true; } // unknown: never read as dead
+  return { ...p, alive: up };
+}
+
+/** idea-653: one status line for a firing request's script progress. */
+export function progressLine(p, now = Date.now()) {
+  if (!p) return null;
+  const head = `  vs restart pid ${p.pid}${p.alive ? "" : " (EXITED)"}: ${p.phase ?? "?"}`;
+  if (p.phase === "waiting") {
+    const left = Math.round((Date.parse(p.waitDeadline ?? "") - now) / 60_000);
+    const who = Array.isArray(p.heldAgents) && p.heldAgents.length ? `: ${p.heldAgents.slice(0, 6).join(", ")}` : "";
+    const dl = Number.isFinite(left) ? `, wait deadline ${p.waitDeadline} (${left >= 0 ? `in ${left} min` : `${-left} min ago`}; then held work defers, running turns are cut)` : "";
+    return `${head} for runner idle (${p.running ?? "?"} running, ${p.held ?? "?"} held${who})${dl}; updated ${p.at ?? "?"}`;
+  }
+  if (p.phase === "finished") return `${head}${p.ok === false ? " (not ok)" : ""}${p.resultFile ? `, result ${path.basename(p.resultFile)}` : ""}; updated ${p.at ?? "?"}`;
+  return `${head}; updated ${p.at ?? "?"}`;
+}
+
 // ---- the state machine ----------------------------------------------------------------------------------------------
 
 function event(req, at, text) {
@@ -496,10 +531,11 @@ export function pendingLeads(req) {
 /**
  * One step for the open request `req` (mutated in place). Inputs: `leads` (liveLeads(), null = runner unreachable),
  * `drained` (drainedSince() map), `held` (heldByLead(); undefined = not read, null = unknown), `results` (restartResults(),
- * read while firing), `verdicts` (autoDrainVerdicts(); null = none, every new lead is asked). Returns the side effects for the driver, which persists `req` BEFORE running any of them:
+ * read while firing), `verdicts` (autoDrainVerdicts(); null = none, every new lead is asked), `progress` (readRestartProgress(),
+ * read while firing BEFORE the results; idea-653: a dead script pid with no result aborts). Returns the side effects for the driver, which persists `req` BEFORE running any of them:
  * { kind: "ask", leadId, text } | { kind: "log", text } | { kind: "fire" } | { kind: "send", leadId, text }.
  */
-export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [], asleep = null, verdicts = null } = {}) {
+export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [], asleep = null, verdicts = null, progress = null } = {}) {
   const actions = [];
   const at = iso(now);
   req.asked ??= {};
@@ -651,6 +687,9 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
       } else if (r) {
         req.result = { file: r.file ?? null, ok: false, finishedAt: r.finishedAt ?? null };
         abort(req, at, r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(redactHostPathTokens(r.errors?.[0] ?? "no error recorded"), 300)}`);
+      } else if (progress && progress.alive === false) {
+        // idea-653: the script that ran this fire has exited and left no result (a crash, a kill): nothing will finish it.
+        abort(req, at, `the vs restart script (pid ${progress.pid}) exited without a result (last phase: ${progress.phase ?? "?"} at ${progress.at ?? "?"}); nothing was restarted after that point. See its log in ~/.vibesquad/logs, then request again`);
       } else if (now - fired > FIRING_TIMEOUT_MS) {
         abort(req, at, `no restart result within ${FIRING_TIMEOUT_MS / 3600_000}h of the fire`);
       }
@@ -697,7 +736,7 @@ export function windowCountdown(at, now = Date.now()) {
   return m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
-export function formatRequestStatus(req, now = Date.now()) {
+export function formatRequestStatus(req, now = Date.now(), { progress = null } = {}) {
   if (!req) return "no restart request (vs restart request <tip> [--deadline <min>] [--urgent --reason <why>])";
   const mins = (t) => Math.round((Date.parse(t) - now) / 60000);
   const queued = req.state === "queued";
@@ -727,6 +766,7 @@ export function formatRequestStatus(req, now = Date.now()) {
   if (req.sync) lines.push(req.sync.ok ? `  synced ${req.sync.at}: runtime at ${String(req.sync.commit ?? "?").slice(0, 7)}${req.sync.built ? " (dist rebuilt)" : ""}` : `  sync-skipped reason=${req.sync.reason} (${req.sync.at})${req.sync.note ? `; ${req.sync.note}` : ""}`);
   else if (needsBuild(req.needs) && !TERMINAL.has(req.state)) lines.push("  needs build: sync-runtime (build if stale) runs right before the fire");
   if (req.firedAt) lines.push(`  fired ${req.firedAt}${req.launch ? (req.launch.ok ? " (vs restart launched)" : ` (launch failed: ${req.launch.error})`) : ""}`);
+  if (req.state === "firing") lines.push(progressLine(progress, now) ?? (req.launch?.ok ? "  vs restart progress: none yet (the script writes vs-restart-progress.json once it holds the restart lock)" : "  vs restart progress: not launched yet"));
   if (req.result?.file) lines.push(`  result: ${req.result.file}`);
   if (req.abortReason) lines.push(`  aborted: ${req.abortReason}`);
   for (const e of (req.events ?? []).slice(-6)) lines.push(`  ${e.at}  ${e.text}`);
@@ -892,6 +932,8 @@ export function createRestartRequestLoop({
   log = () => {},
   // idea-476: { set(req), clear(id) } over the runner's /drain/request; the default holds nothing (tests, no runner).
   drain = null,
+  // idea-653: the firing request's script progress (readRestartProgress); a test seam for the pid check.
+  progressOf = (req) => readRestartProgress(home, req),
 } = {}) {
   let busy = null;
   // The request id this process last set the runner drain for; null once released. `undefined` at start: an earlier server
@@ -957,10 +999,15 @@ export function createRestartRequestLoop({
       // from a queued request's creation, when no lead had been asked. Older files carry no requestedAt: createdAt.
       const sinceMs = cur.state === "queued" ? scanAt : Date.parse(cur.requestedAt ?? cur.createdAt);
       drained = drainedSince(home, { sinceMs, stopMs: scanned?.id === cur.id ? scanned.at : sinceMs, tip: cur.tip });
-    } else if (cur.state === "firing") results = restartResults(home);
+    }
+    let progress = null;
+    if (!open && cur.state === "firing") {
+      try { progress = progressOf(cur); } catch { progress = null; } // idea-653: read before the results (see readRestartProgress)
+      results = restartResults(home);
+    }
     const { req, actions } = await mutateAsync(home, (doc) => {
       if (!doc.current || doc.current.id !== cur.id) return { req: doc.current, actions: [] };
-      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep, verdicts }) };
+      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep, verdicts, progress }) };
     });
     if (open && due) scanned = { id: cur.id, at: scanAt };
     // The drain follows the stepped state (requestHoldsDrain): held while the request is open and until its vs restart

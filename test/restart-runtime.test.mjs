@@ -2660,3 +2660,25 @@ test("systemd R1 helpers: KillMode gate (unset = control-group), refuse only for
   const bus = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: 1, stdout: "", stderr: "Failed to connect to bus" }), cgroup: () => "" } });
   assert.match(bus.warnings[0], /Failed to connect to bus.*Re-adopt/);
 });
+
+test("idea-653: the run writes vs-restart-progress.json: starting, waiting (deadline, running/held) on each poll, finished with its result", async () => {
+  const w = await world({ running: [2, 1, 0] });
+  try {
+    const seen = [];
+    const progressFile = path.join(w.outDir, "vs-restart-progress.json");
+    const r = await w.run({}, [], { sleep: async (ms) => { try { seen.push(JSON.parse(readFileSync(progressFile, "utf8"))); } catch { /* not yet */ } await new Promise((res) => setTimeout(res, Math.min(ms, 5))); } });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const waiting = seen.filter((p) => p.phase === "waiting");
+    assert.ok(waiting.length >= 2, `waiting written on each poll: ${JSON.stringify(seen.map((p) => p.phase))}`);
+    assert.equal(waiting[0].pid, process.pid);
+    assert.equal(waiting[0].startedAt, r.startedAt);
+    assert.equal(waiting[0].running, 2);
+    assert.ok(Date.parse(waiting[0].waitDeadline) > Date.parse(r.startedAt));
+    assert.equal(waiting[1].running, 1, "refreshed on the next poll");
+    const last = JSON.parse(readFileSync(progressFile, "utf8"));
+    assert.equal(last.phase, "finished");
+    assert.equal(last.ok, true);
+    assert.equal(last.resultFile, r.resultFile);
+    assert.ok(!readdirSync(w.outDir).some((f) => /^restart-.*progress/.test(f)), "never named like a result file");
+  } finally { await w.cleanup(); }
+});

@@ -35,7 +35,7 @@
 // (src-tauri restart_marker_fresh: valid 120s, so refreshed every 30s) and server.pid, the desktop's server launch
 // (spawn_server_process: node server/serve.mjs, cwd = runtime dir, VIBESQUAD_RUNTIME_DIR/BUNDLED_NODE/PORT/START_RUNNER).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
@@ -55,6 +55,15 @@ export const BOOT_TIMEOUT_DEFAULT_SEC = 120;
 // finally never leaves the runner draining; the finally clears it on every path that keeps the old runner.
 export const DRAIN_MARGIN_SEC = 120;
 export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
+// idea-653: where this run says what it is doing (pid, phase, wait deadline, running/held), for `vs restart status` and the
+// server's restart-request loop (a firing request whose script pid died with no result is aborted, not left for 3 h). Never
+// named restart-*.json: server/restart-request.mjs restartResults reads those as results.
+export const PROGRESS_FILE = 'vs-restart-progress.json';
+export function writeProgress(outDir, rec) {
+  const file = path.join(outDir, PROGRESS_FILE);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try { writeFileSync(tmp, JSON.stringify(rec)); renameSync(tmp, file); return true; } catch { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } return false; }
+}
 export function drainTtlMs(opts) {
   const sec = (Number(opts.waitTimeoutSec) || 0) + (Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC;
   return Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, Math.round(sec * 1000)));
@@ -777,6 +786,9 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     rmSync(lockFile, { force: true });
     if (!takeLock()) { result.errors.push('could not take restart lock'); return result; }
   }
+  // idea-653: progress for vs restart status and the request loop (best effort: a write failure never fails the restart).
+  const progress = (phase, extra = {}) => writeProgress(outDir, { pid: process.pid, startedAt: result.startedAt, phase, at: new Date(d.now()).toISOString(), ...extra });
+  progress('starting');
   const markerFile = path.join(configDir, 'server.restarting');
   const touchMarker = () => {
     try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
@@ -841,6 +853,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
       let lastHealth = det.runner.health;
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
+      const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20) });
+      waitProgress();
       let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
       const fetchHealth = async () => (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
       const applyHealth = (h) => {
@@ -853,6 +867,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
         try { applyHealth(await fetchHealth()); } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
+        waitProgress();
       }
       if (held > 0 && !opts.killBackground) {
         // idea-604 (rr-20261123012408-ac64): the deadline's last /health may catch an agent whose turn just ended, listed
@@ -907,6 +922,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       } else if (waitErr) step('runner unreachable during idle wait', { error: waitErr, note: 'not confirmed idle: /health failed; re-detected below before any stop' });
       else step('runner idle');
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
+    progress('restarting'); // idea-653: past the wait: stopping and relaunching (no abort from here on)
 
     // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
     const prev = det.runner;
@@ -1388,6 +1404,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     result.finishedAt = new Date(d.now()).toISOString();
     const file = path.join(outDir, `restart-${result.startedAt.replace(/[:.]/g, '-')}.json`);
     try { writeFileSync(file, JSON.stringify(result, null, 2)); result.resultFile = file; log(`result: ${file}`); } catch (e) { log(`could not write result: ${e.message}`); }
+    progress('finished', { ok: result.ok, resultFile: result.resultFile ?? null });
     const holder = readJson(lockFile);
     if (holder?.pid === process.pid) rmSync(lockFile, { force: true });
   }

@@ -2869,7 +2869,9 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
   if (sub === "status") {
     if (flags._.length > 1) throw new Error("usage: vs restart status [--json]");
     const cur = rr.readRestartRequest(vsHome);
-    process.stdout.write((flags.json ? JSON.stringify(cur, null, 2) : rr.formatRequestStatus(cur, now())) + "\n");
+    // idea-653: a firing request shows what its vs restart script is doing (waiting for idle, its deadline, who holds it).
+    const progress = cur?.state === "firing" ? rr.readRestartProgress(vsHome, cur) : null;
+    process.stdout.write((flags.json ? JSON.stringify(progress ? { ...cur, progress } : cur, null, 2) : rr.formatRequestStatus(cur, now(), { progress })) + "\n");
     return 0;
   }
   const caller = await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
