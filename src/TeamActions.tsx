@@ -20,7 +20,7 @@ import { useDraft } from "./drafts";
 import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
-import { findProfile, getProfiles, useProfiles, type Profile, type Role } from "./profiles";
+import { findProfile, getProfiles, pickableProfiles, profileOptionLabel, useProfiles, type Profile, type Role } from "./profiles";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -328,11 +328,12 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         <div className="na-col">
           <Field label="PROFILE">
             <select value={profile.name} onChange={(e) => pickProfile(e.target.value)}>
-              {profiles.map((p) => {
+              {pickableProfiles(profiles, profile.name).map((p) => {
                 const inst = installedProviders.includes(p.provider);
+                const label = profileOptionLabel(p);
                 return (
-                  <option key={p.name} value={p.name} style={inst ? undefined : { opacity: 0.55 }}>
-                    {inst ? p.name : `${p.name} (install ${p.provider})`}
+                  <option key={p.name} value={p.name} title={p.name} style={inst ? undefined : { opacity: 0.55 }}>
+                    {inst ? label : `${label} (install ${p.provider})`}
                   </option>
                 );
               })}
@@ -815,7 +816,7 @@ export function AddBuddyModal({
             <Field label="BRAINSTORM PROFILE">
               <select value={profile.name} onChange={(e) => setProfileName(e.target.value)}>
                 {(brainstormProfiles.length ? brainstormProfiles : profiles).map((p) => (
-                  <option key={p.name} value={p.name}>
+                  <option key={p.name} value={p.name} title={p.name}>
                     {p.name}
                   </option>
                 ))}

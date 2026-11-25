@@ -29,6 +29,9 @@ import {
   fetchProfiles,
   saveProfile,
   seedDefaultPack,
+  pickableProfiles,
+  profileOptionLabel,
+  profileRoleName,
   useProfiles,
   type Profile,
   type Role,
@@ -665,7 +668,7 @@ export function TeamSettingsModal({
             background: "var(--well)",
           }}
         >
-          {profiles.map((p) => {
+          {pickableProfiles(profiles, selectedProfileName).map((p) => {
             const isSelected = p.name === selectedProfileName;
             const inst = installedProviders.includes(p.provider);
             return (
@@ -692,7 +695,7 @@ export function TeamSettingsModal({
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span className="chip">{p.role.toUpperCase()}</span>
-                  <b>{p.name}</b>
+                  <b title={p.name}>{profileRoleName(p.name) ?? p.name}</b>
                   <span className="def-badge">
                     {p.provider} / {p.model}
                   </span>
@@ -731,11 +734,12 @@ export function TeamSettingsModal({
                   {!profiles.some((p) => p.name === selectedProfileName) && (
                     <option value="">{draftProfile.name} (unsaved)</option>
                   )}
-                  {profiles.map((p) => {
+                  {pickableProfiles(profiles, selectedProfileName).map((p) => {
                     const inst = installedProviders.includes(p.provider);
+                    const label = profileOptionLabel(p);
                     return (
-                      <option key={p.name} value={p.name}>
-                        {inst ? p.name : `${p.name} (install ${p.provider})`}
+                      <option key={p.name} value={p.name} title={p.name}>
+                        {inst ? label : `${label} (install ${p.provider})`}
                       </option>
                     );
                   })}
