@@ -23,3 +23,28 @@ Job hurt: "intervene" (change model/mode/thinking mid-session) and "start work".
 
 ## Verdict
 M1 is open (unlabelled Thinking/Mode controls), so FAIL until labelled. L1-L4 are non-blocking.
+
+---
+
+## R30 r2 (fix commit `dea2ca38`)
+
+Evidence: `git diff 794c9325..dea2ca38`, and all 5 re-shot images in `artifacts/boring-b16/`. I opened both menu shots (`dark-4k-120-menu.png`, `light-4k-120-menu.png`). I did not render the staged-switch or Switch-button states. They are verified from code only (see L1/L3).
+
+| Prior | Status | Evidence |
+|---|---|---|
+| M1 | **Closed** | `useAgentConfig.tsx` now sets `aria-label="Provider"`, `aria-label="Mode"` + `title`, and `aria-label="Thinking"` + `title`. The bar shows visible `Think` and `Mode` hints (`.boring-composer-field-label`, `aria-hidden` so the aria-label is not doubled). Both are visible in dark-4k-120.png and dark-1280x720-ctxpanel.png. The labels are 11px `--text-2`, which is small but legible. |
+| L1 | Closed (code) | `providerSwitchBtn` is passed from `Composer.tsx:705` into the bar. The hook only returns it when `switchTarget` is set. The demo agent is on OpenCode, so it does not show in the shots. |
+| L3 | Closed (code) | `Composer.tsx:706` builds the hint from `staged` and `effectiveProv.name`. Both are returned by the hook. It renders in a `role="status"` row with `--st-attn`, which has a readable contrast on dark (#ffc15e) and light (#8a5700). Not rendered. |
+| L4 | Closed | The model select cap is now 240px. `deepseek/deepseek-flash` shows in full in all shots. |
+| L2 | Open, minor (accepted skip) | At 1280x720 with the ctx panel open the bar wraps to 3 rows: icons + provider + model, then Think + Mode, then the Stop / Interrupt & send / Queue group. The groups still read as intentional, with no orphans. Same wrap at 4K: Mode drops under Think. |
+
+Menu shots: the ⋯ menu shows only Mark unread, Flag needs you, Search transcript, Reload session, the Session block (Sandbox, Fork/Export, chips, Attach, meta) and Close chat. There is no leftover Model & mode group. The menu overlaps the right ctx panel as a normal popover, and the text is readable in both themes.
+
+Fresh pass, new issues: none above minor.
+- Minor (L5): Mode wraps onto its own row at the ~550px composer width even at 4K, so the config group is 2 rows beside a single send row. This is cosmetic.
+- Psycho is gated by `enabled: boringChat`, so no second listener or fetch there. Reviewed in the diff, not run.
+- Desktop touch targets are still 32/34px (minor, out of scope).
+
+Open: 0 critical, 0 major, 2 minor (L2, L5).
+
+**Verdict: PASS 0/0/2.**
