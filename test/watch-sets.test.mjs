@@ -722,6 +722,32 @@ test("restart item: restart-<ts>.json ok:true = done, ok:false = stall, none aft
   }
 });
 
+// idea-996: the stall clock of a restart item starts at the request's window, not when the watch was armed.
+test("restart item: a request queued for a future window is not stalled before the window; a past window that never ran stalls after window + stall", async () => {
+  const sb = sandbox();
+  try {
+    const win = T0 + 6 * 60 * MIN;
+    writeFileSync(join(sb.home, "restart-request.json"), JSON.stringify({ current: { id: "rr-7560", tip: "abc", state: "queued", windowAt: iso(win) }, history: [] }));
+    const w = addWatch({ owner: "lead-1", stallMin: 15, items: [{ kind: "restart", ref: "rr-7560" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    clock.t = T0 + 60 * MIN; // armed long ago, window still ahead: the old clock would have stalled it
+    await engine.tick();
+    clock.t = win - MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "not stalled before the window");
+    clock.t = win + 10 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "not stalled inside window + stallMin");
+    clock.t = win + 16 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /stalled \(no-result\)/);
+    assert.equal(delivered[0].setId, w.id);
+  } finally {
+    sb.cleanup();
+  }
+});
+
 // idea-398 fix round (Hub13): the 11-20 02:54 silent old-code restart. A restart fired by a request whose sync was
 // skipped pings with the runtime NOT updated note; a request fired long before, or one that synced, adds nothing.
 test("restart item: a restart fired after a skipped sync pings 'runtime NOT updated: still <sha>, N behind <tip>, reason <why>'", async () => {

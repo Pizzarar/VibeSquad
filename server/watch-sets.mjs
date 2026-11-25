@@ -376,8 +376,23 @@ export function classifyItem(item, set, ctx) {
     const errs = (Array.isArray(last.errors) ? last.errors : []).map((e) => (typeof e === "string" ? e : e?.message ?? e?.step ?? JSON.stringify(e)));
     return { phase: "finished", state: "stalled", reason: "restart-failed", report: `restart failed${errs.length ? `: ${errs.join("; ")}` : ""}${stale}` };
   }
-  const ps = since("waiting", created);
+  // idea-996: a restart request queued for a future window cannot have restarted yet: the stall clock starts at the
+  // window (and, once the window opened and the drain runs, at its deadline), not when the watch was armed.
+  const ps = Math.max(since("waiting", created), restartClockStart(ref, ctx.restartRequests));
   return t - ps > stallMs ? { phase: "waiting", state: "stalled", reason: "no-result" } : { phase: "waiting", state: "waiting" };
+}
+
+/** idea-996: earliest moment an open restart request (the ref's id, else any open one) could have produced a restart record; 0 when none. */
+function restartClockStart(ref, requests) {
+  if (!Array.isArray(requests)) return 0;
+  let start = 0;
+  for (const r of requests) {
+    if (!r || typeof r !== "object" || r.state === "done" || r.state === "aborted") continue;
+    if (ref && !(r.id === ref || String(r.id ?? "").includes(ref))) continue;
+    const at = Math.max(timeOf(r.windowAt) || 0, r.state && r.state !== "queued" ? timeOf(r.deadline) || 0 : 0);
+    start = Math.max(start, at);
+  }
+  return start;
 }
 
 /**
