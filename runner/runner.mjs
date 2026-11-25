@@ -853,6 +853,11 @@ export class Runner {
       const [k, e] = yieldable.shift();
       this._forcePark(k, e, 'room');
     }
+    // idea-975: an owner job starting over maxLive through the OWNER_OVER_CAP allowance leaves one log line (live after this start, maxLive, allowance used).
+    const liveAfter = others.length - freed + 1;
+    if (owner && liveAfter > this.maxLive) {
+      try { this.store.append(except, 'owner-over-cap', { live: liveAfter, maxLive: this.maxLive, allowanceUsed: liveAfter - this.maxLive, allowance: OWNER_OVER_CAP }); } catch { /* log gone */ }
+    }
     return true;
   }
 
