@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
 import { linkNodeModules, runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "./restart-coord.mjs";
+import { VERDICT_WRITER_CAPABILITY } from "./verdict.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -537,14 +538,17 @@ export function recordServerStart({ repoRoot = rootDir, env = process.env, now =
   if (!commit) { try { commit = git(repoRoot, "rev-parse", "HEAD"); } catch { /* not a git checkout */ } }
   if (!commit) { const rt = readJson(join(runtimeDir, "build-stamp.json")); if (typeof rt?.commit === "string") commit = rt.commit; }
   const at = new Date(now()).toISOString();
-  const rec = { startedAt: at, commit: commit ?? null, ok: true, dryRun: false, source: "server-start" };
+  // idea-941: attest that this server writes the server-attested `verdict` field on digest `done` entries so the offline
+  // verdict gate switches from warn-only to fail-closed once this server has booted.
+  const capabilities = [VERDICT_WRITER_CAPABILITY];
+  const rec = { startedAt: at, commit: commit ?? null, ok: true, dryRun: false, source: "server-start", capabilities };
   try {
     mkdirSync(vsHome, { recursive: true });
     writeFileSync(join(vsHome, `server-start-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify(rec, null, 2), "utf8");
   } catch (err) {
     return { ok: false, error: `cannot write server-start record (${firstLine(err)})` };
   }
-  return { ok: true, commit, at };
+  return { ok: true, commit, at, capabilities };
 }
 
 /** idea-116: a server start that actually loaded `entryCommit` (or a descendant of it) covers that pending entry. */

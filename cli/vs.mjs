@@ -3544,7 +3544,8 @@ export async function commandPushGuard(flags, { cwd = process.cwd(), env = proce
   if (sub === "check") {
     const remote = String(flags._[1] ?? "origin");
     const res = await guard.checkHead({ remote, cwd, env, registry });
-    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}` : res.message);
+    const warn = res.warnings ?? "";
+    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}${warn}` : `${res.message}${warn}`);
     return res.ok ? 0 : 1;
   }
   if (sub === "install") {

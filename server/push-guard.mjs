@@ -23,12 +23,14 @@
 // undigested later turn), the reviewer's own last message read offline from the runner store (readRunnerVerdicts); the newest
 // decides. FAIL, none, or no owning Squad refuses. Override (owner/lead only; each use is logged as a `decision`
 // entry and printed): `git -c vs.verdictOverride=<sha> merge|push ...` or VS_VERDICT_OVERRIDE=<sha>[,<sha>].
+// idea-941 rollout guard: until the running server attests `VERDICT_WRITER_CAPABILITY` at boot (server-start-*.json capabilities,
+// read offline by verdictWriterAttested), the verdict gate WARNS instead of refusing. Once attested, it fails closed.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { entryVerdict, evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "./verdict.mjs";
+import { entryVerdict, evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict, VERDICT_WRITER_CAPABILITY } from "./verdict.mjs";
 
 export const GUARDED_REFS = Object.freeze(["refs/heads/master", "refs/heads/main"]);
 export const HOOKS_PATH = ".githooks";
@@ -207,6 +209,48 @@ export function verdictOverrides({ env = process.env, cwd = process.cwd(), git =
 /** idea-883: the VS home whose team logs hold recorded verdicts: an explicit `home`, else env.VIBESQUAD_HOME, else ~/.vibesquad. */
 export function verdictHome({ home, env = process.env } = {}) {
   return path.resolve(home || env.VIBESQUAD_HOME || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
+}
+
+/**
+ * idea-941 rollout guard: offline check of whether the latest booted server in `home` attested that it writes the
+ * server-attested `verdict` field on `done` entries (`capabilities` includes `VERDICT_WRITER_CAPABILITY` in the newest
+ * `server-start-*.json` written by `recordServerStart`). Before the server restarts onto the writer build (or if rolled
+ * back to an older build whose `server-start-*.json` lacks the capability), returns `{ attested: false }` so the verdict
+ * gate warns instead of refusing. Once attested, returns `{ attested: true }` and the gate fails closed.
+ */
+export function verdictWriterAttested({ home = verdictHome() } = {}) {
+  let names = [];
+  try {
+    names = fs.readdirSync(home);
+  } catch {
+    return { attested: false, startedAt: null, file: null };
+  }
+  let best = null;
+  let bestAt = -Infinity;
+  let bestName = "";
+  for (const name of names) {
+    if (!/^server-start-.*\.json$/.test(name)) continue;
+    let r;
+    try {
+      r = JSON.parse(fs.readFileSync(path.join(home, name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (r?.ok !== true || r.dryRun) continue;
+    const at = Date.parse(r?.startedAt ?? "") || 0;
+    if (at > bestAt || (at === bestAt && name > bestName)) {
+      best = r;
+      bestAt = at;
+      bestName = name;
+    }
+  }
+  if (!best) return { attested: false, startedAt: null, file: null };
+  const caps = Array.isArray(best.capabilities) ? best.capabilities : [];
+  return {
+    attested: caps.includes(VERDICT_WRITER_CAPABILITY),
+    startedAt: typeof best.startedAt === "string" ? best.startedAt : null,
+    file: bestName,
+  };
 }
 
 /** A Squad id as its log directory name (the same mapping as appendVsLogEntry's safeSegment in server/brainstorm.mjs), but ""
@@ -483,12 +527,15 @@ async function defaultTeams() {
  */
 export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd = process.cwd(), env = process.env, git = defaultGit, registry, home } = {}) {
   const guarded = updates.filter((u) => GUARDED_REFS.includes(u.remoteRef) && !ZERO.test(u.localSha));
-  if (!guarded.length) return { ok: true, message: "", results: [] };
+  if (!guarded.length) return { ok: true, message: "", warnings: "", results: [], squads: [], attested: true };
   const { teams, findLane } = registry ?? (await defaultTeams());
   const who = pusherFromEnv({ env, cwd, git });
   const shared = isSharedRemote(remote, url, { cwd, git });
+  const vsHome = verdictHome({ home, env });
+  const attestation = verdictWriterAttested({ home: vsHome });
   const results = [];
   let message = "";
+  let warnings = "";
   let squads = null; // idea-883: this repo's Squads, resolved once on the first unit merge
   for (const u of guarded) {
     const branch = u.remoteRef.replace("refs/heads/", "");
@@ -498,24 +545,29 @@ export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd
       listed = listPushMerges({ localSha: u.localSha, exclude: base.exclude, cwd, git });
     } catch (err) {
       message += `vs push-guard: cannot read ${remote} ${u.remoteRef}..${u.localSha.slice(0, 8)} (${String(err?.message ?? err).split("\n")[0]}). Run \`git fetch ${remote}\`, read \`git log ${SHARED_REMOTE}/${branch}..HEAD\`, then push again.\n`;
-      results.push({ ref: u.remoteRef, result: null, direct: [] });
+      results.push({ ref: u.remoteRef, result: null, direct: [], attested: attestation.attested, verdictWarned: false });
       continue;
     }
     const result = evaluatePush({ merges: listed.merges, pusherLane: who.lane, pusherTeam: who.team, includes: who.includes, teams, findLane });
     // idea-883: a pushed unit merge needs a recorded PASS on its merged tip, from this repo's own Squad log(s) only.
-    // vs.pushInclude (whose lane) never waives it.
+    // vs.pushInclude (whose lane) never waives it. idea-941: warns instead of refusing until the server attests.
     const unit = listed.merges.filter((m) => isUnitMergeSubject(m.subject));
     if (unit.length && !squads) squads = await repoSquads({ cwd, git, teams });
     const recorded = unit.length
-      ? await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env })
+      ? await recordedVerdicts({ tips: unit.map((m) => m.tip), home: vsHome, squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env })
       : () => null;
     const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
-    results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict });
+    const verdictWarned = !verdict.ok && !attestation.attested;
+    results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict, attested: attestation.attested, verdictWarned });
     message += formatRefusal(result, { ref: u.remoteRef });
-    message += formatVerdictRefusal(verdict, { action: "push", squads: squads ?? [] });
+    if (!verdict.ok) {
+      const text = formatVerdictRefusal(verdict, { action: "push", squads: squads ?? [], attested: attestation.attested });
+      if (attestation.attested) message += text;
+      else warnings += text;
+    }
   }
-  const ok = results.every((r) => r.result?.ok && (r.verdict?.ok ?? true));
-  return { ok, message, results, squads: squads ?? [] };
+  const ok = results.every((r) => r.result?.ok && (r.verdict?.ok || !r.attested));
+  return { ok, message, warnings, results, squads: squads ?? [], attested: attestation.attested };
 }
 
 /**
@@ -585,7 +637,7 @@ export function isUnitBranchName(name, remotes = [SHARED_REMOTE]) {
  * Returns { ok, message, verdict }.
  */
 export async function checkMergeCommit({ cwd = process.cwd(), env = process.env, git = defaultGit, home, registry } = {}) {
-  const pass = { ok: true, message: "", verdict: null, squads: [] };
+  const pass = { ok: true, message: "", warnings: "", verdict: null, squads: [], attested: true };
   let ref = "";
   try {
     ref = git(["symbolic-ref", "-q", "HEAD"], cwd).trim();
@@ -632,9 +684,14 @@ export async function checkMergeCommit({ cwd = process.cwd(), env = process.env,
   if (!unit.length) return pass;
   const { teams } = registry ?? (await defaultTeams());
   const squads = await repoSquads({ cwd, git, teams });
-  const recorded = await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env });
+  const vsHome = verdictHome({ home, env });
+  const attestation = verdictWriterAttested({ home: vsHome });
+  const recorded = await recordedVerdicts({ tips: unit.map((m) => m.tip), home: vsHome, squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env });
   const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
-  return { ok: verdict.ok, message: formatVerdictRefusal(verdict, { action: "merge", squads }), verdict, squads };
+  if (verdict.ok) return { ok: true, message: "", warnings: "", verdict, squads, attested: attestation.attested };
+  const text = formatVerdictRefusal(verdict, { action: "merge", squads, attested: attestation.attested });
+  if (!attestation.attested) return { ok: true, message: "", warnings: text, verdict, squads, attested: false };
+  return { ok: false, message: text, warnings: "", verdict, squads, attested: true };
 }
 
 /** `vs push-guard check`: what the hook would decide for pushing HEAD to <remote>/<branch> now. */
@@ -712,9 +769,11 @@ export async function main(argv = process.argv.slice(2)) {
     const res = await checkPush({ updates, remote: remoteName, url });
     if (!res.ok) {
       process.stderr.write(res.message);
+      if (res.warnings) process.stderr.write(res.warnings);
       return 1;
     }
     process.stderr.write(summarize(res.results));
+    if (res.warnings) process.stderr.write(res.warnings);
     // idea-883: an override is allowed only with a durable audit entry plus a stderr notice.
     for (const r of res.results) {
       if (!r.verdict?.overridden?.length) continue;
@@ -729,6 +788,7 @@ export async function main(argv = process.argv.slice(2)) {
       process.stderr.write(res.message);
       return 1;
     }
+    if (res.warnings) process.stderr.write(res.warnings);
     if (res.verdict?.overridden?.length) {
       const logged = await logVerdictOverrides({ verdict: res.verdict, action: "merge", squads: res.squads });
       process.stderr.write(formatVerdictOverrides(res.verdict, { action: "merge", logged }));
@@ -737,7 +797,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (mode === "check") {
     const res = await checkHead({ remote: remoteName });
-    process.stdout.write(res.ok ? `vs push-guard: OK to push HEAD to ${remoteName}/master\n${summarize(res.results)}` : res.message);
+    const warn = res.warnings ?? "";
+    process.stdout.write(res.ok ? `vs push-guard: OK to push HEAD to ${remoteName}/master\n${summarize(res.results)}${warn}` : `${res.message}${warn}`);
     return res.ok ? 0 : 1;
   }
   process.stderr.write("usage: node server/push-guard.mjs pre-push <remote> <url> | pre-merge-commit | check [remote]\n");

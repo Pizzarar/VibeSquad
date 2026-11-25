@@ -9,8 +9,9 @@ import { after, before, describe, test } from "node:test";
 
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
-import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, readRunnerVerdicts, recordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
-import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "../server/verdict.mjs";
+import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, readRunnerVerdicts, recordedVerdicts, repoSquads, verdictHome, verdictWriterAttested } from "../server/push-guard.mjs";
+import { recordServerStart } from "../server/sync-runtime.mjs";
+import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict, VERDICT_WRITER_CAPABILITY } from "../server/verdict.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const HOOKS = join(ROOT, ".githooks").replace(/\\/g, "/");
@@ -219,6 +220,13 @@ function freshRepo({ push = true, dev = false, hooks = true } = {}) {
 // idea-883: a unit merge needs a recorded verdict on its tip: a reviewer digest's `done` entry in the (temp) VS home team log.
 const HOME = join(tmp, "home");
 const HOME_LOG = join(HOME, "teams", "squad-a", "log.jsonl");
+// idea-941: attest that the server in `home` writes the `verdict` field on `done` entries (as recordServerStart does at boot).
+function attestServer(home, { capabilities = [VERDICT_WRITER_CAPABILITY], startedAt = "2026-11-25T05:00:00.000Z" } = {}) {
+  mkdirSync(home, { recursive: true });
+  const file = `server-start-${startedAt.replace(/[:.]/g, "-")}.json`;
+  writeFileSync(join(home, file), JSON.stringify({ startedAt, commit: "abc1234", ok: true, dryRun: false, source: "server-start", ...(capabilities ? { capabilities } : {}) }));
+}
+attestServer(HOME);
 // A digest of a reviewer carries the server-attested `verdict` field (vibesquad-api digestLogRecord); `attested: false` writes
 // the same text without it (what any agent's own `done` could say).
 function recordVerdict(text, { ts = new Date().toISOString(), type = "done", attested = true, squad = "squad-a", home = HOME } = {}) {
@@ -527,7 +535,9 @@ describe("push-guard: idea-883 verdict gate (pure)", () => {
 });
 
 describe("push-guard: idea-883 verdict gate on real git", () => {
-  const EMPTY_HOME = join(tmp, "empty-home"); // no teams/ at all: the missing-log case
+  const EMPTY_HOME = join(tmp, "empty-home"); // no teams/ and no attestation
+  const ATTESTED_EMPTY_HOME = join(tmp, "attested-empty-home"); // attested server, no teams/log at all
+  attestServer(ATTESTED_EMPTY_HOME);
   const at = (home, extra = {}) => baseEnv({ VIBESQUAD_HOME: home, ...extra });
 
   test("git merge of a unit branch into master: PASS merges; FAIL and no verdict are refused, master unchanged", () => {
@@ -609,7 +619,7 @@ describe("push-guard: idea-883 verdict gate on real git", () => {
     assert.equal(run(wt, ["commit", "-q", "-m", "worktree commit"], at(EMPTY_HOME)).code, 0);
     assert.ok(Date.now() - t0 < 5000);
     const tip = ok(wt, ["rev-parse", "HEAD"]);
-    const bySha = run(work, ["merge", "-q", "--no-ff", "-m", "misc", tip], at(EMPTY_HOME));
+    const bySha = run(work, ["merge", "-q", "--no-ff", "-m", "misc", tip], at(ATTESTED_EMPTY_HOME));
     assert.notEqual(bySha.code, 0);
     assert.match(bySha.err, /Merge unit-g-wt \(merged as \w{8}\)/);
     ok(work, ["merge", "--abort"]);
@@ -629,12 +639,13 @@ describe("push-guard: idea-883 verdict gate on real git", () => {
       if (r.code !== 0) ok(work, ["merge", "--abort"]);
       return r;
     };
-    // No log at all.
-    let r = tryMerge(at(EMPTY_HOME));
+    // No log at all (attested server -> fails closed).
+    let r = tryMerge(at(ATTESTED_EMPTY_HOME));
     assert.notEqual(r.code, 0);
     assert.match(r.err, /no recorded verdict/);
     // A PASS for this exact tip in another Squad's log (squad-b owns no path of this repo).
     const home = join(tmp, "xsquad-home");
+    attestServer(home);
     recordVerdict(`PASS 0/0/1 ${tip.slice(0, 9)} reviewer=Review - Gemini: ok`, { home, squad: "squad-b" });
     r = tryMerge(at(home));
     assert.notEqual(r.code, 0, "another Squad's PASS must not satisfy this repo's gate");
@@ -880,6 +891,7 @@ describe("push-guard: idea-883 runner-attested fallback (pure + store)", () => {
   test("real git: a unit merge with only the reviewer's runner record merges; an implementer's record is refused", () => {
     const { work } = freshRepo();
     const home = join(tmp, "rr-git-home");
+    attestServer(home);
     mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
     writeFileSync(join(home, "teams", "squad-a", "log.jsonl"), "");
     const env = baseEnv({ VIBESQUAD_HOME: home });
@@ -894,5 +906,122 @@ describe("push-guard: idea-883 runner-attested fallback (pure + store)", () => {
     assert.notEqual(r.code, 0);
     assert.match(r.err, /no recorded verdict/);
     ok(work, ["merge", "--abort"]);
+  });
+});
+
+// ---- idea-941 rollout guard: warn instead of refusing until the running server attests `attested-verdict` at boot.
+describe("push-guard: idea-941 rollout guard (unattested-warns, attested-refuses, attested-pass)", () => {
+  const at = (home, extra = {}) => baseEnv({ VIBESQUAD_HOME: home, ...extra });
+
+  test("verdictWriterAttested: missing or pre-restart server-start is unattested; recordServerStart attests; rollback clears", () => {
+    assert.equal(verdictWriterAttested({ home: join(tmp, "no-such-rollout-home") }).attested, false);
+    const home = join(tmp, "rollout-att-unit");
+    // Pre-restart server-start record (no capabilities field) -> unattested.
+    attestServer(home, { capabilities: null, startedAt: "2026-11-25T03:55:00.000Z" });
+    assert.equal(verdictWriterAttested({ home }).attested, false);
+    // dryRun / failed attested records do not count.
+    writeFileSync(join(home, "server-start-2026-11-25T04-00-00-000Z.json"), JSON.stringify({ startedAt: "2026-11-25T04:00:00.000Z", ok: true, dryRun: true, capabilities: [VERDICT_WRITER_CAPABILITY] }));
+    assert.equal(verdictWriterAttested({ home }).attested, false);
+    // New server boots via recordServerStart -> writes capabilities: ["attested-verdict"] -> attested.
+    const started = recordServerStart({ repoRoot: ROOT, vsHome: home, now: () => Date.parse("2026-11-25T04:10:00.000Z") });
+    assert.equal(started.ok, true);
+    assert.deepEqual(started.capabilities, [VERDICT_WRITER_CAPABILITY]);
+    const att = verdictWriterAttested({ home });
+    assert.equal(att.attested, true);
+    assert.equal(att.startedAt, "2026-11-25T04:10:00.000Z");
+    // Rollback: a newer server-start without the capability returns to unattested.
+    attestServer(home, { capabilities: null, startedAt: "2026-11-25T04:20:00.000Z" });
+    assert.equal(verdictWriterAttested({ home }).attested, false);
+  });
+
+  test("unattested-warns: pre-restart server warns on merge and push instead of refusing, while lane ownership still refuses", async () => {
+    const { work, origin } = freshRepo();
+    const home = join(tmp, "rollout-unattested");
+    attestServer(home, { capabilities: null, startedAt: "2026-11-25T03:55:00.000Z" });
+    const tip = unitBranch(work, "unit-941-warn", { verdict: null });
+    // Pre-restart PASS digest (no server-attested `verdict` field).
+    recordVerdict(`PASS 0/0/0 ${tip.slice(0, 8)} reviewer=Review - Gemini: pre-restart`, { home, attested: false });
+
+    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
+    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-warn: pre-restart (@alp)", "unit-941-warn"], env);
+    assert.equal(m.code, 0, m.err);
+    assert.match(m.err, /WARNING \(rollout guard, idea-941\)/);
+    assert.match(m.err, /PASS digests written before that restart never get the `verdict` field retroactively/);
+
+    const chk = await checkHead({ cwd: work, env: { VS_LANE: "lane-alpha", VIBESQUAD_HOME: home }, registry });
+    assert.equal(chk.ok, true);
+    assert.equal(chk.attested, false);
+    assert.match(chk.warnings, /WARNING \(rollout guard, idea-941\)/);
+
+    const p = run(work, ["push", "origin", "master"], env);
+    assert.equal(p.code, 0, p.err);
+    assert.match(p.err, /WARNING \(rollout guard, idea-941\)/);
+    assert.equal(remoteTip(origin), ok(work, ["rev-parse", "HEAD"]));
+
+    // Lane-ownership push guard is NOT weakened when verdict gate is unattested.
+    unitBranch(work, "unit-941-other", { verdict: null });
+    assert.equal(run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-other: theirs (@bet)", "unit-941-other"], env).code, 0);
+    const otherPush = run(work, ["push", "origin", "master"], env);
+    assert.notEqual(otherPush.code, 0, "other lane merge must still be refused");
+    assert.match(otherPush.err, /refusing to push refs\/heads\/master/);
+    assert.match(otherPush.err, /WARNING \(rollout guard, idea-941\)/);
+  });
+
+  test("attested-refuses: once recordServerStart attests, missing verdict (incl. pre-restart digest) and FAIL refuse on merge and push", () => {
+    const { work, origin } = freshRepo();
+    const home = join(tmp, "rollout-attested-refuse");
+    recordServerStart({ repoRoot: ROOT, vsHome: home, now: () => Date.parse("2026-11-25T05:00:00.000Z") });
+    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
+
+    // Pre-restart unattested PASS digest -> refused after attestation, with pre-restart guidance.
+    const tipMiss = unitBranch(work, "unit-941-miss", { verdict: null });
+    recordVerdict(`PASS 0/0/0 ${tipMiss.slice(0, 8)} reviewer=Review - Gemini: pre-restart`, { home, attested: false });
+    const mMiss = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-miss: x (@alp)", "unit-941-miss"], env);
+    assert.notEqual(mMiss.code, 0);
+    assert.match(mMiss.err, /vs verdict gate: refusing to merge/);
+    assert.match(mMiss.err, /Pre-restart PASS digests/);
+    assert.match(mMiss.err, /re-review the tip or use an override/);
+    ok(work, ["merge", "--abort"]);
+
+    // Recorded FAIL -> refused on merge and on push (even after --no-verify merge).
+    const tipFail = unitBranch(work, "unit-941-fail", { verdict: null });
+    recordVerdict(`FAIL 1/0/0 ${tipFail.slice(0, 8)} reviewer=Review - Gemini: high`, { home, attested: true });
+    const mFail = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-fail: x (@alp)", "unit-941-fail"], env);
+    assert.notEqual(mFail.code, 0);
+    assert.match(mFail.err, /vs verdict gate: refusing to merge/);
+    assert.match(mFail.err, /latest recorded verdict is FAIL 1\/0\/0/);
+    ok(work, ["merge", "--abort"]);
+
+    const before = remoteTip(origin);
+    ok(work, ["merge", "-q", "--no-ff", "--no-verify", "-m", "Merge unit-941-fail: x (@alp)", "unit-941-fail"]);
+    const pFail = run(work, ["push", "origin", "master"], env);
+    assert.notEqual(pFail.code, 0);
+    assert.match(pFail.err, /vs verdict gate: refusing to push/);
+    assert.match(pFail.err, /Pre-restart PASS digests/);
+    assert.equal(remoteTip(origin), before);
+  });
+
+  test("attested-pass: once attested, a recorded PASS merges and pushes cleanly with no warning", () => {
+    const { work, origin } = freshRepo();
+    const home = join(tmp, "rollout-attested-pass");
+    recordServerStart({ repoRoot: ROOT, vsHome: home, now: () => Date.parse("2026-11-25T05:00:00.000Z") });
+    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
+
+    const tip = unitBranch(work, "unit-941-pass", { verdict: null });
+    recordVerdict(`PASS 0/0/1 ${tip.slice(0, 8)} reviewer=Review - Gemini: clean`, { home, attested: true });
+    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-pass: ok (@alp)", "unit-941-pass"], env);
+    assert.equal(m.code, 0, m.err);
+    assert.doesNotMatch(m.err, /WARNING \(rollout guard/);
+
+    const p = run(work, ["push", "origin", "master"], env);
+    assert.equal(p.code, 0, p.err);
+    assert.doesNotMatch(p.err, /WARNING \(rollout guard/);
+    assert.equal(remoteTip(origin), ok(work, ["rev-parse", "HEAD"]));
+  });
+
+  test("docs/WORKFLOWS.md documents the idea-941 rollout guard and pre-restart PASS digests", () => {
+    const wf = readFileSync(join(ROOT, "docs", "WORKFLOWS.md"), "utf8");
+    assert.match(wf, /Rollout guard \(idea-941\)/);
+    assert.match(wf, /PASS digests written before that restart never get the `verdict` field retroactively/);
   });
 });

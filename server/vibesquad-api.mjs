@@ -10,7 +10,7 @@ import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readR
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
-import { attestedVerdict, digestVerdictText, isReviewerAgent } from "./verdict.mjs";
+import { attestedVerdict, digestVerdictText, isReviewerAgent, VERDICT_WRITER_CAPABILITY } from "./verdict.mjs";
 import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { abortRestartRequest, createRestartRequest, formatRequestStatus, readRestartRequest, syncRepoRoot } from "./restart-request.mjs";
 import { isHubLane } from "./lane-pure.mjs";
@@ -638,6 +638,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
       lanEnabled: exposure.lanEnabled,
       exposedIps: exposure.exposedIps,
       ...loopLagStats(),
+      capabilities: [VERDICT_WRITER_CAPABILITY],
       stale,
       ...(warnings.length ? { configWarnings: warnings } : {}),
     };
