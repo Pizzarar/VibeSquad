@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "../server/restart-coord.mjs";
-import { childEnv, testTmpdirEnv } from "./test-child-env.mjs";
+import { childEnv, sweepTestScratch, testTmpdirEnv } from "./test-child-env.mjs";
 import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
 import { ensureTestLockDir } from "../cli/fifo-queue.mjs";
@@ -28,6 +28,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // to the OS temp, matching what childEnv() gives the children. The suite lock does not follow TMPDIR: suitePaths() uses the fixed
 // machine-wide testLockDir() (cli/fifo-queue.mjs), so every caller shares one slot and one last-run record.
 Object.assign(process.env, testTmpdirEnv());
+sweepTestScratch(); // idea-977: stale per-process test scratch dirs from killed runs (hermetic.mjs removes its own on exit)
 const paths = suitePaths();
 try {
   ensureTestLockDir(paths.dir); // fails closed on a symlink, a foreign owner or open permissions (cli/fifo-queue.mjs)

@@ -308,6 +308,8 @@ const subscribeBoringShown = (f: () => void) => {
   return () => void boringShownSubs.delete(f);
 };
 export const useBoringShownAgent = () => useSyncExternalStore(subscribeBoringShown, () => boringShown, () => undefined);
+/** B2: the live value, for App's URL sync effect (BoringApp publishes from a child effect, after App rendered this commit). */
+export const getBoringShownAgent = () => boringShown;
 
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {

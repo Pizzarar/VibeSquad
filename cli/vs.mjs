@@ -52,6 +52,7 @@ import {
   ordStringOf,
   resolveAgentIdentity,
   resolveLeadWinner,
+  resolveWorktreeRootPath,
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
@@ -81,7 +82,8 @@ import {
   restoreArchivedWorktree,
   RETENTION_DAYS,
 } from "../server/team-worktrees.mjs";
-import { appendLesson, readLessons } from "../server/lessons.mjs";
+import { appendLesson, readLessons, retireLesson } from "../server/lessons.mjs";
+import { laneWorkingDir } from "../server/brief-path.mjs";
 import * as slotPool from "./slot-pool.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -562,6 +564,7 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
+  vs lesson add "<title>" "<rule>" [--category <cat>] [--cause <c>] | list [query] | retire <title|id> [--reason "<why>"]   retire keeps the line in lessons.jsonl (audit trail) but drops it from the boot "Recent lessons" digest
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
@@ -2703,13 +2706,35 @@ function specLine(unit) {
   return `- ${unit.id} [${unit.status}] goal="${unit.goal ?? ""}" files=[${files}] doneCheck="${unit.doneCheck ?? ""}"`;
 }
 
+// idea-932: the registry resolves a lane to its project's MAIN checkout, so `vs task set` run from a unit worktree
+// wrote there while the agent (and git) looked at the worktree's own TASKS.json. When cwd is a linked worktree of
+// that same project, target the worktree itself.
+export function laneArtifactBase(identity, rootDir, cwd = process.cwd()) {
+  try {
+    const main = laneWorkingDir(identity.team.id, identity.lane, rootDir);
+    const mainOfCwd = resolveWorktreeRootPath(cwd);
+    if (!main || !mainOfCwd || path.resolve(main) !== path.resolve(mainOfCwd)) return undefined;
+    let dir = path.resolve(cwd);
+    for (let i = 0; i < 12; i++) {
+      try {
+        if (fs.statSync(path.join(dir, ".git")).isFile()) return dir;
+      } catch {}
+      const up = path.dirname(dir);
+      if (up === dir) break;
+      dir = up;
+    }
+  } catch {}
+  return undefined;
+}
+
 function commandSpec(flags) {
   const identity = resolveIdentity(flags);
   const rootDir = LANE_SPEC_ROOT;
+  const baseDir = laneArtifactBase(identity, rootDir);
   const sub = String(flags._[0] ?? "").toLowerCase();
 
   if (sub === "" || sub === "show" || sub === "read") {
-    const spec = readLaneSpec(identity.team.id, identity.lane, rootDir);
+    const spec = readLaneSpec(identity.team.id, identity.lane, rootDir, baseDir);
     const content = spec.exists ? spec.content : "(no lane spec yet)";
     process.stdout.write(content.endsWith("\n") ? content : content + "\n");
     return 0;
@@ -2727,7 +2752,7 @@ function commandSpec(flags) {
         throw new Error('spec write needs markdown: vs spec write "<markdown>" (or --stdin / --file <path>)');
       }
     }
-    const written = writeLaneSpec(identity.team.id, identity.lane, content, rootDir);
+    const written = writeLaneSpec(identity.team.id, identity.lane, content, rootDir, baseDir);
     process.stdout.write(written.fullPath + "\n");
     return 0;
   }
@@ -2738,10 +2763,11 @@ function commandSpec(flags) {
 function commandTask(flags) {
   const identity = resolveIdentity(flags);
   const rootDir = LANE_SPEC_ROOT;
+  const baseDir = laneArtifactBase(identity, rootDir);
   const sub = String(flags._[0] ?? "list").toLowerCase();
 
   if (sub === "list" || sub === "ls") {
-    const board = readLaneTasks(identity.team.id, identity.lane, rootDir);
+    const board = readLaneTasks(identity.team.id, identity.lane, rootDir, baseDir);
     if (flags.json) {
       process.stdout.write(JSON.stringify(board, null, 2) + "\n");
       return 0;
@@ -2769,12 +2795,13 @@ function commandTask(flags) {
     if (flags.branch !== undefined) patch.branch = String(flags.branch);
     if (flags.commit !== undefined) patch.commit = String(flags.commit);
 
-    const res = upsertLaneTask(identity.team.id, identity.lane, patch, rootDir);
+    const res = upsertLaneTask(identity.team.id, identity.lane, patch, rootDir, baseDir);
     if (flags.json) {
       process.stdout.write(JSON.stringify(res.unit, null, 2) + "\n");
       return 0;
     }
     process.stdout.write(specLine(res.unit) + "\n");
+    process.stderr.write(`wrote ${readLaneTasks(identity.team.id, identity.lane, rootDir, baseDir).fullPath}\n`);
     return 0;
   }
 
@@ -3466,6 +3493,15 @@ function commandLesson(flags) {
     } else {
       process.stdout.write(`Logged lesson ${saved.id}: ${saved.title}\n`);
     }
+    return 0;
+  }
+
+  if (sub === "retire") {
+    const key = String(flags._[1] ?? flags.title ?? flags.id ?? "").trim();
+    if (!key) throw new Error('lesson retire needs a title or id: vs lesson retire <title|id> [--reason "<why>"]');
+    const res = retireLesson(key, { reason: flags.reason === undefined ? "" : String(flags.reason) });
+    if (flags.json) process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    else process.stdout.write(`Retired lesson ${res.id}: ${res.title}\n`);
     return 0;
   }
 

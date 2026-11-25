@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -3174,4 +3174,73 @@ test("idea-897 integration: a real idle agent read through RunnerBackend.fetchAg
   } finally {
     rmSync(sb, { recursive: true, force: true });
   }
+});
+
+// ---- idea-942: an archived worker that finished with a final message is done, not STALLED (archived) ----
+
+const A = (text, turnEnd = false) => ({ item: { type: "assistant_message", text }, turnEnd });
+const U = { item: { type: "user_message", text: "go" } };
+const TOOL = { item: { type: "tool_call", name: "bash" } };
+const ERR = { item: { type: "error", message: "boom" } };
+
+// The stub applies the same completedTurnText the production lastMessage uses for an archived worker (completedOnly).
+async function archivedRun(entries, status = "idle") {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-942-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status, archivedAt: new Date(clock.t).toISOString(), lastProgressAt: new Date(clock.t + 1000).toISOString() };
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async (_ref, o) => (o?.completedOnly ? completedTurnText(entries) : "NOT-COMPLETED-ONLY"), deliver: () => true, retryMs: 0 });
+    await eng.tick();
+    clock.t += 61_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    eng.stop?.();
+    return { item: w.items[0], pings: w.pings };
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+}
+
+test("idea-942: an archived idle worker whose last turn completed (turn_done) is done and carries the final message", async () => {
+  const r = await archivedRun([U, A("PASS 0/0/0 abc1234 TOTAL 5 specs", true)]);
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
+  assert.ok(!r.pings.some((p) => /STALLED|archived/.test(p.text)), JSON.stringify(r.pings));
+  assert.match(JSON.stringify(r.pings), /PASS 0\/0\/0 abc1234/);
+});
+
+test("idea-942: an archived worker with no final message still stalls as archived", async () => {
+  const r = await archivedRun([U]);
+  assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  assert.equal(r.item.reason, "archived");
+});
+
+test("idea-942: archived mid-turn (intermediate assistant message, no turn_done) stays stalled archived", async () => {
+  for (const entries of [[U, A("Let me look at the code")], [U, A("Let me look", false), TOOL]]) {
+    const r = await archivedRun(entries);
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+    assert.equal(r.item.reason, "archived");
+  }
+});
+
+test("idea-942: closed (killed mid-turn) and archived is stalled, not done, with or without an intermediate message", async () => {
+  for (const entries of [[U, A("partial plan"), TOOL], [U]]) {
+    const r = await archivedRun(entries, "closed");
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+    assert.notEqual(r.item.state, "done");
+  }
+});
+
+test("idea-942: crashed-then-archived (error entry, status closed) never reads as done, even after a reply", async () => {
+  for (const entries of [[U, ERR], [U, A("reply before the crash", true), U, ERR], [U, A("half a reply"), ERR]]) {
+    const r = await archivedRun(entries, "closed");
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  }
+  assert.equal(completedTurnText([U, A("done", true)]), "done");
+  assert.equal(completedTurnText([U, A("done", true), U, A("new turn, mid")]), "", "a newer unfinished turn is not the final message");
+});
+
+test("idea-942: a completed turn on a closed+archived worker is done (the archive killed an already-finished session)", async () => {
+  const r = await archivedRun([U, A("PASS 0/0/0 deadbee", true)], "closed");
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
 });
