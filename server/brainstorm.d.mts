@@ -3,7 +3,22 @@ export function readBrainstormSummary(laneRaw: string, rootDir?: string): { lane
 export function writeBrainstormSummary(laneRaw: string, content: string, rootDir?: string): { laneId: string; path: string; fullPath: string; content: string };
 export function laneWorkingDir(teamId: string, laneId: string, rootDir?: string): string | null;
 export function findNewestPlanFile(cwd?: string, rootDir?: string): string;
-export function appendVsLogEntry(opts: { teamId?: string; laneId?: string; agent?: string; type?: string; text: string; refs?: string[] }): { entry: any; path: string; teamLogPath: string };
+export function appendVsLogEntry(opts: {
+  teamId?: string;
+  laneId?: string;
+  agent?: string;
+  type?: string;
+  text: string;
+  refs?: string[];
+  plan?: string;
+  pass?: boolean;
+  verdict?: { reviewer: string; profile?: string | null; line: string } | null;
+  summary?: string;
+  decides?: string;
+  do?: string;
+  alt?: string[];
+  kind?: string;
+}): { entry: any; path: string; teamLogPath: string; deduped?: boolean };
 export function buildBrainstormInitialPrompt(opts: { laneId: string; laneUpper: string; summaryContent: string; latestPlan: string; pendingPrompt?: string }): string;
 export function authorizeBuddyRestartRequest(body: any, rootDir?: string): Promise<void>;
 export function performBrainstormRestart(body: any, rootDir?: string): Promise<any>;

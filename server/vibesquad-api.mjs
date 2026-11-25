@@ -844,13 +844,13 @@ async function handleLog(req, res, opts = {}) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team: bodyTeam, type = "you", text, refs, agent = loadUserSettings().userName, lane = "", plan, pass } = await readCleanBody(req);
+      const { team: bodyTeam, type = "you", text, refs, agent = loadUserSettings().userName, lane = "", plan, pass, summary, decides, do: leanDo, alt, kind } = await readCleanBody(req);
       // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
       const caller = agentCaller(req);
       const team = bindAgentTeam(caller, bodyTeam, "log"); // idea-176
       if (!TEAM_ID.test(String(team))) return sendJson(res, 400, { error: "bad team" });
       if (!LOG_TYPES.has(type) || !UI_LOG_TYPES.has(type)) return sendJson(res, 400, { error: `type ${type} not allowed from the UI` });
-      const t = String(text ?? "").trim();
+      const t = String(text ?? (type === "needs-you" ? summary : "") ?? "").trim();
       if (!t) return sendJson(res, 400, { error: "empty text" });
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
       const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
@@ -866,6 +866,11 @@ async function handleLog(req, res, opts = {}) {
         refs: who.refs,
         plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: pass === true,
+        summary,
+        decides,
+        do: leanDo,
+        alt,
+        kind,
       });
       return sendJson(res, 200, entry);
     }
@@ -1256,7 +1261,7 @@ async function handleVsLog(req, res, opts = {}) {
       const laneId = body.laneId || body.lane || teamId;
       if (!TEAM_ID.test(String(teamId)) || !TEAM_ID.test(String(laneId))) return sendJson(res, 400, { ok: false, error: "bad team/lane" });
       const type = body.type || "metric";
-      const text = String(body.text ?? "").trim();
+      const text = String(body.text ?? (type === "needs-you" ? body.summary : "") ?? "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
       const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
       await drainedFeedbackGate(caller, who.type, text, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
@@ -1271,6 +1276,11 @@ async function handleVsLog(req, res, opts = {}) {
         refs: who.refs,
         plan: body.plan, // idea-454: validated + auto-filled in appendVsLogEntry (handoff/done only)
         pass: body.pass === true,
+        summary: body.summary,
+        decides: body.decides,
+        do: body.do,
+        alt: body.alt,
+        kind: body.kind,
       });
       return sendJson(res, 200, { ok: true, entry: resEntry.entry }); // idea-242 L1: no host log path in the answer
     }

@@ -245,12 +245,19 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent, plan, pass, team, lane }) {
+    async writeLog({ type, text, refs, agent, plan, pass, team, lane, summary, decides, do: leanDo, alt, kind }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
       // `team`/`lane` override the target only for the owner's shell (no lane identity); an agent always logs to its own.
       const owner = !agentCallerOf(ctx);
-      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
+      const structured = {
+        ...(summary !== undefined ? { summary } : {}),
+        ...(decides !== undefined ? { decides } : {}),
+        ...(leanDo !== undefined ? { do: leanDo } : {}),
+        ...(alt !== undefined ? { alt } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+      };
+      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...structured, ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -259,7 +266,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       } catch (e) {
         if (!e?.unreachable) throw e;
         const { appendVsLogEntry } = await import("../brainstorm.mjs");
-        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass }).entry;
+        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass, ...structured }).entry;
       }
     },
     // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.

@@ -14,6 +14,23 @@ test("well-formed fence parses every field", () => {
   assert.deepEqual(d, { summary: "Merge blocked, 2 tests fail.", action: "Rebase and rerun the suite", alternatives: ["Merge anyway", "Hold the merge"], riffLane: "and" });
 });
 
+test("parseDecision accepts optional decides: line, clips it, and folds it into the dismiss id", () => {
+  const withDecides = parseDecision("summary: Default landing page?\ndecides:   Whether Normal mode opens on Decisions or Overview  \ndecides: ignored second\ndo: Make Decisions default\nalt: Sidebar only");
+  assert.deepEqual(withDecides, {
+    summary: "Default landing page?",
+    decides: "Whether Normal mode opens on Decisions or Overview",
+    action: "Make Decisions default",
+    alternatives: ["Sidebar only"],
+    riffLane: null,
+  });
+  const withoutDecides = parseDecision("summary: Default landing page?\ndo: Make Decisions default\nalt: Sidebar only");
+  assert.equal("decides" in withoutDecides, false);
+  assert.notEqual(decisionCardId("a", withDecides), decisionCardId("a", withoutDecides));
+  const clipped = parseDecision(`summary: s\ndecides: ${"x".repeat(300)}\ndo: d`);
+  assert.equal(clipped.decides.length, 240);
+  assert.match(readFileSync("src/DecisionCard.tsx", "utf8"), /decision-decides/);
+});
+
 test("missing summary or do rejects the card", () => {
   assert.equal(parseDecision("do: x\nalt: y"), null);
   assert.equal(parseDecision("summary: x\nalt: y"), null);
