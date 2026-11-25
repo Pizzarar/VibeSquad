@@ -1,8 +1,9 @@
 // idea-1043 (repeat of idea-949): a read-only MEAS worktree (branch at origin/main, zero commits) was swept while its worker was
 // auto-archived between turns (resumable): ancestry alone said "merged". idea-1059: `vs worktree sweep --apply` ran >100s with no
-// output (all repos; Escape-From-Idle alone took 198s: a stale local main made every unmerged worktree pay a cherry + 5 MB squash
+// output (all repos; one game repo alone took 198s: a stale local main made every unmerged worktree pay a cherry + 5 MB squash
 // diff against a far-back fork point). Fixes: holdAgentCwds + worktreeHasOwnCommit, ancestor-ref dedupe, per-worktree step
 // budget, progress events and CLI progress on stderr. Temp repos only.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -69,14 +70,14 @@ test("holdAgentCwds: live agents plus agents archived < 24h (auto-archived resum
   const now = Date.parse("2026-11-25T19:00:00Z");
   const agents = [
     { id: "live", cwd: "/w/live", status: "running" },
-    { id: "auto", cwd: "/w/orm-w3", status: "idle", archivedAt: "2026-11-25T18:47:41Z", labels: { role: "worker", "vs.auto-archived": "1" } },
+    { id: "auto", cwd: "/w/meas-w1", status: "idle", archivedAt: "2026-11-25T18:47:41Z", labels: { role: "worker", "vs.auto-archived": "1" } },
     { id: "old", cwd: "/w/old", archivedAt: new Date(now - ZERO_COMMIT_HOLD_MS - 1).toISOString() },
     { id: "num", cwd: "/w/num", archivedAt: now - 1000 },
     { id: "odd", cwd: "/w/odd", archived: true }, // archived at an unreadable time: holds (fail closed)
     { id: "gone", cwd: "/w/gone", status: "closed", resumable: false },
   ];
   assert.deepEqual(liveAgentCwds(agents), ["/w/live"], "the live set is unchanged");
-  assert.deepEqual(holdAgentCwds(agents, { now }).sort(), ["/w/live", "/w/num", "/w/odd", "/w/orm-w3"]);
+  assert.deepEqual(holdAgentCwds(agents, { now }).sort(), ["/w/live", "/w/meas-w1", "/w/num", "/w/odd"]);
   assert.deepEqual(holdAgentCwds(null), []);
 });
 
@@ -88,7 +89,7 @@ test("worktreeHasOwnCommit: checkouts, resets and fast-forwards are not commits;
     const wt = addWorktree(repo, sanct, "meas");
     assert.equal(worktreeHasOwnCommit(wt), false, "fresh -b worktree");
     const next = commitFile(repo, "m.txt", "main moves\n");
-    git(["reset", "-q", "--hard", next], wt); // vs worktree create + "Reset to origin/main" (orm-w3)
+    git(["reset", "-q", "--hard", next], wt); // vs worktree create + "Reset to origin/main" (meas-w1)
     git(["checkout", "-q", "-B", "meas", next], wt);
     commitFile(repo, "m2.txt", "again\n");
     git(["merge", "-q", "--ff-only", "main"], wt);
@@ -117,7 +118,7 @@ test("idea-1043 replay: zero-commit worktree whose worker is auto-archived is ke
     const repo = join(root, "repo");
     const sanct = join(root, "sanct");
     initRepo(repo);
-    const meas = addWorktree(repo, sanct, "orm-w3");
+    const meas = addWorktree(repo, sanct, "meas-w1");
     const tip = commitFile(repo, "upstream.txt", "merged upstream\n");
     git(["reset", "-q", "--hard", tip], meas); // HEAD moved: the 2h fresh guard no longer applies
     const done = addWorktree(repo, sanct, "unit-done");
@@ -134,18 +135,18 @@ test("idea-1043 replay: zero-commit worktree whose worker is auto-archived is ke
     const opts = { apply: true, sanctuaryRoot: sanct, liveCwds: liveAgentCwds(agents), holdCwds: holdAgentCwds(agents, { now }) };
 
     const res = byBranch(sweepMergedWorktrees(repo, opts));
-    assert.equal(res["orm-w3"].merged, true, "ancestry alone reads it merged");
-    assert.equal(res["orm-w3"].ownCommit, false);
-    assert.equal(res["orm-w3"].action, "kept");
-    assert.equal(res["orm-w3"].reason, "in-use-no-commits");
+    assert.equal(res["meas-w1"].merged, true, "ancestry alone reads it merged");
+    assert.equal(res["meas-w1"].ownCommit, false);
+    assert.equal(res["meas-w1"].action, "kept");
+    assert.equal(res["meas-w1"].reason, "in-use-no-commits");
     assert.ok(existsSync(meas), "the MEAS tree survives the archive window");
     assert.equal(res["unit-done"].action, "removed", "a merged unit with its own commits still goes (normal flow unchanged)");
 
     const later = now + ZERO_COMMIT_HOLD_MS + 60_000;
     const res2 = byBranch(sweepMergedWorktrees(repo, { ...opts, holdCwds: holdAgentCwds(agents, { now: later }) }));
-    assert.equal(res2["orm-w3"].action, "removed", "archived for over a day: done");
+    assert.equal(res2["meas-w1"].action, "removed", "archived for over a day: done");
     assert.ok(!existsSync(meas));
-    assert.equal(git(["rev-parse", "--verify", "--quiet", "refs/heads/orm-w3"], repo).length, 40, "branch ref kept");
+    assert.equal(git(["rev-parse", "--verify", "--quiet", "refs/heads/meas-w1"], repo).length, 40, "branch ref kept");
   }));
 
 test("idea-1043: the auto-sweep reads holdCwds from the roster (merge subject naming a zero-commit unit keeps it while its worker may return)", async () =>
@@ -153,7 +154,7 @@ test("idea-1043: the auto-sweep reads holdCwds from the roster (merge subject na
     const repo = join(root, "repo");
     const sanct = join(root, "sanct");
     initRepo(repo);
-    const meas = addWorktree(repo, sanct, "orm-w3");
+    const meas = addWorktree(repo, sanct, "meas-w1");
     git(["reset", "-q", "--hard", commitFile(repo, "u.txt", "u\n")], meas);
     const side = addWorktree(repo, sanct, "side");
     commitFile(side, "s.txt", "s\n");
@@ -164,9 +165,9 @@ test("idea-1043: the auto-sweep reads holdCwds from the roster (merge subject na
     ];
     const sweep = createWorktreeAutoSweep({ root: sanct, apply: true, listAgents: async () => agents, log: () => {} });
     await sweep.tick(); // baseline
-    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'orm-w3'", "side"], repo); // subject names orm-w3: a candidate
+    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'meas-w1'", "side"], repo); // subject names meas-w1: a candidate
     const res = await sweep.tick();
-    const r = res.results.find((x) => x.branch === "orm-w3");
+    const r = res.results.find((x) => x.branch === "meas-w1");
     assert.ok(r, JSON.stringify(res));
     assert.equal(r.reason, "in-use-no-commits", JSON.stringify(r));
     assert.ok(existsSync(meas));
@@ -337,13 +338,13 @@ test("Review-Gemini 1043 r1 #2: the hold set is re-read before removing a zero-c
     const repo = join(root, "repo");
     const sanct = join(root, "sanct");
     initRepo(repo);
-    const meas = addWorktree(repo, sanct, "orm-w4");
+    const meas = addWorktree(repo, sanct, "meas-w2");
     git(["reset", "-q", "--hard", commitFile(repo, "up.txt", "up\n")], meas); // zero commits, merged by ancestry
     const done = addWorktree(repo, sanct, "unit-done");
     commitFile(done, "d.txt", "d\n");
     git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-done'", "unit-done"], repo);
 
-    // Snapshot taken when the sweep began: the MEAS worker did not exist yet. By removal time it was spawned in orm-w4 and
+    // Snapshot taken when the sweep began: the MEAS worker did not exist yet. By removal time it was spawned in meas-w2 and
     // auto-archived (not live, so refreshLiveCwds misses it); only the hold set still names it.
     const t = Date.now();
     const roster = [
@@ -353,18 +354,18 @@ test("Review-Gemini 1043 r1 #2: the hold set is re-read before removing a zero-c
     const holdCalls = [];
     const base = { apply: true, sanctuaryRoot: sanct, freshGraceMs: 0, liveCwds: [repo], holdCwds: [repo], refreshLiveCwds: () => [repo] };
     const r1 = byBranch(
-      sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: throttledHoldCwds(() => (holdCalls.push(1), roster)), only: (w) => w.branch === "orm-w4" }),
+      sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: throttledHoldCwds(() => (holdCalls.push(1), roster)), only: (w) => w.branch === "meas-w2" }),
     );
-    assert.equal(r1["orm-w4"].ownCommit, false);
-    assert.equal(r1["orm-w4"].action, "kept", JSON.stringify(r1["orm-w4"]));
-    assert.equal(r1["orm-w4"].reason, "in-use-no-commits");
+    assert.equal(r1["meas-w2"].ownCommit, false);
+    assert.equal(r1["meas-w2"].action, "kept", JSON.stringify(r1["meas-w2"]));
+    assert.equal(r1["meas-w2"].reason, "in-use-no-commits");
     assert.ok(existsSync(meas));
     assert.equal(holdCalls.length, 1);
 
-    const r2 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => null, only: (w) => w.branch === "orm-w4" }));
-    assert.equal(r2["orm-w4"].reason, "hold-cwd-unknown", "unreadable roster: kept");
-    const r3 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => { throw new Error("roster"); }, only: (w) => w.branch === "orm-w4" }));
-    assert.equal(r3["orm-w4"].reason, "hold-cwd-unknown", "throwing roster: kept");
+    const r2 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => null, only: (w) => w.branch === "meas-w2" }));
+    assert.equal(r2["meas-w2"].reason, "hold-cwd-unknown", "unreadable roster: kept");
+    const r3 = byBranch(sweepMergedWorktrees(repo, { ...base, refreshHoldCwds: () => { throw new Error("roster"); }, only: (w) => w.branch === "meas-w2" }));
+    assert.equal(r3["meas-w2"].reason, "hold-cwd-unknown", "throwing roster: kept");
     assert.ok(existsSync(meas));
 
     // A tree with commits of its own never consults the hold set (the live re-read stays its guard).
@@ -374,8 +375,8 @@ test("Review-Gemini 1043 r1 #2: the hold set is re-read before removing a zero-c
     assert.equal(asked, 0);
 
     // Control: without the re-read the stale snapshot lets the zero-commit tree go (the reviewed race).
-    const r5 = byBranch(sweepMergedWorktrees(repo, { ...base, only: (w) => w.branch === "orm-w4" }));
-    assert.equal(r5["orm-w4"].action, "removed");
+    const r5 = byBranch(sweepMergedWorktrees(repo, { ...base, only: (w) => w.branch === "meas-w2" }));
+    assert.equal(r5["meas-w2"].action, "removed");
     assert.ok(!existsSync(meas));
   }));
 
