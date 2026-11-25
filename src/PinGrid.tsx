@@ -336,7 +336,7 @@ export const SidebarRiffBot = memo(function SidebarRiffBot({ pin, onPin }: { pin
       onClick={() => {
         void ensureHubLaneRegistered(pin);
         if (onPin) onPin(pin);
-        else void openPin(pin);
+        else void openPin(pin).catch((err) => showPinToast(`Could not start ${pin.lane.name}: ${err instanceof Error ? err.message : err}`));
       }}
     >
       <PinDot pin={pin} />

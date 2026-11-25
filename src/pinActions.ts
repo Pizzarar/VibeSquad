@@ -34,6 +34,8 @@ export type OpenPinDeps = {
   /** Agent map to re-check for a live Brainstorm before spawning (defaults to the live Paseo state). */
   agents?: Map<string, PaseoAgent>;
   fetch?: typeof fetch;
+  /** Where the failed-start `vs log` event is posted (defaults to the global fetch). */
+  logFetch?: typeof fetch;
   getTeams?: () => TeamDef[];
   /** Takes an updater, re-run on the fresh registry if someone else wrote it first. */
   saveTeams?: (update: TeamsUpdater) => Promise<unknown>;
@@ -68,13 +70,44 @@ export function openPin(pin: Pin, depsOrProfile: OpenPinDeps | string = {}): Pro
   const pending = inFlight.get(key);
   if (pending) return pending;
   const chosenProfile = deps.profile?.trim() || r.profile || pin.lane?.lastProfile || DEFAULT_PIN_PROFILE;
-  const run = quickStart(pin, chosenProfile, deps).finally(() => {
-    inFlight.delete(key);
-    startListeners.forEach((l) => l());
-  });
+  const run = quickStart(pin, chosenProfile, deps)
+    .catch((err) => {
+      void logPinStartFailure(pin, err, deps.logFetch); // idea-816: a refused/capped first start is reported (best-effort, not awaited), not just thrown
+      throw err;
+    })
+    .finally(() => {
+      inFlight.delete(key);
+      startListeners.forEach((l) => l());
+    });
   inFlight.set(key, run);
   startListeners.forEach((l) => l());
   return run;
+}
+
+const START_FAIL_COOLDOWN_MS = 60_000;
+const lastStartFailLog = new Map<string, number>();
+
+/** Best-effort `vs log blocker` (via the server) saying a pinned lane's first Buddy did not start, and why. Never throws. */
+/** Test hook: forget the failed-start log cooldown. */
+export const resetPinStartFailLog = (): void => lastStartFailLog.clear();
+
+export async function logPinStartFailure(pin: Pin, err: unknown, fetchImpl?: typeof fetch): Promise<void> {
+  const why = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").slice(0, 160);
+  console.error(`pin ${pin.lane.id}: its Buddy did not start: ${why}`);
+  if (DEMO) return;
+  // Per lane + reason, once a minute: a fast 429/503 clears inFlight, so repeated clicks must not each post a blocker.
+  const key = `${laneKey(pin.squad.id, pin.lane.id)}|${why}`;
+  const now = Date.now();
+  const last = lastStartFailLog.get(key);
+  if (last !== undefined && now - last < START_FAIL_COOLDOWN_MS) return;
+  lastStartFailLog.set(key, now);
+  try {
+    await (fetchImpl ?? fetch)("/__vibesquad/vs-log", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ team: pin.squad.id, lane: pin.lane.id, type: "blocker", text: `pin ${pin.lane.id}: Buddy did NOT start: ${why}`.slice(0, 236) }),
+    });
+  } catch {}
 }
 
 async function quickStart(pin: Pin, profile: string, deps: OpenPinDeps): Promise<string> {
@@ -455,7 +488,7 @@ export function setLastBrainstormProfile(profile: string): void {
   } catch {}
 }
 
-export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
+export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "logFetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
   lastProfile?: string;
   startBuddies?: boolean;
   /** Mark the created/reopened lane as a permanent standing team (`standing: true`). */
@@ -464,6 +497,8 @@ export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"
   quickLane?: "bugs" | "workflows";
   /** Called when the server saved the brief in its runtime folder instead of the project's. */
   onBriefFallback?: (laneId: string) => void;
+  /** idea-816: the pin landed but its first Buddy did not start (spin-off). Surface it; never swallow it. */
+  onBuddyStartFailed?: (pin: Pin, err: unknown) => void;
 };
 
 /** The pinned team an idea most likely belongs to in this squad, or null ("Sounds like X. Use it?"). */
@@ -739,7 +774,10 @@ export const createSpinOffPins = (key: string, squadId: string, teams: { name: s
     async (name, brief) => {
       const pin = await createPin(squadId, name, brief, deps);
       if (deps.startBuddies !== false) {
-        void openPin(pin, deps).catch(() => {});
+        void openPin(pin, deps).catch((err) => {
+          console.error(`spin-off: ${pin.lane.id} pinned but its Buddy did not start`, err);
+          deps.onBuddyStartFailed?.(pin, err);
+        });
       }
       return pin;
     },
