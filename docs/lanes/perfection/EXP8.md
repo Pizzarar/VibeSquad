@@ -93,3 +93,24 @@ Verdict line (to log): `vs log decision "@per EXP8 verdict keep|change|ruled-out
 1. @bug-chaser lead consent to be the pull arm (precondition).
 2. Phase 2 spike: can the spawn hook rewrite `request.prompt`? Decides the clash outcome.
 3. @usage ask: group `bootSize` by `boot=` (arm) and attribute merged-unit first-try to the dispatching lead's arm.
+
+## Spike (2026-11-25)
+
+**Verdict: NO — the before.agent.create hook cannot rewrite the successor's first prompt. The trim must live in `lead-handoff.mjs` (the fallback path, ~4-6 lines).**
+
+**1. Where the first prompt is (and is not) mutable.**
+
+The successor first prompt is built by `buildSuccessorPrompt` (`server/lead-handoff.mjs:474-516`), returned as `prompt`, and handed to `deps.createAgent({ ..., prompt, initialPrompt: prompt, ... })` at `lead-handoff.mjs:904-922`. Both spawn paths that carry it forward end in `RunnerBackend.createAgent` (`server/backend/runner-backend.mjs:716`): the plugin's handoff shim `agent-duties.ts:1680-1692` passes `prompt`, and `token-watch.mjs:134-140` passes `initialPrompt: p.initialPrompt || p.prompt`.
+
+Inside `runner-backend.mjs:createAgent` the hook sees `request.prompt = initialPrompt || prompt` (`:739`) and the hook's return value is consumed only as `config = next.config`, `env = next.env`, `labels = next.labels` (`:751-756`). The actual spawn posts `prompt: initialPrompt || prompt` (`:792`) — the **original** destructured argument, never `next.prompt` nor `next.config.prompt`. The hook's own return shape (`agent-duties.ts:2703-2710`, `{ ...request, labels, config: next, env }`) has no prompt field, and even if it did, `:792` would ignore it. There is no other pre-create hook event and no `agent.created` prompt rewrite. (The Paseo daemon's merge is outside this repo, but @bug-chaser leads are `rn-*` runner agents, so the runner path is the only path that matters.)
+
+**2. Proof.** `test/exp8-pull-boot-spike.test.mjs` (3 tests, throwaway):
+- a `pullifyHandoffPrompt` pure function truncates the packet/brief bodies and `measureFirstPromptParts` still partitions the result;
+- **negative**: a `RunnerBackend` whose `before("agent.create")` returns `{ ...request, prompt: trimmed, config: { ...config, prompt: trimmed } }` still POSTs the **original** prompt to `/agents` — the hook rewrite is ignored;
+- **positive**: passing the trimmed prompt *as the `createAgent` arg* (what the 3-line lead-handoff call does) reaches `/agents` untouched.
+
+**3. Revised build estimate and measured savings.** The apply point moves out of the hook (impossible) into `lead-handoff.mjs`: read the lane arm, call `pullifyHandoffPrompt(prompt, {packetHead, briefHead})` right after `buildSuccessorPrompt` at `:871`/before `:904`, and stamp `vs.boot` in `newLabels` (`:890-899`). Footprint: `server/boot-pull.mjs` (new) ~70 lines (unchanged), `server/lead-handoff.mjs` ~4-6 lines (the only new clash; K2 `d5712eba` is already merged, and P5d's `profilesPath` touch is at `:863-869`, non-overlapping), `server/hooks/agent-duties.ts` ~20 lines (read arm to stamp `vs.boot` + add `boot=` to `bootSizeMetric` `:2656`), `server/teams.ts` schema ~10 lines, `test/boot-pull.test.mjs` ~80 lines, `test/auto-failover-spawn.test.mjs` ~6 lines, lane config 1 line. Total still ~190 lines / 5-6 files.
+
+Measured on the most recent @bug-chaser **lead** successor (11-24 21:06:52Z, team vibesquad `log.jsonl`): `first=12548` (packet `7676`, brief `3388`, plan `1484`), `total=28813`, `estTok=7204`. Pull at the 1.5k/2k heads → first ≈ 12,548 → ~5.3k chars (saves ~7.2k ≈ 58% of the first prompt), total ≈ 28.8k → ~21.5k (≈ −25%), estTok ≈ 7,204 → ~5,400 (~1.8k tokens saved).
+
+**4. Lean: ruled-out (for now).** The saving is ~25% of a ~7k-token boot, below the 30% "keep" bar and roughly offset by the pull tax — the dropped ~7.2k chars (~1.8k tokens) are not eliminated, just re-read by the successor's own file tools on turn 1, so first-turn $ is likely to go UP (the guard EXP1 was declined on). Worse, the dominant remaining cost has shifted to the **system prompt** (~16.3k chars ≈ 4.1k tokens: plugin 9.0k + profile 8.2k + artifact 1.5k), which pull-only does not touch — so even a perfect first-prompt pull leaves ~21.5k chars (~5.4k tokens), and the p90>~20k-chars revisit trigger is now met by the system prompt, not the first prompt. The real lean-boot win is the EXP8 §3 second-stage change (pull-form lane artifact via `vs spec show` + trimming the plugin prefix/profile), not first-prompt pull. Recommend folding this verdict into the EXP8 §5 rule and re-pointing the build at system-prompt trim. Build only if the arm wants the packet-head protection regardless of cost (a `change` at `packetHead` ~4k, not a `keep`).
