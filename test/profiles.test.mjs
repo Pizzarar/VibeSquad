@@ -582,8 +582,9 @@ test("UX Reviewer - Opus: profile wired (vision+code+playwright, no edit-source)
   assert.deepEqual([ux.provider, ux.model, ux.role], ["claude", "claude-opus-5-5", "worker"]);
   assert.deepEqual(ux.mcpExtras, ["playwright"]);
   assert.ok(ux.notes.includes(UX_REVIEWER_NOTE_BODY));
-  assert.ok(UX_REVIEWER_NOTE_BODY.includes("Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots"));
+  assert.ok(UX_REVIEWER_NOTE_BODY.includes("Never edit source; write only docs/UX_REVIEW_<lane>_R<n>.md and its screenshots"));
   assert.ok(UX_REVIEWER_NOTE_BODY.includes("PASS only if no critical or major finding is open"));
+  assert.ok(UX_REVIEWER_NOTE_BODY.includes("n counts per lane") && UX_REVIEWER_NOTE_BODY.includes("two lanes never pick the same file")); // idea-984
   assert.equal(new Set(DEFAULT_PACK_PROFILES.map((p) => p.id)).size, DEFAULT_PACK_PROFILES.length, "profile ids unique");
   assert.ok(LEAD_NOTE_BODY.includes("Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases"));
   assert.ok(LEAD_NOTE_BODY.includes("also go to UX Reviewer - Opus"));
