@@ -149,6 +149,38 @@ test("merged: squash merge matches by tree; a cherry-picked unit matches by git 
     assert.equal(mergedStatus(repo, head, ["refs/heads/master"]).merged, false);
   }));
 
+test("idea-978: squash merge after master moved on (tree differs) is merged by squash-patch; partly merged and dirty are kept", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const sq = addWorktree(repo, sanct, "repo", "unit-sq");
+    commitFile(sq, "a.txt", "1\n");
+    commitFile(sq, "a.txt", "1\n2\n");
+    const part = addWorktree(repo, sanct, "repo", "unit-part");
+    commitFile(part, "p1.txt", "p1\n");
+    commitFile(part, "p2.txt", "p2\n");
+    const dirty = addWorktree(repo, sanct, "repo", "unit-dirty");
+    commitFile(dirty, "d.txt", "d\n");
+    commitFile(repo, "pre.txt", "master moved before the squash\n"); // so no squash commit's tree equals a unit's tree
+    // squash-merge unit-sq and only the first commit of unit-part, then move master on so no tree matches
+    git(["merge", "-q", "--squash", "unit-sq"], repo);
+    git(["commit", "-q", "-m", "sq squashed"], repo);
+    commitFile(repo, "p1.txt", "p1\n", "part first half only");
+    git(["merge", "-q", "--squash", "unit-dirty"], repo);
+    git(["commit", "-q", "-m", "dirty squashed"], repo);
+    commitFile(repo, "after.txt", "master moves on\n");
+    writeFile(dirty, "d.txt", "uncommitted edit\n");
+
+    const res = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(res["unit-sq"].mergedBy, "squash-patch");
+    assert.equal(res["unit-sq"].action, "would-remove");
+    assert.equal(res["unit-part"].merged, false);
+    assert.equal(res["unit-part"].reason, "unmerged");
+    assert.equal(res["unit-dirty"].merged, true);
+    assert.equal(res["unit-dirty"].reason, "dirty");
+  }));
+
 test("dirty: untracked build output is ignored, tracked edits and other untracked files are not", () =>
   withTmp((root) => {
     const repo = join(root, "repo");

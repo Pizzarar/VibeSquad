@@ -493,7 +493,30 @@ export function mergedStatus(repoRoot, head, refs, { git = defaultGit, treeCache
     const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (lines.length && lines.every((l) => l.startsWith("- "))) return { merged: true, how: "cherry", ref };
   }
+  // idea-978: a squash merge whose base later moved on (tree differs) and whose commits were folded into one (cherry sees
+  // no equivalent per commit): compare the branch's combined fork-point diff with each base commit's patch-id. Offline.
+  for (const ref of refs) {
+    if (squashPatchMatch(repoRoot, head, ref, git)) return { merged: true, how: "squash-patch", ref };
+  }
   return { merged: false, how: null, ref: null };
+}
+
+const SQUASH_SCAN_MAX = 2000;
+const firstWord = (line) => line.trim().split(/\s+/)[0] ?? "";
+
+/** Does one non-merge commit on `ref` (since the fork point) carry the same patch-id as head's whole fork-point diff? Any git error = no. */
+function squashPatchMatch(repoRoot, head, ref, git) {
+  const mb = tryGit(git, ["merge-base", head, ref], repoRoot)?.trim();
+  if (!mb) return false;
+  const diff = tryGit(git, ["diff", "--no-ext-diff", mb, head], repoRoot);
+  if (!diff || !diff.trim()) return false; // an empty combined diff merged nothing
+  const mine = tryGit(git, ["patch-id", "--stable"], repoRoot, { input: diff.endsWith("\n") ? diff : diff + "\n" });
+  const want = mine ? firstWord(mine) : "";
+  if (!want) return false;
+  const log = tryGit(git, ["log", "-p", "--no-ext-diff", "--no-merges", `--max-count=${SQUASH_SCAN_MAX}`, `${mb}..${ref}`], repoRoot);
+  if (!log || !log.trim()) return false;
+  const ids = tryGit(git, ["patch-id", "--stable"], repoRoot, { input: log.endsWith("\n") ? log : log + "\n" });
+  return (ids ?? "").split(/\r?\n/).some((l) => firstWord(l) === want);
 }
 
 /**
