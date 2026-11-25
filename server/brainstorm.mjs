@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { PLAN_HANDOFF_DEDUPE_MS, planLogFields } from "./plan-log.mjs";
+import { validateNeedsYouFields } from "./needs-you-fields.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
@@ -219,24 +220,27 @@ function recentPlanHandoff(laneLogPath, entry) {
 
 // idea-883: `verdict` ({ reviewer, profile, line }) is the server-attested reviewer verdict from digestLogRecord (vibesquad-api);
 // only a `done` entry keeps it, and no endpoint passes a request body's value here.
-export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [], plan = "", pass = false, verdict = null }) {
+export function appendVsLogEntry({ teamId, laneId, agent = "you", type = "metric", text, refs = [], plan = "", pass = false, verdict = null, summary, decides, do: leanDo, alt, kind }) {
   const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
   const safeTeam = safeSegment(teamId || "vibesquad");
   const safeLane = safeSegment(laneId || safeTeam || "vibesquad");
   const rawText = String(text ?? "").trim().slice(0, MAX_LOG_TEXT);
   if (!rawText) throw new Error("log text cannot be empty");
-  const pf = planLogFields(String(type || "metric"), rawText, plan, pass === true);
+  const logType = String(type || "metric");
+  const pf = planLogFields(logType, rawText, plan, pass === true);
+  const ny = validateNeedsYouFields(logType, rawText, { summary, decides, do: leanDo, alt, kind });
 
   const entry = {
     ts: new Date().toISOString(),
     agent: String(agent || "you"),
     lane: safeLane,
-    type: String(type || "metric"),
+    type: logType,
     text: pf.text,
     refs: Array.isArray(refs) ? refs.map(String) : [],
     ...(pf.plan ? { plan: pf.plan } : {}),
     ...(pf.plan && pf.pass ? { pass: true } : {}),
-    ...(String(type) === "done" && verdict?.reviewer && verdict?.line
+    ...(ny ?? {}),
+    ...(logType === "done" && verdict?.reviewer && verdict?.line
       ? { verdict: { reviewer: String(verdict.reviewer), profile: verdict.profile ? String(verdict.profile) : null, line: String(verdict.line) } }
       : {}),
   };

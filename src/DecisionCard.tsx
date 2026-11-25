@@ -51,6 +51,7 @@ export function DecisionCard({ agentId, offer, variant = "pin" }: Props) {
   return (
     <section className={`decision-card ${variant}`} data-testid={`decision-card-${variant}`} aria-label="Overlord decision">
       <p className="dc-summary" data-testid="decision-summary">{offer.summary}</p>
+      {offer.decides && <p className="dc-decides" data-testid="decision-decides">{offer.decides}</p>}
       <div className="dc-actions">
         <button type="button" className="btn dc-primary" data-testid="decision-do" disabled={busy} onClick={() => void act(approvalText(offer))}>
           ✓ Do obvious fix: {offer.action}

@@ -17,6 +17,8 @@ const FIELD_MAX = 240;
 
 export type Decision = {
   summary: string;
+  /** What the owner's answer changes (optional `decides:` line). */
+  decides?: string;
   action: string;
   alternatives: string[];
   /** Lane slug of the Buddy to jump to, without the `@`. */
@@ -39,6 +41,7 @@ export function parseRiffLane(raw: string): string | null {
 /** Parse the BODY of a vs:decision fence. Null when `summary` or `do` is missing/empty. */
 export function parseDecision(body: string): Decision | null {
   let summary = "";
+  let decides = "";
   let action = "";
   let riffLane: string | null = null;
   const alternatives: string[] = [];
@@ -56,16 +59,23 @@ export function parseDecision(body: string): Decision | null {
     const val = clip(f[2]);
     if (!val) continue;
     if (key === "summary" && !summary) summary = val;
+    else if (key === "decides" && !decides) decides = val;
     else if ((key === "do" || key === "action" || key === "recommend") && !action) action = val;
     else if ((key === "alt" || key === "alternative" || key === "option") && alternatives.length < DECISION_MAX_ALTS) alternatives.push(val);
   }
   if (!summary || !action) return null;
-  return { summary, action, alternatives: alternatives.filter((a) => a.toLowerCase() !== action.toLowerCase()), riffLane };
+  return {
+    summary,
+    ...(decides ? { decides } : {}),
+    action,
+    alternatives: alternatives.filter((a) => a.toLowerCase() !== action.toLowerCase()),
+    riffLane,
+  };
 }
 
 /** Stable, agent-free id (same scheme as send-to / spin-off): the dismissal follows the card text across resumes and devices. */
 export const decisionCardId = (agentId: string, d: Decision): string =>
-  cardId("decision", agentId, d.riffLane ?? "-", [d.summary, d.action, ...d.alternatives].join("\n"));
+  cardId("decision", agentId, d.riffLane ?? "-", [d.summary, ...(d.decides ? [d.decides] : []), d.action, ...d.alternatives].join("\n"));
 
 /** The last REAL vs:decision fence in a message. A fence nested in another fence (````, ~~~, ```md) is an example, not an offer. */
 export function decisionFromText(agentId: string, text: string): DecisionOffer | null {

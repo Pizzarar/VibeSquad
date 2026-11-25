@@ -21,13 +21,14 @@ import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "..
 import { lookupRole } from "../role-route.mjs";
 import { routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
 import { ART_DUET, ART_PAINTERS } from "../art-duet.mjs";
+import { NEEDS_YOU_KINDS, validateNeedsYouFields } from "../needs-you-fields.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
 export const COMPACT_LAST_MESSAGE = 600;
 /** idea-466 M1: `full: true` is generous but bounded (64KB); a longer message is clipped keeping the head plus an explicit marker. */
 export const MAX_FULL_LAST_MESSAGE = 65536;
-export const REPORT_TYPES = ["done", "decision", "blocker"];
+export const REPORT_TYPES = ["done", "decision", "blocker", "needs-you"];
 const WORKER_ROLE = "worker";
 const LEAD_ROLE = "lead";
 const LEAD_PROFILE_PREFIX = "Lead - ";
@@ -245,12 +246,19 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
     // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
     // (worker/digest/lead rules, `you` owner-only). An agent id without its token is a 403 before anything is sent (X1d).
     // Direct disk append only for the owner's shell (local token in hand) when the server is down. Returns the entry.
-    async writeLog({ type, text, refs, agent, plan, pass, team, lane }) {
+    async writeLog({ type, text, refs, agent, plan, pass, team, lane, summary, decides, do: leanDo, alt, kind }) {
       // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
       const name = ctx.identity.agentId || clean(agent);
       // `team`/`lane` override the target only for the owner's shell (no lane identity); an agent always logs to its own.
       const owner = !agentCallerOf(ctx);
-      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...(name ? { agent: name } : {}) };
+      const structured = {
+        ...(summary !== undefined ? { summary } : {}),
+        ...(decides !== undefined ? { decides } : {}),
+        ...(leanDo !== undefined ? { do: leanDo } : {}),
+        ...(alt !== undefined ? { alt } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+      };
+      const body = { teamId: (owner && clean(team)) || ctx.identity.team, laneId: (owner && clean(lane)) || ctx.identity.lane, type, text, refs, ...(plan ? { plan } : {}), ...(pass ? { pass: true } : {}), ...structured, ...(name ? { agent: name } : {}) };
       if (agentCallerOf(ctx)) return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
       // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
       if (!(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
@@ -259,7 +267,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       } catch (e) {
         if (!e?.unreachable) throw e;
         const { appendVsLogEntry } = await import("../brainstorm.mjs");
-        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass }).entry;
+        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs, plan, pass, ...structured }).entry;
       }
     },
     // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
@@ -705,8 +713,13 @@ async function reportTool(ctx, args = {}) {
   if (!REPORT_TYPES.includes(type)) throw new Error(`type must be one of: ${REPORT_TYPES.join(", ")}`);
   const text = clean(args.text);
   if (!text) throw new Error("text is required");
+  // @desk D1: optional structured needs-you fields (decides / do = lean / alt / kind), same validation as `vs log needs-you`.
+  const structured = { decides: args.decides, do: args.do, alt: args.alt, kind: args.kind };
+  const given = Object.entries(structured).filter(([, v]) => v !== undefined);
+  if (given.length && type !== "needs-you") throw new Error(`${given.map(([k]) => k).join(", ")} only apply to type needs-you`);
+  const fields = validateNeedsYouFields(type, text, structured);
   await verifyCaller(ctx); // X1b: 403 on a bad token before the server is asked; the server re-attributes the entry
-  const entry = await ctx.writeLog({ type, text, refs: args.refs });
+  const entry = await ctx.writeLog({ type, text, refs: args.refs, ...(fields ?? {}) });
   return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}) };
 }
 
@@ -1180,8 +1193,8 @@ export const VS_TOOLS = {
   },
   status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true up to 64KB). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
   report: {
-    description: "Write a done/decision/blocker entry to your team log as yourself. The VS server attributes it from your verified token (X1): a worker may only log done/blocker (refs forced to itself), a digest worker done (refs forced to the worker it digests), a lead/Buddy any type; decision from a worker is a 403. Returns {logged, type, agent, refs} as recorded.",
-    inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S }, ["type", "text"]),
+    description: "Write a done/decision/blocker/needs-you entry to your team log as yourself. needs-you (lead/Buddy only) takes optional structured fields: decides (what the answer changes), do (your lean), alt (other options, array), kind (yesno|answer|offscreen). The VS server attributes it from your verified token (X1): a worker may only log done/blocker (refs forced to itself), a digest worker done (refs forced to the worker it digests), a lead/Buddy any type; decision from a worker is a 403. Returns {logged, type, agent, refs} as recorded.",
+    inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S, decides: S, do: S, alt: { type: "array", items: S }, kind: { type: "string", enum: NEEDS_YOU_KINDS } }, ["type", "text"]),
     run: reportTool,
   },
   handoff_lead: {

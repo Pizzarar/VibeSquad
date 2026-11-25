@@ -30,6 +30,7 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { validatePlanPath } from "../server/plan-log.mjs";
+import { isNeedsYouType, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsLive, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { agentCallerOf, callTool, createContext, hasOwnerProof, lastAssistantText, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
@@ -234,7 +235,7 @@ function teamByPath(cwd) {
 // ---------------------------------------------------------------------------
 
 export function parseArgs(argv) {
-  const flags = { _: [], ref: [] };
+  const flags = { _: [], ref: [], alt: [] };
   const valued = new Set([
     "reason",
     "steer",
@@ -297,6 +298,10 @@ export function parseArgs(argv) {
     "sample",
     "checkpoint",
     "plan",
+    "decides",
+    "lean",
+    "alt",
+    "kind",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -360,6 +365,7 @@ export function parseArgs(argv) {
       if (value === undefined) throw new Error(`--${rawKey} needs a value`);
     }
     if (key === "ref") flags.ref.push(value);
+    else if (key === "alt") flags.alt.push(value);
     else flags[key] = value;
     if (key === "team") (flags.teamList ??= []).push(value); // E6c: `vs pair --team a --team b,c`
   }
@@ -551,6 +557,7 @@ Usage:
   vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
   vs log handoff|done "<text>" --plan docs/PLAN_<x>.md [--pass]  (plan lifecycle for @usage: stored as plan=<path> on the entry; --pass only on done, when the whole plan passed; text naming a PLAN path auto-fills it)
+  vs log needs-you "<ask>" [--decides "<what it changes>"] [--lean "<option>"] [--alt "<opt>"...] [--kind yesno|answer|offscreen]  (structured needs-you fields; free-text without flags still works)
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
@@ -638,7 +645,20 @@ async function commandLog(flags) {
   if (flags.plan !== undefined && !plan) throw new Error("--plan needs a docs/PLAN_*.md path");
   if (plan && type !== "handoff" && type !== "done") throw new Error("--plan applies to handoff and done entries only");
   if (flags.pass && type !== "done") throw new Error("--pass applies to done entries only");
-  const entry = await ctx.writeLog({ type: who.type, text, refs: who.refs, agent: who.agent, ...(plan ? { plan } : {}), ...(flags.pass ? { pass: true } : {}) });
+  const hasNeedsYouFlags = flags.decides !== undefined || flags.lean !== undefined || flags.alt.length > 0 || flags.kind !== undefined;
+  if (hasNeedsYouFlags && !isNeedsYouType(type)) throw new Error("--decides, --lean, --alt, and --kind apply to needs-you entries only");
+  const needsYou = hasNeedsYouFlags
+    ? validateNeedsYouFields(type, text, { decides: flags.decides, do: flags.lean, alt: flags.alt.length ? flags.alt : undefined, kind: flags.kind })
+    : null;
+  const entry = await ctx.writeLog({
+    type: who.type,
+    text,
+    refs: who.refs,
+    agent: who.agent,
+    ...(plan ? { plan } : {}),
+    ...(flags.pass ? { pass: true } : {}),
+    ...(needsYou ?? {}),
+  });
   process.stdout.write(JSON.stringify(entry) + "\n");
   return 0;
 }
