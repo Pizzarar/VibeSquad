@@ -302,7 +302,7 @@ export function classifyItem(item, set, ctx) {
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text, ...fin };
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
-    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && Math.max(o.activeAt ?? -Infinity, o.progressAtMs ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText, ...fin };
+    if (!busy && (o.archived || o.status !== "closed") && o.status !== "error" && o.finalText && Math.max(o.activeAt ?? -Infinity, o.progressAtMs ?? -Infinity) >= floor) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: o.finalText, ...fin };
     if (o.archived) return { phase: "archived", state: "stalled", reason: "archived" };
     if (o.status === "closed") return { phase: "closed", state: "stalled", reason: o.lost || o.resumable ? "lost" : "exited" };
     if (o.status === "error") return { phase: "error", state: "stalled", reason: "error" };
@@ -951,7 +951,7 @@ export function createWatchEngine({
     if (lastMessage) {
       for (const ref of refs) {
         const o = agents.get(ref);
-        if (!o || o.status !== "idle" || o.archived || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
+        if (!o || !(o.status === "idle" || (o.archived && o.status === "closed")) || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
         o.finalChecked = t;
         try {
           o.finalText = String((await lastMessage(ref)) ?? "").trim();

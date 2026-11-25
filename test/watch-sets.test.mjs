@@ -3175,3 +3175,37 @@ test("idea-897 integration: a real idle agent read through RunnerBackend.fetchAg
     rmSync(sb, { recursive: true, force: true });
   }
 });
+
+// ---- idea-942: an archived worker that finished with a final message is done, not STALLED (archived) ----
+
+async function archivedRun(finalText) {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-942-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", archivedAt: new Date(clock.t).toISOString(), lastProgressAt: new Date(clock.t + 1000).toISOString() };
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => finalText, deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 61_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    eng.stop?.();
+    return { item: w.items[0], pings: w.pings, sent };
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+}
+
+test("idea-942: an archived idle worker whose last turn ended with a final message is done and carries it", async () => {
+  const r = await archivedRun("PASS 0/0/0 abc1234 TOTAL 5 specs");
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
+  assert.ok(!r.pings.some((p) => /STALLED|archived/.test(p.text)), JSON.stringify(r.pings));
+  assert.match(JSON.stringify(r.pings), /PASS 0\/0\/0 abc1234/);
+});
+
+test("idea-942: an archived worker with no final message still stalls as archived", async () => {
+  const r = await archivedRun("");
+  assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  assert.equal(r.item.reason, "archived");
+});
