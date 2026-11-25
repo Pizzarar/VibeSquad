@@ -106,12 +106,23 @@ export type ProfileRow = {
   fixAfterMergeRate: number;
   avgUnitCycleMs: number | null;
 };
+export type MergedUnit = {
+  implementerModel?: string | null;
+  implementerProfile?: string | null;
+  firstReviewVerdict?: string | null;
+  reviewSource?: string | null;
+  reviewRounds?: number | null;
+  fixRounds?: number | null;
+  fixAfterMerge?: boolean | null;
+  implementerShared?: boolean | null;
+  costUsd?: number | null;
+};
 export type UsageData = {
   limits: LimitRow[];
   lanes: LaneRow[];
   byRole: RoleRow[];
   coordination?: { coordinationTokens: number; executionTokens: number; coordinationShare: number };
-  merged?: { perLane: PerLane[] };
+  merged?: { perLane: PerLane[]; units?: MergedUnit[] };
   loops?: { threshold: number; flagged: LoopRow[] };
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
@@ -1038,4 +1049,132 @@ export function plansSummary(p: PlanScores | null | undefined): string {
   if (!p || !p.pooled.started) return "Plan completion · no plan-tagged handoffs yet";
   const r = p.pooled;
   return `Plan completion · ${planScoreText(r, p.minN)} · ${r.done}/${r.started} done · ${r.open} open${r.stale ? ` (${r.stale} stale)` : ""}`;
+}
+
+// ---- usa-64: quality yardstick beside routing savings (idea-929)
+
+/** First-try review outcome of a merged unit, matching server/providers-catalog.mjs unitFirstTry.
+ * Returns null when reviewSource is "none" (outcome unknown). */
+export function unitFirstTry(u: Pick<MergedUnit, "reviewSource" | "firstReviewVerdict" | "reviewRounds"> | null | undefined): boolean | null {
+  if (!u || u.reviewSource === "none") return null;
+  if (u.firstReviewVerdict === "PASS" || u.firstReviewVerdict === "FAIL") return u.firstReviewVerdict === "PASS";
+  return (u.reviewRounds ?? 0) <= 1;
+}
+
+export type QualitySummary = {
+  totalUnits: number;
+  knownReviewUnits: number;
+  unknownReviewUnits: number;
+  firstTryPassCount: number;
+  firstTryPassRate: number | null;
+  fixAfterMergeCount: number;
+  fixAfterMergeRate: number | null;
+};
+
+/** Overall first-try PASS % (over known-review units) and fix-after-merge % (over ALL merged units). */
+export function buildQualitySummary(units: readonly MergedUnit[] | null | undefined): QualitySummary {
+  const list = Array.isArray(units) ? units : [];
+  let knownReviewUnits = 0;
+  let firstTryPassCount = 0;
+  let fixAfterMergeCount = 0;
+  for (const u of list) {
+    // fix-after-merge does not depend on review: counted over ALL merged units (same denominator as server byProfile/cohorts).
+    if (u?.fixAfterMerge) fixAfterMergeCount += 1;
+    const ft = unitFirstTry(u);
+    if (ft === null) continue;
+    knownReviewUnits += 1;
+    if (ft) firstTryPassCount += 1;
+  }
+  return {
+    totalUnits: list.length,
+    knownReviewUnits,
+    unknownReviewUnits: list.length - knownReviewUnits,
+    firstTryPassCount,
+    firstTryPassRate: knownReviewUnits > 0 ? firstTryPassCount / knownReviewUnits : null,
+    fixAfterMergeCount,
+    fixAfterMergeRate: list.length > 0 ? fixAfterMergeCount / list.length : null,
+  };
+}
+
+/** Minimum known-review units before a model's PASS % ranks normally (plan-score minN convention is 5; quality uses 10). */
+export const QUALITY_MIN_N = 10;
+
+export type ModelQualityRow = {
+  model: string;
+  lowN: boolean;
+  units: number;
+  firstTryPassCount: number;
+  firstTryKnown: number;
+  firstTryPassRate: number | null;
+  fixRounds: number;
+  fixRoundsPerUnit: number;
+  fixAfterMergeCount: number;
+  fixAfterMergeRate: number;
+  costUnits: number;
+  costUsd: number;
+  costPerUnit: number | null;
+};
+
+/** Per-model quality rollup from merged.units (grouped by implementerModel || implementerProfile).
+ * Excludes reviewSource="none" from PASS% (tracks firstTryKnown for n) and excludes implementerShared from $/unit.
+ * Rows with firstTryKnown >= QUALITY_MIN_N sort first; then by first-try PASS % desc (nulls last), then $/unit asc (nulls last), then units desc, then model name. */
+export function buildQualityByModel(units: readonly MergedUnit[] | null | undefined): ModelQualityRow[] {
+  if (!Array.isArray(units) || units.length === 0) return [];
+  const groups = new Map<string, {
+    model: string; units: number; firstTryPassCount: number; firstTryKnown: number;
+    fixRounds: number; fixAfterMergeCount: number; costUnits: number; costUsd: number;
+  }>();
+  for (const u of units) {
+    if (!u) continue;
+    const label = String(u.implementerModel || u.implementerProfile || "").trim().replace(/-(?:low|medium|high|xhigh|max)$/i, "");
+    if (!label) continue;
+    const model = label.toLowerCase();
+    let g = groups.get(model);
+    if (!g) {
+      g = { model: label, units: 0, firstTryPassCount: 0, firstTryKnown: 0, fixRounds: 0, fixAfterMergeCount: 0, costUnits: 0, costUsd: 0 };
+      groups.set(model, g);
+    }
+    g.units += 1;
+    const ft = unitFirstTry(u);
+    if (ft !== null) {
+      g.firstTryKnown += 1;
+      if (ft) g.firstTryPassCount += 1;
+    }
+    if (typeof u.fixRounds === "number" && Number.isFinite(u.fixRounds) && u.fixRounds > 0) g.fixRounds += u.fixRounds;
+    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+    if (!u.implementerShared) {
+      g.costUnits += 1;
+      if (typeof u.costUsd === "number" && Number.isFinite(u.costUsd) && u.costUsd > 0) g.costUsd += u.costUsd;
+    }
+  }
+  return [...groups.values()]
+    .map((g): ModelQualityRow => ({
+      model: g.model,
+      lowN: g.firstTryKnown < QUALITY_MIN_N,
+      units: g.units,
+      firstTryPassCount: g.firstTryPassCount,
+      firstTryKnown: g.firstTryKnown,
+      firstTryPassRate: g.firstTryKnown > 0 ? g.firstTryPassCount / g.firstTryKnown : null,
+      fixRounds: g.fixRounds,
+      fixRoundsPerUnit: g.units > 0 ? g.fixRounds / g.units : 0,
+      fixAfterMergeCount: g.fixAfterMergeCount,
+      fixAfterMergeRate: g.units > 0 ? g.fixAfterMergeCount / g.units : 0,
+      costUnits: g.costUnits,
+      costUsd: g.costUsd,
+      costPerUnit: g.costUnits > 0 ? g.costUsd / g.costUnits : null,
+    }))
+    .sort((a, b) => {
+      if (a.lowN !== b.lowN) return a.lowN ? 1 : -1;
+      if (a.firstTryPassRate !== b.firstTryPassRate) {
+        if (a.firstTryPassRate === null) return 1;
+        if (b.firstTryPassRate === null) return -1;
+        if (b.firstTryPassRate !== a.firstTryPassRate) return b.firstTryPassRate - a.firstTryPassRate;
+      }
+      if (a.costPerUnit !== b.costPerUnit) {
+        if (a.costPerUnit === null) return 1;
+        if (b.costPerUnit === null) return -1;
+        if (a.costPerUnit !== b.costPerUnit) return a.costPerUnit - b.costPerUnit;
+      }
+      return b.units - a.units || a.model.localeCompare(b.model);
+    });
 }
