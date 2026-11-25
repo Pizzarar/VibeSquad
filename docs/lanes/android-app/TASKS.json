@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-21T01:00:30.000Z",
+  "updatedAt": "2026-11-23T15:34:27.120Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -465,6 +465,20 @@
       "status": "done",
       "branch": "unit-and-pair-fp-expanded-127",
       "commit": "0ec5cd0e"
+    },
+    {
+      "id": "unit-and-trinity-bugs-463",
+      "goal": "Add permanent Bugs Trinity tab to PhoneCockpit and exclude Bugs from drawer TEAMS list (idea-463)",
+      "files": [
+        "src/phoneCockpitLogic.ts",
+        "src/PhoneCockpit.tsx",
+        "src/styles.css",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-trinity-bugs-463",
+      "commit": "53d29a01"
     }
   ]
 }

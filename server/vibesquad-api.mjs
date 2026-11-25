@@ -1,7 +1,8 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleStorybookRoute } from "./storybook/api.mjs";
 import { loopLagStats } from "../runner/loop-lag.mjs";
-import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, testerTeamRecords } from "./runner-api.mjs";
+import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, stampTesterText, testerTeamRecords } from "./runner-api.mjs";
+import { appendTesterThreadLine, isTesterCard, testerThreadLines } from "./tester-thread.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
@@ -11,6 +12,8 @@ import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
 import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
+import { abortRestartRequest, createRestartRequest, formatRequestStatus, readRestartRequest, syncRepoRoot } from "./restart-request.mjs";
+import { isHubLane } from "./lane-pure.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
@@ -363,6 +366,7 @@ export const AGENT_WRITE_ALLOWLIST = Object.freeze([
   "/__vibesquad/vs-log",
   "/__vibesquad/inbox",
   "/__vibesquad/inbox/triage",
+  "/__vibesquad/inbox/reply",
   "/__vibesquad/handoff",
   "/__vibesquad/lead-handoff",
   "/__vibesquad/lead-handoff/confirm",
@@ -544,6 +548,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
     return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
   }
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (path === "/__vibesquad/restart-host") return true; // H2 (idea-74): restart request state is owner-only, GET included
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
   if (isTerminalsPath(path)) return true; // live shells and script logs
   if (isGitPath(path)) return true; // diffs are file contents (writes are owner-gated as non-GET)
@@ -1324,6 +1329,75 @@ function sendCaughtError(req, res, e, what, { fallback = 500, rootDir = REPO_ROO
   return true;
 }
 
+// ---- H2 (idea-74, docs/PLAN_HEADLESS_HOST_74.md): phone "Restart Host (Server & Runner)" -------------------------------
+export const RESTART_HOST_REASON_MAX = 200;
+const RESTART_HOST_DEFAULT_REASON = "phone cockpit restart";
+/** The tip a phone restart asks for: the short HEAD of the checkout the runtime syncs from (what runtimeLagAsync compares), else "HEAD". */
+export function resolveRestartTip({ repoRoot = syncRepoRoot(), timeoutMs = 5000 } = {}) {
+  if (!repoRoot) return Promise.resolve("HEAD");
+  return new Promise((resolve) => {
+    execFile("git", ["-C", repoRoot, "rev-parse", "--short", "HEAD"], { windowsHide: true, timeout: timeoutMs }, (err, out) => {
+      const sha = String(out ?? "").trim();
+      resolve(!err && /^[0-9a-f]{7,40}$/i.test(sha) ? sha : "HEAD");
+    });
+  });
+}
+/** Where restart-feedback lines for an owner request are logged: the vibesquad Squad's hub lane, else the first hub lane (cli ownerHubLane). */
+function ownerHubLaneOf(rootDir) {
+  let teams = [];
+  try { teams = loadTeamsRegistry(rootDir); } catch { teams = []; }
+  const order = [...(Array.isArray(teams) ? teams : [])].sort((a, b) => (a.id === "vibesquad" ? -1 : b.id === "vibesquad" ? 1 : 0));
+  for (const t of order) {
+    const hub = (t.lanes ?? []).find((l) => isHubLane(t, l));
+    if (hub) return { team: t.id, lane: hub.id };
+  }
+  return { team: "", lane: "" };
+}
+/** 400 for a POST body the phone never sends: { mode?: "urgent" | "window", reason?: string } only. */
+function restartHostBody(body) {
+  const bad = (m) => Object.assign(new Error(m), { status: 400 });
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw bad("body must be a JSON object");
+  for (const k of Object.keys(body)) if (k !== "mode" && k !== "reason") throw bad(`unknown field: ${k}`);
+  const mode = body.mode === undefined ? "urgent" : body.mode;
+  if (mode !== "urgent" && mode !== "window") throw bad('mode must be "urgent" or "window"');
+  if (body.reason !== undefined && typeof body.reason !== "string") throw bad("reason must be a string");
+  const reason = String(body.reason ?? "").trim();
+  if (reason.length > RESTART_HOST_REASON_MAX) throw bad(`reason is at most ${RESTART_HOST_REASON_MAX} characters`);
+  if (reason && mode === "window") throw bad("reason is only for an urgent restart (a window restart waits for the next restart window)");
+  return { mode, reason };
+}
+/**
+ * GET/POST/DELETE /__vibesquad/restart-host. Owner only for every method: the route is a gated read (isGatedRead) and every
+ * write is owner-gated in gated(), and this re-checks so no future gate change opens it. POST only ever records a request
+ * through createRestartRequest (the coordinated drain: the server loop asks leads, waits, then fires vs restart once); it
+ * never restarts anything itself. DELETE aborts an open, not yet fired request.
+ */
+async function handleRestartHost(req, res, { owner, rootDir, home = undefined, resolveTip = resolveRestartTip } = {}) {
+  if (!owner) return sendJson(res, 403, { ok: false, error: "forbidden: restart-host is owner-only" });
+  try {
+    if (req.method === "GET") {
+      const request = readRestartRequest(home);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    if (req.method === "POST") {
+      const { mode, reason } = restartHostBody(await readBody(req));
+      const urgent = mode !== "window";
+      const tip = await resolveTip();
+      const request = createRestartRequest(home, { tip, requestedBy: "owner", ...ownerHubLaneOf(rootDir), urgent, ...(urgent ? { reason: reason || RESTART_HOST_DEFAULT_REASON } : {}) });
+      console.warn(`[vibesquad] restart-host: owner ${urgent ? "urgent" : "window"} request ${request.id} (tip ${request.tip}) is ${request.state}`);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    if (req.method === "DELETE") {
+      const request = abortRestartRequest(home, { by: "owner", reason: "phone cockpit cancel" });
+      console.warn(`[vibesquad] restart-host: owner aborted ${request.id}`);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  } catch (e) {
+    return sendCaughtError(req, res, e, "restart-host", { fallback: 409, rootDir }); // an open request / nothing to abort is 409
+  }
+}
+
 // ---- idea-249 (fix round): a non-owner caller (agent, read-only device) never gets a host path ----
 /** The owner (app, phone, owner shell) per the resolved caller; an agent, a read-only device or an unresolved request is not. */
 const ownerRequest = (req) => callerOf(req)?.kind === "owner";
@@ -1383,6 +1457,38 @@ async function handleInboxTriage(req, res, rootDir) {
   } catch (e) {
     if (sendServerFsError(res, e, "inbox triage", INBOX_BUSY)) return;
     return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
+  }
+}
+
+/**
+ * PTO v1.2 T: POST /__vibesquad/inbox/reply { cardId, text } (`vs inbox reply <cardId> "<text>"`): the bug-intake agent's
+ * answer to an alpha tester, the only agent output a tester ever reads (GET /tester/thread). Verified agents only (the owner,
+ * testers and owner-playtest devices are 403: not in their route sets / refused here), a lead or Buddy of the card's own
+ * Squad, and the card must be an alpha-tester card. The line is stored under that card's tester device, nowhere else.
+ */
+async function handleInboxReply(req, res) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const caller = agentCaller(req);
+    if (!caller) throw forbidden("inbox reply is for the Squad's bug-intake agent (vs inbox reply); the owner answers in the app");
+    if (caller.role !== "lead" && caller.role !== "brainstorm") throw forbidden(`inbox reply is for leads and Buddies of the card's Squad; ${caller.id} is a ${caller.role || "worker"}`);
+    const body = await readCleanBody(req);
+    const cardId = typeof body?.cardId === "string" ? body.cardId.trim() : "";
+    if (!TESTER_CARD_ID_RE.test(cardId)) throw testerStatus("cardId must be an inbox card id (idea-<n>)", 400);
+    if (typeof body.text !== "string") throw testerStatus("text must be a string", 400);
+    const text = sanitizeTesterInput(body.text);
+    if (!text) throw testerStatus("text is required", 400);
+    if (text.length > TESTER_TEXT_MAX_CHARS) throw testerStatus(`text too long (${TESTER_TEXT_MAX_CHARS} chars max)`, 413);
+    const card = readInboxCards().find((c) => c?.id === cardId);
+    if (!card) throw testerStatus(`Card not found: ${cardId}`, 404);
+    if (!sameId(card.teamId, caller.team) || !String(caller.team ?? "").trim()) throw forbidden(`card ${cardId} is not in your Squad`);
+    if (!isTesterCard(card)) throw forbidden(`card ${cardId} is not an alpha-tester card; only tester cards take a reply`);
+    const line = await appendTesterThreadLine(card.testerDeviceId, { role: "assistant", kind: "reply", teamId: card.teamId, cardId: card.id, text, agentId: caller.id });
+    return sendJson(res, 200, { ok: true, cardId: card.id, seq: line.seq });
+  } catch (e) {
+    if (sendServerFsError(res, e, "inbox reply", INBOX_BUSY)) return;
+    const status = [400, 403, 404, 413].includes(e?.status) ? e.status : 400;
+    return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -2288,8 +2394,6 @@ function testerCardView(c) {
 }
 
 const TESTER_CARD_ID_RE = /^idea-\d{1,12}$/;
-/** The card id a stamped tester chat line carries (`[Alpha Tester · <name> · card:<id>] ...`), or null. */
-const testerChatCardId = (text) => /^\[Alpha Tester · [^\]\n·]* · card:(idea-\d{1,12})\] /.exec(String(text ?? ""))?.[1] ?? null;
 /** The caller's own card `cardId` (testerDeviceId === caller.id, on an allowed Squad), else 403 (also for a missing card). */
 function ownTesterCard(caller, cardId) {
   const id = String(cardId ?? "").trim();
@@ -2410,6 +2514,9 @@ async function fileTesterReport({ caller, team, laneId, text, telemetry, shot, r
  * GET /__vibesquad/tester/thread?teamId=&limit=&after= -> { ok, teamId, laneId, agent: { id, title, status } | null, messages,
  * cursor }; `after` (a message id) returns only the messages strictly after it when it is still in the window; `cursor` is the
  * last returned id (or `after` when nothing is newer, or null). messages[] carry `cardId` when the line was card-tagged.
+ * PTO v1.2 T: a bug-tester gets its own per-device thread (ids `tt:<seq>`): the lines it posted (delivered report cards,
+ * thread / runner input lines) and the agent replies addressed to its own cards (`vs inbox reply`), never the agent's raw
+ * timeline. The owner-playtest caller (local owner / owner device) keeps the intake agent's timeline (its own Buddy).
  * POST { teamId?, text, cardId? } -> the line goes to the bug-intake agent, prefixed (with `card:<cardId>` for one of the
  * caller's own cards on that Squad) and non-owner -> { ok, agentId }.
  */
@@ -2421,17 +2528,33 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const limit = Math.min(Math.max(Number(q.get("limit")) || TESTER_THREAD_DEFAULT, 1), TESTER_THREAD_MAX);
       const after = (q.get("after") ?? "").trim();
       const a = await testerIntakeAgentFor(backend, team);
+      const agentView = a ? { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") } : null;
+      if (!isOwnerPlaytest(caller)) {
+        // PTO v1.2 T: a bug-tester never gets the intake agent's raw timeline (owner chat, lane work, other testers). Only its
+        // own stored lines and the replies addressed to its own cards (server/tester-thread.mjs), paged the same way.
+        const all = testerThreadLines(String(caller.id), team.id, readInboxCards(), undefined).map((l) => ({
+          id: `tt:${l.seq}`,
+          role: l.role,
+          text: redactTester(l.text),
+          ts: l.ts ?? null,
+          ...(l.cardId ? { cardId: l.cardId } : {}),
+        }));
+        const at = after ? all.findIndex((m) => m.id === after) : -1;
+        const messages = at >= 0 ? all.slice(at + 1, at + 1 + limit) : all.slice(-limit);
+        const cursor = messages.length ? messages[messages.length - 1].id : at >= 0 ? after : null;
+        return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: agentView, messages, cursor });
+      }
       if (!a) return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: null, messages: [], cursor: null });
       const t = await fetchTesterTimeline(backend, a.id, { limit: after ? TESTER_THREAD_MAX : limit });
       const all = t.entries.map((e) => {
         const role = e.item.type === "user_message" ? "user" : "assistant";
-        const cardId = role === "user" ? (isOwnerPlaytest(caller) ? ownerPlaytestChatCardId : testerChatCardId)(e.item.text) : null;
+        const cardId = role === "user" ? ownerPlaytestChatCardId(e.item.text) : null;
         return { id: `${a.id}:${e.seqStart ?? ""}`, role, text: e.item.text, ts: e.timestamp ?? null, ...(cardId ? { cardId } : {}) };
       });
       const at = after ? all.findIndex((m) => m.id === after) : -1;
       const messages = at >= 0 ? all.slice(at + 1, at + 1 + limit) : all.slice(-limit);
       const cursor = messages.length ? messages[messages.length - 1].id : at >= 0 ? after : null;
-      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") }, messages, cursor });
+      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: agentView, messages, cursor });
     }
     if (req.method === "POST") {
       const body = await readTesterBody(req);
@@ -2447,7 +2570,11 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const a = await testerIntakeAgentFor(backend, team);
       if (!a) throw testerStatus(`no live bug-intake agent in Squad "${team.id}"; your report is parked in the inbox`, 409);
       if (isOwnerPlaytest(caller)) await backend.sendAgentPrompt(a.id, `${ownerPlaytestChatPrefix(cardId)}${sanitizeTesterInput(text)}`, { owner: true });
-      else await sendTesterInput(backend, caller, a.id, text, { cardId });
+      else {
+        await sendTesterInput(backend, caller, a.id, text, { cardId });
+        // PTO v1.2 T: the caller's own line, as the agent got it, in its own thread.
+        await appendTesterThreadLine(String(caller.id), { role: "user", kind: "chat", teamId: team.id, cardId, text: stampTesterText(caller, sanitizeTesterInput(text), { cardId }) });
+      }
       return sendJson(res, 200, { ok: true, agentId: a.id });
     }
     return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2636,6 +2763,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/restart-runner": // owner-only (same guard as Unstick): park live turns cleanly, then restart the runner
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
         return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "restart-runner")); // idea-249
+      case "/__vibesquad/restart-host": // H2 (idea-74): owner-only coordinated server+runner restart (gated read + in-handler check)
+        return handleRestartHost(req, res, { owner, rootDir });
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":
@@ -2648,6 +2777,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInboxTriage(req, res, rootDir);
       case "/__vibesquad/inbox/send":
         return handleInboxSend(req, res, rootDir);
+      case "/__vibesquad/inbox/reply":
+        return handleInboxReply(req, res);
       case "/__vibesquad/inbox/attachment": // owner-only (non-GET gate above): raw image body, ?cardId=
         return handleInboxAttachment(req, res);
       case "/__vibesquad/push/vapid-public-key":

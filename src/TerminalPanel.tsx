@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { DEMO } from "./demoFlag";
+import { LOST_NOTICE, exitNotice, isCopyKey, isPasteKey, makeInputSender, readClipboardText } from "./terminalIo";
 import { captureFileName, captureText } from "./fileOps";
 import {
   vsCreateTerminal, vsKillTerminal, vsListTerminals, vsStream, vsTerminalInput, vsTerminalOutput, vsTerminalRename, vsTerminalResize, vsTerminalStreamUrl,
@@ -49,6 +50,21 @@ export const TERMINAL_THEME = {
 };
 
 const vsTerminalIds = new Set<string>(); // terminals served by /__vibesquad/terminals (runner agents)
+
+const inputSender = makeInputSender((id, data) => vsTerminalInput(id, data));
+const sendInput = (id: string, data: string) => inputSender(id, data);
+
+async function copyText(text: string) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); return; } catch { /* insecure page or denied: legacy path below */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch { /* nothing more to try */ }
+  ta.remove();
+}
 
 function resizeTerminal(terminalId: string, cols: number, rows: number) {
   if (DEMO || cols < 1 || rows < 1) return;
@@ -119,7 +135,28 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
         term.write(data === "\r" ? "\r\n$ " : data);
         return;
       }
-      void vsTerminalInput(terminalId, data).catch(() => {});
+      sendInput(terminalId, data);
+    });
+
+    // Paste (idea-691). Ctrl+V / Ctrl+Shift+V / Shift+Insert: don't let xterm turn the key into ^V; the browser then fires a
+    // native paste event, which xterm turns into onData (bracketed when the shell asked). That needs no clipboard API, so it
+    // works on plain-http LAN pages. Ctrl+Shift+C (or Ctrl+C with a selection) copies instead of sending ^C.
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== "keydown") return true;
+      if (isPasteKey(e)) return false;
+      if (isCopyKey(e, term.hasSelection())) {
+        void copyText(term.getSelection());
+        return false;
+      }
+      return true;
+    });
+    // Right-click: copy a selection, else paste via the async clipboard when the page may use it; on http/denied fall through to
+    // the browser's own context menu, whose Paste item feeds the same native paste event.
+    el.addEventListener("contextmenu", (e) => {
+      if (term.hasSelection()) { e.preventDefault(); void copyText(term.getSelection()); term.clearSelection(); return; }
+      if (!window.isSecureContext || !navigator.clipboard?.readText) return;
+      e.preventDefault();
+      void readClipboardText().then((text) => { if (text) term.paste(text); }).catch(() => {});
     });
 
     termInstancesRef.current.set(terminalId, { term, fit });
@@ -139,9 +176,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
 
     function subscribeToTerminal(terminalId: string) {
       vsTerminalIds.add(terminalId);
-      const stop = vsStream(vsTerminalStreamUrl(terminalId), (d) => writeToTerm(terminalId, d), (code) => writeToTerm(terminalId, `
-[process exited${code == null ? "" : ` with code ${code}`}]
-`));
+      const stop = vsStream(vsTerminalStreamUrl(terminalId), (d) => writeToTerm(terminalId, d), (code, reason) => writeToTerm(terminalId, exitNotice(code, reason)), () => writeToTerm(terminalId, LOST_NOTICE));
       unsubsRef.current.set(terminalId, stop);
     }
 
@@ -222,9 +257,7 @@ export function TerminalPanel({ agent }: { agent: PaseoAgent }) {
       setActiveId(termId);
 
       vsTerminalIds.add(termId);
-      unsubsRef.current.set(termId, vsStream(vsTerminalStreamUrl(termId), (d) => writeToTerm(termId, d), (code) => writeToTerm(termId, `
-[process exited${code == null ? "" : ` with code ${code}`}]
-`)));
+      unsubsRef.current.set(termId, vsStream(vsTerminalStreamUrl(termId), (d) => writeToTerm(termId, d), (code, reason) => writeToTerm(termId, exitNotice(code, reason)), () => writeToTerm(termId, LOST_NOTICE)));
     } catch (e) {
       console.error("createTerminal failed", e);
       setTabErr(`New terminal failed: ${e instanceof Error ? e.message : String(e)}`);

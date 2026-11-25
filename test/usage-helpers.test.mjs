@@ -590,3 +590,26 @@ test("usa-48: cold-start focus=usage is consumed once, URL stripped, scroll pend
   assert.equal(takeColdUsageFocus(), false);
   delete globalThis.location; delete globalThis.history; resetColdUsageForTest();
 });
+
+test("laneRoleRows (usa-52): sorted by loop $ desc, squad-filtered, missing -> null", async () => {
+  const { laneRoleRows } = await import("../src/usageHelpers.ts");
+  const z = { turns: 0, costUsd: 0 };
+  const mk = (teamId, lane, role, loop) => ({ teamId, lane, role, productive: z, waiting: z, loop: { turns: 1, costUsd: loop }, other: z });
+  const l = { threshold: 40, pooled: {}, byLaneRole: [mk("a", "x", "lead", 1), mk("a", "y", "brainstorm", 5), mk("b", "x", "lead", 2)] };
+  assert.deepEqual(laneRoleRows(l, null).map((r) => [r.lane, r.role, r.loop.costUsd]), [["y", "brainstorm", 5], ["x", "lead", 3]]);
+  assert.deepEqual(laneRoleRows(l, "b").map((r) => r.loop.costUsd), [2]);
+  assert.deepEqual(laneRoleRows(l, "zzz"), []);
+  assert.equal(laneRoleRows(undefined, null), null);
+  assert.equal(laneRoleRows({ threshold: 40, pooled: {}, byLaneRole: [] }, null), null);
+});
+
+test("burstCellText / planStatusLabel / shortLead (usa-53)", async () => {
+  const { burstCellText, planStatusLabel, shortLead, pctText: pt } = await import("../src/usageHelpers.ts");
+  assert.equal(burstCellText({ insufficient: true }, null, pt, 5), "n<5");
+  assert.equal(burstCellText({ insufficient: false }, null, pt), "—");
+  assert.equal(burstCellText({ insufficient: false }, 2.5, (n) => n.toFixed(1)), "2.5");
+  assert.equal(planStatusLabel("stale"), "stale (7d+)");
+  assert.equal(planStatusLabel("done"), "done");
+  assert.equal(shortLead("rn-64cf71d9a16d"), "d9a16d");
+  assert.equal(shortLead(null), "—");
+});

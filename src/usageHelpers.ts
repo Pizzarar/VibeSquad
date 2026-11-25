@@ -72,7 +72,8 @@ export type SpawnStorm = {
 };
 export type LongTurnBucket = { turns: number; costUsd: number };
 export type LongTurnSplit = { productive: LongTurnBucket; waiting?: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
-export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[] };
+export type LaneRoleLongTurns = Partial<LongTurnSplit> & { teamId: string; lane: string; role: string };
+export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[]; byLaneRole?: LaneRoleLongTurns[] };
 
 export type ProfileRow = {
   provider: string;
@@ -124,6 +125,7 @@ export type UsageData = {
   squads?: string[];
   autonomy?: Autonomy;
   planScores?: PlanScores;
+  burstCohorts?: BurstCohorts;
   readyTime?: ReadyTime | null;
   compaction?: CompactionStats | null;
 };
@@ -894,6 +896,28 @@ export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | n
   return keys.map(([key, label]) => ({ key, label, turns: num(src[key]?.turns), costUsd: num(src[key]?.costUsd), pct: total > 0 ? num(src[key]?.costUsd) / total : null }));
 }
 
+export type LaneRoleRow = { key: string; lane: string; role: string; productive: LongTurnBucket; waiting: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
+
+/** usa-52: lane x role long-turn rows (usa-49 byLaneRole), squad-filtered, summed across teams, sorted by loop $ desc (then lane/role). Missing/empty -> null (tile hidden). */
+export function laneRoleRows(l: LeadLongTurns | undefined, squad: string | null): LaneRoleRow[] | null {
+  const src = l?.byLaneRole;
+  if (!Array.isArray(src) || src.length === 0) return null;
+  const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  const b = (x?: LongTurnBucket): LongTurnBucket => ({ turns: num(x?.turns), costUsd: num(x?.costUsd) });
+  const map = new Map<string, LaneRoleRow>();
+  for (const r of src) {
+    if (!r || (squad && r.teamId !== squad)) continue;
+    const key = `${r.lane}\u0000${r.role}`;
+    const row = map.get(key) ?? { key, lane: r.lane, role: r.role, productive: b(), waiting: b(), loop: b(), other: b() };
+    for (const k of ["productive", "waiting", "loop", "other"] as const) {
+      const v = b(r[k]);
+      row[k] = { turns: row[k].turns + v.turns, costUsd: row[k].costUsd + v.costUsd };
+    }
+    map.set(key, row);
+  }
+  return [...map.values()].sort((a, b2) => b2.loop.costUsd - a.loop.costUsd || a.lane.localeCompare(b2.lane) || a.role.localeCompare(b2.role));
+}
+
 /** usa-48: quota alert banner. Active alerts come from usage payload `quotaAlerts` (usa-47). */
 export type QuotaAlert = { provider: string; window: string; usedPct: number; resetsAt: string | null; firedAt?: string };
 export const QUOTA_DISMISS_KEY = "vs.quotaAlert.dismissed";
@@ -971,7 +995,35 @@ export type PlanScoreRow = {
   buddy: { handedOff: number; reachedDone: number; score: number | null };
 };
 export type PlanLeadRow = { lead: string; lane: string | null; started: number; done: number };
-export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; minN: number };
+/** usa-51 per-plan drilldown row (server buildPlanScores plans[]). */
+export type PlanRow = {
+  path: string; team: string | null; lane: string | null; buddy: string | null; currentLead: string | null;
+  startedAt: number; doneAt: number | null; status: "open" | "done" | "stale"; cycleMs: number | null;
+};
+export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; plans?: PlanRow[]; minN: number };
+
+/** usa-51 burst cohort bucket (server buildBurstCohorts). Metrics are null while insufficient (units < minN). */
+export type BurstBucket = {
+  key: string; label: string; units: number; insufficient: boolean;
+  firstTryPassRate: number | null; avgReviewRounds: number | null; fixAfterMergeRate: number | null; costPerUnit: number | null;
+};
+export type BurstCohorts = { buckets: BurstBucket[]; unjoined: number; minN: number };
+
+/** Burst cell text: `n<5` for an insufficient bucket, `—` for a missing metric, else the formatted value. */
+export function burstCellText(b: Pick<BurstBucket, "insufficient">, v: number | null | undefined, fmt: (n: number) => string, minN = 5): string {
+  if (b.insufficient) return `n<${minN}`;
+  return v === null || v === undefined ? "—" : fmt(v);
+}
+
+/** Plan status badge text. */
+export function planStatusLabel(s: PlanRow["status"]): string {
+  return s === "done" ? "done" : s === "stale" ? "stale (7d+)" : "open";
+}
+
+/** Short lead id for the plan table (last 6 chars). */
+export function shortLead(id: string | null | undefined): string {
+  return id ? id.slice(-6) : "—";
+}
 
 /** `73%`, or `n<5 plans` while fewer than minN plans are old enough to score. */
 export function planScoreText(r: Pick<PlanScoreRow, "score" | "insufficient">, minN = 5): string {

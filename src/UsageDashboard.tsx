@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -350,6 +350,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const flagged = data.loops?.flagged ?? [];
   const storms = data.spawnStorms ?? [];
   const leadLongRows = leadLongTurnRows(data.leadLongTurns, activeSquad);
+  const laneRoleTile = laneRoleRows(data.leadLongTurns, activeSquad);
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
@@ -468,6 +469,33 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
               {data.planScores.byLead.length > 0 && (
                 <div className="small muted" data-testid="usage-plans-leads">
                   Per lead: {data.planScores.byLead.map((l) => `${l.lane ?? "?"} ${l.lead.slice(-6)} ${l.done}/${l.started}`).join(" · ")}
+                </div>
+              )}
+              {data.planScores.plans && data.planScores.plans.length > 0 && (
+                <div className="usage-plan-rows" data-testid="usage-plan-rows">
+                  <div className="usage-plan-grid usage-plan-head small muted">
+                    <span>Plan</span><span>Status</span><span>Lane</span><span>Lead</span><span className="num">Started</span><span className="num">Cycle</span>
+                  </div>
+                  {data.planScores.plans.map((p) => (
+                    <details key={`${p.path}|${p.startedAt}`} className="usage-plan-details" data-testid="usage-plan-row" data-status={p.status}>
+                      <summary className="usage-plan-grid usage-plan-summary">
+                        <span className="usage-plan-name" title={p.path}>{p.path.split("/").pop()}</span>
+                        <span className={`usage-plan-status is-${p.status}`}>{planStatusLabel(p.status)}</span>
+                        <span className="muted">{p.lane ?? "?"}</span>
+                        <span className="muted">{shortLead(p.currentLead)}</span>
+                        <span className="num muted">{relTime(p.startedAt, Date.now())}</span>
+                        <span className="num muted">{p.cycleMs === null ? "—" : dur(p.cycleMs)}</span>
+                      </summary>
+                      <dl className="usage-plan-detail small" data-testid="usage-plan-detail">
+                        <dt>Path</dt><dd><a className="usage-plan-path" href={`#${encodeURI(p.path)}`} data-testid="usage-plan-path">{p.path}</a></dd>
+                        <dt>Team</dt><dd>{p.team ?? "—"}</dd>
+                        <dt>Buddy</dt><dd>{shortLead(p.buddy)}</dd>
+                        <dt>Current lead</dt><dd>{shortLead(p.currentLead)}</dd>
+                        <dt>Started</dt><dd>{new Date(p.startedAt).toLocaleString()}</dd>
+                        <dt>Done</dt><dd>{p.doneAt === null ? "—" : new Date(p.doneAt).toLocaleString()}</dd>
+                      </dl>
+                    </details>
+                  ))}
                 </div>
               )}
               <div className="small muted">Score = done / started over plans started more than 3 days ago. Open for 7+ days is stale.</div>
@@ -730,11 +758,31 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
               ))}
             </div>
           )}
+          {laneRoleTile && laneRoleTile.length > 0 && (
+            <div className="usage-lane-role" data-testid="usage-lane-role">
+              <div className="usage-cohort-label small">Long turns by lane × role (sorted by loop $)</div>
+              <div className="usage-table-wrap">
+                <table className="usage-table">
+                  <thead><tr><th>Lane</th><th>Role</th><th className="num">Productive</th><th className="num">Waiting</th><th className="num">Loop</th><th className="num">Other</th></tr></thead>
+                  <tbody>
+                    {laneRoleTile.map((r) => (
+                      <tr key={r.key} data-lane={r.lane} data-role={r.role}>
+                        <td>{r.lane || "—"}</td><td>{r.role}</td>
+                        {(["productive", "waiting", "loop", "other"] as const).map((k) => (
+                          <td key={k} className="num">{r[k].turns} · {usdText(r[k].costUsd)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </section>
         </Collapse>
       )}
 
-      {(data.savings || workflows.length > 0) && (
+      {(data.savings || workflows.length > 0 || data.burstCohorts) && (
         <Collapse id="workflows" testid="usage-workflows-collapse" summary={workflowSummary(data.savings, workflows.length)}>
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">
@@ -762,6 +810,31 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-label small">Cost / 100 LOC</div>
                 <div className="usage-cohort-value">{usdText(data.savings.costPer100Loc)}</div>
                 <div className="small muted">{usdText(data.savings.costPerMergedUnit)}/unit · {data.savings.totalLocChanged.toLocaleString()} LOC</div>
+              </div>
+            </div>
+          )}
+          {data.burstCohorts && (
+            <div className="usage-table-wrap" data-testid="usage-burst">
+              <div className="usage-sub">Parallel burst size at dispatch → outcome (merged units)</div>
+              <table className="usage-table" data-testid="usage-burst-table">
+                <thead>
+                  <tr><th>Burst</th><th className="num">Units</th><th className="num">1st-try PASS %</th><th className="num">Avg rev rounds</th><th className="num">Fix rate</th><th className="num">Cost/unit</th></tr>
+                </thead>
+                <tbody>
+                  {data.burstCohorts.buckets.map((b) => (
+                    <tr key={b.key} data-testid="usage-burst-row" data-burst={b.key} className={b.insufficient ? "usage-burst-thin" : undefined}>
+                      <td>{b.label}</td>
+                      <td className="num">{b.units}</td>
+                      <td className="num">{burstCellText(b, b.firstTryPassRate, pctText, data.burstCohorts!.minN)}</td>
+                      <td className="num">{burstCellText(b, b.avgReviewRounds, (n) => n.toFixed(1), data.burstCohorts!.minN)}</td>
+                      <td className="num">{burstCellText(b, b.fixAfterMergeRate, pctText, data.burstCohorts!.minN)}</td>
+                      <td className="num">{burstCellText(b, b.costPerUnit, usdText, data.burstCohorts!.minN)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="small muted" data-testid="usage-burst-note">
+                n&lt;{data.burstCohorts.minN} = too few units to compare{data.burstCohorts.unjoined > 0 ? ` · unjoined ${data.burstCohorts.unjoined} (no dispatch burst recorded)` : ""}
               </div>
             </div>
           )}

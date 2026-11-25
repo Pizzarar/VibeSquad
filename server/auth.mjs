@@ -1,13 +1,14 @@
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual, X509Certificate } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir, hostname, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
+import { readRestartRequest, TERMINAL as RESTART_TERMINAL } from "./restart-request.mjs";
 import { buildRelayPairingLink, publicRelayEndpoint } from "./relay-link.mjs";
 import { isRelayRequest } from "./relay-tunnel.mjs";
 import { downloadArtifactSha256s, downloadArtifactSha256sAsync, resolveAndroidApkPath } from "./vibesquad-api.mjs";
@@ -275,12 +276,26 @@ const artifactShaFields = ({ desktopInstaller, androidApk }) => ({
   androidApkSha256: artifactShaFingerprint(androidApk),
 });
 
+/** H1: compact open restart request for the phone Host block; null when none, terminal, or the file is missing/corrupt. */
+function restartRequestSummary() {
+  try {
+    const r = readRestartRequest(vibesquadHome());
+    if (!r || typeof r.state !== "string" || RESTART_TERMINAL.has(r.state)) return null;
+    return { id: r.id ?? null, state: r.state, windowAt: r.windowAt ?? null, deadlineAt: r.deadline ?? null, summary: `${r.state}${r.tip ? ` · ${r.tip}` : ""}` };
+  } catch {
+    return null;
+  }
+}
+
 export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   const distReady = hasDistIndex(rootDir);
   return {
     ok: true,
     hostId: getHostId(),
+    hostLabel: process.env.VIBESQUAD_HOST_LABEL || hostname(),
+    headless: Boolean(process.env.VIBESQUAD_HEADLESS || process.env.INVOCATION_ID),
+    restartRequest: restartRequestSummary(),
     port,
     meshnetIp,
     meshnetHost,

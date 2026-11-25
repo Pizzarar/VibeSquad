@@ -2807,6 +2807,29 @@ test('usa-38: markdown export prints compaction outcomes and handoff overhead', 
   assert.match(md.data.markdown, /successor 1st turn: \$0\.4 \| predecessor wrap-up: \$- \| handoff overhead \$0\.4/);
 });
 
+test('K2a: compact-step lines carrying reason=/attempts= after tokens= still parse the old fields', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 24, 12);
+  const step = (at, agent, text) => writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + at, agent, 'usage', 'metric', text));
+  step(1, 'rn-a', 'compact-step lead agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000 attempts=2');
+  step(2, 'rn-b', 'compact-step lead agent=rn-b outcome=ok before=100000 after=20000 cap=150000 ms=60000 costUsd=0.30 tokens=10000 attempts=1');
+  step(3, 'rn-c', 'compact-step lead agent=rn-c outcome=failed before=158000 after=? cap=150000 ms=2500 costUsd=0.10 tokens=2000 reason=no-boundary attempts=3 -> falling through to handoff');
+  step(4, 'rn-d', 'compact-step buddy agent=rn-d outcome=timeout before=152000 after=? cap=150000 ms=600000 reason=queue attempts=1 -> falling through to handoff');
+  step(5, 'rn-e', 'compact-step lead agent=rn-e outcome=failed before=152000 after=? cap=150000 ms=12 reason=label-write attempts=0 -> falling through to handoff');
+  step(6, 'rn-f', 'compact-step lead agent=rn-f outcome=ok before=120000 after=24000 cap=150000 ms=50000 tokens=9000 attempts=1'); // no costUsd field
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 6); // events, not sends: attempts= is not read as a count
+  assert.equal(cp.okCount, 3);
+  assert.equal(cp.failedCount, 2);
+  assert.equal(cp.timeoutCount, 1);
+  assert.equal(cp.okRate, 0.5);
+  assert.equal(cp.medianBeforeTokens, 120000);
+  assert.equal(cp.medianAfterTokens, 20000);
+  assert.equal(cp.meanOkCostUsd, 0.25);
+  assert.equal(cp.failedCostUsd, 0.1);
+});
+
 test('usa-38: compact-step lines landing in both logs/*.jsonl and teams/<t>/log.jsonl are deduped', () => {
   const home = tmp();
   clearUsageCache();

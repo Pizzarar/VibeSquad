@@ -12,7 +12,7 @@ import { pidAlive, readLock } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
-import { oncePerOwner, restartRunner as ownerRestart, restartRunnerNow } from "./runner-supervisor.mjs";
+import { oncePerOwner, restartRunner as ownerRestart, restartRunnerNow, restartWhenIdle, runnerBusy } from "./runner-supervisor.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
@@ -192,35 +192,39 @@ export async function unstick({
 }
 
 /**
- * Owner-confirmed "Restart runner" (Unstick's new action): cancel every running turn cleanly (cancelAgent keeps the session,
- * the agent stays unarchived), then kill the runner tree and start a fresh one. Unlike `unstick`, this restarts a HEALTHY
- * runner — the exact gap that left runner code changes not live after build + sync. Cancelled agents come back parked/lost
- * and resume on their next send through the existing park/resume path. Never archives anything.
- * Everything environmental is injectable for tests: `listAgents`, `cancelAgent`, `restartRunner`.
+ * Owner-confirmed "Restart runner" (Settings / phone cockpit): restart a HEALTHY runner so new runner code loads (the gap that left
+ * runner code changes not live after build + sync). idea-786: it never cancels a turn and never kills a busy runner. It used to
+ * cancel every running turn and hard-kill the runner tree; on 11-24 12:28:46Z that cut three running workers mid-turn
+ * (rn-980b4f09bcc1, rn-c5e00414319c, rn-c6b295ee98be). Now:
+ *   - runner idle (runner-supervisor runnerBusy: no /health turn, no held background work, no running-ish agent): restart now;
+ *   - runner busy or the busy count unknown: arm restartWhenIdle(); the supervisor restarts it on its first idle tick (RR1's gate);
+ *   - runner down (neither /health nor the agent list answers): start a fresh one, as before (nothing it runs can answer).
+ * Never archives or cancels anything. `cancelled` stays [] for the UI. Injectable for tests: `health`, `listAgents`,
+ * `restartRunner`, `whenIdle`.
  */
 export async function forceRestartRunner({
   backend,
+  health,
   listAgents,
-  cancelAgent,
   restartRunner = (be) => restartRunnerNow(be),
+  whenIdle = (be) => restartWhenIdle(be),
 } = {}) {
   const be = backend ?? sharedRunnerBackend();
-  let agents = [];
-  try {
-    agents = await (listAgents ?? (() => be.listAgents()))();
-  } catch {
-    // Runner down or unreachable: nothing to cancel; restartRunnerNow still starts a fresh runner.
+  const h = await Promise.resolve()
+    .then(() => (health ?? (() => be.rc.request("GET", "/health")))())
+    .then((x) => (x && typeof x === "object" ? x : null), () => null);
+  const agents = await Promise.resolve()
+    .then(() => (listAgents ?? (() => be.listAgents()))())
+    .then((a) => (Array.isArray(a) ? a : null), () => null);
+  if (!h && !agents) {
+    await restartRunner(be);
+    return { ok: true, cancelled: [], restarted: true };
   }
-  const cancelled = [];
-  for (const a of agents ?? []) {
-    if (!a || a.archivedAt || a.status !== "running") continue; // only stop turns that are actually running
-    try {
-      await (cancelAgent ?? ((id) => be.cancelAgent(id)))(a.id);
-      cancelled.push(a.id);
-    } catch {
-      // Already finished mid-loop: nothing to cancel.
-    }
+  const gate = runnerBusy(h, agents);
+  if (gate.busy) {
+    const armed = whenIdle(be);
+    return { ok: true, cancelled: [], restarted: false, deferred: true, alreadyArmed: !armed, busy: gate.ids, running: gate.running, held: gate.held, unknown: gate.unknown };
   }
   await restartRunner(be);
-  return { ok: true, cancelled, restarted: true };
+  return { ok: true, cancelled: [], restarted: true };
 }

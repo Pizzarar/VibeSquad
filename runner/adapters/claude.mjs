@@ -41,7 +41,18 @@ export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT) {
 }
 // Extras are opt-in: a profile with mcpExtras:["playwright"] (server/profiles.mjs; the backend stamps it as the vs.mcp label)
 // or any agent labelled vs.mcp=playwright (comma list).
-export const wantsPlaywright = (meta = {}) => String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes('playwright');
+export const wantsExtra = (meta = {}, name) => String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes(name);
+export const wantsPlaywright = (meta = {}) => wantsExtra(meta, 'playwright');
+export const wantsGodotRuntime = (meta = {}) => wantsExtra(meta, 'godot-runtime');
+// godot-runtime has NO safe default (the engine exe is per project, often on the dev PC behind an ssh stdio bridge: see
+// docs/lanes/playtest-overlay/README.md). Only the owner's own ~/.claude.json mcpServers["godot-runtime"] is reused; absent -> null.
+export function godotRuntimeSpec(home = os.homedir()) {
+  try {
+    const s = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8'))?.mcpServers?.['godot-runtime'];
+    if (s?.command) return { command: s.command, args: s.args ?? [], env: s.env ?? {} };
+  } catch { /* absent or unreadable */ }
+  return null;
+}
 // Reuse the owner's own playwright server config (browser/headless flags) when present, else a headless default.
 export function playwrightSpec(home = os.homedir()) {
   try {
@@ -57,7 +68,7 @@ export function playwrightSpec(home = os.homedir()) {
 // --resume or a crash at boot exits first and rejects it; a CLI that hangs while alive is not detectable without a prompt.
 export const CLAUDE_READY_SETTLE_MS = 1000;
 
-export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts'), readySettleMs = CLAUDE_READY_SETTLE_MS, drainFile = null } = {}) {
+export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts'), readySettleMs = CLAUDE_READY_SETTLE_MS, drainFile = null, home = os.homedir() } = {}) {
   const promptFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.md`);
   const mcpFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.mcp.json`);
   return {
@@ -68,6 +79,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
     lazyResume: true,
     cleanup(id) { for (const f of [promptFile(id), mcpFile(id)]) { try { rmSync(f, { force: true }); } catch { /* best effort */ } } }, // on archive; start rewrites them
     start({ id, model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
+      const spawnWarnings = [];
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
       if (resume) args.push('--resume', String(resume));
       if (model) args.push('--model', model);
@@ -84,10 +96,16 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         // expands from its own process env (set by the runner's spawn env) when it starts the sidecar.
         const serverEnv = { ...spec.env, ...(env?.VS_AGENT_TOKEN ? { VS_AGENT_TOKEN: '${VS_AGENT_TOKEN}' } : {}) };
         const servers = { [spec.name]: { command: spec.command, args: spec.args, env: serverEnv } };
-        if (extra) servers.playwright = playwrightSpec();
+        if (extra) servers.playwright = playwrightSpec(home);
+        let godot = false;
+        if (wantsGodotRuntime(meta)) {
+          const g = godotRuntimeSpec(home);
+          if (g) { servers['godot-runtime'] = g; godot = true; }
+          else spawnWarnings.push('godot-runtime MCP extra requested but ~/.claude.json has no mcpServers["godot-runtime"] entry; not adding it (see docs/lanes/playtest-overlay/README.md)');
+        }
         writeFileSync(file, JSON.stringify({ mcpServers: servers }), 'utf8');
         args.push('--strict-mcp-config', '--mcp-config', file);
-        args.push('--allowedTools', `mcp__${spec.name}`, ...(extra ? ['mcp__playwright'] : []));
+        args.push('--allowedTools', `mcp__${spec.name}`, ...(extra ? ['mcp__playwright'] : []), ...(godot ? ['mcp__godot-runtime'] : []));
       }
       // The prompt goes via a file, never argv: a long role prompt blows the Windows 32,767-char command-line cap (spawn ENAMETOOLONG).
       // Rewritten on every start/resume so a parked agent restarts with the same prompt.
@@ -99,6 +117,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       }
       let child;
       try { child = spawnNoShell(command, args, { cwd, ...(spawnImpl ? { resolved: { file: command, args: [] } } : {}), ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
+      for (const line of spawnWarnings) emit('stderr', { line: `warning: ${line}` });
       let pending = 0; // open turns written to stdin whose `result` has not arrived yet
       let interrupted = false; // an interrupt was issued: the next send opens its own turn (it does not merge)
       let stopped = false; // set by kill(): a result that lands after we were stopped must not log a follow-up turn

@@ -8,14 +8,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { hashRunnerFiles } from "../runner/server.mjs";
-import { restartRunnerNow, superviseRunner } from "../server/runner-supervisor.mjs";
+import { pendingIdleRestart, restartRunnerNow, restartWhenIdle, runnerBusy, superviseRunner } from "../server/runner-supervisor.mjs";
 
 /** Runs the supervisor with a fake healthy runner; each `next()` advances one tick. `restart` only counts (never flips state). */
-function harness(state, { runningCount } = {}) {
+function harness(state, { runningCount, owner = { rc: { healthy: async () => true } } } = {}) {
   const logs = [];
   let restarts = 0;
   const pending = [];
-  const owner = { rc: { healthy: async () => true } };
   const opts = {
     checkMs: 5000,
     minBackoffMs: 100,
@@ -28,8 +27,10 @@ function harness(state, { runningCount } = {}) {
     clearTimer() {},
   };
   if (runningCount) opts.runningCount = runningCount;
+  if (state.agents !== undefined) opts.agentList = async () => state.agents;
   const sup = superviseRunner(owner, opts);
   return {
+    owner,
     sup,
     logs,
     restarts: () => restarts,
@@ -202,4 +203,82 @@ test("restartRunnerNow is single-flight per owner: concurrent calls share one ki
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// idea-786: 11-24 12:28:46Z a restart killed three running workers. Every killing restart goes through runnerBusy(): /health open
+// turns + held background work + every running-ish agent on the list; unknown is busy.
+test("idea-786: runnerBusy counts /health turns, held work and every running-ish listed agent; unknown is busy", () => {
+  assert.equal(runnerBusy({ running: 0, held: 0, heldAgents: [] }, []).busy, false);
+  assert.equal(runnerBusy({ running: 0, held: 0, heldAgents: [] }, [{ id: "a", status: "idle" }, { id: "b", status: "closed" }]).busy, false);
+  assert.equal(runnerBusy({ running: 1 }, []).busy, true);
+  assert.equal(runnerBusy({ running: 0, held: 1, heldAgents: ["h"] }, []).busy, true);
+  for (const status of ["running", "initializing", "starting", "working", "queued", "RUNNING"]) {
+    const g = runnerBusy({ running: 0, held: 0, heldAgents: [] }, [{ id: "w", status }]);
+    assert.equal(g.busy, true, status);
+    assert.deepEqual(g.ids, ["w"]);
+  }
+  assert.equal(runnerBusy({ running: 0 }, [{ id: "x", status: "running", archivedAt: "2026-11-01T00:00:00Z" }]).busy, false, "archived does not count");
+  assert.equal(runnerBusy(null, []).unknown, true, "no /health body is unknown");
+  assert.equal(runnerBusy({}, null).busy, true, "no count and no list is unknown -> busy");
+  assert.equal(runnerBusy({}, []).busy, false, "an old build with a listed-idle roster is idle");
+});
+
+test("idea-786: RR1 stale hash + /health says 0 turns but the list has a running worker: no restart, pending names it", async () => {
+  const state = { disk: "new", health: { hash: "old", running: 0, held: 0, heldAgents: [] }, agents: [{ id: "rn-980b4f09bcc1", status: "running" }] };
+  const h = harness(state);
+  await h.sup.ready;
+  await h.next();
+  assert.equal(h.restarts(), 0);
+  assert.equal(h.logs.length, 1);
+  assert.match(h.logs[0], /restart pending: 1 running turn\(s\).*rn-980b4f09bcc1/);
+  state.agents = [{ id: "rn-980b4f09bcc1", status: "idle" }];
+  await h.next();
+  assert.equal(h.restarts(), 1, "restarts once the worker is done");
+  h.sup.stop();
+});
+
+test("idea-786: an owner restart armed while busy fires only on the first idle tick (same hash), once", async () => {
+  const state = { disk: "same", health: { hash: "same", running: 1, held: 0, heldAgents: [] }, agents: [{ id: "rn-w", status: "running" }] };
+  const h = harness(state);
+  await h.sup.ready;
+  assert.equal(restartWhenIdle(h.owner), true);
+  assert.equal(restartWhenIdle(h.owner), false, "a second press while armed is a no-op");
+  await h.next();
+  assert.equal(h.restarts(), 0, "busy: armed, not fired");
+  assert.match(h.logs.at(-1), /pending: 1 running turn\(s\).*\[owner restart armed\]/);
+  state.health = { hash: "same", running: 0, held: 1, heldAgents: ["rn-w"] };
+  state.agents = [{ id: "rn-w", status: "idle" }];
+  await h.next();
+  assert.equal(h.restarts(), 0, "held background work still blocks it");
+  state.health = { hash: "same", running: 0, held: 0, heldAgents: [] };
+  await h.next();
+  assert.equal(h.restarts(), 1, "fires once idle");
+  assert.equal(pendingIdleRestart(h.owner), null, "disarmed after firing");
+  await h.next();
+  assert.equal(h.restarts(), 1, "fires once");
+  h.sup.stop();
+});
+
+test("idea-786: an armed owner restart waits out a vs restart drain like RR1 does", async () => {
+  const state = { disk: "same", health: { hash: "same", running: 0, held: 0, heldAgents: [], drain: { kind: "restart", reason: "vs restart pid 9" } }, agents: [] };
+  const h = harness(state);
+  await h.sup.ready;
+  restartWhenIdle(h.owner);
+  await h.next();
+  assert.equal(h.restarts(), 0);
+  assert.ok(h.logs.some((l) => /deferred: vs restart drain active/.test(l)));
+  h.sup.stop();
+});
+
+test("idea-786: a runner the supervisor (re)starts from down clears an armed owner restart", async () => {
+  let healthy = false;
+  const owner = { rc: { healthy: async () => healthy }, startOwned: async () => { healthy = true; return true; } };
+  restartWhenIdle(owner);
+  const state = { disk: "same", health: { hash: "same", running: 0, held: 0, heldAgents: [] }, agents: [] };
+  const h = harness(state, { owner });
+  await h.sup.ready;
+  assert.equal(pendingIdleRestart(owner), null);
+  await h.next();
+  assert.equal(h.restarts(), 0, "no second restart of the fresh runner");
+  h.sup.stop();
 });

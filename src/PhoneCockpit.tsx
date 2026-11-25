@@ -11,6 +11,7 @@ import {
   effectiveSurface,
   getBuddyRequest,
   hostHealthLine,
+  restartStateLabel,
   isBugsLane,
   isPhoneShell,
   openBuddy,
@@ -21,6 +22,7 @@ import {
 } from "./phoneCockpitLogic";
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
+import { openStorybook, probeStorybook } from "./StorybookView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -53,26 +55,64 @@ const buddyOf = (view: TeamView | undefined, laneId: string | null): Member | nu
 };
 
 type RestartState = { phase: "idle" | "confirm" | "busy" | "done"; msg?: string };
+type HostRestartReq = { id?: string; state: string } | null;
 
-/** Restart the runner through the existing owner-only route (also used by Settings). */
-// TODO(PLAN_V03_STABILIZE R1): the server half of "Restart Server & Runner" waits on R1's graceful restart; until then this restarts the runner only. Do not add a server route here.
-function RestartHost() {
+/** Restart states a phone Abort can still call back (vs restart abort refuses once it is firing). */
+const ABORTABLE = new Set(["queued", "requested", "draining", "ready"]);
+const ACTIVE = new Set([...ABORTABLE, "firing"]);
+const HOST_RESTART_URL = "/__vibesquad/restart-host";
+
+async function hostRestartCall(method: "GET" | "POST" | "DELETE", body?: unknown): Promise<{ ok: boolean; error?: string; request?: HostRestartReq }> {
+  const r = await fetch(HOST_RESTART_URL, { method, ...(body !== undefined ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
+  return (await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as { ok: boolean; error?: string; request?: HostRestartReq };
+}
+
+/**
+ * Restart Runner (runner only, the existing owner-only route also used by Settings) and Restart Host (server & runner):
+ * an owner-only restart request through the coordinated drain (POST /__vibesquad/restart-host), live queued / draining /
+ * firing status, and Abort (DELETE) while it can still be called back.
+ */
+function RestartHost({ hostRestart }: { hostRestart?: HostRestartReq }) {
   const [s, setS] = useState<RestartState>({ phase: "idle" });
+  const [h, setH] = useState<RestartState>({ phase: "idle" });
+  const [req, setReq] = useState<HostRestartReq | undefined>(undefined);
+  const live = req === undefined ? hostRestart ?? null : req;
+  const liveState = live && ACTIVE.has(live.state) ? live.state : null;
+  useEffect(() => {
+    if (!liveState) return;
+    let alive = true;
+    const t = setInterval(() => {
+      hostRestartCall("GET")
+        .then((j) => alive && j.ok && setReq(j.request ?? null))
+        .catch(() => {});
+    }, 5_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [liveState]);
   const run = async () => {
     setS({ phase: "busy" });
     try {
       const r = await fetch("/__vibesquad/restart-runner", { method: "POST" });
-      const j = (await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as { ok: boolean; error?: string; cancelled?: string[] };
-      setS({ phase: "done", msg: j.ok ? `Runner restarted${j.cancelled?.length ? ` · cancelled ${j.cancelled.length} turn(s)` : ""}` : `Failed: ${j.error ?? "unknown"}` });
+      const j = (await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }))) as { ok: boolean; error?: string; deferred?: boolean; busy?: string[] };
+      setS({ phase: "done", msg: !j.ok ? `Failed: ${j.error ?? "unknown"}` : j.deferred ? `Runner restarts once ${j.busy?.length || "the"} busy agent(s) finish` : "Runner restarted" });
     } catch (e) {
       setS({ phase: "done", msg: `Failed: ${String((e as Error)?.message ?? e)}` });
+    }
+  };
+  const host = async (method: "POST" | "DELETE") => {
+    setH({ phase: "busy" });
+    try {
+      const j = await hostRestartCall(method, method === "POST" ? { mode: "urgent" } : undefined);
+      if (j.ok) setReq(j.request ?? null);
+      setH({ phase: "done", msg: !j.ok ? `Failed: ${j.error ?? "unknown"}` : method === "DELETE" ? "Host restart aborted" : "Host restart requested" });
+    } catch (e) {
+      setH({ phase: "done", msg: `Failed: ${String((e as Error)?.message ?? e)}` });
     }
   };
   return (
     <div className="phone-restart" data-testid="phone-restart">
       {s.phase === "confirm" ? (
         <>
-          <p className="muted small">Running turns are cancelled; agents resume on the next message.</p>
+          <p className="muted small">Nothing is cancelled: restarts now if no agent is busy, else once they finish.</p>
           <button type="button" className="btn small" data-testid="phone-restart-confirm" onClick={() => void run()}>Restart now</button>{" "}
           <button type="button" className="btn ghost small" onClick={() => setS({ phase: "idle" })}>Cancel</button>
         </>
@@ -82,6 +122,29 @@ function RestartHost() {
         </button>
       )}
       {s.msg && <div className="muted small" role="status" data-testid="phone-restart-result">{s.msg}</div>}
+      {h.phase === "confirm" ? (
+        <>
+          <p className="muted small" data-testid="phone-restart-host-warn">Drains active leads and restarts both server & runner</p>
+          <button type="button" className="btn small" data-testid="phone-restart-host-confirm" onClick={() => void host("POST")}>Confirm</button>{" "}
+          <button type="button" className="btn ghost small" data-testid="phone-restart-host-cancel" onClick={() => setH({ phase: "idle" })}>Cancel</button>
+        </>
+      ) : (
+        <button type="button" className="btn ghost" data-testid="phone-restart-host-btn" disabled={h.phase === "busy" || Boolean(liveState)} onClick={() => setH({ phase: "confirm" })}>
+          {h.phase === "busy" ? "Working…" : "Restart Host (Server & Runner)"}
+        </button>
+      )}
+      {liveState && (
+        <div className="muted small" role="status" data-testid="phone-restart-host-status">
+          {restartStateLabel(liveState) ?? liveState}
+          {ABORTABLE.has(liveState) && (
+            <>
+              {" "}
+              <button type="button" className="btn ghost small" data-testid="phone-restart-host-abort" disabled={h.phase === "busy"} onClick={() => void host("DELETE")}>Abort</button>
+            </>
+          )}
+        </div>
+      )}
+      {h.msg && <div className="muted small" role="status" data-testid="phone-restart-host-result">{h.msg}</div>}
     </div>
   );
 }
@@ -99,6 +162,26 @@ function Empty({ what, action, busy, onAction }: { what: string; action: string;
   );
 }
 
+type HostStatus = { hostLabel?: string; headless?: boolean; restartRequest?: { state: string; summary?: string } | null; relay?: { running?: boolean; connected?: boolean } | null };
+
+/** H1: host label / headless / relay / restart window from /api/auth/status; once on mount, then every 30s only while the ⋯ drawer is open. */
+function useHostStatus(open: boolean): HostStatus | null {
+  const [st, setSt] = useState<HostStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch("/api/auth/status")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => alive && j && setSt(j as HostStatus))
+        .catch(() => {});
+    load();
+    if (!open) return () => { alive = false; };
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [open]);
+  return st;
+}
+
 export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSlot, onSuccessor, onSpinUp, onSpinUpOverlord, overlordBusy = false, onSettings }: Props) {
   const needsYou = view?.needsYou ?? 0;
   const [vibe] = usePref("app.vibe");
@@ -110,6 +193,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
     /gemini/i.test(getLastBrainstormProfile()) ? "gemini" : "claude",
   );
   const [switching, setSwitching] = useState(false);
+  const host = useHostStatus(menu);
 
   const chooseDefaultProv = (next: "claude" | "gemini") => {
     setDefaultProv(next);
@@ -137,7 +221,8 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
 
   const shown = effectiveSurface(surface, buddyLane);
   const zones = skyZonesFor(view);
-  const health = hostHealthLine(runnerConn);
+  const restartState = host?.restartRequest?.state ?? null;
+  const health = hostHealthLine(runnerConn, host?.hostLabel, restartState);
   const buddy = buddyOf(view, buddyLane);
   const laneRows = phoneLaneRows(view);
   const activeMember =
@@ -270,7 +355,28 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
         <aside className="phone-drawer" data-testid="phone-drawer" aria-label="Host">
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
+            {host?.headless && <span className="phone-host-badge" data-testid="phone-host-headless">headless</span>}
           </div>
+          {host && (
+            <div className="phone-host-block muted small" data-testid="phone-host-block">
+              <span data-testid="phone-host-runner">Runner: {runnerConn === "up" ? "online" : runnerConn === "down" ? "offline" : "reconnecting"}</span>
+              {host.relay && <span data-testid="phone-host-relay">Relay: {host.relay.connected ? "connected" : host.relay.running ? "connecting…" : "off"}</span>}
+              {restartStateLabel(restartState) && <span data-testid="phone-host-restart">{restartStateLabel(restartState)}</span>}
+            </div>
+          )}
+          {view && !probeStorybook(view.team.id) && (
+            <button
+              type="button"
+              className="btn ghost phone-storybook-btn"
+              data-testid="phone-storybook-btn"
+              onClick={() => {
+                setMenu(false);
+                openStorybook(view.team.id, view.team.name);
+              }}
+            >
+              ◉ Storybook
+            </button>
+          )}
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
             <span className="phone-lanes-head">PROVIDER</span>
             <div className="phone-seg-row">
@@ -326,7 +432,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           >
             ⚙ Settings
           </button>
-          <RestartHost />
+          <RestartHost hostRestart={host?.restartRequest ?? null} />
           <div className="phone-pair-slot" data-testid="phone-pair-slot">{pairSlot}</div>
         </aside>
       )}

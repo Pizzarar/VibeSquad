@@ -74,7 +74,7 @@ test("cockpit: three surfaces, no escape hatch, slots and restart wiring", () =>
   assert.match(c, /\{bugSlot\}/);
   assert.match(c, /\{pairSlot\}/);
   assert.match(c, /\/__vibesquad\/restart-runner/);
-  assert.match(c, /TODO\(PLAN_V03_STABILIZE R1\)/);
+  assert.doesNotMatch(c, /TODO\(PLAN_V03_STABILIZE R1\)/, "H2 replaced the runner-only stopgap");
   assert.doesNotMatch(c, /Desktop view|setFullView|MobileBar|SidebarTree/);
   assert.doesNotMatch(c, /BugButton/);
 });
@@ -106,6 +106,19 @@ test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onS
   const s = src("PhoneCockpit.tsx");
   assert.ok(s.includes("phoneLaneRows(view)") && s.includes("phone-lane-"));
   assert.ok(/state === "none"\) onSpinUp\(r\.pin(?:,\s*[^)]+)?\);\s*openBuddy\(r\.laneId\)/.test(s));
+});
+
+test("idea-838: phone shell has a Storybook entry gated by probeStorybook, opens via openStorybook, Back returns to cockpit", () => {
+  const c = src("PhoneCockpit.tsx");
+  assert.ok(c.includes('import { openStorybook, probeStorybook } from "./StorybookView";'), "imports openStorybook + probeStorybook");
+  assert.ok(c.includes("phone-storybook-btn"), "entry present");
+  assert.match(c, /!probeStorybook\(view\.team\.id\)/, "entry hidden when probe reports no Storybook");
+  assert.match(c, /openStorybook\(view\.team\.id, view\.team\.name\)/, "entry opens the current project's Storybook");
+  // Storybook takeover must precede the phone-shell gate so a phone user actually sees the view (and its ← Back closes it).
+  const app = src("App.tsx");
+  const sbGate = app.indexOf("storybookOpen && deviceRole");
+  const phoneGate = app.indexOf("if (phoneShell)");
+  assert.ok(sbGate > 0 && sbGate < phoneGate, "StorybookHost branch precedes the phone shell, so Back returns to the cockpit");
 });
 
 test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher & corpo settings search", () => {
@@ -233,4 +246,73 @@ test("idea-463 PhoneCockpit: Bugs tab after RiffBot, openBuddy(bugsLane) routes 
   assert.match(c, /\{bugSlot\}/);
   const css = src("styles.css");
   assert.ok(css.includes(".phone-tab-label") && /\.phone-tab \{[^}]*min-width: 0;[^}]*white-space: nowrap;/.test(css), "4 tabs fit narrow phones");
+});
+
+test("H1: hostHealthLine takes a real host label and restart states", () => {
+  assert.deepEqual(hostHealthLine("up", "brimble-pc"), { text: "brimble-pc · Online", tone: "ok" });
+  assert.equal(hostHealthLine("up", undefined, "queued").text, "Home PC · Restart queued");
+  assert.equal(hostHealthLine("up", "pc", "draining").text, "pc · Draining for restart…");
+  assert.equal(hostHealthLine("down", "pc", "firing").text, "pc · Restarting host…");
+  assert.equal(hostHealthLine("down", "pc", "done").text, "pc · Offline");
+  assert.equal(hostHealthLine("up", "pc", null).tone, "ok");
+});
+
+test("H1: getAuthStatus carries hostLabel, headless and restartRequest (summary when open; null when absent/terminal/corrupt)", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const home = mkdtempSync(join(tmpdir(), "vs-h1-"));
+  const file = join(home, "restart-request.json");
+  const writeCurrent = (current) => writeFileSync(file, JSON.stringify({ version: 1, current, history: [] }), "utf8");
+  const prev = { h: process.env.VIBESQUAD_HOME, l: process.env.VIBESQUAD_HOST_LABEL, hl: process.env.VIBESQUAD_HEADLESS };
+  process.env.VIBESQUAD_HOME = home;
+  process.env.VIBESQUAD_HOST_LABEL = "test-box";
+  process.env.VIBESQUAD_HEADLESS = "1";
+  try {
+    const auth = await import("../server/auth.mjs");
+    const st = auth.getAuthStatus();
+    assert.equal(st.hostLabel, "test-box");
+    assert.equal(st.headless, true);
+    assert.equal(st.restartRequest, null, "no file -> null");
+
+    writeCurrent({ id: "rr-q", state: "queued", tip: "abc1234", windowAt: "2026-11-25T13:00:00.000Z", deadline: "2026-11-25T13:30:00.000Z" });
+    assert.deepEqual(auth.getAuthStatus().restartRequest, { id: "rr-q", state: "queued", windowAt: "2026-11-25T13:00:00.000Z", deadlineAt: "2026-11-25T13:30:00.000Z", summary: "queued · abc1234" });
+    writeCurrent({ id: "rr-d", state: "draining", tip: "def5678", deadline: "2026-11-24T23:30:00.000Z" });
+    assert.deepEqual(auth.getAuthStatus().restartRequest, { id: "rr-d", state: "draining", windowAt: null, deadlineAt: "2026-11-24T23:30:00.000Z", summary: "draining · def5678" });
+
+    for (const state of ["done", "aborted"]) {
+      writeCurrent({ id: `rr-${state}`, state, tip: "abc1234" });
+      assert.equal(auth.getAuthStatus().restartRequest, null, `${state} (terminal) -> null`);
+    }
+    writeCurrent({ id: "rr-bad", state: 7, tip: "abc1234" });
+    assert.equal(auth.getAuthStatus().restartRequest, null, "non-string state -> null");
+    writeFileSync(file, "{not json", "utf8");
+    assert.equal(auth.getAuthStatus().restartRequest, null, "corrupt file -> null");
+  } finally {
+    for (const [k, v] of [["VIBESQUAD_HOME", prev.h], ["VIBESQUAD_HOST_LABEL", prev.l], ["VIBESQUAD_HEADLESS", prev.hl]]) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("H1: PhoneCockpit fetches host status and renders the host block in the drawer", () => {
+  const t = src("PhoneCockpit.tsx");
+  assert.match(t, /\/api\/auth\/status/);
+  assert.match(t, /phone-host-block/);
+  assert.match(t, /hostHealthLine\(runnerConn, host\?\.hostLabel, restartState\)/);
+});
+
+test("H2: Restart Host (Server & Runner) — two-step confirm, coordinated route, live status and Abort; Restart Runner kept", () => {
+  const t = src("PhoneCockpit.tsx");
+  assert.match(t, /Restart Runner/);
+  assert.match(t, /\/__vibesquad\/restart-runner/);
+  assert.match(t, /Restart Host \(Server & Runner\)/);
+  assert.match(t, /Drains active leads and restarts both server & runner/);
+  assert.match(t, /HOST_RESTART_URL = "\/__vibesquad\/restart-host"/);
+  for (const id of ["phone-restart-host-btn", "phone-restart-host-warn", "phone-restart-host-confirm", "phone-restart-host-cancel", "phone-restart-host-status", "phone-restart-host-abort"]) assert.ok(t.includes(`data-testid="${id}"`), id);
+  // the button only opens the confirm; only Confirm POSTs, only Abort DELETEs
+  assert.match(t, /data-testid="phone-restart-host-btn"[^>]*onClick=\{\(\) => setH\(\{ phase: "confirm" \}\)\}/);
+  assert.match(t, /data-testid="phone-restart-host-confirm" onClick=\{\(\) => void host\("POST"\)\}/);
+  assert.match(t, /data-testid="phone-restart-host-abort"[^>]*onClick=\{\(\) => void host\("DELETE"\)\}/);
+  assert.match(t, /const ABORTABLE = new Set\(\["queued", "requested", "draining", "ready"\]\)/, "no Abort once firing");
+  assert.match(t, /<RestartHost hostRestart=\{host\?\.restartRequest \?\? null\} \/>/, "seeded from H1's host status");
 });

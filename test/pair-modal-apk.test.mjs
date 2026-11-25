@@ -28,10 +28,12 @@ const transpiled = transformSync("PairDeviceModal.tsx", src, { lang: "tsx", jsx:
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace('"react"', JSON.stringify(reactUrl))
   .replace('"./TeamActions"', '"./TeamActions.mjs"')
-  .replace('"./ui"', '"./ui.mjs"');
+  .replace('"./ui"', '"./ui.mjs"')
+  // Inline helpers are module-private; expose them from the transpiled copy only (no source change).
+  .concat("\nexport { formatDeviceRoleBadge, pairStartInit };\n");
 const modFile = join(dir, "PairDeviceModal.mjs");
 writeFileSync(modFile, transpiled);
-const { PairDeviceModal, resolvePairModalUrls } = await import(pathToFileURL(modFile).href);
+const { PairDeviceModal, resolvePairModalUrls, formatDeviceRoleBadge, pairStartInit } = await import(pathToFileURL(modFile).href);
 
 function renderModal(initialPair) {
   return renderToStaticMarkup(React.createElement(PairDeviceModal, { onClose: () => {}, initialPair }));
@@ -259,5 +261,29 @@ describe("idea-384: rendered dialog links installer/APK over https only and show
       assert.match(u.setupUrl, /^https:\/\//, networkMode);
       assert.match(u.apkUrl, /^https:\/\//, networkMode);
     }
+  });
+});
+
+describe("U: owner-playtest role in the inline modal copies", () => {
+  test("formatDeviceRoleBadge: PLAYTEST for owner-playtest; owner and bug-tester unchanged", () => {
+    assert.equal(formatDeviceRoleBadge({ role: "owner-playtest", allowedTeams: null }), "PLAYTEST");
+    assert.equal(formatDeviceRoleBadge({ role: "owner" }), null);
+    assert.equal(formatDeviceRoleBadge({ role: "bug-tester", allowedTeams: ["efi", "ade"] }), "TESTER · efi, ade");
+    assert.equal(formatDeviceRoleBadge({ role: "bug-tester", allowedTeams: [] }), "TESTER");
+  });
+
+  test("pairStartInit bodies: owner-playtest {role, allowedTeams:null}; owner and bug-tester unchanged", () => {
+    const body = (r, t = []) => JSON.parse(pairStartInit(r, t).body);
+    assert.deepEqual(body("owner-playtest", ["efi"]), { role: "owner-playtest", allowedTeams: null });
+    assert.deepEqual(body("owner", ["efi"]), { role: "owner" });
+    assert.deepEqual(body("bug-tester", ["efi"]), { role: "bug-tester", allowedTeams: ["efi"] });
+    assert.equal(pairStartInit("owner-playtest", []).method, "POST");
+  });
+
+  test("rendered dialog has the Playtest (Godot addon) role button alongside owner and tester", () => {
+    const html = renderModal(basePair());
+    assert.match(html, /<button[^>]*data-testid="pair-role-playtest"[^>]*>Playtest \(Godot addon\)<\/button>/);
+    assert.match(html, /data-testid="pair-role-owner"[^>]*>Owner \(full access\)</);
+    assert.match(html, /data-testid="pair-role-tester"[^>]*>Alpha Tester/);
   });
 });
