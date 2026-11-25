@@ -232,3 +232,67 @@ None new.
 
 ## Verdict
 M4 is fixed live: 54/54 right-pane starts (Brainstorm, Bugs, RiffBot), 3 per combo, across 1280/2560/4K in dark and light. Each one keeps the split, lands the agent on the right and leaves the left agent untouched. Closing the split mid-start does not reopen it. The right card resets on project switch, and the quick-jumps open on the right. N7 and N8 are fixed (0px at 2560 and 4K). No regressions in the no-split start paths or in the r3 fixes. Open: N9 (minor). N4 and L4 are skipped by lead decision. **PASS 0/0/1** (N9; N4 and L4 are deferred and not counted).
+
+# R34 r5 (merged with @desk U1+U2): merge tip `8688c0e6`
+
+Scope: the merge `8561a2b3` (origin/master `c5934bf6` with @desk U1+U2, plus B17 `b11a63cb`). It resolved 3 conflicts in `src/BoringAde.tsx`: the imports, the Overview tab state (`tabFor` / `pendingUrl0` / `overviewTab`) next to the B17 `rightCard` state, and the breadcrumb (B17 right-card `laneLabel` plus desk `tab: overviewTab`). The focus is how the two features interact.
+
+Evidence: I rebuilt `dist` from `8688c0e6` and drove it with Playwright on Chromium at 1280x720, 2560x1440 and 3200x1800@1.2 (4K at 120%), dark and light. Each session used a fresh context. A history hook logs every `pushState` / `replaceState` / `back` / `forward` / `POP`. Each step records URL, `history.length`, split, left/right agent, right-pane content, breadcrumb, Overview tab and the selected (`.on`) sidebar rows. For attribution I also built `c5934bf6` (desk only) and `b11a63cb` (B17 only) from `git archive`. Shots are in `artifacts/boring-b17/ux-r34r5/` (untracked, as before). No page errors in any run.
+
+Tests on the merged tree:
+- `node --test test/bor-b17-deadspace.test.mjs test/desk-nav-history-u2-e2e.test.mjs`: **15/15 pass**.
+- `test/desk-nav-history.test.mjs` + `test/desk-nav-history-e2e.test.mjs`: 53/55. The 2 failures, `B1 e2e (a,d)` and `(b)`, fail on the `boring-needs-open` row-text filter (`· VibeSquad`, which returns `[]`). They fail **identically on master `c5934bf6`** (31/33) and pass on `b11a63cb`, so they are pre-existing on master and the B17 merge did not cause them. See "Pre-existing" below.
+
+## Status vs R34 r4
+
+| r4 item | r5 (merged) | Evidence |
+|---|---|---|
+| **M4**: a right-card Start keeps the split | **Holds.** Wiki and Bugs Start Brainstorm: 3/3 at each of the 6 combos (36/36). RiffBot (routed demo): 6/6. The split stays on at every 10ms sample, the left agent never changes, and the new agent lands on the right. | `sc-*` / `m4` runs; `m4-*-{dark,light}-*.png` |
+| Closing the split mid-start does not reopen it | Holds (0ms and 40ms, all 6 combos) | `closeinflight-*` |
+| The right card resets on a project switch | Holds. A sidebar Overlord row in efi gives `Main Game Project›Split · pick an agent` with the picker on the right. Back on VibeSquad, it is still the picker, not the stale card (2560 dark, 4K light, 1280 light). | ps run |
+| Quick-jumps open on the right | Holds. Wiki card `Lead` / `UI Bois`, and the first Bugs-card jump, give `split=1 L=<left> R=demo-lead-*` at all combos. | `sc-*` |
+| N7 placeholder chip / N8 bubble edge | Hold. No `· Lane` chips; `demo-lead-vs` reads `Overlord · Working`. User bubble vs prose right edge is 0px at 1280/2560/4K. | `sc-*` |
+| N9 (minor): closing the split mid-start steals focus | Still open, unchanged (not touched by the merge) | — |
+
+## Merge interaction: the right card + Desk URL keys (`slot=` / `tab=`)
+
+Results are identical, row for row, across the 5 combos in the full matrix (1280 dark/light, 2560 dark, 4K dark/light) once spawned ids are normalised.
+
+| Sequence | Result | Verdict |
+|---|---|---|
+| **A**: agent → `◫ Split` → right card `wiki` → Start → Back ×2 → Fwd ×2 → reload | Split and card write **no** URL or history entry; the card crumb reads `VibeSquad›wiki`. Start pushes `agent=demo-bs-wiki-*` (+1) and the crumb reads `wiki›Brainstorm` with the wiki row on. **Back** gives `agent=demo-impl-1`, the split stays, both agents stay, and focus moves to the left pane (crumb `Desk›Worker`, worker row on). The next Back leaves the app (correct, that was the first entry). 0 `replaceState` during pops. | OK |
+| **Breadcrumb for the right card** | `VibeSquad›wiki` / `VibeSquad›Bugs` while the card is up. It becomes `…›Brainstorm` after Start, and `Split · pick an agent` with the picker. The desk `tab:` argument never adds a tab segment in chat mode, including right after visiting `tab=standup`. | OK |
+| **B2**: split + right Bugs card, then reload | It reloads to the single pane `demo-impl-1`; the split and the card are not restored. The card is pane-local and never in the URL (the B17 design), and the URL's agent is what comes back. Sensible. | OK |
+| **C2**: `tab=standup` → wiki lane → split → Bugs card → Start → Back ×3 → Fwd ×3 → 2× Back race → Fwd | Back: the Bugs Brainstorm entry, then the wiki Lead (split kept, left focused), then `tab=standup` (Standup Feed tab on, crumb `VibeSquad›Standup Feed`), then `?team=vibesquad` (Overview). Forward replays exactly, and the split comes back with both agents. The 2× race lands on `tab=standup` (no double-pop, no lost entry), and Fwd from there restores the split. | OK |
+| **D2**: `tab=inbox` → wiki lane → split → wiki card → efi header → efi Standup → vs header → Back ×4 → Fwd ×2 | The efi switch drops the card and resets to `?team=efi` (Overview). efi Standup pushes `tab=standup`, and back on vs it is the Overview tab, not Inbox (U1 reset). Back walks `efi&tab=standup` → `efi` → `vs&agent=demo-lead-wiki` (split back, picker on the right, the card reset as designed) → `vs&tab=inbox` (Idea Inbox tab on). One `.on` row at every step. | OK |
+| **E**: split → needs-you strip chip → Back/Fwd; Unsplit/Split → wiki card → quick-jump `Lead` → Back/Fwd → reload | The strip chip pushes `agent=demo-aud` into the right pane. Back focuses the left pane without folding the split or dropping the right agent; Fwd returns. The quick-jump pushes `agent=demo-lead-wiki` on the right, and Back/Fwd behave the same. **Reload restores the split with both agents** (`L=demo-aud R=demo-lead-wiki`). | OK |
+| **F**: split → sidebar Needs-you row 2 → row 1 → Back ×2 → Fwd ×2 | Each row opens on the right (+1 each). Back re-opens the previous one on the right; Back again focuses the left agent. Fwd replays. The split is never lost. Ctrl+J does nothing in the static demo (as in r4). | OK |
+
+## Regression: column measure at 2560 and 4K
+
+Values are CSS px. They match r3/r4 exactly. No horizontal scroll, dark = light.
+
+| Viewport | ctx open: column / prose right / user right / `pre` | ctx collapsed | split: each pane |
+|---|---|---|---|
+| 2560x1440 | 1720 / 1484 / 1484 / 497–2002 | 2144 / 1630 / 1630 / 643–2280 | 1090 / 1090 |
+| 4K@120% | 2360 / 1738 / 1738 / 751–2388 | 2784 / 1950 / 1950 / 963–2600 | 1410 / 1410 |
+
+## New findings
+None caused by the merge.
+
+**Pre-existing (not counted; queue for @bug / @desk):**
+- **P1: a dormant sidebar Desk row while split is on pushes a `slot=` the screen does not show.** Steps: split, then click the sidebar `Bugs` row (dormant).
+  - With the right pane empty and active, the click is dead on screen: the picker stays and the crumb stays `Split · pick an agent`. But it pushes `?team=vibesquad&slot=bugs`.
+  - Back, then Forward to that entry, gives crumb `VibeSquad›Bugs›Brainstorm` and the Bugs row on, while the panes show `demo-impl-1` plus the picker. The breadcrumb no longer matches the open agent.
+  - Reloading that URL opens a single-pane Bugs card the user never saw.
+  - With the left pane active, it is the same as r4's pre-existing "the crumb says Brainstorm, the pane keeps the old drawer".
+  - The behaviour is **identical on desk-only `c5934bf6`**. On B17-only `b11a63cb` it pushed `?team=vibesquad`, and Forward folded to Overview. So the merge did not introduce it; it is the r4 pre-existing dormant-row-in-split issue, now with a URL key.
+  - Fix direction: in split, a dormant core row should set `rightCard` / show the card in the active pane (the same as the picker's `openCore`/`openBugs`, `BoringAde.tsx:816-817`) instead of `pickBugs`/`pickCore` changing `selectedLaneId` behind the panes (`BoringAde.tsx:642-660`, `urlSlot` at `:692`).
+  - Evidence: `B3-*.png`, B3/B4 logs. Effort: S.
+- **P2: `test/desk-nav-history-e2e.test.mjs` B1 (a,d) and (b) fail on master `c5934bf6`.** The `.boring-needs-open` `· VibeSquad` text filter finds no rows; this looks like a stale selector, not a UX regression, since F shows the Needs-you rows work. Owner: @desk. Effort: XS.
+
+## Owner decisions
+None.
+
+## Verdict
+On the merged tree, all the B17 behaviour hold at 1280/2560/4K, dark and light: M4 (42/42 right-pane starts keep the split), the right-card reset on project switch, the quick-jumps, the strip, N7 and N8. They combine cleanly with the @desk URL keys. The right card writes no URL. Start, the strip, quick-jumps and Needs-you rows push exactly one entry each. Back/Forward never fold the split or double-pop, including the 2× race. `tab=` survives a round trip through a split session and resets on a project switch, and the breadcrumb `tab:` merge adds nothing in chat mode. Reload restores a two-agent split and drops a pane-local card (by design). The column measure is unchanged. Open: N9 (minor, from r4). P1 and P2 are pre-existing on master and not counted. **PASS 0/0/1**.
