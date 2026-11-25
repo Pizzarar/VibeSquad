@@ -2,6 +2,14 @@
 
 import type { InboxCard } from "./types";
 
+export type CreditRow = {
+  provider: string;
+  balance: number | null;
+  currency: string | null;
+  checkedAt: string | null;
+  status: string;
+};
+
 export type LimitRow = {
   provider: string;
   window: string;
@@ -130,6 +138,8 @@ export type ProfileRow = {
 export type MergedUnit = {
   implementerModel?: string | null;
   implementerProfile?: string | null;
+  implementerArm?: string | null;
+  implementerArmReason?: string | null;
   firstReviewVerdict?: string | null;
   reviewSource?: string | null;
   reviewRounds?: number | null;
@@ -140,6 +150,8 @@ export type MergedUnit = {
 };
 export type UsageData = {
   limits: LimitRow[];
+  credits?: CreditRow[];
+  creditThresholdUsd?: number;
   lanes: LaneRow[];
   byRole: RoleRow[];
   coordination?: { coordinationTokens: number; executionTokens: number; coordinationShare: number };

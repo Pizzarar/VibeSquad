@@ -502,7 +502,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const teamLog = teamLogWriter(path.dirname(home));
-  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog), detachedProbe: detachedSupported() ? createDetachedProbe() : null, detachedFile: path.join(home, DETACHED_FILE), onDetached: detachedReporter(teamLog) });
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, pollCredits: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog), detachedProbe: detachedSupported() ? createDetachedProbe() : null, detachedFile: path.join(home, DETACHED_FILE), onDetached: detachedReporter(teamLog) });
   // idea-697: /shutdown (vs restart) records the agents' detached work in the ledger first (bounded 5 s); the next runner reaps it.
   const server = createServer(runner, { token, onShutdown: () => runner.recordDetached(5000).finally(() => stop({ keepResumable: true })), teamLog });
   phase('init');

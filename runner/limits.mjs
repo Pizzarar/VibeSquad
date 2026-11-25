@@ -167,3 +167,276 @@ export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minInte
   poll.shutdown = () => { stopped = true; if (current) killTree(current); current = null; };
   return poll;
 }
+
+// ---- Prepaid provider credits (usa-66, idea-963) --------------------------------------------------------------------
+// Polls prepaid balance APIs (starting with DeepSeek) at most once per 30 min and persists latest readings to
+// <runner home>/credits.json. Keys are read from existing provider config/env only (never stored or logged).
+
+export const DEEPSEEK_BALANCE_URL = 'https://api.deepseek.com/user/balance';
+export const CREDIT_POLL_INTERVAL_MS = 30 * 60_000;
+const CREDIT_FETCH_TIMEOUT_MS = 15_000;
+
+/** Replace any occurrence of secret in text with [REDACTED] so a key never leaks into errors or logs. */
+export function redactSecret(text, secret) {
+  const s = String(text ?? '');
+  if (!secret || typeof secret !== 'string') return s;
+  return s.split(secret).join('[REDACTED]');
+}
+
+/**
+ * Parse DeepSeek GET /user/balance response:
+ *   { is_available: true, balance_infos: [{ currency: "USD", total_balance: "7.12", ... }] }
+ * Prefers the USD entry when multiple currencies are returned, else the first entry with a finite total_balance.
+ */
+export function parseDeepSeekBalance(body) {
+  let data = body;
+  if (typeof data === 'string') {
+    try { data = JSON.parse(data); } catch { return null; }
+  }
+  if (!data || typeof data !== 'object' || !Array.isArray(data.balance_infos)) return null;
+  const valid = [];
+  for (const info of data.balance_infos) {
+    if (!info || typeof info !== 'object') continue;
+    const raw = info.total_balance;
+    if (raw === null || raw === undefined || raw === '') continue;
+    const balance = Number(raw);
+    if (!Number.isFinite(balance)) continue;
+    const currency = typeof info.currency === 'string' && info.currency.trim() ? info.currency.trim().toUpperCase() : 'USD';
+    valid.push({ balance, currency });
+  }
+  if (!valid.length) return null;
+  const chosen = valid.find((v) => v.currency === 'USD') ?? valid[0];
+  return {
+    balance: chosen.balance,
+    currency: chosen.currency,
+    isAvailable: typeof data.is_available === 'boolean' ? data.is_available : null,
+  };
+}
+
+function extractKeyFromJsonValue(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+    if (parsed && typeof parsed === 'object') {
+      const k = parsed.key ?? parsed.apiKey ?? parsed.api_key ?? parsed.token;
+      if (typeof k === 'string' && k.trim()) return k.trim();
+    }
+    return null;
+  } catch {
+    return trimmed;
+  }
+}
+
+/**
+ * Locate the DeepSeek API key where opencode / env already keeps it (no new secret store):
+ *  1. env.DEEPSEEK_API_KEY
+ *  2. opencode SQLite credential table (~/.local/share/opencode/opencode.db, integration_id = 'deepseek')
+ *  3. opencode legacy JSON auth/config files (auth.json / opencode.json)
+ * Under a test runner, never reads the developer's real home (isForbiddenRealUserHome).
+ */
+export async function findDeepSeekApiKey({ env = process.env, realHome = os.homedir(), sqliteImport } = {}) {
+  const fromEnv = typeof env?.DEEPSEEK_API_KEY === 'string' ? env.DEEPSEEK_API_KEY.trim() : '';
+  if (fromEnv) return fromEnv;
+  if (!realHome || isForbiddenRealUserHome(realHome)) return null;
+
+  const dataRoots = [
+    env?.XDG_DATA_HOME ? path.join(env.XDG_DATA_HOME, 'opencode') : null,
+    path.join(realHome, '.local', 'share', 'opencode'),
+    env?.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'opencode') : null,
+  ].filter(Boolean);
+
+  for (const root of [...new Set(dataRoots)]) {
+    const dbPath = path.join(root, 'opencode.db');
+    if (!existsSync(dbPath)) continue;
+    let db;
+    try {
+      const mod = sqliteImport ? await sqliteImport() : await import('node:sqlite');
+      const DatabaseSync = mod?.DatabaseSync;
+      if (!DatabaseSync) continue;
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      const row = db
+        .prepare("SELECT value FROM credential WHERE lower(integration_id) = 'deepseek' AND (active = 1 OR active IS NULL) ORDER BY active DESC, time_updated DESC LIMIT 1")
+        .get();
+      const key = extractKeyFromJsonValue(row?.value);
+      if (key) return key;
+    } catch {
+      // unreadable / locked / unsupported sqlite: fall through to JSON files
+    } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+
+  const configRoots = [
+    ...dataRoots,
+    env?.XDG_CONFIG_HOME ? path.join(env.XDG_CONFIG_HOME, 'opencode') : null,
+    path.join(realHome, '.config', 'opencode'),
+  ].filter(Boolean);
+
+  for (const root of [...new Set(configRoots)]) {
+    for (const file of ['auth.json', 'opencode.json']) {
+      const p = path.join(root, file);
+      if (!existsSync(p)) continue;
+      try {
+        const doc = JSON.parse(readFileSync(p, 'utf8'));
+        const ds = doc?.deepseek ?? doc?.provider?.deepseek?.options ?? doc?.providers?.deepseek;
+        if (typeof ds === 'string' && ds.trim()) return ds.trim();
+        if (ds && typeof ds === 'object') {
+          const k = ds.key ?? ds.apiKey ?? ds.api_key ?? ds.token;
+          if (typeof k === 'string' && k.trim()) return k.trim();
+        }
+      } catch { /* ignore malformed/unreadable file */ }
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch DeepSeek prepaid balance. Refuses real network calls under a test runner when no fetchImpl is injected.
+ * Never includes the API key in returned values or error messages.
+ */
+export async function fetchDeepSeekBalance({ key, fetchImpl, timeoutMs = CREDIT_FETCH_TIMEOUT_MS, url = DEEPSEEK_BALANCE_URL } = {}) {
+  const apiKey = typeof key === 'string' ? key.trim() : '';
+  if (!apiKey) return { provider: 'deepseek', balance: null, currency: null, status: 'no-key' };
+  if (!fetchImpl && underTestRunner()) throw new Error('refusing to fetch DeepSeek balance under a test runner');
+  const doFetch = fetchImpl ?? globalThis.fetch;
+  if (typeof doFetch !== 'function') return { provider: 'deepseek', balance: null, currency: null, status: 'error' };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    const res = await doFetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: ac.signal,
+    });
+    if (!res?.ok) return { provider: 'deepseek', balance: null, currency: null, status: 'error' };
+    const body = typeof res.json === 'function' ? await res.json() : JSON.parse(await res.text());
+    const parsed = parseDeepSeekBalance(body);
+    if (!parsed) return { provider: 'deepseek', balance: null, currency: null, status: 'error' };
+    return { provider: 'deepseek', balance: parsed.balance, currency: parsed.currency, status: 'ok' };
+  } catch {
+    return { provider: 'deepseek', balance: null, currency: null, status: 'error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export const PREPAID_CREDIT_PROVIDERS = Object.freeze([
+  Object.freeze({
+    provider: 'deepseek',
+    resolveKey: findDeepSeekApiKey,
+    fetchBalance: fetchDeepSeekBalance,
+  }),
+]);
+
+/** Persist latest credit readings per provider to <runner home>/credits.json (atomic tmp + rename). */
+export class CreditStore {
+  constructor(file) { this.file = file; }
+
+  read() {
+    if (isForbiddenRealHome(this.file)) return [];
+    let map = {};
+    try {
+      const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
+      map = parsed && typeof parsed.credits === 'object' && parsed.credits && !Array.isArray(parsed.credits) ? parsed.credits : {};
+    } catch { return []; }
+    return Object.values(map)
+      .filter((r) => r && typeof r === 'object' && typeof r.provider === 'string' && r.provider)
+      .map((r) => ({
+        provider: r.provider,
+        balance: typeof r.balance === 'number' && Number.isFinite(r.balance) ? r.balance : null,
+        currency: typeof r.currency === 'string' && r.currency ? r.currency : null,
+        checkedAt: typeof r.checkedAt === 'string' && r.checkedAt ? r.checkedAt : null,
+        status: typeof r.status === 'string' && r.status ? r.status : 'error',
+      }))
+      .sort((a, b) => a.provider.localeCompare(b.provider));
+  }
+
+  record({ provider, balance = null, currency = null, checkedAt, status = 'error' }, now = Date.now()) {
+    if (!provider || isForbiddenRealHome(this.file)) return null;
+    let map = {};
+    try {
+      const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
+      if (parsed && typeof parsed.credits === 'object' && parsed.credits && !Array.isArray(parsed.credits)) map = parsed.credits;
+    } catch { map = {}; }
+    // Strict allowlist of fields so secrets can never be written to disk.
+    const rec = {
+      provider: String(provider),
+      balance: typeof balance === 'number' && Number.isFinite(balance) ? balance : null,
+      currency: typeof currency === 'string' && currency ? currency : null,
+      checkedAt: typeof checkedAt === 'string' && checkedAt ? checkedAt : new Date(now).toISOString(),
+      status: String(status || 'error'),
+    };
+    map[rec.provider] = rec;
+    mkdirSync(path.dirname(this.file), { recursive: true });
+    const tmp = `${this.file}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ credits: map }, null, 2) + '\n');
+    renameSync(tmp, this.file);
+    return rec;
+  }
+}
+
+/**
+ * Polls prepaid provider credit balances at most once per minIntervalMs (default 30 min), one in flight.
+ * Returns cached readings when throttled. Generic across PREPAID_CREDIT_PROVIDERS.
+ */
+export function createCreditPoller({
+  store = null,
+  providers = PREPAID_CREDIT_PROVIDERS,
+  minIntervalMs = CREDIT_POLL_INTERVAL_MS,
+  now = Date.now,
+  fetchImpl,
+  resolveKey,
+  env = process.env,
+  realHome = os.homedir(),
+} = {}) {
+  let busy = false;
+  let lastAt = -Infinity;
+  let stopped = false;
+  let cached = [];
+
+  const poll = async function poll({ force = false } = {}) {
+    if (stopped) return [...cached];
+    const t = now();
+    if (busy || (!force && t - lastAt < minIntervalMs)) return [...cached];
+    busy = true;
+    lastAt = t;
+    const out = [];
+    try {
+      for (const p of providers) {
+        if (stopped) break;
+        const checkedAt = new Date(now()).toISOString();
+        let entry;
+        try {
+          const key = resolveKey ? await resolveKey(p.provider) : await p.resolveKey({ env, realHome });
+          if (!key) {
+            entry = { provider: p.provider, balance: null, currency: null, checkedAt, status: 'no-key' };
+          } else {
+            const res = await p.fetchBalance({ key, fetchImpl });
+            entry = {
+              provider: p.provider,
+              balance: typeof res?.balance === 'number' && Number.isFinite(res.balance) ? res.balance : null,
+              currency: typeof res?.currency === 'string' && res.currency ? res.currency : null,
+              checkedAt,
+              status: typeof res?.status === 'string' && res.status ? res.status : 'error',
+            };
+          }
+        } catch {
+          entry = { provider: p.provider, balance: null, currency: null, checkedAt, status: 'error' };
+        }
+        try { store?.record(entry, now()); } catch { /* best-effort */ }
+        out.push(entry);
+      }
+      if (!stopped) cached = out;
+      return [...cached];
+    } finally {
+      busy = false;
+    }
+  };
+  poll.shutdown = () => { stopped = true; };
+  poll.cached = () => [...cached];
+  return poll;
+}

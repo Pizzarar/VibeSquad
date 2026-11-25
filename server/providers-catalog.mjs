@@ -3,7 +3,9 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
-import { readLimits } from "./limits-read.mjs";
+import { readCredits, readLimits } from "./limits-read.mjs";
+import { DEFAULT_CREDIT_THRESHOLD_USD } from "./credit-guard.mjs";
+import { ARM_LABEL, ARM_REASON_LABEL } from "./exp6-arm.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -254,7 +256,11 @@ export function normalizeRunnerSettings(raw) {
   const interval = USAGE_REVIEW_INTERVALS.includes(r.usageReview?.interval) ? r.usageReview.interval : USAGE_REVIEW_DEFAULT_INTERVAL;
   const t = Number(r.usageReview?.timeoutMs);
   const timeoutMs = Number.isFinite(t) && t >= USAGE_REVIEW_TIMEOUT_RANGE[0] && t <= USAGE_REVIEW_TIMEOUT_RANGE[1] ? Math.round(t) : USAGE_REVIEW_DEFAULT_TIMEOUT_MS;
-  return { providers, usageReview: { interval, timeoutMs } };
+  const ct = Number(r.creditGuard?.thresholdUsd);
+  const thresholdUsd = r.creditGuard?.thresholdUsd !== undefined && r.creditGuard?.thresholdUsd !== null && r.creditGuard?.thresholdUsd !== "" && Number.isFinite(ct) && ct >= 0
+    ? ct
+    : DEFAULT_CREDIT_THRESHOLD_USD;
+  return { providers, usageReview: { interval, timeoutMs }, creditGuard: { thresholdUsd } };
 }
 
 export function loadRunnerSettings(home) {
@@ -283,7 +289,10 @@ export function saveRunnerSettings(patch, home) {
     ? { interval: "interval" in patch.usageReview ? incoming.usageReview.interval : current.usageReview.interval,
         timeoutMs: "timeoutMs" in patch.usageReview ? incoming.usageReview.timeoutMs : current.usageReview.timeoutMs }
     : current.usageReview;
-  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview } };
+  const creditGuard = patch && patch.creditGuard && typeof patch.creditGuard === "object"
+    ? { thresholdUsd: "thresholdUsd" in patch.creditGuard ? incoming.creditGuard.thresholdUsd : current.creditGuard.thresholdUsd }
+    : current.creditGuard;
+  const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview, creditGuard } };
   writeSettingsAtomic(settingsPath(home), next);
   return normalizeRunnerSettings(next.runner);
 }
@@ -737,6 +746,11 @@ function foldIdentity(st, m) {
   // usa-65: quota family on vs.route (`family=<f>`); empty/absent leaves st.family unset, odd values kept verbatim.
   const routeFamily = parseRouteFamily(rawRoute);
   if (routeFamily) st.family = routeFamily;
+  // usa-66: arm pick labels (exp6-arm.mjs vs.arm / vs.arm-reason) carried onto merged unit rows.
+  const rawArm = typeof m.labels?.[ARM_LABEL] === "string" ? m.labels[ARM_LABEL].trim() : "";
+  if (rawArm) st.arm = rawArm;
+  const rawArmReason = typeof m.labels?.[ARM_REASON_LABEL] === "string" ? m.labels[ARM_REASON_LABEL].trim() : "";
+  if (rawArmReason) st.armReason = rawArmReason;
   if (m.role === "digest" || m.labels?.role === "digest" || m.labels?.digest || m.labels?.digestFor || m.labels?.digestTurn) st.digest = true;
 }
 
@@ -1018,7 +1032,7 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 // ---- provider limit windows: <runner home>/limits.jsonl, one JSON line per sample (written by the adapters/runner):
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
 // readLimits lives in ./limits-read.mjs (G2 idea-1012: a leaf module, so the spawn hook reads it without this catalog).
-export { readLimits } from "./limits-read.mjs";
+export { readCredits, readLimits } from "./limits-read.mjs";
 
 const AGY_THIRD_PARTY_POOL = "antigravity-cli/claude-gpt";
 /** Attribute the Antigravity 3rd-party (Claude/GPT) pool to VibeSquad agents: antigravity-cli agents running claude or gpt models. */
@@ -1485,6 +1499,8 @@ function agentV2(st, agentId) {
     roleOnly: !!st.roleOnly,
     stakes: normalizeStakes(st.stakes),
     family: st.family ?? null,
+    arm: st.arm ?? null,
+    armReason: st.armReason ?? null,
     wfLabel: st.wfLabel ?? null,
     respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
@@ -2943,6 +2959,8 @@ function buildLedgerSnapshot(merged, rows) {
     implementerProvider: u.implementerProvider ?? null,
     ...(u.implementerModel ? { implementerModel: u.implementerModel } : {}),
     ...(u.implementerFamily ? { implementerFamily: u.implementerFamily } : {}),
+    ...(u.implementerArm ? { implementerArm: u.implementerArm } : {}),
+    ...(u.implementerArmReason ? { implementerArmReason: u.implementerArmReason } : {}),
     ...(u.stakes ? { stakes: u.stakes } : {}),
     ...(u.reviewerFamily ? { reviewerFamily: u.reviewerFamily } : {}),
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
@@ -3862,6 +3880,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerProvider: implementer ? implementer.provider : null,
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
       implementerFamily: implementer ? (implementer.family ?? null) : null,
+      implementerArm: implementer ? (implementer.arm ?? null) : null,
+      implementerArmReason: implementer ? (implementer.armReason ?? null) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
       attributionMiss: implementer ? null : attributionMiss,
@@ -4080,7 +4100,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
       // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
       attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
-      implementerModel: r.implementerModel ?? null, implementerFamily: r.implementerFamily ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
+      implementerModel: r.implementerModel ?? null, implementerFamily: r.implementerFamily ?? null, implementerArm: r.implementerArm ?? null, implementerArmReason: r.implementerArmReason ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       reviewVerdicts: r.reviewVerdicts ?? 0, firstReviewVerdict: r.firstReviewVerdict ?? null, reviewSource: r.reviewSource ?? undefined, reviewVerdictOrigin: r.reviewVerdictOrigin ?? null, fixRounds: r.fixRounds ?? 0, fixProfiles: r.fixProfiles ?? [],
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
@@ -4160,6 +4180,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   yield;
 
   const limitRows = readLimits(home);
+  const creditRows = readCredits(home);
+  const creditThresholdUsd = loadRunnerSettings(home).creditGuard.thresholdUsd;
   const result = {
     squad, squads, autonomy,
     planScores: buildPlanScores(entries, { now: now(), squad, roleByAgent: new Map(allAgentSquads.map((a) => [a.agentId, a.st.role])) }),
@@ -4172,6 +4194,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byDay: byDayFinal,
     rows,
     limits: withPoolAgents(limitRows, agents),
+    credits: creditRows,
+    creditThresholdUsd,
     quotaAlerts: activeQuotaAlerts(limitRows, home, { now: now() }),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
