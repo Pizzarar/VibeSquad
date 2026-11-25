@@ -148,7 +148,7 @@ This section is the complete Phase-1 runbook. It replaces §4's slot/egress bull
 - JIT config: the slot script calls `generate-jitconfig` with the PAT fed to curl on stdin (`--config -`), then passes the config as env `ACTIONS_RUNNER_INPUT_JITCONFIG` (podman `--env NAME`, no value in argv).
   Verified in actions/runner `src/Runner.Listener/CommandSettings.cs`: `run` accepts `jitconfig`; env `ACTIONS_RUNNER_INPUT_*` is read, masked as a secret, and removed from the Listener env.
   Reviewers split (Gemini: stdin into `run.sh --jitconfig "$cfg"`; Claude: env): took env, because the stdin wrapper still puts the config in run.sh's argv, which the host `/proc/*/cmdline` shows to every user (no `hidepid`). `/proc/<pid>/environ` is owner-only. No registration-token or PAT fallback, ever: if JIT fails, stop and re-plan.
-- Egress: own nft table `inet ghrunner_egress` loaded by `ghrunner-egress.service`; never `flush ruleset`, never enable `nftables.service` (its `/etc/nftables.conf` flushes ufw + NordVPN rules). For uid ghrunner: allow DNS to 127.0.0.53, reject **all IPv6**, every local/broadcast/multicast address (`fib daddr type`), and 0/8, 10/8, 100.64/10 (Meshnet), 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, 224/3. Public IPv4 allowed.
+- Egress: own nft table `inet ghrunner_egress` loaded by `ghrunner-egress.service`; the base chain only `jump`s on `meta skuid $U` (kernel-sent packets: RST, ICMP, IPv6 NDP, kernel-WireGuard `nordlynx` UDP have no socket uid and must never reach the rejects); never `flush ruleset`, never enable `nftables.service` (its `/etc/nftables.conf` flushes ufw + NordVPN rules). For uid ghrunner: allow DNS to 127.0.0.53, reject **all IPv6**, every local/broadcast/multicast address (`fib daddr type`), and 0/8, 10/8, 100.64/10 (Meshnet), 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.168/16, 198.18/15, 224/3. Public IPv4 allowed.
   `user@<ghrunner-uid>.service` `Requires=` the egress unit and the mount (fail closed), and the slot script refuses to start if `127.0.0.1:22` is reachable as ghrunner (canary for a wiped table). Containers run `--network=pasta:-4,--no-map-gw` (no IPv6, no gateway-to-host mapping); nft is the real control.
   Reviewers split (drop vs reject): took reject (same block, clients fail fast instead of hanging).
 - Caps (slice `user-<uid>.slice`): `CPUQuota=800%`, `CPUWeight=20`, `MemoryHigh=10G`, `MemoryMax=11G`, `MemorySwapMax=0`, `TasksMax=4096`, `IOWeight=20` + `IORead/WriteBandwidthMax` 600M/300M on the image's backing device. Per container `--cpus=4 --memory=5g --memory-swap=5g --pids-limit=2048`, `Nice=10`.
@@ -163,6 +163,7 @@ This section is the complete Phase-1 runbook. It replaces §4's slot/egress bull
 
 ### 7a. Owner block S (one paste; idempotent; safe before the PAT exists)
 Run from the VS login. It installs packages, makes the image + user + egress + caps, installs the root-owned slot script, unit, wrapper and token tool, and writes the one sudo rule. Re-running is safe: it never re-formats an existing image, and it reloads the nft table atomically without restarting runners.
+First run `sudo -v` on its own and enter the password; only then paste the block (otherwise the password prompt eats the next pasted line).
 ```bash
 sudo install -m 0700 -o root -g root /dev/null /root/forge-runner-setup.sh
 sudo tee /root/forge-runner-setup.sh >/dev/null <<'SETUP'
@@ -171,12 +172,14 @@ sudo tee /root/forge-runner-setup.sh >/dev/null <<'SETUP'
 set -euo pipefail
 VS_USER=${SUDO_USER:?run as: sudo bash /root/forge-runner-setup.sh  from the VS login}
 id "$VS_USER" >/dev/null
+cd /
 RU=ghrunner; IMG=/var/lib/ghrunner.img; H=/srv/ghrunner
 export DEBIAN_FRONTEND=noninteractive
 put() { # put MODE DEST <content: atomic replace, root-owned (never rewrite a running script in place)
   local t; t=$(mktemp "$2.XXXXXX"); cat > "$t"; chown root:root "$t"; chmod "$1" "$t"; mv -f "$t" "$2"; }
 
 # S1 packages (kernel 7.0 has native rootless overlay: no fuse-overlayfs)
+apt-get update -q </dev/null
 apt-get install -y -q podman uidmap passt jq </dev/null
 
 # S2 own 80 GB ext4 in a root-only image; format only if it has no ext4 yet
@@ -197,10 +200,11 @@ for f in /etc/subuid /etc/subgid; do
   [[ $(grep -c "^$RU:" "$f") == 1 ]] || { echo "$f: need exactly one $RU range" >&2; exit 1; }
 done
 U=$(id -u "$RU")
-chown "$RU:$RU" "$H"; chmod 0700 "$H"
-install -d -o "$RU" -g "$RU" -m 0700 "$H/tmp" "$H/.config" "$H/.config/forge-runner" "$H/.config/containers"
-printf '[engine]\nimage_copy_tmp_dir = "%s/tmp"\n' "$H" > "$H/.config/containers/containers.conf"
-chown "$RU:$RU" "$H/.config/containers/containers.conf"; chmod 0600 "$H/.config/containers/containers.conf"
+chown "$RU:$RU" "$H"; chmod 0700 "$H"   # $H's parent /srv is root-owned: ghrunner cannot swap $H itself
+# Root never writes or chowns inside ghrunner's home (ghrunner could plant symlinks there): ghrunner does it.
+runuser -u "$RU" -- install -d -m 0700 "$H/tmp" "$H/.config" "$H/.config/forge-runner" "$H/.config/containers"
+printf '[engine]\nimage_copy_tmp_dir = "%s/tmp"\n' "$H" \
+  | runuser -u "$RU" -- /bin/sh -c 'umask 077; cat > "$1/.config/containers/containers.conf"' sh "$H"
 
 # S4 egress: own table, never 'flush ruleset'; runners fail closed without it
 install -d -m 0755 /etc/nftables.d
@@ -210,10 +214,14 @@ put 0644 /etc/nftables.d/ghrunner.nft <<NFT
 table inet ghrunner_egress
 delete table inet ghrunner_egress
 table inet ghrunner_egress {
+  # Positive uid match only: 'skuid != U accept' would NOT match socketless (kernel-sent) packets,
+  # so host RSTs/ICMP/NDP/WireGuard would fall through to the rejects and break host networking.
   chain output {
     type filter hook output priority filter; policy accept;
-    meta skuid != $U accept
-    ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept
+    meta skuid $U jump ghrunner
+  }
+  chain ghrunner {
+    ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 return
     meta nfproto ipv6 reject with icmpx admin-prohibited
     fib daddr type { local, broadcast, multicast } reject with icmpx admin-prohibited
     ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3 } reject with icmpx admin-prohibited
@@ -393,6 +401,7 @@ SMOKE=$(cat <<'EOF'
 echo "user=$(id -un) home=$HOME"
 sudo -n true && echo "sudo: ok"
 /actions-runner/bin/Runner.Listener --version
+if test -w /actions-runner; then echo "runner dir: writable"; else echo "runner dir: NOT writable"; fi
 if unshare -Ur true 2>/dev/null; then echo "nested userns: allowed (accepted residual, sec 7e)"
 else echo "nested userns: blocked"; fi
 EOF
@@ -428,12 +437,14 @@ put 0700 /usr/local/sbin/forge-runner-set-token <<'TOK'
 # forge-runner-set-token: OWNER ONLY. Store or rotate the org PAT for the forge runners (PLAN_CI_RUNNERS sec 7c).
 set -euo pipefail
 umask 077
-f=/srv/ghrunner/.config/forge-runner/token
+cd /
 IFS= read -rsp 'Paste the fine-grained PAT (input hidden): ' p </dev/tty; echo
 [[ $p =~ ^github_pat_[A-Za-z0-9_]{20,}$ ]] || { echo "refused: not a fine-grained PAT (github_pat_...)" >&2; exit 1; }
-printf '%s' "$p" > "$f.new"; p=
-chown ghrunner:ghrunner "$f.new"; chmod 0600 "$f.new"; mv -f "$f.new" "$f"
-stat -c 'saved %n (%U, mode %a, %s bytes)' "$f"
+# ghrunner owns that directory, so ghrunner does the write (root writing there would follow planted symlinks).
+# printf is a builtin: the PAT goes to stdin, never argv.
+printf '%s' "$p" | runuser -u ghrunner -- /bin/sh -c 'umask 077; d=/srv/ghrunner/.config/forge-runner
+  cat > "$d/token.new" && mv -f "$d/token.new" "$d/token" && stat -c "saved %n (%U, mode %a, %s bytes)" "$d/token"'
+p=
 TOK
 
 # S10 the one sudo rule for the VS login; the old O4 '(ghrunner) ALL' grant must not exist
@@ -466,15 +477,16 @@ If `nft -c` fails, nothing is loaded yet and the script stops: send the error to
 ### 7b. Agent steps before the PAT (VS login; this is the full sudo scope)
 - A1 `sudo -n /usr/local/sbin/forge-runner-ctl info` -> `rootless=true cgroups=v2/systemd driver=overlay graphroot=/srv/ghrunner/.local/share/containers/storage`.
 - A2 `sudo -n /usr/local/sbin/forge-runner-ctl pull` (3.3 GB into `/srv/ghrunner`).
-- A3 `sudo -n /usr/local/sbin/forge-runner-ctl smoke` -> `user=runner home=/home/runner`, `sudo: ok`, `2.338.2` (JIT needs >= 2.304), and a `nested userns:` line (record it; see 7e).
+- A3 `sudo -n /usr/local/sbin/forge-runner-ctl smoke` -> `user=runner home=/home/runner`, `sudo: ok`, `2.338.2` (JIT needs >= 2.304), `runner dir: writable`, and a `nested userns:` line (record it; see 7e).
   If podman rejects the pasta options, report it; the owner fallback is `sudo sed -i 's/^NET=.*/NET=pasta/' /usr/local/libexec/forge-runner-slot /usr/local/sbin/forge-runner-ctl` (nft still enforces everything).
 - A4 `sudo -n /usr/local/sbin/forge-runner-ctl probe` -> every target line `blocked`, `ok https://api.github.com` in both sections, exit 0. Control (shows the probe is real): as the VS login `timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' && echo reachable` prints `reachable`.
+  Host networking intact (VS login, table loaded): `time timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9'` fails at once with `Connection refused` (not a 3 s timeout); `ping -c1 -w3 127.0.0.1` and `ping -6 -c1 -w3 2606:4700:4700::1111` reply; `ip -6 neigh show` lists the router `REACHABLE`/`STALE` (not `FAILED`); Meshnet peers still connect (VS UI over Meshnet loads). Any failure: `sudo nft delete table inet ghrunner_egress` (runners then refuse to start) and report.
   Plus: `stat -c '%a %U' /var/lib/ghrunner.img` -> `600 root`; `ls /srv/ghrunner` -> Permission denied; `sudo -n -u ghrunner true` -> fails (a password is required).
 
 ### 7c. Owner O7: the PAT (the only step that needs it)
 1. Org Settings -> Personal access tokens: fine-grained tokens allowed (approve the request if the org requires approval).
 2. Your Settings -> Developer settings -> Fine-grained tokens -> Generate: resource owner **IdleMinds-Dev**, repository access "Public repositories" (no repo permissions), Organization permissions -> **Self-hosted runners: Read and write**, nothing else, expiry 90 days. Set a reminder 7 days before expiry; rotate by re-running step 3.
-3. On the forge: `sudo /usr/local/sbin/forge-runner-set-token` (hidden prompt, root process, writes `/srv/ghrunner/.config/forge-runner/token` ghrunner 0600; refuses anything not `github_pat_...`). Then tell forge-host "PAT in".
+3. On the forge: `sudo /usr/local/sbin/forge-runner-set-token` (hidden prompt, root process; the write to `/srv/ghrunner/.config/forge-runner/token` ghrunner 0600 runs as ghrunner via `runuser`; refuses anything not `github_pat_...`). Then tell forge-host "PAT in".
 
 ### 7d. Agent steps after the PAT
 - A5 `sudo -n /usr/local/sbin/forge-runner-ctl enable priority-3`, then `... status` (active, one `forge-runner-priority-3` container) and `... logs priority-3` (`waiting for one job`, then the runner's `Listening for Jobs`).
@@ -491,7 +503,8 @@ If `nft -c` fails, nothing is loaded yet and the script stops: send the error to
 6. 24 h: `MemoryPeak` < `MemoryMax`, no OOM kills in `logs`, VS suite time within normal range. EFI lane told via inbox that it now has 2 VM + 2 forge priority slots.
 
 ### 7e. Residual risks and unverified
-- Accepted: host-kernel escape from a rootless container (job root = ghrunner's subuid; an escape gets ghrunner, so the PAT). Org members only, private repos. If A3 shows `nested userns: allowed`, that widens the kernel surface; accepted for Phase 1 (a custom seccomp denying `CLONE_NEWUSER` is the follow-up if wanted).
+- Accepted: host-kernel escape from a rootless container. Container uid 0 maps to ghrunner's **real** uid (rootless podman) and the image gives `runner` passwordless sudo, so a job is ghrunner-equivalent inside its userns and an escape gets ghrunner, so the PAT. It does not reach root through these files: root never writes inside ghrunner's home (S3 and S9 do those writes as ghrunner via `runuser`); ghrunner -> root needs a separate LPE. Org members only, private repos. If A3 shows `nested userns: allowed`, that widens the kernel surface; accepted for Phase 1 (a custom seccomp denying `CLONE_NEWUSER` is the follow-up if wanted).
+- The owner types the sudo password and pastes the PAT on a pts/tty owned by the VS uid (mode 0600 to that uid), so a VS agent process could open the device and race-read the input. Pre-existing for any sudo on this login; accepted for Phase 1. To avoid it, run O7 from a login that is not the VS uid.
 - The job can read its own JIT config from `/proc/1/environ` inside the container; it is single-use for that runner, which the job already runs on.
 - The VS login is in `adm` (reads all journals): the scripts never log secrets, so this exposes nothing. It is also in `lxd`; LXD is not installed. If LXD is ever installed, that group is root and every boundary here falls.
 - Optional (owner, GitHub UI): a runner group limited to `<efi-repo>`, then set `GROUP_ID` in the slot script; today group 1 lets any org repo target `homelab-priority`.
