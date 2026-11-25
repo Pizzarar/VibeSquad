@@ -4,7 +4,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, RefObject, TextareaHTMLAttributes } from "react";
 import { Field } from "./TeamActions";
-import { EFFORTS, TIERS, fetchRoles, saveLadderRungs, saveRole, useProfiles } from "./profiles";
+import { EFFORTS, TIERS, fetchRoles, isHiddenRoleKey, visibleRoleKeys, saveLadderRungs, saveRole, useProfiles } from "./profiles";
 import type { Ladder, LadderRung, RoleDef, RoleMode, Tier } from "./profiles";
 
 const PROVIDER_LABEL: Record<string, string> = { claude: "Claude", "antigravity-cli": "Gemini", opencode: "OpenCode" };
@@ -111,7 +111,7 @@ function useStoredDraft<K extends keyof typeof draftStore>(k: K) {
 
 export function RoleEditorSection() {
   const { roles, rolesSource } = useProfiles();
-  const keys = useMemo(() => Object.keys(roles ?? {}), [roles]);
+  const keys = useMemo(() => visibleRoleKeys(roles), [roles]);
   const [picked, setKey] = useState("");
   // One unsaved draft per role: switching tabs keeps it (dot on the tab); Save or Discard drops it so the saved role shows.
   const [drafts, setDrafts] = useStoredDraft("roles");
@@ -410,7 +410,7 @@ export function LadderEditorSection() {
   const provs = Object.keys(ladder);
   const cellOf = (fam: string, tier: Tier): LadderRung => edits[fam]?.[tier] ?? ladder[fam]?.[tier] ?? {};
   const usedBy = (tier: Tier) =>
-    Object.values(roles ?? {}).filter((r) => r.tier === tier).map((r) => r.name).join(", ");
+    Object.entries(roles ?? {}).filter(([k, r]) => !isHiddenRoleKey(k) && r.tier === tier).map(([, r]) => r).map((r) => r.name).join(", ");
   const defOf = (fam: string, tier: Tier) => ladderDefaults?.[fam]?.[tier] ?? {};
   const cellChanged = (fam: string, tier: Tier) =>
     edits[fam]?.[tier] !== undefined &&

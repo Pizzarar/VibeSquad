@@ -32,6 +32,7 @@ export type RoleKey =
   | "lead"
   | "brainstorm"
   | "implement"
+  | "planner"
   | "work-order"
   | "review"
   | "pre-check"
@@ -598,6 +599,7 @@ export const DEMO_ROLES: RolesMap = {
   lead: demoRole("Lead", "top", CAO, "You are the lane lead. Plan, delegate, merge. Never implement what a worker can.", ["playwright"]),
   brainstorm: demoRole("Brainstorm", "top", CAO, "Brainstorm only, no edits. Give a lean, not a survey."),
   implement: demoRole("Implement", "mid", CAO, "Build the unit on its branch. Run your own tests. Report with evidence.", ["playwright"]),
+  planner: demoRole("Planner", "mid", CAO, "Turn one block into an exact work order: file scopes, quoted lines, done-checks. Never edit source."),
   "work-order": demoRole("Work Order", "mid", ["opencode", "claude", "antigravity-cli"], "Clean work order in, small diff out."),
   review: demoRole("Review", "mid", ACO, "Review the diff only; report findings, do not edit."),
   "pre-check": demoRole("Pre-check", "cheap", ACO, "Cheap mechanical checks before a human looks."),
@@ -762,6 +764,51 @@ export function roleNameFor(label: string | undefined | null, roles: RolesMap | 
     }
   }
   return null;
+}
+
+/** Role keys that still resolve (saved data, old spawns) but are not offered in role lists or pickers (R1). */
+export const HIDDEN_ROLE_KEYS: readonly string[] = ["work-order"];
+export const isHiddenRoleKey = (key: string) => HIDDEN_ROLE_KEYS.includes(key);
+
+/** Role keys to list: hidden aliases dropped. */
+export const visibleRoleKeys = (roles: RolesMap | undefined): string[] =>
+  Object.keys(roles ?? {}).filter((k) => !isHiddenRoleKey(k));
+
+/** Old model-named profile heads that map onto a role even though no role carries that name. */
+const LEGACY_HEAD_ROLE: Record<string, string> = {
+  spec: "Planner",
+  "work order": "Work Order",
+  mechanical: "Implement",
+  audit: "Implement",
+  "senior reasoning": "Implement",
+  check: "Pre-check",
+  scout: "Pre-check",
+  "ux reviewer": "Review",
+};
+
+/** Role a saved profile name belongs to ("Implement - Sonnet" -> "Implement"); null when unknown. */
+export function profileRoleName(name: string | undefined | null, roles: RolesMap | undefined = state.roles ?? DEMO_ROLES): string | null {
+  const direct = roleNameFor(name, roles);
+  if (direct) return direct;
+  const head = String(name ?? "").split(/\s+-\s+/)[0].trim().toLowerCase();
+  const via = LEGACY_HEAD_ROLE[head];
+  return via ? roleNameFor(via, roles) ?? via : null;
+}
+
+/** Picker label: role + the model it runs ("Implement · claude-sonnet-5-5"); falls back to the saved name. */
+export function profileOptionLabel(p: Pick<Profile, "name" | "model">, roles?: RolesMap): string {
+  const role = profileRoleName(p.name, roles);
+  const model = shortModel(p.model);
+  return role ? (model ? `${role} · ${model}` : role) : p.name;
+}
+
+/** Profiles to offer in a picker: ones that belong to a hidden role are dropped unless `keep` names the current pick. */
+export function pickableProfiles(list: Profile[], keep?: string | null, roles?: RolesMap): Profile[] {
+  return list.filter((p) => {
+    if (p.name === keep) return true;
+    const role = profileRoleName(p.name, roles);
+    return !(role && HIDDEN_ROLE_KEYS.includes(role.toLowerCase().replace(/\s+/g, "-")));
+  });
 }
 
 /** Model id trimmed for a header chip: provider prefix and date suffix off. */
