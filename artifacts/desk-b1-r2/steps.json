@@ -1,0 +1,120 @@
+[
+ {
+  "step": "start",
+  "calls": [],
+  "hlen": 2,
+  "url": "?demo=&team=vibesquad",
+  "chat": false,
+  "crumb": "VibeSquad›Overview"
+ },
+ {
+  "step": "A1-chat",
+  "calls": [
+   "pushState ?demo=&team=vibesquad&agent=demo-aud"
+  ],
+  "hlen": 3,
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "chat": true,
+  "crumb": "VibeSquad›Desk›Worker"
+ },
+ {
+  "step": "A2-project-row",
+  "calls": [
+   "pushState ?demo=&team=efi&agent=demo-aud",
+   "pushState ?demo=&team=efi"
+  ],
+  "hlen": 5,
+  "url": "?demo=&team=efi",
+  "chat": false,
+  "crumb": "Main Game Project›Overview"
+ },
+ {
+  "step": "A3-back",
+  "calls": [
+   "POP ?demo=&team=efi&agent=demo-aud",
+   "replaceState ?demo=&team=vibesquad",
+   "replaceState ?demo=&team=vibesquad&agent=demo-aud"
+  ],
+  "hlen": 5,
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "chat": true,
+  "crumb": "VibeSquad›Desk›Worker"
+ },
+ {
+  "step": "A4-forward",
+  "calls": [
+   "POP ?demo=&team=efi",
+   "replaceState ?demo=&team=efi&agent=demo-aud",
+   "replaceState ?demo=&team=efi"
+  ],
+  "hlen": 5,
+  "url": "?demo=&team=efi",
+  "chat": false,
+  "crumb": "Main Game Project›Overview"
+ },
+ {
+  "step": "B1-chat",
+  "calls": [
+   "pushState ?demo=&team=vibesquad",
+   "pushState ?demo=&team=vibesquad&agent=demo-aud"
+  ],
+  "hlen": 7,
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "chat": true,
+  "crumb": "VibeSquad›Desk›Worker"
+ },
+ {
+  "step": "B2-open-in-inbox",
+  "skipped": "no ref popover in demo chat"
+ },
+ {
+  "step": "B3-back",
+  "calls": [
+   "POP ?demo=&team=vibesquad",
+   "replaceState ?demo=&team=vibesquad&agent=demo-aud",
+   "replaceState ?demo=&team=vibesquad"
+  ],
+  "hlen": 7,
+  "url": "?demo=&team=vibesquad",
+  "chat": false,
+  "crumb": "VibeSquad›Overview"
+ },
+ {
+  "step": "C1-ctrlk",
+  "calls": [],
+  "hlen": 7,
+  "url": "?demo=&team=vibesquad",
+  "chat": false,
+  "crumb": "VibeSquad›Overview"
+ },
+ {
+  "step": "C2-pick",
+  "calls": [
+   "pushState ?demo=&team=efi"
+  ],
+  "hlen": 7,
+  "url": "?demo=&team=efi",
+  "chat": false,
+  "crumb": "Main Game Project›Overview"
+ },
+ {
+  "step": "C3-back",
+  "calls": [
+   "POP ?demo=&team=vibesquad"
+  ],
+  "hlen": 7,
+  "url": "?demo=&team=vibesquad",
+  "chat": false,
+  "crumb": "VibeSquad›Overview"
+ },
+ {
+  "step": "C4-forward",
+  "calls": [
+   "POP ?demo=&team=efi"
+  ],
+  "hlen": 7,
+  "url": "?demo=&team=efi",
+  "chat": false,
+  "crumb": "Main Game Project›Overview"
+ }
+]

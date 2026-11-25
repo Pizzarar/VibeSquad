@@ -47,6 +47,19 @@ const HISTORY_WRAP = `(() => {
   addEventListener("popstate", () => window.__h.push("POP"));
 })()`;
 
+async function openChat(theme) {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: theme });
+  await context.addInitScript(HISTORY_WRAP);
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({...p,"app.theme":"${theme}"})); }catch{}`);
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/?demo=&team=vibesquad`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+  await page.waitForTimeout(900);
+  const take = () => page.evaluate(() => ({ h: window.__h.splice(0), hlen: history.length, url: location.search }));
+  return { context, page, take };
+}
+const pushes = (s) => s.h.filter((k) => k === "pushState").length;
+
 async function drive(t, theme) {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: theme });
   await context.addInitScript(HISTORY_WRAP);
@@ -103,4 +116,66 @@ test("B1 e2e: cross-project Back/Forward never pushState while a pop settles (da
 test("B1 e2e: cross-project Back/Forward never pushState while a pop settles (light)", async (t) => {
   if (unavailable) return t.skip(unavailable);
   await drive(t, "light");
+});
+
+// (1)+(2) A pop settles over 2+ renders (stale render, BoringAde's navGen effect, boringShown catching up): 0 pushes. Then a user
+// click right after Back (no timer advance) is a real navigation: exactly 1 push (the old 1s window turned it into replaceState).
+test("B1 e2e: pop never pushes; an immediate user navigation after Back pushes exactly once", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  await take();
+  await page.goBack(); // -> the Overview entry before the chat
+  await page.waitForTimeout(900);
+  const back = await take();
+  assert.ok(back.h.includes("POP"));
+  assert.equal(pushes(back), 0, `pop settling over several renders: 0 pushState (got ${JSON.stringify(back.h)})`);
+  await page.goForward(); // -> chat again
+  await page.waitForTimeout(900);
+  await take();
+  await page.goBack();
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click(); // immediately, no waitForTimeout
+  await page.waitForTimeout(900);
+  const nav = await take();
+  assert.equal(pushes(nav), 1, `Back then an immediate user navigation: exactly 1 pushState (got ${JSON.stringify(nav.h)})`);
+  await context.close();
+});
+
+// (3) Popping to an agent that cannot be represented (unknown id) must not leave the flag armed: the next user navigation pushes.
+test("B1 e2e: pop to an unknown agent, then a user navigation, still pushes", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.evaluate(() => history.pushState(null, "", "?team=vibesquad&agent=no-such-agent")); // an entry the app cannot show
+  await page.evaluate(() => history.pushState(null, "", "?team=vibesquad"));
+  await take();
+  await page.goBack(); // pop to the unknown agent
+  await page.waitForTimeout(900);
+  const pop = await take();
+  assert.equal(pushes(pop), 0, `unknown-agent pop: 0 pushState (got ${JSON.stringify(pop.h)})`);
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  const nav = await take();
+  assert.ok(pushes(nav) >= 1, `flag cleared: the next user navigation pushes (got ${JSON.stringify(nav.h)})`);
+  await context.close();
+});
+
+// (4) urlSyncDecision: takeStorybookReplace is still honored outside a pop, consumed only when a write happens, and the pop flag clears.
+test("B1: urlSyncDecision honors takeStorybookReplace and clears the pop flag", async () => {
+  const { transformSync } = await import("rolldown/utils");
+  const { readFileSync } = await import("node:fs");
+  const code = transformSync("urlSync.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code;
+  const { urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+  let taken = 0;
+  const sb = (v) => () => { taken++; return v; };
+  assert.deepEqual(urlSyncDecision({ next: "?a", current: "?b", pop: null, storybookReplace: sb(true) }), { write: true, replace: true, pop: null });
+  assert.deepEqual(urlSyncDecision({ next: "?a", current: "?b", pop: null, storybookReplace: sb(false) }), { write: true, replace: false, pop: null });
+  assert.equal(taken, 2, "consumed on each write");
+  assert.equal(urlSyncDecision({ next: "?a", current: "?a", pop: null, storybookReplace: sb(true) }).write, false);
+  assert.equal(taken, 2, "not consumed when nothing is written");
+  const arm = { url: "?p", giveUp: false };
+  assert.deepEqual(urlSyncDecision({ next: "?stale", current: "?p", pop: arm, storybookReplace: sb(false) }), { write: true, replace: true, pop: arm }, "stale render: replace, stay armed");
+  assert.deepEqual(urlSyncDecision({ next: "?p", current: "?stale", pop: arm, storybookReplace: sb(false) }), { write: true, replace: true, pop: null }, "reached the popped URL: replace, clear");
+  assert.equal(urlSyncDecision({ next: "?p", current: "?p", pop: arm, storybookReplace: sb(false) }).pop, null, "settled: clear");
+  assert.deepEqual(urlSyncDecision({ next: "?x", current: "?p", pop: { ...arm, giveUp: true }, storybookReplace: sb(false) }), { write: true, replace: true, pop: null }, "unrepresentable: replace in place, clear");
 });

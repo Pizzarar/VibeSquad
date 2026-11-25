@@ -246,12 +246,12 @@ test("B1: a pop to a known-but-unpinned agent clears the stale lane/worker selec
 });
 
 // ── B1 M1/M2 wiring (source assertions on the App + RefPopover hunks) ──────────
-test("B1 M1: App's URL-sync never pushStates while a pop is settling (popReplaceUntil guard)", () => {
+test("B1 M1: App's URL-sync is gated by a state-based pop flag, not a time window", () => {
   const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
-  assert.match(app, /popReplaceUntil\.current = Date\.now\(\) \+ 1000/, "onPop arms the pop-in-flight window");
-  assert.match(app, /Date\.now\(\) < popReplaceUntil\.current/, "URL-sync checks the pop window");
-  assert.match(app, /const storybookReplace = takeStorybookReplace\(\);/, "takeStorybookReplace stays consumed");
-  assert.match(app, /history\[replace \? "replaceState" : "pushState"\]/, "URL-sync picks replace vs push");
+  assert.doesNotMatch(app, /popReplaceUntil|Date\.now\(\) \+ 1000/, "no time window");
+  assert.match(app, /popArm\.current = \{ url: location\.search/, "onPop arms the one-shot flag");
+  assert.match(app, /urlSyncDecision\(\{[^}]*takeStorybookReplace/, "takeStorybookReplace stays consumed through the decision");
+  assert.match(app, /onPopSettled=\{onPopSettled\}/, "BoringAde reports the settle");
 });
 
 test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox", () => {

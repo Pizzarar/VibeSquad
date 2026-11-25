@@ -403,10 +403,12 @@ type Props = {
   banners?: ReactNode;
   /** App's URL routing generation: bumps on popstate so BoringAde re-derives mode + selection from the URL (B1). */
   navGen?: number;
+  /** Called at the end of the navGen effect: representable = the popped URL maps to a chat/Overview here (false: unknown agent, team gone). */
+  onPopSettled?: (representable: boolean) => void;
 };
 
 
-export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners, navGen = 0 }: Props) {
+export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners, navGen = 0, onPopSettled }: Props) {
   const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
@@ -557,7 +559,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   useEffect(() => {
     if (!navGen || typeof location === "undefined") return;
     const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
-    if (!land) return;
+    if (!land) { onPopSettled?.(false); return; }
     if (land.teamId && land.teamId !== view?.team.id) onSelectSquad(land.teamId);
     if (land.mode === "chat") {
       if (land.sel) {
@@ -574,6 +576,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     } else {
       setMode("project");
     }
+    onPopSettled?.(true);
   }, [navGen]);
   // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
   useEffect(() => {
