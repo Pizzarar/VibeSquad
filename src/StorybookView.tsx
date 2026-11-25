@@ -1,6 +1,6 @@
 // Storybook view (SB5, docs/PLAN_STORYBOOK_V1.md). READ-ONLY: quest web per trader chain, per-location, per-character,
 // findings list. Data: GET /api/storybook/:project (SB4) in the SB1 snapshot shape. All grouping/filter/Mermaid logic is in storybookLogic.ts.
-// Entry: the project ⋯ menu ("Open Storybook", CommandPalette.teamCtxItems) → openStorybook(); App renders this instead of the cockpit.
+// Entry: the Code | Storybook tabs, the "Open Storybook: <project>" palette command, the phone ⋯ entry → openStorybook(); App renders this instead of the cockpit.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { MermaidView } from "./MermaidView";
@@ -77,6 +77,7 @@ const probe = new Map<string, "unknown" | "present" | "missing">();
 // A probe can resolve after the ⋯ menu / phone drawer first reads it (slow host): notify subscribers so consumers re-render
 // (same subscribe/notify shape as the `target` store above).
 const probeSubs = new Set<() => void>();
+const subscribeProbe = (cb: () => void) => { probeSubs.add(cb); return () => { probeSubs.delete(cb); }; };
 const probeEmit = () => probeSubs.forEach((f) => f());
 /** Known-missing probe (UX R18 m6): true once a project is known to have no Storybook (404), so the ⋯ menu can hide. */
 export function probeStorybook(projectId: string): boolean {
@@ -95,7 +96,7 @@ export function probeStorybook(projectId: string): boolean {
 /** Subscribe to the known-missing probe and re-render when it resolves (useStorybookTarget pattern). */
 export function useStorybookMissing(projectId: string | null): boolean {
   const isMissing = useSyncExternalStore(
-    (cb) => { probeSubs.add(cb); return () => { probeSubs.delete(cb); }; },
+    subscribeProbe,
     () => (projectId ? probe.get(projectId) === "missing" : false),
     () => false,
   );
@@ -107,7 +108,7 @@ export function useStorybookMissing(projectId: string | null): boolean {
  *  don't flicker for projects that have none. Built on the same probe store/emitter as useStorybookMissing. */
 export function useStorybookPresent(projectId: string | null): boolean {
   const isPresent = useSyncExternalStore(
-    (cb) => { probeSubs.add(cb); return () => { probeSubs.delete(cb); }; },
+    subscribeProbe,
     () => (projectId ? probe.get(projectId) === "present" : false),
     () => false,
   );
@@ -476,7 +477,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
         <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={() => onClose()}>← Back</button>
         <div className="sb-title">
           <span className="sb-eye" aria-hidden="true">◉</span>
-          <h2>Storybook <span className="sb-proj">· {name}</span></h2>
+          <h2><span className="sb-word">Storybook </span><span className="sb-proj">· {name}</span></h2>
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">

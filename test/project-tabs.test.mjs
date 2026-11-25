@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 import { transformSync } from "rolldown/utils";
@@ -97,4 +97,23 @@ test("StorybookView sb-head: pill always shows with Storybook selected; Esc hand
   assert.ok(s.includes("<ProjectTabs projectId={projectId} name={name} active=\"storybook\" />"), "pill in sb-head, Storybook active");
   assert.ok(s.includes('addEventListener("keydown", onKey, true)'), "Esc stays a capture-phase handler");
   assert.ok(s.includes('data-testid="sb-back"'), "← Back stays");
+});
+
+test("fix round (UX R22 M1/m1/m2/m3 + review M1): sb-head pill placement, active cue, phone title, Psycho base rules", () => {
+  const css = src("storybook.css"), b = src("boring.css"), s = src("StorybookView.tsx");
+  assert.match(css, /\.sb-title \{[^}]*flex: 0 1 auto/, "title no longer grows, so the pill follows it");
+  assert.match(css, /\.sb-head-right \{[^}]*margin-left: auto/, "right cluster pushed to the end");
+  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped (Psycho) pill base rule");
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-head \.project-tabs \.boring-switch-pill \{ min-height: 40px; \}/, "phone 40px segments");
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-word \{ display: none; \}/, "phone keeps the project name, drops the Storybook word");
+  assert.ok(s.includes('<span className="sb-word">Storybook </span>'), "sb-word wrapper");
+  assert.match(b, /\.project-tabs \.boring-switch-pill\.on \{ color: var\(--accent\); box-shadow: inset 0 0 0 1px var\(--accent\); \}/, "active cue scoped to .project-tabs, existing token");
+  assert.ok(!/project-tabs[^{]*\{[^}]*opacity/.test(b + css), "dim by colour, never opacity");
+});
+
+test("probe hooks share one stable subscribeProbe", () => {
+  const s = src("StorybookView.tsx");
+  assert.ok(s.includes("const subscribeProbe = (cb: () => void) =>"));
+  assert.ok(!s.includes("(cb) => { probeSubs.add(cb)"), "no inline per-render subscribe arrows");
+  assert.equal(s.split("    subscribeProbe,\n").length - 1, 2, "both probe hooks use it");
 });
