@@ -20,7 +20,7 @@ import { useDraft } from "./drafts";
 import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
-import { findProfile, getProfiles, pickableProfiles, profileOptionLabel, useProfiles, type Profile, type Role } from "./profiles";
+import { findProfile, getProfiles, ladderModels, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -109,6 +109,9 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const resolveProfile = (name: string) => findProfile(name, profiles)?.name;
   const [profileName, setProfileName] = useState(() => defaultNewAgentProfile(getPref("newAgent.profile"), resolveProfile));
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
+  // R1: the model comes from the tier ladder unless the spawner picks one here ("" = from ladder).
+  const [modelOverride, setModelOverride] = useState("");
+  const roleName = profileRoleName(profile.name) ?? profile.name;
   const [role, setRole] = useState<Role>(profile.role);
   // The modal can open before /__vibesquad/profiles loads: re-apply a custom default once they arrive,
   // unless the user already chose a profile or role.
@@ -202,6 +205,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const pickProfile = (name: string) => {
     userPickedProfile.current = true;
     const p = findProfile(name, profiles) ?? profiles[0]!;
+    setModelOverride("");
     setProfileName(p.name);
     setRole(p.role);
   };
@@ -224,7 +228,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const defaults = defaultSpawnConfigFor(profile.provider);
   const modeId = profile.modeId ?? defaults.modeId;
   const isProviderInstalled = installedProviders.includes(profile.provider);
-  const badges: [string, string][] = [["provider/model", `${profile.provider}/${profile.model}`]];
+  const effectiveModel = modelOverride || profile.model;
+  const badges: [string, string][] = [["provider/model", `${profile.provider}/${effectiveModel}`]];
   if (modeId) badges.push(["modeId", modeId]);
   if (profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
   if (profile.featureValues && Object.keys(profile.featureValues).length > 0) {
@@ -268,7 +273,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     try {
       const r = await Promise.race([spawnTeamAgentWithImages({
         provider: profile.provider,
-        model: profile.model,
+        model: effectiveModel,
         modeId,
         thinkingOptionId: profile.thinkingOptionId,
         featureValues: profile.featureValues,
@@ -328,15 +333,25 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         <div className="na-col">
           <Field label="PROFILE">
             <select value={profile.name} onChange={(e) => pickProfile(e.target.value)}>
-              {pickableProfiles(profiles, profile.name).map((p) => {
-                const inst = installedProviders.includes(p.provider);
-                const label = profileOptionLabel(p);
+              {rolePickRows(profiles, profile.name).map((r) => {
+                const p = findProfile(r.value, profiles);
+                const inst = !p || installedProviders.includes(p.provider);
                 return (
-                  <option key={p.name} value={p.name} title={p.name} style={inst ? undefined : { opacity: 0.55 }}>
-                    {inst ? label : `${label} (install ${p.provider})`}
+                  <option key={r.value} value={r.value} title={r.value} style={inst ? undefined : { opacity: 0.55 }}>
+                    {inst ? r.label : `${r.label} (install ${p!.provider})`}
                   </option>
                 );
               })}
+            </select>
+          </Field>
+          <Field label="MODEL OVERRIDE (optional)">
+            <select value={modelOverride} data-testid="model-override" onChange={(e) => setModelOverride(e.target.value)}>
+              <option value="">From ladder (stakes)</option>
+              {ladderModels(profile.provider).map((m) => (
+                <option key={m} value={m}>
+                  {shortModel(m)}
+                </option>
+              ))}
             </select>
           </Field>
           {!isProviderInstalled && (
@@ -406,7 +421,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             <div className="pills">
               {Object.entries(labels).map(([k, v]) => (
                 <span key={k} className="label-pill">
-                  {k}={v}
+                  {k}={k === "profile" ? (profileRoleName(v) ?? v) : v}
                 </span>
               ))}
             </div>
@@ -584,7 +599,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             className="btn ghost small"
             onClick={clearPrompt}
           >
-            Reset to {profileName} template
+            Reset to {roleName} template
           </button>
         </div>
       </div>
@@ -815,9 +830,9 @@ export function AddBuddyModal({
           <div className="row2">
             <Field label="BRAINSTORM PROFILE">
               <select value={profile.name} onChange={(e) => setProfileName(e.target.value)}>
-                {(brainstormProfiles.length ? brainstormProfiles : profiles).map((p) => (
-                  <option key={p.name} value={p.name} title={p.name}>
-                    {p.name}
+                {rolePickRows(profiles, profile.name, (p) => p.role === "brainstorm").map((r) => (
+                  <option key={r.value} value={r.value} title={r.value}>
+                    {r.label}
                   </option>
                 ))}
               </select>

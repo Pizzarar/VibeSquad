@@ -3,7 +3,7 @@ import { Modal } from "./TeamActions";
 import { TeamSettingsModal, type TeamSettingsPart } from "./TeamSettingsModal";
 import { PushNotificationControls, playAlertChime } from "./notifications";
 import { checkForUpdates, updateLabel, type UpdateCheck } from "./DiagnosticsModal";
-import { pickableProfiles, profileOptionLabel, profileRoleName, useProfiles } from "./profiles";
+import { rolePickRows, useProfiles } from "./profiles";
 import { triggerUpdateInstall, useUpdaterStatus } from "./userName";
 import { clearSession, isRemote } from "./remoteSession";
 import { KeybindingsEditor } from "./KeybindingsEditor";
@@ -292,10 +292,9 @@ function PrefControl({ k, value, set }: { k: PrefKey; value: any; set: (v: any) 
     return (
       <select id={id} value={value} onChange={(e) => set(e.target.value)}>
         <option value="">Built-in default</option>
-        {value && !profiles.some((p) => p.name === value) && <option value={value}>{profileRoleName(value) ?? value} (missing)</option>}
-        {pickableProfiles(profiles, value).map((p) => (
-          <option key={p.name} value={p.name} title={p.name}>
-            {profileOptionLabel(p)}
+        {rolePickRows(profiles, value).map((r) => (
+          <option key={r.value} value={r.value} title={r.value}>
+            {r.label}
           </option>
         ))}
       </select>
