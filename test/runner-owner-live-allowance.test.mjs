@@ -70,6 +70,27 @@ test('896: an owner send starts with live == maxLive; a non-owner send still que
   } finally { h.runner.shutdown(); }
 });
 
+test("975: an owner start over maxLive logs owner-over-cap (live, maxLive, allowance used); an in-cap owner start logs nothing", async () => {
+  const h = harness({ maxLive: 2 });
+  try {
+    const c = await h.parked();
+    const d = await h.parked();
+    h.runner.send(d, 'owner, room free', { owner: true }); // live 1 < maxLive: no allowance used
+    assert.ok(!types(h.runner, d).includes('owner-over-cap'));
+    h.endTurn(d);
+    h.runner.park(d);
+    await until(() => h.status(d) === 'parked');
+    h.create();
+    h.create(); // live == maxLive, nothing idle
+    h.runner.send(c, 'owner over', { owner: true });
+    assert.equal(h.status(c), 'running');
+    const ev = h.runner.timeline(c).find((e) => e.type === 'owner-over-cap');
+    assert.ok(ev, 'owner-over-cap logged');
+    const data = ev.data ?? ev;
+    assert.deepEqual([data.live, data.maxLive, data.allowanceUsed], [3, 2, 1]);
+  } finally { h.runner.shutdown(); }
+});
+
 test('896: live never exceeds maxLive + OWNER_OVER_CAP; the next owner job queues', async () => {
   assert.equal(OWNER_OVER_CAP, 2);
   const h = harness({ maxLive: 2 });

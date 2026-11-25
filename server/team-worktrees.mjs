@@ -534,15 +534,15 @@ function basePatchIds(repoRoot, ref, git, cache) {
       map = null;
       break;
     }
-    let n = 0;
     for (const line of ids.split(/\r?\n/)) {
       const [pid, c] = line.trim().split(/\s+/);
       if (pid && c) {
         map.set(pid, [...(map.get(pid) ?? []), c]);
-        n++;
       }
     }
-    if (n < SQUASH_CHUNK) break; // a short chunk is the end of history (empty commits have no patch-id, so this can only stop early, never loop)
+    // A short chunk is the end of history. Count commits (`commit <sha>` headers), not patch-ids: an empty commit has no patch-id and would
+    // end the scan early (idea-999).
+    if ((log.match(/^commit [0-9a-f]{7,}/gm) ?? []).length < SQUASH_CHUNK) break;
   }
   cache.set(key, map);
   return map;
