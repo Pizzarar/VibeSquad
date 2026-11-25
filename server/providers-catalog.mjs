@@ -2716,6 +2716,7 @@ function buildLedgerSnapshot(merged, rows) {
     sha: u.sha,
     ts: u.mergedAt ?? null,
     lane: u.lane ?? null,
+    ...(u.laneSource && u.laneSource !== "none" ? { laneSource: u.laneSource } : {}),
     ...(u.squad ? { squad: u.squad } : {}),
     ...(u.repo ? { repo: u.repo } : {}),
     implementerProfile: u.implementerProfile ?? null,
@@ -3556,6 +3557,21 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const subjectRounds = u.reviewRounds ?? 0;
     return { verdicts, subjectRounds, reviewRounds: Math.max(subjectRounds, verdicts.length), firstReviewVerdict: verdicts[0]?.verdict ?? null, reviewSource: verdicts.length ? (subjectRounds > 0 ? "both" : "verdict-log") : (subjectRounds > 0 ? "subject" : "none") };
   };
+  // usa-61: lane backfill for units whose subject has no (@code tag. Evidence only, in order: the attributed run's lane label,
+  // the unit-<code>-* name prefix (only when <code> is an existing lane code/id in teams.json), the ledger row for the sha.
+  const ledgerLaneBySha = new Map();
+  for (const r of readUsageLedger(home)) if (r.kind === "unit" && r.sha && typeof r.lane === "string" && r.lane) ledgerLaneBySha.set(r.sha, r);
+  const backfillLane = (u, implementer) => {
+    if (u.lane) return { lane: u.lane, laneSource: "subject" };
+    const runLane = typeof implementer?.lane === "string" && implementer.lane ? (codes.get(implementer.lane.toLowerCase()) ?? implementer.lane) : null;
+    if (runLane) return { lane: runLane, laneSource: "run" };
+    const pre = /^unit-([a-z0-9]+)-/i.exec(typeof u.unit === "string" ? u.unit : "")?.[1]?.toLowerCase();
+    const preLane = pre ? codes.get(pre) : null;
+    if (preLane) return { lane: preLane, laneSource: "unit-prefix" };
+    const row = ledgerLaneBySha.get(u.sha);
+    if (row) return { lane: row.lane, laneSource: row.laneSource && row.laneSource !== "none" ? row.laneSource : "ledger" };
+    return { lane: null, laneSource: "none" };
+  };
   const merged = [];
   for (const u of mergedRaw) {
     if (merged.length % 200 === 199) yield;
@@ -3587,8 +3603,10 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       g.n += 1;
       if (f.next === "PASS") g.passN += 1;
     }
+    const { lane: unitLane, laneSource } = backfillLane(u, implementer);
     return {
       ...unitRest, mergedAtMs,
+      lane: unitLane, laneSource,
       reviewRounds: outRounds,
       reviewVerdicts: verdicts.length,
       firstReviewVerdict: outFirst,
@@ -3782,7 +3800,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       sha: r.sha, unit: r.unit ?? null, code: null, reviewRounds: r.reviewRounds ?? 0,
       mergedAt: r.ts ?? null, mergedAtMs: toMs(r.ts), firstBranchCtMs: null, subject: "",
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
-      lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
+      lane: r.lane ?? null, laneSource: r.lane ? (r.laneSource && r.laneSource !== "none" ? r.laneSource : "ledger") : "none", squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
       // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
       attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
