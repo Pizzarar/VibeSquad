@@ -1,4 +1,5 @@
 // R5: cap TTL (expired caps are ignored and pruned) and archived-worker revival through RunnerBackend.send.
+import "./setup/hermetic.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

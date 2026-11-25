@@ -1,6 +1,7 @@
 // scripts/restart-runtime.mjs against stub runner/server processes (loopback http servers + a fake process table).
 // Nothing here touches the real runner, server, desktop config dir or ~/.vibesquad: VIBESQUAD_HOME / config dir are temp dirs.
 // Also covers the runner's POST /shutdown auth (same token gate as POST /agents).
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

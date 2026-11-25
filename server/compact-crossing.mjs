@@ -3,14 +3,14 @@
 //
 // A crossing is the soft meter going over a stage threshold. Each stage gets one compaction attempt per crossing, before that
 // stage's handoff step (lead: the 150k nudge and the 250k packet stage; Buddy: its restart cap). The attempt re-arms when the
-// meter is back under REARM_RATIO x the lowest stage AND at least REARM_MIN_DROP under the stage it was tried for: a compaction
+// meter is back under min(REARM_RATIO x the lowest stage, (1 - REARM_MIN_DROP) x the stage tried) (90% / 75%): a compaction
 // that lands just under the cap (150k -> 130k) does not re-arm and burn the life cap at the next turns (hysteresis). After COMPACT_LIFE_CAP attempts in one agent life the agent hands off instead (summaries of summaries
 // degrade). The caller falls through to its unchanged handoff on a failed / still-over attempt, and that crossing is not tried
 // again (loop guard). The raw-meter hard cap is the caller's, never delayed by this.
 //
 // Labels (they survive a server restart; the runner merges label patches key by key, runner/fold-index.mjs):
-//   vs.compacted-at   ISO of the last attempt. compact-step writes it and refuses to run while it is set (its own once-guard),
-//                     so an armed attempt hands compact-step a snapshot with it cleared.
+//   vs.compacted-at   ISO of the last attempt. compact-step writes it; its once-guard (refuse while set) applies to unarmed runs
+//                     only: the callers here pass `armed: true`, so this tracker (not the label) decides whether to attempt.
 //   vs.compact-stage  the stage threshold (tokens) the last attempt (or life-cap hand-off) was for; "" once re-armed. Persisted
 //                     for a life cap too, so a server restart does not log the same crossing's compact-life-cap line again.
 //   vs.compact-count  attempts in this life. Written with vs.compacted-at in compact-step's one label write; a busy skip writes
@@ -28,9 +28,25 @@ export const COMPACT_REARM_MIN_DROP = 0.25; // re-arm only once the meter is 25%
 /** Shared across coordinators (token-watch's and the HTTP route's): agent ids with a compaction in flight (compact-step run()). */
 export const compactPending = new Set();
 
-/** compact-step outcomes that leave no attempt behind: busy (retry at the next idle, K2a) and non-claude (no compact path, K2b). */
+/** compact-step outcomes that leave no attempt behind: busy (retry at the next idle, K2a) and no-compact (provider without one, K2b). */
 export function compactNotAttempted(res) {
-  return res?.outcome === "skipped" && (res.reason === "busy" || res.reason === "non-claude");
+  return res?.outcome === "skipped" && (res.reason === "busy" || res.reason === "no-compact");
+}
+
+/**
+ * K2b: no turn will ever come to compact in (errored / closed / lost / exited). compact-step reports any non-idle status as busy,
+ * so without this check the caller would defer every time; the meter of a dead agent does not grow, so the hard cap never fires either.
+ * The lead path skips compaction for these and runs its pre-K2 ladder. A deny-list, not an idle/running allow-list: a lead
+ * that is queued / starting must still defer (falling through could write the 250k packet and rule out compaction for that crossing).
+ */
+const DEAD_FOR_COMPACT = new Set(["error", "errored", "closed", "lost", "exited"]);
+export function isDeadForCompact(agent) {
+  return Boolean(agent?.lost) || DEAD_FOR_COMPACT.has(String(agent?.status ?? "").trim().toLowerCase());
+}
+
+/** K2b: the agent's meter is the ACP adapter's post-compact estimate (runner-backend usageFields), not a real reading. */
+export function isCompactEstimate(agent) {
+  return agent?.lastUsage?.compactEstimate === true;
 }
 
 /** True for a busy skip: the caller defers to the next idle evaluation (no handoff step, no stamp). */
@@ -75,7 +91,9 @@ export function createCrossingTracker({ lifeCap = COMPACT_LIFE_CAP, rearmRatio =
 
   function decide(agent, used, stages) {
     const st = state(agent, stages);
-    if (st.stage > 0 && used < rearmLine(st.stage, stages)) {
+    // K2b: only a real meter reading re-arms. The ACP adapter's post-compact estimate (the summary size) would re-arm before the
+    // next turn's reading shows whether the compaction shrank the session; a failed one would then burn the life cap.
+    if (st.stage > 0 && !isCompactEstimate(agent) && used < rearmLine(st.stage, stages)) {
       return { action: "rearm", count: st.count, labels: { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "" } };
     }
     let cap = 0;

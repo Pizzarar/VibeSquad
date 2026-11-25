@@ -758,6 +758,86 @@ export function parseMermaid(code: string): ParseMermaidResult {
   }
 }
 
+// ─── Theme Palette ─────────────────────────────────────────────────────────────
+// The renderer bakes colors into the SVG markup (the React converter below drops
+// `style` attributes, so CSS variables can't flow through), so it carries an
+// explicit dark/light palette keyed by the app's active `data-theme`. Dark is the
+// pre-existing scheme, preserved byte-for-byte; light mirrors the app's light
+// tokens (styles.css `:root[data-theme="light"]`) so the canvas is no longer a
+// dark slab in light mode.
+
+type MermaidTheme = "dark" | "light";
+
+interface MermaidPalette {
+  canvas: string;
+  nodeFill: string;
+  nodeText: string;
+  nodeStroke: string;
+  diamondStroke: string;
+  stadiumStroke: string;
+  edge: string;
+  edgeStrong: string;
+  edgeLabelBg: string;
+  edgeLabelStroke: string;
+  edgeLabelText: string;
+  subgraphFill: string;
+  subgraphStroke: string;
+  subgraphText: string;
+  lifeline: string;
+  startFill: string;
+  startStroke: string;
+  endFill: string;
+  endStroke: string;
+  cross: string;
+}
+
+const PALETTES: Record<MermaidTheme, MermaidPalette> = {
+  dark: {
+    canvas: "#0c0d1b",
+    nodeFill: "#181b34",
+    nodeText: "#f1f5ff",
+    nodeStroke: "#38f6ff",
+    diamondStroke: "#c28cff",
+    stadiumStroke: "#4df7a6",
+    edge: "#b4aee0",
+    edgeStrong: "#38f6ff",
+    edgeLabelBg: "#0c0d1b",
+    edgeLabelStroke: "#2e325c",
+    edgeLabelText: "#38f6ff",
+    subgraphFill: "rgba(24,27,52,0.55)",
+    subgraphStroke: "#38f6ff",
+    subgraphText: "#b4aee0",
+    lifeline: "#2e325c",
+    startFill: "#38f6ff",
+    startStroke: "#f1f5ff",
+    endFill: "#111326",
+    endStroke: "#38f6ff",
+    cross: "#ff8573",
+  },
+  light: {
+    canvas: "#f6f4f1",
+    nodeFill: "#ffffff",
+    nodeText: "#2b1840",
+    nodeStroke: "#1f6f72",
+    diamondStroke: "#7a5fd0",
+    stadiumStroke: "#1f7a4c",
+    edge: "#6f6686",
+    edgeStrong: "#1f6f72",
+    edgeLabelBg: "#ffffff",
+    edgeLabelStroke: "#c9c3d0",
+    edgeLabelText: "#1f6f72",
+    subgraphFill: "rgba(122,95,208,0.10)",
+    subgraphStroke: "#9a7fe0",
+    subgraphText: "#574268",
+    lifeline: "#c9c3d0",
+    startFill: "#1f6f72",
+    startStroke: "#2b1840",
+    endFill: "#ffffff",
+    endStroke: "#1f6f72",
+    cross: "#c0392b",
+  },
+};
+
 // ─── Layered Graph Layout & SVG Renderer (Flowchart + State) ──────────────────
 
 interface PositionedNode extends MermaidNode {
@@ -838,8 +918,116 @@ function assignLayers(nodes: MermaidNode[], edges: MermaidEdge[]): Map<string, n
   return layer;
 }
 
-function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>): string {
+// ── Edge-label geometry & collision resolution (idea-843) ─────────────────────
+
+interface EdgeGeom {
+  e: MermaidEdge;
+  selfLoop: boolean;
+  src: PositionedNode;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  cx1: number;
+  cy1: number;
+  cx2: number;
+  cy2: number;
+}
+
+/** Point on the cubic Bézier the edge `<path>` actually draws (label sits on the curve, not the chord). */
+function bezierPoint(
+  x1: number,
+  y1: number,
+  cx1: number,
+  cy1: number,
+  cx2: number,
+  cy2: number,
+  x2: number,
+  y2: number,
+  t: number,
+): { x: number; y: number } {
+  const mt = 1 - t;
+  const a = mt * mt * mt;
+  const b = 3 * mt * mt * t;
+  const c = 3 * mt * t * t;
+  const d = t * t * t;
+  return { x: a * x1 + b * cx1 + c * cx2 + d * x2, y: a * y1 + b * cy1 + c * cy2 + d * y2 };
+}
+
+interface LabelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Area of overlap between two rects (0 when disjoint); `pad` inflates each rect by that margin. */
+function overlapArea(a: LabelRect, b: LabelRect, pad = 0): number {
+  const ox = Math.min(a.x + a.w + pad, b.x + b.w + pad) - Math.max(a.x - pad, b.x - pad);
+  const oy = Math.min(a.y + a.h + pad, b.y + b.h + pad) - Math.max(a.y - pad, b.y - pad);
+  return ox > 0 && oy > 0 ? ox * oy : 0;
+}
+
+/**
+ * Find a non-colliding centre for one edge label. Baseline is t=0.5 on the
+ * Bézier; when that overlaps an already-placed label or node box, nudge first
+ * along the edge (t) — which separates stacked parallel edges and fan-in/fan-out
+ * labels — then perpendicular to the chord (stepped by the label's extent on that
+ * axis, so a wide label can clear a vertical edge), then combinations. If every
+ * candidate still collides, return the one with the least total overlap instead
+ * of stacking on the baseline.
+ */
+function resolveLabelAnchor(
+  g: EdgeGeom,
+  lw: number,
+  lh: number,
+  placed: LabelRect[],
+): { x: number; y: number } {
+  const dx = g.x2 - g.x1;
+  const dy = g.y2 - g.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = -dy / len;
+  const py = dx / len;
+
+  // Label extent along the perpendicular axis (vertical edge → its width;
+  // horizontal edge → its height), so a full step clears a whole label.
+  const perpExtent = Math.abs(px) * lw + Math.abs(py) * lh;
+  const perpStep = Math.max(16, perpExtent + 6);
+
+  const dt = 0.06;
+  const tSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7];
+  const pSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
+
+  const candidates: Array<{ t: number; perp: number }> = [{ t: 0.5, perp: 0 }];
+  for (const ts of tSteps) candidates.push({ t: 0.5 + ts * dt, perp: 0 });
+  for (const ps of pSteps) candidates.push({ t: 0.5, perp: ps * perpStep });
+  for (const ts of tSteps) {
+    for (const ps of pSteps) candidates.push({ t: 0.5 + ts * dt, perp: ps * perpStep });
+  }
+
+  const base = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, 0.5);
+  let best: { x: number; y: number } | null = null;
+  let bestOverlap = Infinity;
+  for (const cand of candidates) {
+    const tt = Math.min(0.9, Math.max(0.1, cand.t));
+    const pt = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, tt);
+    const x = pt.x + px * cand.perp;
+    const y = pt.y + py * cand.perp;
+    const rect: LabelRect = { x: x - lw / 2, y: y - lh / 2, w: lw, h: lh };
+    let overlap = 0;
+    for (const r of placed) overlap += overlapArea(r, rect, 2);
+    if (overlap === 0) return { x, y };
+    if (overlap < bestOverlap) {
+      bestOverlap = overlap;
+      best = { x, y };
+    }
+  }
+  return best ?? base;
+}
+
+function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>, theme: MermaidTheme): string {
   const { nodes, edges, subgraphs, direction } = parsed;
+  const p = PALETTES[theme];
   const layerMap = assignLayers(nodes, edges);
   const maxLayer = Math.max(0, ...Array.from(layerMap.values()));
 
@@ -852,8 +1040,10 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
   const isHorizontal = direction === "LR" || direction === "RL";
   const isReversed = direction === "BT" || direction === "RL";
 
-  const layerGap = isHorizontal ? 96 : 74;
-  const siblingGap = isHorizontal ? 34 : 42;
+  // rankSpacing / nodeSpacing (idea-843): wider gaps so edge labels have room in
+  // top-down (TB/TD) fan-outs, where labels converge toward a shared source.
+  const layerGap = isHorizontal ? 104 : 88;
+  const siblingGap = isHorizontal ? 44 : 60;
   const padX = 40;
   const padY = 40;
 
@@ -909,61 +1099,24 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     primaryCursor += pSize + layerGap;
   }
 
-  const svgWidth = Math.ceil((isHorizontal ? totalPrimarySpan : maxSecondarySpan) + padX * 2);
-  const svgHeight = Math.ceil((isHorizontal ? maxSecondarySpan : totalPrimarySpan) + padY * 2);
-
-  const parts: string[] = [];
-
-  // Render subgraphs
-  for (const sg of subgraphs) {
-    const members = sg.nodeIds
-      .map((id) => positioned.get(id))
-      .filter((n): n is PositionedNode => Boolean(n));
-    if (members.length === 0) continue;
-    const minX = Math.min(...members.map((m) => m.x - m.w / 2)) - 18;
-    const maxX = Math.max(...members.map((m) => m.x + m.w / 2)) + 18;
-    const minY = Math.min(...members.map((m) => m.y - m.h / 2)) - 28;
-    const maxY = Math.max(...members.map((m) => m.y + m.h / 2)) + 16;
-    parts.push(
-      `<g class="mermaid-subgraph" data-subgraph-id="${escapeXml(sg.id)}">` +
-        `<rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6" ry="6" fill="rgba(24,27,52,0.55)" stroke="#38f6ff" stroke-opacity="0.45" stroke-dasharray="5,4" stroke-width="1.2" />` +
-        `<text x="${minX + 10}" y="${minY + 16}" fill="#b4aee0" font-size="11" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(sg.label)}</text>` +
-      `</g>`,
-    );
-  }
-
-  // Render edges
+  // ── Edge geometry (trimmed endpoints + control points), computed once so the
+  // labels can be collision-resolved before the SVG is sized. ──────────────────
+  const edgeGeoms: EdgeGeom[] = [];
   for (const e of edges) {
     const src = positioned.get(e.from);
     const dst = positioned.get(e.to);
     if (!src || !dst) continue;
-
+    if (src.id === dst.id) {
+      edgeGeoms.push({ e, selfLoop: true, src, x1: 0, y1: 0, x2: 0, y2: 0, cx1: 0, cy1: 0, cx2: 0, cy2: 0 });
+      continue;
+    }
     let x1 = src.x;
     let y1 = src.y;
     let x2 = dst.x;
     let y2 = dst.y;
-
     const dx = x2 - x1;
     const dy = y2 - y1;
     const dist = Math.hypot(dx, dy) || 1;
-
-    if (src.id === dst.id) {
-      // Self-loop
-      const rx = src.x + src.w / 2;
-      const ry = src.y;
-      const pathD = `M ${rx} ${ry - 8} C ${rx + 36} ${ry - 28}, ${rx + 36} ${ry + 28}, ${rx} ${ry + 8}`;
-      parts.push(
-        `<path d="${pathD}" fill="none" stroke="#b4aee0" stroke-width="1.6" ${
-          e.arrow ? 'marker-end="url(#mermaid-arrow)"' : ""
-        } />`,
-      );
-      if (e.label) {
-        parts.push(
-          `<text x="${rx + 40}" y="${ry + 4}" fill="#38f6ff" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(e.label)}</text>`,
-        );
-      }
-      continue;
-    }
 
     if (isHorizontal) {
       const signX = dx >= 0 ? 1 : -1;
@@ -992,24 +1145,112 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     const cx2 = isHorizontal ? (x1 + x2) / 2 : x2;
     const cy2 = isHorizontal ? y2 : (y1 + y2) / 2;
 
-    const strokeDash = e.style === "dotted" ? ' stroke-dasharray="5,4"' : "";
-    const strokeWidth = e.style === "thick" ? "2.6" : "1.6";
-    const strokeColor = e.style === "thick" ? "#38f6ff" : "#b4aee0";
-    const markerAttr = e.arrow ? ' marker-end="url(#mermaid-arrow)"' : "";
+    edgeGeoms.push({ e, selfLoop: false, src, x1, y1, x2, y2, cx1, cy1, cx2, cy2 });
+  }
+
+  // ── Place edge labels with AABB collision resolution (idea-843) ─────────────
+  interface PlacedLabel {
+    g: EdgeGeom;
+    lx: number;
+    ly: number;
+    lw: number;
+    lh: number;
+  }
+  const placedLabels: PlacedLabel[] = [];
+  // Seed with every node's bounding box so labels avoid nodes too (not just each
+  // other); a small pad keeps labels off node edges.
+  const placedRects: LabelRect[] = [];
+  for (const n of positioned.values()) {
+    placedRects.push({ x: n.x - n.w / 2 - 4, y: n.y - n.h / 2 - 4, w: n.w + 8, h: n.h + 8 });
+  }
+  for (const g of edgeGeoms) {
+    if (g.selfLoop || !g.e.label) continue;
+    const lw = Math.max(32, g.e.label.length * 7 + 18);
+    const lh = 20;
+    const anchor = resolveLabelAnchor(g, lw, lh, placedRects);
+    placedLabels.push({ g, lx: anchor.x, ly: anchor.y, lw, lh });
+    placedRects.push({ x: anchor.x - lw / 2, y: anchor.y - lh / 2, w: lw, h: lh });
+  }
+  const labelByGeom = new Map<EdgeGeom, PlacedLabel>();
+  for (const pl of placedLabels) labelByGeom.set(pl.g, pl);
+
+  // ── Grow / shift the viewBox so nudged labels are never clipped ─────────────
+  let minLabelX = Infinity;
+  let minLabelY = Infinity;
+  let maxLabelX = -Infinity;
+  let maxLabelY = -Infinity;
+  for (const pl of placedLabels) {
+    minLabelX = Math.min(minLabelX, pl.lx - pl.lw / 2);
+    minLabelY = Math.min(minLabelY, pl.ly - pl.lh / 2);
+    maxLabelX = Math.max(maxLabelX, pl.lx + pl.lw / 2);
+    maxLabelY = Math.max(maxLabelY, pl.ly + pl.lh / 2);
+  }
+  const hasLabels = placedLabels.length > 0;
+  const shiftX = hasLabels ? Math.max(0, Math.ceil(padX - minLabelX)) : 0;
+  const shiftY = hasLabels ? Math.max(0, Math.ceil(padY - minLabelY)) : 0;
+  let contentMaxX = (isHorizontal ? totalPrimarySpan : maxSecondarySpan) + padX * 2;
+  let contentMaxY = (isHorizontal ? maxSecondarySpan : totalPrimarySpan) + padY * 2;
+  if (hasLabels) {
+    contentMaxX = Math.max(contentMaxX, maxLabelX + padX);
+    contentMaxY = Math.max(contentMaxY, maxLabelY + padY);
+  }
+  const svgWidth = Math.ceil(contentMaxX + shiftX);
+  const svgHeight = Math.ceil(contentMaxY + shiftY);
+
+  const parts: string[] = [];
+
+  // Render subgraphs
+  for (const sg of subgraphs) {
+    const members = sg.nodeIds
+      .map((id) => positioned.get(id))
+      .filter((n): n is PositionedNode => Boolean(n));
+    if (members.length === 0) continue;
+    const minX = Math.min(...members.map((m) => m.x - m.w / 2)) - 18;
+    const maxX = Math.max(...members.map((m) => m.x + m.w / 2)) + 18;
+    const minY = Math.min(...members.map((m) => m.y - m.h / 2)) - 28;
+    const maxY = Math.max(...members.map((m) => m.y + m.h / 2)) + 16;
+    parts.push(
+      `<g class="mermaid-subgraph" data-subgraph-id="${escapeXml(sg.id)}">` +
+        `<rect x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6" ry="6" fill="${p.subgraphFill}" stroke="${p.subgraphStroke}" stroke-opacity="0.45" stroke-dasharray="5,4" stroke-width="1.2" />` +
+        `<text x="${minX + 10}" y="${minY + 16}" fill="${p.subgraphText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(sg.label)}</text>` +
+      `</g>`,
+    );
+  }
+
+  // Render edges
+  for (const g of edgeGeoms) {
+    if (g.selfLoop) {
+      const rx = g.src.x + g.src.w / 2;
+      const ry = g.src.y;
+      const pathD = `M ${rx} ${ry - 8} C ${rx + 36} ${ry - 28}, ${rx + 36} ${ry + 28}, ${rx} ${ry + 8}`;
+      parts.push(
+        `<path d="${pathD}" fill="none" stroke="${p.edge}" stroke-width="1.6" ${
+          g.e.arrow ? 'marker-end="url(#mermaid-arrow)"' : ""
+        } />`,
+      );
+      if (g.e.label) {
+        parts.push(
+          `<text x="${rx + 40}" y="${ry + 4}" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(g.e.label)}</text>`,
+        );
+      }
+      continue;
+    }
+
+    const strokeDash = g.e.style === "dotted" ? ' stroke-dasharray="5,4"' : "";
+    const strokeWidth = g.e.style === "thick" ? "2.6" : "1.6";
+    const strokeColor = g.e.style === "thick" ? p.edgeStrong : p.edge;
+    const markerAttr = g.e.arrow ? ' marker-end="url(#mermaid-arrow)"' : "";
 
     parts.push(
-      `<path class="mermaid-edge" d="M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${cx1.toFixed(1)} ${cy1.toFixed(1)}, ${cx2.toFixed(1)} ${cy2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}"${strokeDash}${markerAttr} />`,
+      `<path class="mermaid-edge" d="M ${g.x1.toFixed(1)} ${g.y1.toFixed(1)} C ${g.cx1.toFixed(1)} ${g.cy1.toFixed(1)}, ${g.cx2.toFixed(1)} ${g.cy2.toFixed(1)}, ${g.x2.toFixed(1)} ${g.y2.toFixed(1)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}"${strokeDash}${markerAttr} />`,
     );
 
-    if (e.label) {
-      const mx = (x1 + x2) / 2;
-      const my = (y1 + y2) / 2;
-      const lw = Math.max(28, e.label.length * 7 + 14);
-      const lh = 18;
+    const pl = labelByGeom.get(g);
+    if (pl) {
       parts.push(
         `<g class="mermaid-edge-label">` +
-          `<rect x="${(mx - lw / 2).toFixed(1)}" y="${(my - lh / 2).toFixed(1)}" width="${lw}" height="${lh}" rx="3" ry="3" fill="#0c0d1b" stroke="#2e325c" stroke-width="1" />` +
-          `<text x="${mx.toFixed(1)}" y="${(my + 4).toFixed(1)}" text-anchor="middle" fill="#38f6ff" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(e.label)}</text>` +
+          `<rect x="${(pl.lx - pl.lw / 2).toFixed(1)}" y="${(pl.ly - pl.lh / 2).toFixed(1)}" width="${pl.lw}" height="${pl.lh}" rx="3" ry="3" fill="${p.edgeLabelBg}" stroke="${p.edgeLabelStroke}" stroke-width="1" />` +
+          `<text x="${pl.lx.toFixed(1)}" y="${(pl.ly + 4).toFixed(1)}" text-anchor="middle" fill="${p.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(g.e.label)}</text>` +
         `</g>`,
       );
     }
@@ -1023,7 +1264,7 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     if (n.shape === "state-start") {
       parts.push(
         `<g class="mermaid-node" data-node-id="${escapeXml(n.id)}" data-shape="state-start">` +
-          `<circle cx="${n.x}" cy="${n.y}" r="9" fill="#38f6ff" stroke="#f1f5ff" stroke-width="1.5" />` +
+          `<circle cx="${n.x}" cy="${n.y}" r="9" fill="${p.startFill}" stroke="${p.startStroke}" stroke-width="1.5" />` +
           `<title>${escapeXml(n.label)}</title>` +
         `</g>`,
       );
@@ -1033,8 +1274,8 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     if (n.shape === "state-end") {
       parts.push(
         `<g class="mermaid-node" data-node-id="${escapeXml(n.id)}" data-shape="state-end">` +
-          `<circle cx="${n.x}" cy="${n.y}" r="11" fill="#111326" stroke="#38f6ff" stroke-width="1.8" />` +
-          `<circle cx="${n.x}" cy="${n.y}" r="5.5" fill="#38f6ff" />` +
+          `<circle cx="${n.x}" cy="${n.y}" r="11" fill="${p.endFill}" stroke="${p.endStroke}" stroke-width="1.8" />` +
+          `<circle cx="${n.x}" cy="${n.y}" r="5.5" fill="${p.endStroke}" />` +
           `<title>${escapeXml(n.label)}</title>` +
         `</g>`,
       );
@@ -1049,32 +1290,37 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
         `${n.x},${top + n.h}`,
         `${left},${n.y}`,
       ].join(" ");
-      shapeSvg = `<polygon points="${pts}" fill="#181b34" stroke="#c28cff" stroke-width="1.5" />`;
+      shapeSvg = `<polygon points="${pts}" fill="${p.nodeFill}" stroke="${p.diamondStroke}" stroke-width="1.5" />`;
     } else if (n.shape === "circle") {
-      shapeSvg = `<circle cx="${n.x}" cy="${n.y}" r="${n.w / 2}" fill="#181b34" stroke="#38f6ff" stroke-width="1.5" />`;
+      shapeSvg = `<circle cx="${n.x}" cy="${n.y}" r="${n.w / 2}" fill="${p.nodeFill}" stroke="${p.nodeStroke}" stroke-width="1.5" />`;
     } else if (n.shape === "stadium") {
-      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="${n.h / 2}" ry="${n.h / 2}" fill="#181b34" stroke="#4df7a6" stroke-width="1.5" />`;
+      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="${n.h / 2}" ry="${n.h / 2}" fill="${p.nodeFill}" stroke="${p.stadiumStroke}" stroke-width="1.5" />`;
     } else if (n.shape === "round") {
-      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="10" ry="10" fill="#181b34" stroke="#38f6ff" stroke-width="1.5" />`;
+      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="10" ry="10" fill="${p.nodeFill}" stroke="${p.nodeStroke}" stroke-width="1.5" />`;
     } else {
-      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="3" ry="3" fill="#181b34" stroke="#38f6ff" stroke-width="1.5" />`;
+      shapeSvg = `<rect x="${left}" y="${top}" width="${n.w}" height="${n.h}" rx="3" ry="3" fill="${p.nodeFill}" stroke="${p.nodeStroke}" stroke-width="1.5" />`;
     }
 
     parts.push(
       `<g class="mermaid-node" data-node-id="${escapeXml(n.id)}" data-shape="${n.shape}">` +
         shapeSvg +
-        `<text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="#f1f5ff" font-size="12" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(n.label)}</text>` +
+        `<text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="${p.nodeText}" font-size="12" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(n.label)}</text>` +
       `</g>`,
     );
   }
 
-  return buildSvgEnvelope(svgWidth, svgHeight, parts.join("\n"));
+  const body =
+    shiftX || shiftY
+      ? `<g transform="translate(${shiftX} ${shiftY})">${parts.join("\n")}</g>`
+      : parts.join("\n");
+  return buildSvgEnvelope(svgWidth, svgHeight, body, theme);
 }
 
 // ─── Sequence Diagram SVG Renderer ────────────────────────────────────────────
 
-function renderSequenceSvg(parsed: Extract<ParseMermaidResult, { ok: true }>): string {
+function renderSequenceSvg(parsed: Extract<ParseMermaidResult, { ok: true }>, theme: MermaidTheme): string {
   const { participants, messages } = parsed;
+  const pal = PALETTES[theme];
   const boxHeight = 36;
   const topY = 24;
   const rowGap = 46;
@@ -1106,14 +1352,14 @@ function renderSequenceSvg(parsed: Extract<ParseMermaidResult, { ok: true }>): s
     const cx = centers[idx];
     const bw = boxWidths[idx];
     parts.push(
-      `<line class="mermaid-lifeline" x1="${cx}" y1="${lifelineStart}" x2="${cx}" y2="${lifelineEnd}" stroke="#2e325c" stroke-width="1.5" stroke-dasharray="5,4" />`,
+      `<line class="mermaid-lifeline" x1="${cx}" y1="${lifelineStart}" x2="${cx}" y2="${lifelineEnd}" stroke="${pal.lifeline}" stroke-width="1.5" stroke-dasharray="5,4" />`,
     );
-    const stroke = p.actor ? "#c28cff" : "#38f6ff";
+    const stroke = p.actor ? pal.diamondStroke : pal.nodeStroke;
     const rx = p.actor ? 18 : 4;
     parts.push(
       `<g class="mermaid-participant" data-participant-id="${escapeXml(p.id)}">` +
-        `<rect x="${cx - bw / 2}" y="${topY}" width="${bw}" height="${boxHeight}" rx="${rx}" ry="${rx}" fill="#181b34" stroke="${stroke}" stroke-width="1.5" />` +
-        `<text x="${cx}" y="${topY + 22}" text-anchor="middle" fill="#f1f5ff" font-size="12" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(p.label)}</text>` +
+        `<rect x="${cx - bw / 2}" y="${topY}" width="${bw}" height="${boxHeight}" rx="${rx}" ry="${rx}" fill="${pal.nodeFill}" stroke="${stroke}" stroke-width="1.5" />` +
+        `<text x="${cx}" y="${topY + 22}" text-anchor="middle" fill="${pal.nodeText}" font-size="12" font-family="JetBrains Mono, Consolas, monospace" font-weight="600">${escapeXml(p.label)}</text>` +
       `</g>`,
     );
   });
@@ -1137,9 +1383,9 @@ function renderSequenceSvg(parsed: Extract<ParseMermaidResult, { ok: true }>): s
       const pathD = `M ${x1} ${y - 6} L ${x1 + 34} ${y - 6} L ${x1 + 34} ${y + 12} L ${x1 + 4} ${y + 12}`;
       parts.push(
         `<g class="mermaid-message">` +
-          `<path d="${pathD}" fill="none" stroke="#b4aee0" stroke-width="1.5"${dashAttr} marker-end="url(#${markerId})" />` +
+          `<path d="${pathD}" fill="none" stroke="${pal.edge}" stroke-width="1.5"${dashAttr} marker-end="url(#${markerId})" />` +
           (m.text
-            ? `<text x="${x1 + 40}" y="${y + 4}" fill="#38f6ff" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(m.text)}</text>`
+            ? `<text x="${x1 + 40}" y="${y + 4}" fill="${pal.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(m.text)}</text>`
             : "") +
         `</g>`,
       );
@@ -1149,35 +1395,36 @@ function renderSequenceSvg(parsed: Extract<ParseMermaidResult, { ok: true }>): s
       const midX = (x1 + x2) / 2;
       parts.push(
         `<g class="mermaid-message">` +
-          `<line x1="${x1}" y1="${y}" x2="${endX}" y2="${y}" stroke="#b4aee0" stroke-width="1.6"${dashAttr} marker-end="url(#${markerId})" />` +
+          `<line x1="${x1}" y1="${y}" x2="${endX}" y2="${y}" stroke="${pal.edge}" stroke-width="1.6"${dashAttr} marker-end="url(#${markerId})" />` +
           (m.text
-            ? `<text x="${midX}" y="${y - 7}" text-anchor="middle" fill="#38f6ff" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(m.text)}</text>`
+            ? `<text x="${midX}" y="${y - 7}" text-anchor="middle" fill="${pal.edgeLabelText}" font-size="11" font-family="JetBrains Mono, Consolas, monospace">${escapeXml(m.text)}</text>`
             : "") +
         `</g>`,
       );
     }
   });
 
-  return buildSvgEnvelope(svgWidth, svgHeight, parts.join("\n"));
+  return buildSvgEnvelope(svgWidth, svgHeight, parts.join("\n"), theme);
 }
 
-function buildSvgEnvelope(width: number, height: number, body: string): string {
+function buildSvgEnvelope(width: number, height: number, body: string, theme: MermaidTheme): string {
+  const p = PALETTES[theme];
   const defs =
     `<defs>` +
     `<marker id="mermaid-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
-    `<path d="M 0 1 L 10 5 L 0 9 z" fill="#38f6ff" />` +
+    `<path d="M 0 1 L 10 5 L 0 9 z" fill="${p.edgeStrong}" />` +
     `</marker>` +
     `<marker id="mermaid-arrow-open" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
-    `<path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#38f6ff" stroke-width="1.8" />` +
+    `<path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="${p.edgeStrong}" stroke-width="1.8" />` +
     `</marker>` +
     `<marker id="mermaid-arrow-cross" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto">` +
-    `<path d="M 2 2 L 8 8 M 8 2 L 2 8" fill="none" stroke="#ff8573" stroke-width="1.8" />` +
+    `<path d="M 2 2 L 8 8 M 8 2 L 2 8" fill="none" stroke="${p.cross}" stroke-width="1.8" />` +
     `</marker>` +
     `</defs>`;
 
   const raw =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="max-width:100%;height:auto;image-rendering:auto;display:block;" shape-rendering="geometricPrecision">` +
-    `<rect width="${width}" height="${height}" fill="#0c0d1b" rx="4" ry="4" />` +
+    `<rect width="${width}" height="${height}" fill="${p.canvas}" rx="4" ry="4" />` +
     defs +
     body +
     `</svg>`;
@@ -1187,15 +1434,15 @@ function buildSvgEnvelope(width: number, height: number, body: string): string {
 
 // ─── Public SVG Render Entrypoint ─────────────────────────────────────────────
 
-export function renderMermaidSvg(code: string): RenderMermaidResult {
+export function renderMermaidSvg(code: string, theme: MermaidTheme = "dark"): RenderMermaidResult {
   const parsed = parseMermaid(code);
   if (!parsed.ok) {
     return { ok: false, error: parsed.error };
   }
   const svg =
     parsed.kind === "sequence"
-      ? renderSequenceSvg(parsed)
-      : renderLayeredGraphSvg(parsed);
+      ? renderSequenceSvg(parsed, theme)
+      : renderLayeredGraphSvg(parsed, theme);
 
   return {
     ok: true,
@@ -1275,9 +1522,12 @@ function renderSafeSvgElement(svgMarkup: string): ReactNode {
 
 // ─── React Component ──────────────────────────────────────────────────────────
 
+import { useTheme } from "./useBotFace";
+
 export function MermaidView({ code }: { code: string }) {
+  const theme = useTheme();
   const detectedKind = useMemo(() => detectMermaidKind(code), [code]);
-  const rendered = useMemo(() => renderMermaidSvg(code), [code]);
+  const rendered = useMemo(() => renderMermaidSvg(code, theme), [code, theme]);
   const [mode, setMode] = useState<"diagram" | "source">(() =>
     rendered.ok ? "diagram" : "source",
   );

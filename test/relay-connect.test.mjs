@@ -3,7 +3,8 @@
 // known host is RelayPinMismatchError, a known host's relay endpoint moves only after the user said yes (default keeps
 // it), nothing is written before the pinned handshake + redeem succeeded, and the E4a id + relay id of one PC fold
 // into ONE hosts[] entry. Attacker cases are marked "attacker:".
-// Run: node --test --import ./test/setup/hermetic.mjs test/relay-connect.test.mjs
+// Run: node --test test/relay-connect.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

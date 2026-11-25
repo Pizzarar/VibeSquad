@@ -4,7 +4,8 @@
 // MagicDNS name rides the existing VIBESQUAD_MESHNET_HOST into isAllowedHostHeader and the cert SAN; (3) /pair?format=json,
 // /pair/status and x-vs-device-token work on that listener with a ts.net Host, through the real TLS mux on a non-loopback
 // socket address (127.0.0.2: isLocal() only knows 127.0.0.1/::1). Attacker / regression cases are marked "negative:".
-// Run: node --test --import ./test/setup/hermetic.mjs test/tailscale-listener.test.mjs
+// Run: node --test test/tailscale-listener.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

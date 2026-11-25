@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": "efi",
   "ref": "origin/main",
-  "sha": "9a0131ae9fe5dae75c8eb5baf9f2354854053d12",
+  "sha": "9da5fac452f730eb6b23ee5e9121cea96a7c5941",
   "generatedAt": "2026-01-01T00:00:00.000Z",
   "entities": [
     {
@@ -1636,6 +1636,179 @@
         "text": "# PLAN_MAP_VIBES\n\n## Per map\n\n### 1. Harbor District (`harbor_district`) — ANCHOR\n- **Setting:** a dead container port at dusk; cranes, wet concrete.\n- **Palette / light:** olive-drab, khaki-tan.\n- **Roster:** `scav` (hooded scavenger), `armored_scav` (slate plate). **Boss** `boss_dockmaster`: greatcoat.\n\n### 6. Sealed Vault (`sealed_vault`)\n- **Setting:** the sealed records vault; steel shelving.\n\n### 7-10. The Sublevels: cold-war complex, 4 bands\n| Band | Floors | Setting | Palette / light | Signature enemy (redo) |\n|---|---|---|---|---|\n| A | 1-3 | Service levels | concrete grey | `shaft_runner`: a fast scavenger |\n\n## Plan\n",
         "lore_kind": "doc",
         "path": "docs/PLAN_MAP_VIBES.md"
+      }
+    },
+    {
+      "id": "enemy.scav",
+      "kind": "art_slot",
+      "display": "enemy.scav",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 6
+      },
+      "links": [
+        {
+          "rel": "portrait",
+          "kind": "enemy",
+          "id": "scav"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "artKind": "enemy_portrait",
+        "slot": "portrait",
+        "status": "PIPELINE",
+        "batch": "B1",
+        "path": "res://art/pipeline/enemy_portrait/x_enemy.scav.png",
+        "candidates": null,
+        "target": {
+          "kind": "enemy",
+          "id": "scav"
+        }
+      }
+    },
+    {
+      "id": "enemy.boss_dockmaster",
+      "kind": "art_slot",
+      "display": "enemy.boss_dockmaster",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 12
+      },
+      "links": [
+        {
+          "rel": "portrait",
+          "kind": "enemy",
+          "id": "boss_dockmaster"
+        }
+      ],
+      "production": "placeholder",
+      "data": {
+        "artKind": "enemy_portrait",
+        "slot": "portrait",
+        "status": "PLACEHOLDER",
+        "batch": "B1",
+        "path": "res://art/enemy_portrait/boss_dockmaster.png",
+        "candidates": [
+          "res://art/enemy_portrait/boss_dockmaster.png"
+        ],
+        "target": {
+          "kind": "enemy",
+          "id": "boss_dockmaster"
+        }
+      }
+    },
+    {
+      "id": "sprite.scav",
+      "kind": "art_slot",
+      "display": "sprite.scav",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 21
+      },
+      "links": [
+        {
+          "rel": "sprite",
+          "kind": "enemy",
+          "id": "scav"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "artKind": "raid_sprite",
+        "slot": "sprite",
+        "status": "PIPELINE",
+        "batch": "B2",
+        "path": "res://art/pipeline/raid_sprite/x_sprite.scav.png",
+        "candidates": null,
+        "target": {
+          "kind": "enemy",
+          "id": "scav"
+        }
+      }
+    },
+    {
+      "id": "trader.popper",
+      "kind": "art_slot",
+      "display": "trader.popper",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 27
+      },
+      "links": [
+        {
+          "rel": "portrait",
+          "kind": "trader",
+          "id": "popper"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "artKind": "trader_portrait",
+        "slot": "portrait",
+        "status": "PIPELINE",
+        "batch": "B1",
+        "path": "res://art/pipeline/trader_portrait/x_trader.popper.png",
+        "candidates": null,
+        "target": {
+          "kind": "trader",
+          "id": "popper"
+        }
+      }
+    },
+    {
+      "id": "squad.doc",
+      "kind": "art_slot",
+      "display": "squad.doc",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 33
+      },
+      "links": [
+        {
+          "rel": "portrait",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "artKind": "squad_portrait",
+        "slot": "portrait",
+        "status": "PIPELINE",
+        "batch": "B1",
+        "path": "res://art/pipeline/squad_portrait/x_squad.doc.png",
+        "candidates": null,
+        "target": {
+          "kind": "squad",
+          "id": "doc"
+        }
+      }
+    },
+    {
+      "id": "item.scrap_metal",
+      "kind": "art_slot",
+      "display": "item.scrap_metal",
+      "aliases": [],
+      "source": {
+        "path": "data/art_manifest.json",
+        "line": 39
+      },
+      "links": [],
+      "production": "final",
+      "data": {
+        "artKind": "item_icon",
+        "slot": "other",
+        "status": "COMMISSIONED",
+        "batch": "B9",
+        "path": "res://art/item_icon/scrap_metal.png",
+        "candidates": null,
+        "target": null
       }
     }
   ],

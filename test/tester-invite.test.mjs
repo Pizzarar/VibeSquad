@@ -1,5 +1,6 @@
 // E6c (docs/PLAN_E6_TESTER_ROLES.md): scoped alpha-tester invites. Pure helpers, the two pair UIs' wiring, and the CLI
 // (`vs pair --role bug-tester --team efi`, `vs devices list`) against a real in-process server.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

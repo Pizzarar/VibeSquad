@@ -2,6 +2,7 @@
 // session (resumable) stays live; an exited / session-less one is retired as before. Exercises the shared predicate
 // (isRetiredAgent / isLiveAgent / whoCandidate / resolveLeadWinner), the runner's resumable status, vs who, spawn gating,
 // and send routing — with real resumable fixtures (session event, lost, no exit) and unresumable ones (exit / no session).
+import "./setup/hermetic.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";

@@ -16,8 +16,8 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 test("default kind table: one file per kind, SB1 order, v1 + reserved", () => {
   const files = fs.readdirSync(DEFAULT_KINDS_DIR).filter((f) => f.endsWith(".mjs")).map((f) => f.slice(0, -4)).sort();
   assert.deepEqual(files, [...KIND_TABLE.ALL_KINDS].sort());
-  assert.deepEqual(Object.keys(reg.KINDS), ["trader", "squad", "enemy", "location", "room", "item", "skill", "contract", "recipe", "quest_step", "line", "voice_card", "lore"]);
-  assert.deepEqual([...reg.RESERVED_KINDS], ["faction", "dialogue_node", "dialogue_choice", "cutscene", "ability", "art_slot", "audio_cue", "map_graph"]);
+  assert.deepEqual(Object.keys(reg.KINDS), ["trader", "squad", "enemy", "location", "room", "item", "skill", "contract", "recipe", "quest_step", "line", "voice_card", "lore", "art_slot"]);
+  assert.deepEqual([...reg.RESERVED_KINDS], ["faction", "dialogue_node", "dialogue_choice", "cutscene", "ability", "audio_cue", "map_graph"]);
   for (const d of KIND_TABLE.defs) {
     assert.ok(Object.isFrozen(d) && d.slots.length >= 1, d.kind);
     assert.equal(d.lane, d.reserved ? null : "storybook", d.kind);
@@ -36,7 +36,8 @@ test("extension: a dummy kind file added in the test only shows up in the table"
   fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, "dummy_widget.mjs"), 'export default { kind: "dummy_widget", label: "Dummy widget", order: 500, reserved: false, lane: "test-lane", required: ["size"], slots: ["text", "icon"] };\n');
   const ext = await loadKindTable([DEFAULT_KINDS_DIR, dir]);
-  assert.deepEqual(ext.ALL_KINDS, [...Object.keys(reg.KINDS), "dummy_widget", ...reg.RESERVED_KINDS]);
+  // dummy_widget (order 500) sorts between the v1 kinds (order <= 130) and art_slot (order 1060)
+  assert.deepEqual(ext.ALL_KINDS, [...Object.keys(reg.KINDS).slice(0, -1), "dummy_widget", "art_slot", ...reg.RESERVED_KINDS]);
   assert.deepEqual(ext.KINDS.dummy_widget, { label: "Dummy widget", required: ["size"] });
   assert.equal(ext.byKind.get("dummy_widget").lane, "test-lane");
   // the default table (and so Storybook) never sees it
@@ -106,10 +107,17 @@ test("production per slot: primary slot falls back to `production`; bad slots/st
 test("cross-lane / cross-project links", () => {
   const t = entity({ id: "doc", kind: "trader", display: "Doc", source: src, links: [
     { rel: "sells", kind: "item", id: "bandage" },
-    { rel: "portrait", kind: "art_slot", id: "doc_portrait" },
+    { rel: "member_of", kind: "faction", id: "traders_union" },
     { rel: "sequel", kind: "trader", id: "doc", project: "efi2" },
   ] });
   assert.deepEqual(reg.validateEntity(t), { ok: true, errors: [] });
-  assert.deepEqual(reg.crossLaneLinks(t).map((l) => l.rel), ["portrait", "sequel"]);
+  assert.deepEqual(reg.crossLaneLinks(t).map((l) => l.rel), ["member_of", "sequel"]);
   assert.match(reg.validateEntity({ ...t, links: [{ rel: "x", kind: "item", id: "a", project: "Bad Key" }] }).errors.join(), /links\[0\]\.project/);
+});
+
+test("registry: character flag is optional boolean, defaults false", () => {
+  const good = { kind: "x", label: "X", order: 1, reserved: false, lane: null, required: [], slots: ["text"] };
+  assert.equal(buildKindTable([good]).byKind.get("x").character, false);
+  assert.equal(buildKindTable([{ ...good, character: true }]).byKind.get("x").character, true);
+  assert.throws(() => buildKindTable([{ ...good, character: "yes" }]), /character/);
 });

@@ -84,6 +84,8 @@ function usageFields(u) {
     inputTokens: u.inputTokens ?? u.contextTokens,
     ...(Number.isFinite(u.outputTokens) ? { outputTokens: u.outputTokens } : {}),
     ...(Number.isFinite(u.costUsd) ? { costUsd: u.costUsd } : {}),
+    // K2b: the ACP adapter's post-compact estimate (agy has no real reading until the next turn): never re-arms a crossing.
+    ...(u.compacted === true ? { compactEstimate: true } : {}),
   };
   return { lastUsage, tokenUsage: { ...lastUsage, usedTokens: u.contextTokens } };
 }
@@ -230,7 +232,7 @@ export function newFoldState() {
   };
 }
 
-const USAGE_KEYS = ["contextTokens", "contextMax", "inputTokens", "outputTokens", "costUsd"]; // all usageFields() reads
+const USAGE_KEYS = ["contextTokens", "contextMax", "inputTokens", "outputTokens", "costUsd", "compacted"]; // all usageFields() reads
 
 export function feedFoldLine(st, line) {
   if (!line) return;

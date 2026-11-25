@@ -171,7 +171,7 @@ static func auth_mode(url: String) -> String:
 
 ## B2b egress rule (PLAN_V1 "Remote is https only"): the device token (and a pairing code) only goes to an https://
 ## server_url. Off loopback VS serves only its mesh listener, whose plain-http side 301s GETs, 426s POSTs and burns a
-## /pair code (server/serve.mjs createMeshnetMux), so plain http (Tailscale addresses included) is refused. https alone
+## /pair code (server/serve.mjs createMeshnetMux), so plain http (Meshnet addresses included) is refused. https alone
 ## is not enough: transport.gd also requires the pinned VS CA (never the system trust store). Redirects never followed.
 static func is_device_egress_allowed(url: String) -> bool:
 	var u := parse_url(url)
