@@ -37,6 +37,7 @@ import { PermissionCard } from "./PermissionCard";
 import { Composer, formatBtwPrompt, shouldQueueOnSend } from "./Composer";
 import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { BoringAgentHeader } from "./BoringAgentHeader";
+import { useAgentConfig } from "./useAgentConfig";
 import { useVibe } from "./AngelBezel";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers } from "./WorkingBar";
@@ -325,6 +326,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     [agent, bsUsedTokens, clearDraft, laneId, restarting, teamId],
   );
 
+  // B16: Normal mode owns one shared config instance for the header and the composer bar. `active` is gated so Psycho (whose
+  // DrawerHeader has its own hook) never gets a second Shift+Tab listener from here.
+  const boringCfg = useAgentConfig({ agent, active: active && boringChat, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch: setStagedSwitch, enabled: boringChat });
+
   const sendLock = useRef(createSendLock());
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -527,6 +532,36 @@ ${draft}`);
     [clearDraft, inboxParking, laneId, teamId],
   );
 
+  // Bor19 (n5/n6): the Working-now strip + permission cards share the chat column with the timeline (so they sit
+  // beside, not above, the context panel). Extract them once; boring mode wraps them with the timeline in a column.
+  const timelineEl = (
+    <TimelineErrorBoundary fallbackLabel="timeline">
+      <Timeline
+        agentId={agent.id}
+        agentStatus={agent.status}
+        queuedAhead={(agent as { queued?: { ahead: number } }).queued?.ahead}
+        agentTitle={agent.title}
+        entries={entries}
+        error={error}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        loaded={loaded}
+        loadMore={loadMore}
+        onParkText={(txt) => void parkToInbox(txt, false)}
+      />
+    </TimelineErrorBoundary>
+  );
+  const permCards = agent.pendingPermissions?.map((p) => (
+    <PermissionCard
+      key={p.id}
+      p={p}
+      agentId={agent.id}
+      agentName={agent.title ?? agent.id.slice(0, 8)}
+      permInputs={permInputs}
+      setPermInputs={setPermInputs}
+    />
+  ));
+
   return (
     <aside
       className={boringChat ? "drawer boring-drawer" : "drawer"}
@@ -590,6 +625,7 @@ ${draft}`);
           active={active}
           stagedSwitch={stagedSwitch}
           onStageSwitch={setStagedSwitch}
+          cfg={boringCfg}
           restartedFrom={restartedFrom}
           feedbackDismissed={feedbackDismissed}
           onFeedback={onFeedback}
@@ -651,36 +687,19 @@ ${draft}`);
       />
       )}
 
-      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />}
-
-      {agent.pendingPermissions?.map((p) => (
-        <PermissionCard
-          key={p.id}
-          p={p}
-          agentId={agent.id}
-          agentName={agent.title ?? agent.id.slice(0, 8)}
-          permInputs={permInputs}
-          setPermInputs={setPermInputs}
-        />
-      ))}
+      {!boringChat && permCards}
 
       {pinDecisions && <DecisionPin agentId={agent.id} entries={entries} />}
+      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />}
       <div className="drawer-shell">
-        <TimelineErrorBoundary fallbackLabel="timeline">
-          <Timeline
-            agentId={agent.id}
-            agentStatus={agent.status}
-            queuedAhead={(agent as { queued?: { ahead: number } }).queued?.ahead}
-            agentTitle={agent.title}
-            entries={entries}
-            error={error}
-            hasMore={hasMore}
-            loadingMore={loadingMore}
-            loaded={loaded}
-            loadMore={loadMore}
-            onParkText={(txt) => void parkToInbox(txt, false)}
-          />
-        </TimelineErrorBoundary>
+        {boringChat ? (
+          <div className="boring-convo-col">
+            {permCards?.length ? <div className="boring-perm-stack">{permCards}</div> : null}
+            {timelineEl}
+          </div>
+        ) : (
+          timelineEl
+        )}
         {vibe === "boring" && !chatOnly && !noContextPanel && (
           <TimelineErrorBoundary fallbackLabel="context panel">
             <BoringContextPanel key={agent.id} agent={agent} entries={entries} teamId={teamId} laneId={laneId} />
@@ -725,6 +744,7 @@ ${draft}`);
         queuedItems={queuedItems}
         onSendQueuedNow={() => void sendQueuedNow()}
         onCancelQueued={cancelQueued}
+        boringConfig={boringChat ? boringCfg : undefined}
       />
     </aside>
   );
