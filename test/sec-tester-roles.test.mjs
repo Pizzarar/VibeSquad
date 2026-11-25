@@ -806,7 +806,7 @@ describe("scoped /__vibesquad/runner/* and the SSE filter", () => {
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-othbuddy", seq: 1, type: "output" }), []);
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efiart", seq: 1, type: "output" }), []);
     assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "tool_call" }), []);
-    assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output", text: "secret" }), [{ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output" }]);
+    assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 4, type: "output", text: "secret" }), [], "L1: raw intake timeline never reaches a tester (seq/type leak owner + other testers activity)");
     assert.deepEqual(filter({ kind: "status", agentId: "rn-efiart", from: "idle", to: "running" }), []);
     const st = filter({ kind: "status", agentId: "rn-efibuddy", from: "idle", to: "running" });
     assert.equal(st.length, 1);
