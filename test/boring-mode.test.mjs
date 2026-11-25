@@ -147,7 +147,7 @@ stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; expor
 stub("usageHelpers.mjs", `export const OPEN_USAGE_EVENT = "vs:open-usage"; export const takeColdUsageFocus = () => false;`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
-stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
+stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; }; export const needsYouRows = () => globalThis.__needsYouRows ?? []; export const needsYouReason = (i) => i.reason ?? "";`);
 // B17: the real picker (pure builders + presentational component), transformed like BoringAde itself.
 writeFileSync(join(dir, "BoringPanePicker.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + transformSync("BoringPanePicker.tsx", readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace(/from "react"/, `from ${JSON.stringify(reactUrl)}`));
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
@@ -714,7 +714,7 @@ test("D1: type + colour tokens, no vw type, flat canvas, measure and row density
   assert.ok(!css.includes("font-size: clamp("), "no clamp()/vw font sizes");
   for (const t of ["--surface-0", "--surface-1", "--surface-2", "--surface-3", "--surface-sunken", "--border-strong", "--text-1", "--text-2", "--text-3", "--focus", "--st-run", "--st-attn", "--st-err", "--st-done", "--st-ok"]) assert.ok(css.includes(t + ":"), t);
   assert.ok(css.includes("--surface-0: #f7f6f3; --surface-1: #ffffff"), "neutral light surfaces");
-  assert.ok(css.includes("--measure-col: clamp(880px, 86%, 1360px)") && css.includes("--measure-prose: min(100%, 960px)"));
+  assert.ok(css.includes("--measure-col: clamp(880px, 90%, 1680px)") && css.includes("--measure-prose: min(100%, 960px)"));
   assert.ok(css.includes("--row-h: 32px"));
   assert.ok(css.includes("@media (pointer: coarse) { html[data-vibe=\"boring\"] { --row-h: 40px; } }"));
   assert.ok(/\.boring-app::before \{[^}]*height: 2px; background: var\(--titlebar\)/.test(css));

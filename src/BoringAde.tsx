@@ -5,7 +5,7 @@ import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
 import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
-import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
+import { BoringInbox, needsYouReason, needsYouRows, type NeedsYouRow } from "./BoringInbox";
 import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, parseUrlState, teamCtxItems } from "./CommandPalette";
 import { RemoveTeamDialog } from "./PinRemove";
 import { captureFocusReturn } from "./ctxMenuLogic";
@@ -27,7 +27,7 @@ import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLast
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
-import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type PickerHandlers } from "./BoringPanePicker";
+import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type PickerHandlers, type StripItem } from "./BoringPanePicker";
 import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
@@ -709,6 +709,17 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     openBugs: () => pickBugs(),
     openRole: (laneId, role) => { const c = conversations.find((x) => x.laneId === laneId); if (c && view) pickRoleIn(view, c.pin, laneId, role); },
   };
+  /** B17: the picker strip = the sidebar's own Needs-you rows (needsYouRows) + every other running member (Desk workers, Buddies, Leads), so the counts agree. */
+  const pickerStrip = (): StripItem[] => {
+    if (!view) return [];
+    const rows = needsYouRows([view], now).filter((r) => r.item.kind !== "finished");
+    const seen = new Set(rows.map((r) => r.item.id));
+    const running = view.members.filter((m) => m.agent.status === "running" && !seen.has(m.agent.id) && !m.agent.archivedAt).map((m): StripItem => ({
+      id: m.agent.id, needs: false, sub: "Working",
+      title: m.kind === "lead" || m.kind === "brainstorm" ? `${m.kind === "lead" ? "Lead" : "Buddy"} · ${conversations.find((c) => c.laneId === m.laneId)?.name ?? "Desk"}` : m.agent.title ?? m.agent.id.slice(0, 8),
+    }));
+    return [...rows.map((r): StripItem => ({ id: r.item.id, needs: true, title: r.who, sub: `${r.lane} · ${needsYouReason(r.item)}` })), ...running];
+  };
   const emptyCard = () => {
     const startKey = startKeyFor(currentPin);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
@@ -748,7 +759,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <BoringPanePicker data={buildPickerData(model, pickerHandlers)}>
+            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={emptyCard} onClose={() => toggleSplit()}>
               <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={() => toggleSplit()}>Close split</button>
             </BoringPanePicker>
             <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>
@@ -1216,7 +1227,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
               // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
               // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
-              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
+              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : currentPin && isLive(currentPin.lead) ? `Lead ${leadStatus === "running" ? "working" : "idle"} · no Brainstorm` : currentPin && isLive(currentPin.brainstorm) ? "Brainstorm ready · no Lead" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
             ) : emptyCard()}
           </div>
         )}
