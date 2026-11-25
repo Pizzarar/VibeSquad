@@ -83,7 +83,8 @@ test("hermetic preload + childEnv keep the live runtime out of test children", (
   const out = execFileSync(process.execPath, ["--import", "./test/setup/hermetic.mjs", "-e", "console.log(process.env.VIBESQUAD_RUNTIME_DIR)"],
     { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_RUNTIME_DIR: live } }).trim();
   assert.notEqual(out, live);
-  assert.ok(path.relative(tmpdir(), out).startsWith("vs-test-runtime-"), out);
+  assert.ok(path.basename(out).startsWith("vs-test-runtime-"), out);
+  assert.ok(!path.relative(tmpdir(), out).startsWith(".."), `inside the temp dir: ${out}`); // a direct run nests it under the child's vs-t- scratch
 });
 
 test("forge 11-23: test env drops inherited live/identity vars, keeps test knobs, and moves a TMPDIR out of ~/.vibesquad", () => {

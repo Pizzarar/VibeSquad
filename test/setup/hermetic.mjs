@@ -15,7 +15,8 @@ import { basename, join } from "node:path";
 import { hermeticizeEnv, TEST_SCRATCH_PREFIX } from "../../scripts/test-child-env.mjs";
 
 hermeticizeEnv(process.env);
-// idea-977: one scratch dir per test process; every mkdtemp(os.tmpdir()) in a test (and in its children) lands inside it and the
+// idea-977: one scratch dir per test run (under `node --test --import` the parent runner creates it and every file inherits it, so it
+// lives until the whole run exits; a direct `node --test <file>` run creates its own); every mkdtemp(os.tmpdir()) in a test (and in its children) lands inside it and the
 // exit hook below removes the lot. Killed processes leave theirs for scripts/run-tests.mjs (sweepTestScratch) to age out.
 // A child that inherits its parent's scratch (TMPDIR already a vs-t- dir) reuses it: the parent owns and removes it.
 const inherited = basename(tmpdir()).startsWith(TEST_SCRATCH_PREFIX);
