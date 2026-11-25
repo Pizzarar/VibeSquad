@@ -308,6 +308,51 @@ test("pin merge gate: the owner, the same-Squad Overlord and the same-Squad hub 
   await assert.rejects(run("remove", "art", { env: agentEnv, verify: as("brainstorm", "vibesquad") }), /only the owner or the Overlord/);
 });
 
+test("pin merge: the hub lane cannot be merged away, even by the owner; a feature lane may merge into the hub", async () => {
+  // Review rn-541cb1391753 #1: merge marks <from> removed, so it must keep `vs pin remove`'s hub-lane guard.
+  const mergeHub = (from, into, env, verify) =>
+    quiet(() => commandPinMerge({ _: [from, into], team: "vibesquad" }, { env, ...(verify ? { verify } : {}) }));
+  for (const [who, env, verify] of [
+    ["owner", OWNER_ENV, null],
+    ["Overlord", agentEnv, as("lead", "vibesquad")],
+    ["hub Buddy", agentEnv, as("brainstorm", "vibesquad")],
+  ]) {
+    reset();
+    briefs();
+    const before = raw();
+    const logStart = logLines().length;
+    await assert.rejects(mergeHub("vibesquad", "bug-chaser", env, verify), /vs pin merge: vibesquad is VibeSquad's hub lane/, who);
+    await assert.rejects(mergeHub("VibeSquad", "art", env, verify), /hub lane/, `${who}: by name`);
+    assert.equal(raw(), before, `${who}: teams.json unchanged`);
+    assert.equal(logLines().length, logStart, `${who}: no decision logged`);
+  }
+  reset();
+  briefs();
+  const r = await mergeHub("art", "vibesquad", OWNER_ENV, null);
+  assert.equal(r.code, 0, r.out);
+  assert.equal(laneOf("art").state, "removed");
+  assert.equal(laneOf("vibesquad").state, "pinned");
+  assert.ok(laneOf("vibesquad").aliases.includes("art"));
+});
+
+test("pin gate runs before lane lookup: an unauthorized caller gets 403-class refusal, not an unknown-lane probe", async () => {
+  // Review rn-541cb1391753 #2.
+  reset();
+  const before = raw();
+  const worker = as("worker", "bug-chaser");
+  for (const verb of ["hide", "unhide", "remove"]) {
+    await assert.rejects(run(verb, "no-such-lane", { env: agentEnv, verify: worker }), /only the owner or the Overlord/, verb);
+  }
+  await assert.rejects(
+    quiet(() => commandPinMerge({ _: ["no-such-lane", "also-missing"], team: "vibesquad" }, { env: agentEnv, verify: worker })),
+    /only the owner, the Overlord or the hub Buddy/,
+  );
+  await assert.rejects(quiet(() => commandPinMerge({ _: ["no-such-lane", "art"], team: "vibesquad" }, { env: {} })), /no owner proof/);
+  assert.equal(raw(), before);
+  // an authorized caller still gets the precise error
+  await assert.rejects(run("hide", "no-such-lane"), /unknown lane "no-such-lane"/);
+});
+
 test("pin merge CLI: a worker shell is refused and teams.json is unchanged", () => {
   reset();
   briefs();

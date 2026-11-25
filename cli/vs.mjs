@@ -1851,13 +1851,18 @@ export async function commandPinMerge(flags, { env = process.env, ...gateOpts } 
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
 
+  // Gate before lane lookup: an unauthorized caller gets 403, not an "unknown lane" probe of the Squad's lanes.
+  const caller = await assertPinAdminCaller("merge", target.id, doc.teams, env, { ...gateOpts, allowHubBuddy: true });
   const lanes = target.lanes ?? [];
   const fromLane = matchLaneRef(lanes, fromRaw);
   const intoLane = matchLaneRef(lanes, intoRaw);
   if (!fromLane) throw new Error(`unknown source lane "${fromRaw}" in ${squadDef.name}`);
   if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
   if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
-  const caller = await assertPinAdminCaller("merge", target.id, doc.teams, env, { ...gateOpts, allowHubBuddy: true });
+  // Merging marks <from> removed, so the hub lane is refused as the source for everyone, same as `vs pin remove`.
+  if (isHubLane(target, fromLane)) {
+    throw new Error(`vs pin merge: ${fromLane.id} is ${squadDef.name}'s hub lane (the Overlord's); it cannot be merged away. Merge a feature lane into it instead.`);
+  }
 
   const briefRoot = process.env.VIBESQUAD_ROOT ? path.resolve(process.env.VIBESQUAD_ROOT) : undefined;
   const fromBrief = readBrainstormSummary(fromLane.id, briefRoot, { teamId: squadDef.id }).content;
@@ -2005,10 +2010,9 @@ export async function commandPinHide(verb, flags, { env = process.env, listAgent
   if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+  const caller = await assertPinAdminCaller(verb, target.id, doc.teams, env, gateOpts);
   const lane = matchLaneRef(target.lanes ?? [], laneRaw);
   if (!lane) throw new Error(`unknown lane "${laneRaw}" in ${squadDef.name}`);
-
-  const caller = await assertPinAdminCaller(verb, target.id, doc.teams, env, gateOpts);
   if (isHubLane(target, lane)) throw new Error(`vs pin ${verb}: ${lane.id} is ${squadDef.name}'s hub lane (the Overlord's); it cannot be hidden or removed.`);
 
   const already =
