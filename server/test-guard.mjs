@@ -35,3 +35,9 @@ export function isForbiddenRepoTeams(file, env = process.env) {
   if (!underTestRunner(env) || env.VS_ALLOW_REAL_HOME === "1" || env.VIBESQUAD_TEAMS_FILE) return false;
   return path.resolve(file) === path.join(repoRoot(), "teams.json");
 }
+
+/** True when `dir` is the developer's real user home and we are under a test runner without the opt-out (no tool may copy its sign-in files). */
+export function isForbiddenRealUserHome(dir, env = process.env) {
+  if (!underTestRunner(env) || env.VS_ALLOW_REAL_HOME === "1") return false;
+  return path.resolve(dir) === path.resolve(osHome());
+}
