@@ -107,7 +107,7 @@
   .sb-back { order: 0; }
   .sb-title { order: 1; flex: 1 1 0; }
   .sb-head .project-tabs { order: 1; }
-  .sb-head .project-tabs .boring-switch-pill { min-height: 40px; }
+  .sb-root .sb-head .project-tabs .boring-switch-pill { min-height: 40px; } /* (0,4,0) beats boring.css min-height 28 */
   .sb-word { display: none; } /* UX R22 m2: the pill already says Storybook; keep the project name visible */
   .sb-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
   .sb-head-right { order: 2; }
