@@ -6770,9 +6770,15 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   flex: 0 1 auto;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: inline-flex;
 }
+/* R2 fix r1 (UX M1): the model ellipsizes first; the reason (why) never shrinks. */
+.role-model-chip .rmc-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.role-model-chip .rmc-why { flex: 0 0 auto; white-space: pre; }
+.role-model-chip .rmc-why[data-reason="all-capped"], .role-model-chip .rmc-why[data-reason="failover"] { color: var(--pink-t); }
 .drawer-head-compact .role-model-chip { font-size: 10px; }
+/* R2 fix r1 (UX m3): the all-capped landing badge and its note read as a warning, not a healthy pick. */
+.def-badge.def-badge-warn { border-color: var(--pink-t); color: var(--pink-t); }
 
 .re-section { border-left-color: var(--violet-t, #b69cff); }
 .re-role-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }

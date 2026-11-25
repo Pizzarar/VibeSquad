@@ -10,13 +10,35 @@ import { routeWhy } from "../server/spawn-reason.mjs";
 const routeOverrideLabel = ({ provider, model }: { provider?: string; model?: string }) =>
   [provider && !/\s/.test(provider) ? `provider=${provider}` : "", model && !/\s/.test(model) ? `model=${model}` : ""].filter(Boolean).join(" ");
 
-/** R2: the ` · <reason>` a drawer role chip shows: the hook's vs.route why=; "override" once the live model no longer matches
+/** R2: the reason a drawer role chip shows: the hook's vs.route why=; "override" once the live model no longer matches
  *  vs.model (a switch since spawn); "" while a switch is staged (the chip already shows the staged model). */
 export function drawerSpawnWhy(labels: Record<string, string>, liveModel: string | null | undefined, staged: boolean): string {
   if (staged) return "";
   const spawned = labels["vs.model"];
   if (spawned && liveModel && liveModel !== spawned) return "override";
   return routeWhy(labels["vs.route"]);
+}
+
+/** One word per reason in the UI. The machine value `rung` is the ladder (same word the New Agent badge uses). */
+export const spawnReasonLabel = (reason: string) => (reason === "rung" ? "ladder" : reason);
+
+/** Plain-words gloss per reason (tooltip). test/r2-ui-badge.test.mjs pins that every SPAWN_REASONS member has one. */
+export const SPAWN_REASON_GLOSS: Record<string, string> = {
+  rung: "Ladder: picked by this role and its stakes.",
+  arm: "Arm: an alternating Sonnet/Gemini trial picked this model.",
+  override: "Override: you or the caller picked the provider or model.",
+  failover: "Failover: the preferred provider was capped, so a fallback ran instead.",
+  "legacy-name": "Legacy name: an old profile name ran its stored profile.",
+  "all-capped": "All capped: every provider was capped, so it started on the first and waits or fails over.",
+};
+
+/** Chip tooltip: plain words only (never the raw route text). */
+export function spawnChipTitle(opts: { role?: string; model?: string; reason: string; staged?: boolean; provider?: string }): string {
+  const head = [opts.role, opts.model].filter(Boolean).join(" · ");
+  if (opts.staged) return `${head} (staged switch: applies on your next message)`;
+  const gloss = opts.reason ? (SPAWN_REASON_GLOSS[opts.reason] ?? "") : "";
+  const on = opts.reason === "failover" && opts.provider ? ` Runs on ${opts.provider}.` : "";
+  return [head, gloss + on].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
 }
 
 /** Provider id -> the name the role editor shows. */
@@ -57,37 +79,41 @@ export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stake
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
 }
 
-/** R2: where a role row will actually land: the first provider of the stakes' walk order (walkOrder, A2) that is neither
- *  capped nor missing (the hook's failover), or the override. `via` is the badge text. All providers capped = the first
- *  provider of the walk order (the hook queues/warns there). */
+/** R2: where a role row will actually land, the way the hook does (server/spawn-route.mjs roleSpawnProfile): an override
+ *  provider that is capped hops along the role's walk order (walkOrder, A2) to the first uncapped provider, and so does a
+ *  plain ladder pick. Only CAPPED providers are skipped (agent-duties.ts: the hook never skips a not-installed one).
+ *  All providers capped = it stays on the override provider (or the first of the walk order) and `allCapped` is set: the
+ *  hook starts it there and waits/fails over, Spawn is never blocked. `via` is the badge text. */
 export function landingPick(
   role: RoleLike,
   ladder: LadderLike | undefined,
   stakes: string,
-  opts: { capped?: readonly string[]; installed?: readonly string[]; override?: Override | null } = {},
-): { provider: string; model: string; via: string } {
+  opts: { capped?: readonly string[]; override?: Override | null } = {},
+): { provider: string; model: string; via: string; allCapped: boolean } {
   const ov = opts.override ?? null;
-  if (ov) {
-    const model = ov.model ?? ladder?.[ov.provider]?.[tierFor(role, stakes)]?.model ?? "";
-    return { provider: ov.provider, model, via: ov.model ? "override" : "override (provider rung)" };
-  }
   const capped = opts.capped ?? [];
-  const installed = opts.installed;
+  const tier = tierFor(role, stakes);
+  const modelOf = (provider: string) => ladder?.[provider]?.[tier]?.model ?? "";
+  if (ov && !capped.includes(ov.provider)) {
+    return { provider: ov.provider, model: ov.model ?? modelOf(ov.provider), via: ov.model ? "override" : "override (provider rung)", allCapped: false };
+  }
   const providers = role.providers.length ? walkOrder(role, stakes) : ["claude"];
-  const skipped: string[] = [];
+  const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
   for (const provider of providers) {
-    const isCapped = capped.includes(provider);
-    const missing = !!installed && !installed.includes(provider);
-    if (isCapped || missing) {
-      skipped.push(`${providerName(provider)} ${isCapped ? "capped" : "not installed"}`);
+    if (ov && provider === ov.provider) continue;
+    if (capped.includes(provider)) {
+      skipped.push(`${providerName(provider)} capped`);
       continue;
     }
-    const model = ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "";
-    return { provider, model, via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder" };
+    // The hook keeps the caller's model only when it belongs to the hop target's family; this badge has no family table, so it shows the ladder model.
+    return { provider, model: modelOf(provider), via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder", allCapped: false };
   }
-  const first = ladderPick(role, ladder, stakes);
-  return { ...first, via: `all capped (${skipped.join(", ")})` };
+  const stay = ov?.provider ?? ladderPick(role, ladder, stakes).provider;
+  return { provider: stay, model: ov?.model ?? modelOf(stay), via: `all capped (${skipped.join(", ")})`, allCapped: true };
 }
+
+/** What an all-capped landing will do, in plain words (shown under the badges; Spawn stays enabled). */
+export const allCappedNote = (provider: string) => `All providers capped: will start on ${providerName(provider)} and wait or fail over.`;
 
 /** Override choices grouped by provider: the role's provider list, each with its ladder models (top > mid > cheap). */
 export function overrideGroups(role: RoleLike, ladder: LadderLike | undefined): Array<{ provider: string; models: string[] }> {

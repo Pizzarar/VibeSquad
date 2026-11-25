@@ -6,45 +6,67 @@ import { join } from "node:path";
 import test from "node:test";
 import { getRolesState } from "../server/roles-api.mjs";
 import { routeWhy } from "../server/spawn-reason.mjs";
-import { landingPick } from "../src/roleSpawn.ts";
+import { SPAWN_REASONS } from "../server/spawn-reason.mjs";
+import { SPAWN_REASON_GLOSS, allCappedNote, landingPick, spawnChipTitle, spawnReasonLabel } from "../src/roleSpawn.ts";
 
 const ladder = {
   claude: { top: { model: "claude-opus-5-5" }, mid: { model: "claude-sonnet-5-5" }, cheap: { model: "claude-haiku-5-5" } },
   "antigravity-cli": { top: { model: "g-top" }, mid: { model: "g-mid" }, cheap: { model: "g-cheap" } },
 };
 const role = { name: "Implement", tier: "mid", providers: ["claude", "antigravity-cli"] };
-const ALL = ["claude", "antigravity-cli", "opencode"];
 
 test("landingPick: nothing capped lands on the first provider via ladder", () => {
-  assert.deepEqual(landingPick(role, ladder, "normal", { capped: [], installed: ALL }), { provider: "claude", model: "claude-sonnet-5-5", via: "ladder" });
+  assert.deepEqual(landingPick(role, ladder, "normal", { capped: [] }), { provider: "claude", model: "claude-sonnet-5-5", via: "ladder", allCapped: false });
 });
 test("landingPick: capped first provider fails over to the next", () => {
-  const l = landingPick(role, ladder, "normal", { capped: ["claude"], installed: ALL });
-  assert.deepEqual(l, { provider: "antigravity-cli", model: "g-mid", via: "failover (Claude capped → Gemini)" });
+  const l = landingPick(role, ladder, "normal", { capped: ["claude"] });
+  assert.deepEqual(l, { provider: "antigravity-cli", model: "g-mid", via: "failover (Claude capped → Gemini)", allCapped: false });
 });
-test("landingPick: first provider not installed fails over", () => {
+test("landingPick: the hook only skips CAPPED providers, so `installed` is ignored (no not-installed failover)", () => {
   const l = landingPick(role, ladder, "tierA-security", { capped: [], installed: ["antigravity-cli"] });
-  assert.equal(l.provider, "antigravity-cli");
-  assert.equal(l.model, "g-top");
-  assert.equal(l.via, "failover (Claude not installed → Gemini)");
+  assert.deepEqual([l.provider, l.model, l.via], ["claude", "claude-opus-5-5", "ladder"]);
 });
-test("landingPick: override wins over caps", () => {
-  const l = landingPick(role, ladder, "normal", { capped: ["claude"], installed: ALL, override: { provider: "claude", model: "claude-opus-5-5" } });
-  assert.deepEqual(l, { provider: "claude", model: "claude-opus-5-5", via: "override" });
+test("landingPick: an uncapped override wins", () => {
+  const l = landingPick(role, ladder, "normal", { capped: [], override: { provider: "claude", model: "claude-opus-5-5" } });
+  assert.deepEqual(l, { provider: "claude", model: "claude-opus-5-5", via: "override", allCapped: false });
   assert.equal(landingPick(role, ladder, "normal", { capped: [], override: { provider: "antigravity-cli" } }).via, "override (provider rung)");
 });
-test("landingPick: mechanical walks A2's cheap order (Gemini Flash first, Claude Haiku next) like the hook", () => {
-  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: [], installed: ALL }), { provider: "antigravity-cli", model: "g-cheap", via: "ladder" });
-  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: ["antigravity-cli"], installed: ALL }), { provider: "claude", model: "claude-haiku-5-5", via: "failover (Gemini capped → Claude)" });
-  const all = landingPick(role, ladder, "mechanical", { capped: ["claude", "antigravity-cli"], installed: ALL });
-  assert.deepEqual([all.provider, all.via], ["antigravity-cli", "all capped (Gemini capped, Claude capped)"]);
+test("landingPick: a CAPPED override provider hops along the role's walk like roleSpawnProfile", () => {
+  const l = landingPick(role, ladder, "normal", { capped: ["claude"], override: { provider: "claude", model: "claude-opus-5-5" } });
+  assert.deepEqual([l.provider, l.model, l.via, l.allCapped], ["antigravity-cli", "g-mid", "failover (Claude capped → Gemini)", false]);
+  // override = the role's second provider, capped: hops to the first uncapped one (Claude)
+  const m = landingPick(role, ladder, "normal", { capped: ["antigravity-cli"], override: { provider: "antigravity-cli" } });
+  assert.deepEqual([m.provider, m.via], ["claude", "failover (Gemini capped → Claude)"]);
 });
-test("landingPick: all capped stays on the first provider and says so", () => {
-  const l = landingPick(role, ladder, "normal", { capped: ["claude", "antigravity-cli"], installed: ALL });
+test("landingPick: mechanical walks A2's cheap order (Gemini Flash first, Claude Haiku next) like the hook", () => {
+  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: [] }), { provider: "antigravity-cli", model: "g-cheap", via: "ladder", allCapped: false });
+  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: ["antigravity-cli"] }), { provider: "claude", model: "claude-haiku-5-5", via: "failover (Gemini capped → Claude)", allCapped: false });
+  const all = landingPick(role, ladder, "mechanical", { capped: ["claude", "antigravity-cli"] });
+  assert.deepEqual([all.provider, all.via, all.allCapped], ["antigravity-cli", "all capped (Gemini capped, Claude capped)", true]);
+});
+test("landingPick: all capped stays on the first provider (or the override's) and flags allCapped", () => {
+  const l = landingPick(role, ladder, "normal", { capped: ["claude", "antigravity-cli"] });
   assert.equal(l.provider, "claude");
+  assert.equal(l.allCapped, true);
   assert.match(l.via, /^all capped \(Claude capped, Gemini capped\)$/);
+  const o = landingPick(role, ladder, "normal", { capped: ["claude", "antigravity-cli"], override: { provider: "antigravity-cli", model: "g-top" } });
+  assert.deepEqual([o.provider, o.model, o.allCapped], ["antigravity-cli", "g-top", true]);
+  assert.match(allCappedNote(l.provider), /^All providers capped: will start on Claude and wait or fail over\.$/);
 });
 
+test("every SPAWN_REASONS member has a plain-words gloss, and `rung` reads as ladder (never rung in the UI)", () => {
+  for (const r of SPAWN_REASONS) assert.ok(SPAWN_REASON_GLOSS[r], `no gloss for ${r}`);
+  assert.equal(spawnReasonLabel("rung"), "ladder");
+  for (const r of SPAWN_REASONS) assert.doesNotMatch(`${spawnReasonLabel(r)} ${SPAWN_REASON_GLOSS[r]}`, /\brung\b/i);
+});
+test("spawnChipTitle is plain words: no route text, no key=value, no self-contradiction", () => {
+  const t = spawnChipTitle({ role: "Implement", model: "claude-opus-5-5", reason: "failover", provider: "Gemini" });
+  assert.doesNotMatch(t, /why=|reason=|route:|tier=/);
+  assert.match(t, /Failover/);
+  assert.doesNotMatch(t, /Ladder/);
+  assert.match(spawnChipTitle({ model: "m", reason: "arm", staged: true }), /staged switch/);
+  assert.doesNotMatch(spawnChipTitle({ model: "m", reason: "arm", staged: true }), /Arm/);
+});
 test("getRolesState carries capped families from the disk caps file; unreadable = []", () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-r2ui-"));
   const prev = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
