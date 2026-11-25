@@ -179,7 +179,7 @@ export function BoringInbox({ views, onOpen, now, logs: injected, sidebarMenu = 
                     <span className={`boring-dot st-${item.kind === "error" ? "err" : item.kind === "stalled" ? "stalled" : "attn"}`} />
                     <span className="boring-needs-main">
                       <span className="boring-needs-who">{roleOnlyWho(r.who, r.lane)}</span>
-                      <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where" title={sidebarMenu ? `${r.lane} · ${r.project}` : undefined}>{sidebarMenu && r.lane === "Desk" ? null : r.lane}<span className="boring-needs-proj">{sidebarMenu && r.lane === "Desk" ? r.project : ` · ${r.project}`}</span></span>
+                      <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where" title={sidebarMenu ? `${r.lane} · ${r.project}` : undefined}><span className="boring-needs-lane">{sidebarMenu && r.lane === "Desk" ? null : r.lane}</span><span className="boring-needs-proj">{sidebarMenu && r.lane === "Desk" ? r.project : ` · ${r.project}`}</span></span>
                     </span>
                     <span className="boring-conv-age">{r.age}</span>
                   </button>

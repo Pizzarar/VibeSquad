@@ -1,7 +1,8 @@
 // Des8 B3 (docs/PLAN_DESK_NAV_HISTORY.md, idea-740 m3 + m5, docs/UX_REVIEW_R16.md:50,52).
 // Pins two invariants:
 //   (1) the light `--st-err` token clears 4.5:1 against the `.tl-exit-badge` background (`--st-err-bg` over `--surface-0`);
-//   (2) the Needs-you line 1 keeps the full "Lane · Project" location (title elides first; the project is never dropped).
+//   (2) the Needs-you line 1 keeps the "Lane · Project" location bounded: title elides first, the lane elides before the
+//       project, and the location can never overflow the row (geometry pinned at the CSS level).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -78,32 +79,51 @@ test("B3 m5: light --st-err clears 4.5:1 on the .tl-exit-badge background", () =
   assert.ok(cr >= 4.5, `light --st-err (${t["--st-err"]}) on --st-err-bg over --surface-0 = ${cr.toFixed(2)}:1, need >= 4.5:1`);
 });
 
-test("B3 m3: the Needs-you line 1 keeps the location (title elides first, project never dropped)", () => {
+test("B3 n1: light --st-err-bg is the same hue as --st-err (matched token pair)", () => {
+  const t = lightTokens();
+  const err = hex(t["--st-err"]).slice(0, 3);
+  const bg = hex(t["--st-err-bg"]).slice(0, 3);
+  assert.deepEqual(bg, err, `--st-err-bg rgb ${bg} should equal --st-err rgb ${err}`);
+});
+
+test("B3 m3: the Needs-you line 1 keeps the location bounded (title elides first, lane elides before the project)", () => {
   // the who/where pair sits in a wrapping main cell so the location can move to its own line
   const main = lastRule(/\.boring-needs-main\b/);
   assert.match(main.body, /flex-wrap:\s*wrap/);
   assert.match(main.body, /display:\s*flex/);
   assert.match(main.body, /flex:\s*1 1 auto/);
 
-  // title: the flexible filler — zero flex-basis so line-breaking ignores its content, so it elides
-  // (shrinks) to make room for the location before the location ever wraps; a 6ch floor keeps a readable
-  // prefix and lets the location wrap instead of crushing the title to nothing
+  // title: the flexible filler — zero flex-basis so line-breaking ignores its content (it elides to make
+  // room for the location), with a readable min(18ch,100%) floor so the location wraps before the title is crushed
   const who = lastRule(/\.boring-needs-open \.boring-needs-who\b/);
   assert.match(who.body, /flex:\s*1 1 0/);
-  assert.match(who.body, /min-width:\s*6ch/);
+  assert.match(who.body, /min-width:\s*min\(18ch,\s*100%\)/);
   assert.match(who.body, /max-width:\s*none/);
 
-  // location: never truncated — flex-shrink 0 (natural width), no ellipsis clip
+  // location: bounded — can shrink (flex 0 1 auto) but never exceed the row (max-width 100%, overflow hidden)
   const where = lastRule(/\.boring-needs-open \.boring-needs-where-inline\b/);
-  assert.match(where.body, /flex:\s*0 0 auto/);
-  assert.doesNotMatch(where.body, /text-overflow:\s*ellipsis/);
-  assert.match(where.body, /overflow:\s*visible/);
+  assert.match(where.body, /display:\s*flex/);
+  assert.match(where.body, /flex:\s*0 1 auto/);
+  assert.match(where.body, /max-width:\s*100%/);
+  assert.match(where.body, /min-width:\s*0/);
+  assert.match(where.body, /overflow:\s*hidden/);
 
-  // project span is never clamped to zero (the R5-6 narrow-width drop is reversed for line 1)
+  // lane elides first: its own span, shrinkable, ellipsis clip
+  const lane = lastRule(/\.boring-needs-open \.boring-needs-lane\b/);
+  assert.match(lane.body, /min-width:\s*0/);
+  assert.match(lane.body, /overflow:\s*hidden/);
+  assert.match(lane.body, /text-overflow:\s*ellipsis/);
+  assert.match(lane.body, /white-space:\s*nowrap/);
+
+  // project keeps its name (flex: none = never shrinks); ellipsis only if the project alone exceeds the row
   const proj = lastRule(/\.boring-needs-open \.boring-needs-proj\b/);
-  assert.match(proj.body, /max-width:\s*none/);
+  assert.match(proj.body, /flex:\s*none/);
+  assert.match(proj.body, /max-width:\s*100%/);
+  assert.match(proj.body, /overflow:\s*hidden/);
+  assert.match(proj.body, /text-overflow:\s*ellipsis/);
 
-  // markup: who + where are wrapped together in `.boring-needs-main`
+  // markup: who + where are wrapped together in `.boring-needs-main`, and the lane text sits in its own span
   assert.match(inbox, /className="boring-needs-main"/);
   assert.match(inbox, /<span className="boring-needs-who">\{roleOnlyWho\(r\.who, r\.lane\)\}<\/span>/);
+  assert.match(inbox, /<span className="boring-needs-lane">\{sidebarMenu && r\.lane === "Desk" \? null : r\.lane\}<\/span>/);
 });
