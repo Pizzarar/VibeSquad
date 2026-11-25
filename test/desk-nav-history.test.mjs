@@ -259,15 +259,16 @@ test("B1: a remount with navGen>0 does not re-land (the effect ignores its initi
   assert.ok(globalThis.__calls.some((c) => c[0] === "onSelectSquad" && c[1] === "efi"), "a later pop re-lands");
 });
 
-test("B1 M1: App owns the pop alone: popTarget armed in onPop, ended by input / reaching it; no BoringApp plumbing", () => {
+test("B1 M1: App owns the pop alone: popActive armed in onPop, ended only by input or a newer pop (never URL equality); no BoringApp plumbing", () => {
   const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.doesNotMatch(app, /endPop|popTarget/, "no URL-equality end of a pop");
   assert.doesNotMatch(app, /popReplaceUntil|Date\.now\(\) \+ 1000|popArm|settleGen|onPopSettled|popSettledGen/, "no time window, no settle plumbing");
   assert.doesNotMatch(src, /onPopSettled|popPending|settleGen/, "BoringAde has no pop plumbing");
-  assert.match(app, /popTarget\.current = location\.search \|\| ""/, "onPop records the popped URL");
+  assert.match(app, /popActive\.current = true/, "onPop arms the pop");
   assert.match(app, /addEventListener\("pointerdown", end, \{ capture: true, once: true \}\)/);
   assert.match(app, /addEventListener\("keydown", end, \{ capture: true, once: true \}\)/);
-  assert.match(app, /popTarget: popTarget\.current, storybookReplace: takeStorybookReplace/, "takeStorybookReplace stays consumed through the decision");
-  assert.doesNotMatch(app, /app\.vibe"\) === "boring"\) popTarget/, "armed in every vibe/screen: nothing depends on BoringApp");
+  assert.match(app, /popActive: popActive\.current, storybookReplace: takeStorybookReplace/, "takeStorybookReplace stays consumed through the decision");
+  assert.doesNotMatch(app, /app\.vibe"\) === "boring"\) popActive/, "armed in every vibe/screen: nothing depends on BoringApp");
 });
 
 test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox", () => {

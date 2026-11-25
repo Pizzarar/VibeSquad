@@ -55,7 +55,7 @@ async function openChat(theme) {
   await page.goto(`${baseUrl}/?demo=&team=vibesquad`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
   await page.waitForTimeout(900);
-  const take = () => page.evaluate(() => ({ h: window.__h.splice(0), hlen: history.length, url: location.search }));
+  const take = () => page.evaluate(() => ({ h: window.__h.splice(0), hlen: history.length, url: location.search, chat: !!document.querySelector(".boring-timeline, .timeline") }));
   return { context, page, take };
 }
 const pushes = (s) => s.h.filter((k) => k === "pushState").length;
@@ -227,31 +227,66 @@ test("B1 e2e (a): a pop followed by a non-Boring route and then a user nav pushe
   await page.waitForTimeout(900);
   await take();
   await page.keyboard.press("Escape"); // first user input ends the pop
-  await page.locator(".boring-sidebar .boring-needs-open", { hasNotText: "Audit - token scout" }).first().click().catch(() => {});
+  await page.locator(".boring-sidebar .boring-needs-open", { hasNotText: "Audit - token scout" }).first().click();
   await page.waitForTimeout(900);
   const nav = await take();
-  assert.ok(pushes(nav) >= 1 || nav.url.includes("agent="), `a user nav after the pop pushes (got ${JSON.stringify(nav.h)})`);
-  assert.equal(nav.h.includes("replaceState") && pushes(nav) === 0, false, "not swallowed as replaceState");
+  assert.ok(pushes(nav) >= 1, `a user nav after the pop pushes (got ${JSON.stringify(nav.h)})`);
   await context.close();
 });
 
-// (b) L1: a double Back retargets: the screen lands on the 2nd target, and the next click pushes.
-test("B1 e2e (b): double Back lands on the 2nd target; the next click pushes", async (t) => {
+// (b) L1: a double Back retargets: the screen lands on the 2nd target (rows[0]'s URL), and a click on a DIFFERENT agent pushes.
+test("B1 e2e (b): double Back lands on the 2nd target; a click on a different agent pushes", async (t) => {
   if (unavailable) return t.skip(unavailable);
   const { context, page, take } = await openChat("dark");
   const rows = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => /· VibeSquad/.test(x));
-  for (const r of rows.slice(0, 3)) { await page.locator(".boring-sidebar .boring-needs-open", { hasText: r.slice(0, 20) }).first().click(); await page.waitForTimeout(500); }
-  const trail = await page.evaluate(() => location.search);
+  assert.ok(rows.length >= 3, `>=3 same-project rows (${JSON.stringify(rows)})`);
+  const urls = [];
+  for (const r of rows.slice(0, 3)) { await page.locator(".boring-sidebar .boring-needs-open", { hasText: r.slice(0, 20) }).first().click(); await page.waitForTimeout(500); urls.push(await page.evaluate(() => location.search)); }
   await take();
-  await page.evaluate(() => { history.back(); history.back(); }); // two pops in one tick
+  await page.evaluate(() => { history.back(); history.back(); }); // two pops in one tick: rows[2] -> rows[1] -> rows[0]
   await page.waitForTimeout(1200);
   const two = await take();
   assert.equal(pushes(two), 0, `double Back: 0 pushState (got ${JSON.stringify(two.h)})`);
-  assert.notEqual(two.url, trail);
-  await page.locator(".boring-sidebar .boring-needs-open", { hasText: rows[0].slice(0, 20) }).first().click();
+  assert.equal(two.url, urls[0], "the double Back lands on the 2nd target (rows[0]'s URL)");
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: rows[2].slice(0, 20) }).first().click();
   await page.waitForTimeout(900);
   const nav = await take();
-  assert.ok(pushes(nav) >= 1 || nav.url === two.url, `next click pushes, or re-selects the already-shown agent (got ${JSON.stringify(nav.h)})`);
+  assert.ok(pushes(nav) >= 1, `a click on a different agent pushes (got ${JSON.stringify(nav.h)})`);
+  assert.equal(nav.url, urls[2]);
+  await context.close();
+});
+
+// R28 M1: go(-2) over a mixed entry, Forward x2, Back x3: every pop lands on the right screen, history.length never changes, 0 pushes.
+test("B1 e2e: go(-2) over a mixed entry, Forward x2, Back x3 never pushes and never traps", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); // pushes mixed team=efi&agent=demo-aud, then ?team=efi
+  await page.waitForTimeout(900);
+  await take();
+  const len0 = await page.evaluate(() => history.length);
+  const chatUrl = /team=vibesquad&agent=demo-aud/;
+  const stepTo = async (label, fn, re) => {
+    await page.evaluate(fn);
+    await page.waitForTimeout(900);
+    const s = await take();
+    assert.equal(pushes(s), 0, `${label}: 0 pushState (got ${JSON.stringify(s.h)})`);
+    assert.equal(s.hlen, len0, `${label}: history.length unchanged`);
+    assert.match(s.url, re, `${label}: lands on ${re} (got ${s.url})`);
+    return s;
+  };
+  const s1 = await stepTo("go(-2)", () => history.go(-2), chatUrl);
+  assert.equal(s1.chat, true);
+  const f1 = await stepTo("Forward 1 (mixed entry, healed in place)", () => history.forward(), chatUrl);
+  assert.equal(f1.chat, true);
+  const f2 = await stepTo("Forward 2", () => history.forward(), /team=efi(&|$)(?!.*agent)/);
+  assert.equal(f2.chat, false, "Forward 2 reaches the Main Game Overview (the Forward entry survived)");
+  const b1 = await stepTo("Back 1", () => history.back(), chatUrl);
+  assert.equal(b1.chat, true);
+  await stepTo("Back 2", () => history.back(), chatUrl);
+  const b3 = await stepTo("Back 3", () => history.back(), /team=vibesquad(&|$)(?!.*agent)/);
+  assert.equal(b3.chat, false, "Back 3 walks out to the VibeSquad Overview (no trap)");
   await context.close();
 });
 
@@ -263,17 +298,21 @@ test("B1: urlSyncDecision never pushes while a pop target is set; takeStorybookR
   const { urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   let taken = 0;
   const sb = (v) => () => { taken++; return v; };
-  const D = (o) => urlSyncDecision({ popTarget: null, storybookReplace: sb(false), ...o });
-  assert.deepEqual(D({ next: "?a", current: "?b", storybookReplace: sb(true) }), { write: true, replace: true, endPop: false });
-  assert.deepEqual(D({ next: "?a", current: "?b" }), { write: true, replace: false, endPop: false });
+  const D = (o) => urlSyncDecision({ popActive: false, storybookReplace: sb(false), ...o });
+  assert.deepEqual(D({ next: "?a", current: "?b", storybookReplace: sb(true) }), { write: true, replace: true });
+  assert.deepEqual(D({ next: "?a", current: "?b" }), { write: true, replace: false });
   const t0 = taken;
   assert.equal(D({ next: "?a", current: "?a", storybookReplace: sb(true) }).write, false);
   assert.equal(taken, t0, "not consumed when nothing is written");
-  assert.deepEqual(D({ next: "?p", current: "?p", popTarget: "?p" }), { write: false, replace: true, endPop: true }, "reached the popped URL: no write, pop ends");
-  assert.deepEqual(D({ next: "?p", current: "?transient", popTarget: "?p" }), { write: true, replace: true, endPop: true }, "a stale render's transient replace is restored in place (never a push)");
-  assert.deepEqual(D({ next: "?healed", current: "?p", popTarget: "?p" }), { write: true, replace: true, endPop: false }, "healed mixed entry: replace, stay armed (input ends it)");
-  assert.equal(D({ next: "?x", current: "?x", popTarget: "?p" }).write, false);
+  // During a pop every write is a replace, whatever next/current are — including next === the popped URL (a stale render that
+  // hasn't healed yet must not end the pop: R28 M1).
+  for (const [next, current] of [["?p", "?p"], ["?p", "?transient"], ["?healed", "?p"], ["?x", "?y"]]) {
+    const d = D({ next, current, popActive: true });
+    assert.equal(d.write, next !== current, `${next}/${current}`);
+    assert.equal(d.replace, true, `pop write is never a push (${next}/${current})`);
+  }
+  assert.deepEqual(Object.keys(D({ next: "?a", current: "?b", popActive: true })).sort(), ["replace", "write"], "no endPop in the contract");
   const before = taken;
-  D({ next: "?x", current: "?p", popTarget: "?p" });
+  D({ next: "?x", current: "?p", popActive: true });
   assert.equal(taken, before + 1, "drained during a pop write");
 });

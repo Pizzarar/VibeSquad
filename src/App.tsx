@@ -1662,16 +1662,16 @@ export function App() {
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
   // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
   const [navGen, setNavGen] = useState(0);
-  // B1: App owns the pop alone. onPop records the popped URL; while it is set the URL sync never pushState()s (it replaces, and ends the
+  // B1: App owns the pop alone. onPop sets popActive; while it is set the URL sync never pushState()s (it replaces, and ends the
   // pop with a no-op when the screen reaches the popped URL). The first real user input (capture-phase pointerdown / keydown) ends it too,
   // so nothing depends on BoringApp being mounted (Storybook, phone, Psycho) and a double pop just retargets.
-  const popTarget = useRef<string | null>(null);
+  const popActive = useRef(false);
   const popDisarm = useRef<(() => void) | null>(null);
   useEffect(() => {
     const onPop = () => {
-      popTarget.current = location.search || "";
+      popActive.current = true;
       popDisarm.current?.(); // a second pop retargets: drop the previous input listeners, arm fresh ones
-      const end = () => { popTarget.current = null; popDisarm.current?.(); popDisarm.current = null; };
+      const end = () => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; };
       window.addEventListener("pointerdown", end, { capture: true, once: true });
       window.addEventListener("keydown", end, { capture: true, once: true });
       popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };
@@ -1868,8 +1868,7 @@ export function App() {
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    const d = urlSyncDecision({ next, current: location.search || "", popTarget: popTarget.current, storybookReplace: takeStorybookReplace });
-    if (d.endPop) popTarget.current = null;
+    const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
