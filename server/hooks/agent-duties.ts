@@ -46,6 +46,7 @@ import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
 import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -2517,9 +2518,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             shadow,
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
+          // R2 (PLAN_PER_ROLES_LADDER_1125): the reason the spawn SHOWS (`Role · model · reason`: drawer header, spawn_worker
+          // result) rides the label as ` why=<reason>` (server/spawn-reason.mjs); the `route:` metric above keeps its fields.
+          const why = shownSpawnReason({
+            hookReason: reason,
+            failover: Boolean(failoverProfileName) || Boolean(roleRoute?.override?.hopped),
+            override: Boolean(roleRoute?.override) || keepCaller,
+            arm: Boolean(String(reqLabels["vs.arm"] ?? "").trim()),
+            legacyName,
+            routed: Boolean(matchedProfile && profileMatch?.explicit),
+          });
           // idea-87: the id does not exist yet, so the route rides the spawn's labels and agent.created logs `route-agent` with it.
           if (!reqAgentId && (request as any).labels) {
-            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [ROUTE_LABEL]: routeText };
+            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [ROUTE_LABEL]: `${routeText} ${ROUTE_WHY_KEY}=${why}` };
             changed = true;
           }
         }
@@ -2545,8 +2556,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             const v = stampVals[k];
             if (v && (nextReqLabels ?? reqLabels)[k] !== v) stamp[k] = v;
           }
-          // R0: spawn_worker's `vs.model` (arm picks) names the model actually run, so re-sync it after failover / the ladder.
-          if ((nextReqLabels ?? reqLabels)["vs.model"] && stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
+          // R0/R2: `vs.model` names the model actually run on every routed spawn (not only arm picks, not only when the
+          // caller pre-filled it: a provider-only override arrives without one), re-synced after failover / the ladder.
+          if (stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
           if (Object.keys(stamp).length) {
             nextReqLabels = { ...(nextReqLabels ?? reqLabels), ...stamp };
             changed = true;
