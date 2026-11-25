@@ -588,16 +588,24 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, cap = setProviderC
   }
 }
 
+/** idea-820: a failed turn counts as a failed SPAWN only this soon after the agent was created. A parked worker re-prompted
+ *  hours later (its worktree swept meanwhile: rn-bc6c5973958c, rn-f57bd761eafd, rn-18f7a29b3b60) is a stale reuse, which a
+ *  fresh spawn fixes; holding spawn_worker for it would block the cure. */
+export const SPAWN_FAIL_WINDOW_MS = 30 * 60_000;
+
 /**
  * idea-820: the per-lane fail-streak input (server/spawn-streak.mjs) for one lifecycle event, or null. Only a worker's
- * turn_ended counts (leads, Buddies and digests never hold a lane); stepLaneStreak keeps only first turns.
+ * turn_ended counts (leads, Buddies and digests never hold a lane); stepLaneStreak keeps only first turns. A failure counts
+ * only within SPAWN_FAIL_WINDOW_MS of the agent's createdAt (`at`: the event's ts, so a catch-up replay judges by event time).
  */
-export function spawnOutcomeOf(agent, lifecycle) {
+export function spawnOutcomeOf(agent, lifecycle, { at = Date.now() } = {}) {
   if (lifecycle?.kind !== "turn_ended" || !agent?.id) return null;
   const lane = String(agent.labels?.lane ?? "").trim();
   if (!lane || effectiveAgentRole(agent) !== "worker") return null;
   const kind = lifecycle.outcome?.kind;
   if (kind !== "completed" && kind !== "failed") return null;
+  const born = Date.parse(agent.createdAt ?? "");
+  if (kind === "failed" && !(at - born <= SPAWN_FAIL_WINDOW_MS)) return null; // unknown createdAt: not provably a spawn
   return { team: String(agent.labels?.team ?? ""), lane, agentId: agent.id, outcome: kind, error: String(lifecycle.outcome?.error?.message ?? "") };
 }
 
@@ -1648,7 +1656,7 @@ export class RunnerBackend {
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
-    const spawnOutcome = spawnOutcomeOf(shown, lifecycle);
+    const spawnOutcome = spawnOutcomeOf(shown, lifecycle, Number.isFinite(e.ts) ? { at: e.ts } : undefined);
     if (spawnOutcome) void noteLaneSpawnOutcome(spawnOutcome, this.spawnStreakFile ? { file: this.spawnStreakFile } : undefined); // idea-820
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending

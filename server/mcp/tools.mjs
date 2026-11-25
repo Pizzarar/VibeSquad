@@ -16,6 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { decideArm, readArmCaps, readPerfectionVerdict } from "../exp6-arm.mjs";
+import { claimHoldNotice, holdText, laneSpawnHold, spawnStreakPath } from "../spawn-streak.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -371,6 +372,24 @@ async function spawnWorker(ctx, args = {}) {
   }
 }
 
+// idea-820 (dups 660/825): a lane whose last FAIL_STREAK_MAX worker spawns failed at start is held (server/spawn-streak.mjs,
+// recorded by runner-backend handleLogEvent). A worker spawn into a held lane is refused; the first refused caller of each hold
+// writes the one needs-you line (claimHoldNotice), later ones only get the error. Lead/Buddy spawns never reach this (exempt).
+async function refuseOnLaneHold(ctx, { team, lane }) {
+  const file = spawnStreakPath(ctx.env ?? process.env);
+  const hold = laneSpawnHold({ team, lane }, { file });
+  if (!hold) return;
+  const text = holdText(lane, hold);
+  // Only a caller the vs-log route lets write needs-you (lead, Buddy, owner shell; agentLogFields) may claim the one notice:
+  // a worker's 403 would spend the claim and leave the hold silent.
+  const callerRole = clean(ctx.identity.role).toLowerCase();
+  const canNotify = !callerAgentId(ctx) || callerRole === LEAD_ROLE || callerRole === "brainstorm";
+  if (canNotify && (await claimHoldNotice({ team, lane }, { file }))) {
+    try { await ctx.writeLog({ type: "needs-you", text }); } catch { /* the refusal below still carries the reason */ }
+  }
+  throw new Error(text);
+}
+
 async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   await verifyCaller(ctx); // X1b: role/lane/team below are the runner's record, not the env claim (403 propagates)
   const prompt = need(args, "prompt", "initialPrompt");
@@ -499,6 +518,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   delete labels["vs.profile-derived"];
   const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);
   if (derived.length) labels["vs.profile-derived"] = derived.join(",");
+  if (!asLead && labels.lane) await refuseOnLaneHold(ctx, { team: labels.team, lane: labels.lane }); // idea-820: before createAgent
   const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
