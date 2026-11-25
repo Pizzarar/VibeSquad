@@ -100,3 +100,52 @@ test('usa-55: no agents at all -> other-repo-unmapped', () => {
   assert.equal(unitsOf(u).m1.attributionMiss, 'other-repo-unmapped');
   assert.deepEqual(u.attributionCoverage.byMiss, { 'other-repo-unmapped': 1 });
 });
+
+// ---- R1 review fixes: unit-level tests on synthetic agent summaries
+import { usageTestHooks as H } from '../server/providers-catalog.mjs';
+const ag = (agentId, cwd, o = {}) => ({ agentId, role: 'worker', cwd, lane: 'x', profile: 'Implement - Sonnet', provider: 'claude', turns: 1, costUsd: 1, createdAt: 1000, team: null, ...o });
+const resolve = (unit, agents, merged = []) => {
+  const idx = H.indexWorkers(agents);
+  idx.mergedNames = new Set(merged);
+  idx.mergesByName = new Map();
+  return H.resolveImplementer({ squad: null, mergedAt: 5000, lane: null, ...unit }, agents, idx);
+};
+
+test('R1 M1: main-checkout cwd (.../VibeSquad) is never aliased to branch unit-vibesquad', () => {
+  const r = resolve({ unit: 'unit-vibesquad' }, [ag('a', '/home/x/projects/VibeSquad')]);
+  assert.equal(r.implementer, null);
+  assert.equal(r.miss, 'no-worker-cwd-match');
+});
+
+test('R1 M1: exact unit-<name> worktree outranks a costlier unit-less alias worktree', () => {
+  const agents = [ag('exact', '/h/.vibesquad/worktrees/R/unit-foo', { costUsd: 1 }), ag('alias', '/h/.vibesquad/worktrees/R/foo', { costUsd: 99 })];
+  assert.equal(resolve({ unit: 'unit-foo' }, agents).implementer.agentId, 'exact');
+  assert.equal(resolve({ unit: 'unit-foo' }, [agents[1]]).implementer.agentId, 'alias'); // alias still joins when no exact worktree exists
+});
+
+test('R1 M2: a worker in alias worktree `sb2-x` is not also credited to the unit its log references (byRef)', () => {
+  const w = ag('w', '/h/.vibesquad/worktrees/R/sb2-x', { unitRef: 'unit-other' });
+  const merged = ['unit-sb2-x', 'unit-other'];
+  assert.equal(resolve({ unit: 'unit-sb2-x' }, [w], merged).implementer.agentId, 'w');
+  const r = resolve({ unit: 'unit-other' }, [w], merged);
+  assert.equal(r.implementer, null, 'no double credit');
+});
+
+test('R1 M3: byRef multi-profile ambiguity reports ambiguous-implementers; later-created ref worker is not "claimed"', () => {
+  const m = '/home/x/projects/R';
+  const a = ag('a', m, { unitRef: 'unit-q', profile: 'Implement - Sonnet' });
+  const b = ag('b', m, { unitRef: 'unit-q', profile: 'Mechanical - DSF' });
+  assert.equal(resolve({ unit: 'unit-q' }, [a, b]).miss, 'ambiguous-implementers');
+  const late = ag('late', m, { unitRef: 'unit-q', createdAt: 9000 }); // created after mergedAt 5000: filtered, falls through
+  assert.notEqual(resolve({ unit: 'unit-q' }, [late]).miss, 'evidence-claimed-by-other-merge');
+});
+
+test('R1 L1: primary implementer is the costliest worked run; 0-turn loses; ties break by createdAt then agentId', () => {
+  const wt = '/h/.vibesquad/worktrees/R/unit-t';
+  const pick = (agents) => resolve({ unit: 'unit-t' }, agents).implementer.agentId;
+  assert.equal(pick([ag('p', wt, { costUsd: 1, profile: 'Implement - Sonnet' }), ag('q', wt, { costUsd: 5, profile: 'Mechanical - DSF' })]), 'q');
+  assert.equal(pick([ag('p', wt, { costUsd: 9, turns: 0, profile: 'Implement - Sonnet' }), ag('q', wt, { costUsd: 1, profile: 'Mechanical - DSF' })]), 'q');
+  assert.equal(pick([ag('p', wt, { createdAt: 2000, profile: 'Implement - Sonnet' }), ag('q', wt, { createdAt: 1000, profile: 'Mechanical - DSF' })]), 'q');
+  assert.equal(pick([ag('z', wt, { createdAt: null, profile: 'Implement - Sonnet' }), ag('b', wt, { createdAt: null, profile: 'Mechanical - DSF' })]), 'b');
+  assert.equal(pick([ag('z', wt, { profile: 'Implement - Sonnet' }), ag('b', wt, { profile: 'Mechanical - DSF' })]), 'b');
+});
