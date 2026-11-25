@@ -19,11 +19,14 @@ test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subs
     // fixed number we pick (and one deadline shared by both waits starved the second). Wait for the pty to finish
     // (marker, then the full count) and give up only when it makes no progress for STALL_MS.
     const STALL_MS = 20000;
+    const MAX_WAIT_MS = 120000; // hard ceiling: a slow trickle that keeps resetting the stall timer still fails loudly
+    const startedAt = Date.now();
     const waitDrained = async (done) => {
       let last = got, progressAt = Date.now();
       while (!done()) {
         if (got !== last) { last = got; progressAt = Date.now(); }
-        else if (Date.now() - progressAt > STALL_MS) return false;
+        else if (Date.now() - progressAt > STALL_MS || Date.now() - startedAt > MAX_WAIT_MS) return false;
+        if (m.get(t.id).exited) return done(); // the shell ended: nothing more will arrive
         await sleep(50);
       }
       return true;

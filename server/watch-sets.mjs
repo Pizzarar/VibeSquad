@@ -388,8 +388,9 @@ function restartClockStart(ref, requests) {
   let start = 0;
   for (const r of requests) {
     if (!r || typeof r !== "object" || r.state === "done" || r.state === "aborted") continue;
-    if (ref && !(r.id === ref || String(r.id ?? "").includes(ref))) continue;
-    const at = Math.max(timeOf(r.windowAt) || 0, r.state && r.state !== "queued" ? timeOf(r.deadline) || 0 : 0);
+    if (ref && !(r.id === ref || r.id === `rr-${ref}`)) continue;
+    // queued: the window; opened (requested/draining/ready/firing, also an --urgent promotion that left a future windowAt): the deadline.
+    const at = r.state === "queued" ? timeOf(r.windowAt) || 0 : timeOf(r.deadline) || timeOf(r.windowAt) || 0;
     start = Math.max(start, at);
   }
   return start;

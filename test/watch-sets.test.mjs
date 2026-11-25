@@ -748,6 +748,30 @@ test("restart item: a request queued for a future window is not stalled before t
   }
 });
 
+test("restart item (idea-996): no-ref watch follows the open request; draining waits for its deadline, urgent promotion ignores the stale window; done/aborted and other ids are ignored", async () => {
+  const run = async (reqDoc, ref, probes) => {
+    const sb = sandbox();
+    try {
+      writeFileSync(join(sb.home, "restart-request.json"), JSON.stringify(reqDoc));
+      addWatch({ owner: "lead-1", stallMin: 15, items: [{ kind: "restart", ...(ref ? { ref } : {}) }] }, { home: sb.home, now: T0 });
+      const { engine, delivered, clock } = engineFor(sb);
+      const out = [];
+      for (const at of probes) { clock.t = at; await engine.tick(); out.push(delivered.length); }
+      return out;
+    } finally { sb.cleanup(); }
+  };
+  const win = T0 + 6 * 60 * MIN;
+  // no ref, queued future window: quiet until window + 15
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "queued", windowAt: iso(win) }, history: [] }, "", [T0 + MIN, T0 + 60 * MIN, win + 10 * MIN, win + 16 * MIN]), [0, 0, 0, 1]);
+  // draining: window long past, deadline ahead
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "draining", windowAt: iso(T0 + 10 * MIN), deadline: iso(T0 + 120 * MIN) }, history: [] }, "", [T0 + MIN, T0 + 100 * MIN, T0 + 130 * MIN, T0 + 136 * MIN]), [0, 0, 0, 1]);
+  // urgent-promoted: state requested, old future windowAt, near deadline -> clock follows the deadline
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "requested", windowAt: iso(win), deadline: iso(T0 + 30 * MIN) }, history: [] }, "", [T0 + MIN, T0 + 40 * MIN, T0 + 46 * MIN]), [0, 0, 1]);
+  // a done request is ignored (armed-time clock), as is a different id (rr-1 vs rr-10)
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "done", windowAt: iso(win) }, history: [] }, "", [T0 + 16 * MIN]), [1]);
+  assert.deepEqual(await run({ current: { id: "rr-10", state: "queued", windowAt: iso(win) }, history: [] }, "rr-1", [T0 + 16 * MIN]), [1]);
+});
+
 // idea-398 fix round (Hub13): the 11-20 02:54 silent old-code restart. A restart fired by a request whose sync was
 // skipped pings with the runtime NOT updated note; a request fired long before, or one that synced, adds nothing.
 test("restart item: a restart fired after a skipped sync pings 'runtime NOT updated: still <sha>, N behind <tip>, reason <why>'", async () => {
