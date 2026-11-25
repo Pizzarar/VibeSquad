@@ -440,6 +440,7 @@ test("lead: a compaction in flight (shared pending) defers another coordinator's
   const pending = new Set(["rn-l"]);
   const http = createLeadHandoffCoordinator({
     rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, compactPending: pending,
+    usageProviders: () => [],
     setLabels: (id, labels) => r.updateAgent(id, { labels }), sendMessage: (id, text) => r.sendAgentPrompt(id, text),
     createAgent: (p) => r.createAgent(p), listAgents: async () => [...r.agents.values()], getAgent: async (id) => r.agents.get(id) ?? null,
     deleteHeartbeat: async () => {},
@@ -459,6 +460,7 @@ test("lead: a self handoff through another coordinator (shared slot maps) is und
   r.agents.set("rn-l", lead("rn-l"));
   const http = createLeadHandoffCoordinator({
     rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, sharedSlots: true,
+    usageProviders: () => [],
     setLabels: (id, labels) => r.updateAgent(id, { labels }), sendMessage: (id, text) => r.sendAgentPrompt(id, text),
     createAgent: (p) => r.createAgent({ ...p, labels: p.labels }), listAgents: async () => [...r.agents.values()], getAgent: async (id) => r.agents.get(id) ?? null,
     deleteHeartbeat: async () => {},
