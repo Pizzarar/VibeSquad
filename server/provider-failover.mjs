@@ -3,9 +3,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { updateJsonFileSync } from "./file-lock.mjs";
 import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
-import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
+import { GEMINI_TOP_MODEL, AGY_CLAUDE_FAMILY, AGY_CLAUDE_SUFFIXED_RE, isAgyClaudeModel } from "./model-ids.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
+/**
+ * R10: agy-claude fails over to direct claude at this pool %, below the 95 default. agy polls its pool at most every
+ * 30 min (runner/limits.mjs), so a reading can lag a busy pool by that long; 85 leaves the headroom. A caller's lower
+ * threshold still wins (min).
+ */
+export const AGY_CLAUDE_FAILOVER_THRESHOLD = 85;
 
 // Role failover chains (R1, docs/PLAN_PER_ROLES_LADDER_1125.md): role key -> provider families in hop order, the most
 // capable provider for that role first. The one source for server/role-route.mjs ROLE_TABLE.providers; a role spawn
@@ -143,17 +149,30 @@ export function registerDefaultFailoverProfiles(profiles) {
 }
 
 export function normalizeProviderFamily(providerId) {
-  const raw = String(providerId ?? "")
+  let raw = String(providerId ?? "")
     .trim()
-    .toLowerCase()
-    .split("/")[0]
-    .trim();
+    .toLowerCase();
+  // R10: the agy Claude/GPT pool row and suffixed agy Claude ids are agy-claude, never claude or antigravity-cli.
+  if (raw === "antigravity-cli/claude-gpt" || raw === AGY_CLAUDE_FAMILY || AGY_CLAUDE_SUFFIXED_RE.test(raw)) return AGY_CLAUDE_FAMILY;
+  raw = raw.split("/")[0].trim();
   if (!raw) return "";
   if (raw === "claude" || raw === "anthropic" || raw.startsWith("claude-")) return "claude";
   if (raw === "antigravity-cli" || raw === "antigravity" || raw === "gemini" || raw.startsWith("gemini-")) {
     return "antigravity-cli";
   }
   return raw;
+}
+
+/**
+ * R10: the quota/cap family a spawn draws on, from its runner provider AND model. antigravity-cli running a Claude id
+ * is agy-claude (its own pool and cap key); anything else is normalizeProviderFamily(provider). Use it wherever a live
+ * agent's provider is turned into a cap key (upstream exits, respawns, caller-model checks).
+ */
+export function spawnFamily(provider, model) {
+  const fam = normalizeProviderFamily(provider);
+  if (fam === AGY_CLAUDE_FAMILY) return fam;
+  if (fam === "antigravity-cli" && isAgyClaudeModel(model)) return AGY_CLAUDE_FAMILY;
+  return fam;
 }
 
 export function counterpartProfileName(profileName) {
@@ -431,7 +450,8 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
     return { overQuota: false, reason: null, usedPct: null };
   }
 
-  const limitThreshold = typeof threshold === "number" && Number.isFinite(threshold) ? threshold : QUOTA_FAILOVER_THRESHOLD;
+  let limitThreshold = typeof threshold === "number" && Number.isFinite(threshold) ? threshold : QUOTA_FAILOVER_THRESHOLD;
+  if (targetFamily === AGY_CLAUDE_FAMILY) limitThreshold = Math.min(limitThreshold, AGY_CLAUDE_FAILOVER_THRESHOLD);
   const status = String(entry.status ?? entry?.report?.status ?? "")
     .trim()
     .toLowerCase();

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeProviderFamily } from "./provider-failover.mjs";
-import { DEEPSEEK_CHEAP_MODEL, DEEPSEEK_TOP_MODEL, GEMINI_CHEAP_MODEL, GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
+import { AGY_CLAUDE_MID_MODEL, AGY_CLAUDE_TOP_MODEL, DEEPSEEK_CHEAP_MODEL, DEEPSEEK_TOP_MODEL, GEMINI_CHEAP_MODEL, GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 
 export const STAKES_VALUES = ["tierA-security", "tierA-invariant", "normal", "mechanical"];
 
@@ -106,6 +106,12 @@ export const DEFAULT_TIER_LADDER = deepFreeze({
     top: { model: GEMINI_TOP_MODEL, effort: "high" },
     mid: { model: GEMINI_TOP_MODEL },
     cheap: { model: GEMINI_CHEAP_MODEL },
+  },
+  // R10: Claude on agy (runner provider antigravity-cli). Exact suffixed ids (agy has no bare ids); no cheap rung (agy has
+  // no Haiku), so cheap/mechanical stays direct claude-haiku. role-route only walks this family for worker roles.
+  "agy-claude": {
+    top: { model: AGY_CLAUDE_TOP_MODEL, effort: "high" },
+    mid: { model: AGY_CLAUDE_MID_MODEL, effort: "medium" },
   },
   opencode: {
     top: { model: DEEPSEEK_TOP_MODEL, effort: "high" },
