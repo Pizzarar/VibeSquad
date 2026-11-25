@@ -114,3 +114,47 @@ None.
 - **Screenshots:** `docs/ux-review-r33/*.png`: all 12 dark-1920 steps, plus light-3200 and light-1920 samples.
 
 **Verdict: FAIL 0/1/2**
+
+## r2 re-check (b138d29b)
+
+Date: 2026-11-25 · Build: `desk-u1-url-keys` @ `b138d29b` (`npx vite build`, HEAD checked before and after, tree clean) · Same static harness and drivers as above. The R33 `u1.mjs`, `canon.mjs`, `ctrlj.mjs` and R31 `b2.mjs` were re-run unchanged. A new `drive/r2.mjs` covers the leak scenarios (Storybook then Ctrl+K to an agent / a team item, slot or tab then project rows, cold `?team=gone`, `?team=<non-first>&tab=`, Storybook over an Overview reached from a chat, Storybook over a chat).
+
+**Verdict: PASS 0/0/2** (0 critical, 0 major, 2 minor: m2 carried to U2, plus new m3 in the same stale-entry path, also for U2)
+
+The four configs (dark/light × 1920@1 / 3200@1.2) produce identical logs apart from the theme name (`diff`), for both `u1.mjs` and `r2.mjs`. There were 0 page errors in all 29 + 12 sessions per config.
+
+### Status vs the first pass
+
+| Item | `304366f4` | `b138d29b` | Evidence |
+|---|---|---|---|
+| **M1** Storybook +2 entries; Esc doesn't go back; Back reopens it | Open | **Closed.** Opening is 1 push (`len` 2→3). Esc runs `back` → `POP ?demo=&team=vibesquad`. The next Back leaves Storybook behind. This matches base `cfb2e88c` line for line (`storybook-ov` block, `base-dark-1920.log`). Over Inbox: Esc → `tab=inbox`, Back → Overview, Forward → Overview. | `logs/r2-u1-*.log` `storybook*`; `r2/dark-1920-storybook-esc.png`, `r2/light-3200-storybook-over-inbox.png` |
+| `?sb=` deep link + tab | 1 extra push on load | **Better than base.** No write on load (`len=2`). Esc replaces to `…&tab=standup` and shows Standup Feed. | `storybook-url` |
+| Storybook over an Overview reached from a chat (pre-existing SB5 close-on-open) | n/a | **Pass.** Storybook stays open (`dLen=1`). Esc → `?team=vibesquad` Overview; Back → Audit chat; Forward → Overview. Storybook over a chat: Esc → the chat; Back → Overview. | `logs/r2-leak-*.log` `sb over …`; `r2/*-r2-sb-from-chat.png` |
+| **m1** breadcrumb says Overview on Inbox/Standup | Open | **Closed.** The crumb reads `VibeSquad › Idea Inbox` / `› Standup Feed` (and `Main Game Project › Standup Feed`, `Site › Idea Inbox`) at every step, including on Back/Forward/reload. It says `Overview` on the Overview tab. | `tabs`, `proj-switch`, `ctrlj`; `r2/dark-1920-tab-standup.png` |
+| **Leak:** Storybook over vs Standup → Ctrl+K "Main Game squad team" | stale tab (Gemini Major 1) | **Fixed.** `?team=efi`, Overview tab, crumb `Main Game Project › Overview`. Storybook's entry is replaced (SB5 forward-nav close), so Back → vs Standup Feed. | `leak sb+ctrlk team`; `r2/light-3200-r2-leak-ctrlk-team.png` |
+| Storybook over vs Inbox → Ctrl+K "UI Lab" (agent) / efi Overlord slot → Ctrl+K "VibeSquad squad team" | n/a | **Pass.** `?team=efi&agent=demo-lead-ui` chat / `?team=vibesquad` Overview, with no slot or tab carried. Back lands on the pre-Storybook screen (`tab=inbox` / `slot=overlord` card). | `leak sb+ctrlk agent`, `leak sb+ctrlk proj` |
+| vs Standup → efi row → efi Overlord → vs row, Back ×3 | n/a | **Pass.** Each row lands on the Overview with no slot or tab. Back walks efi Overlord card → efi Overview → vs Standup Feed. | `leak rows` |
+| **Cold** `?team=gone&tab=inbox`, `?team=gone&slot=overlord`, `?slot=overlord`, `?tab=inbox` | `slot`/`tab` applied to the fallback project (efi card / efi Inbox) | **Fixed.** Main Game Project Overview, URL `?demo=&team=efi`, and reload matches. | `cold …`; `r2-u1-*.log` `unknown` |
+| Cold reload of a tab on a non-first project (`team=efi&tab=inbox\|standup`, `team=site&tab=inbox`), slot `team=efi&slot=riffbot` | n/a | **Pass.** No write (`len=2`), and reload keeps the tab or card and its crumb. | `cold …`, `logs/r2-canon.log` |
+| B2 +1-entry routes | Pass | **Pass, no change.** 6/6 forward and 4/4 reverse in dark 1920 and light 3200. The reverse `proj-row` FAIL is the known script expectation (it lands on Site, the same as base). Diff vs the R33 U1 logs: empty (reload lines and crumb text aside). | `logs/r2-b2-*.log` |
+| Slot/tab Back/Forward/reload; Ctrl+K from a tab; Ctrl+J/Needs-you; Open in Inbox | Pass | **Pass, no change** (only crumb text differs in the log diff). | `r2-u1-*.log`, `r2-ctrlj.log` |
+| One `.on` row; breadcrumb = row = screen = URL | Pass outside Storybook | **Pass** everywhere except the stale-entry path in m3 | all logs |
+| m2 pasted non-canonical URL pushes | Open (moved to U2) | **Partly better.** A reorder-only URL (`?demo=&foo=1&team=vibesquad`) no longer pushes. Bad values (`tab=bogus`, `team=nope`, `team=gone…`) still push one entry. Out of scope (U2). | `unknown …`, `cold …` |
+
+### New minor
+
+#### m3 · Back into the stale entry that m2 leaves behind applies `?slot=` to the fallback project, and for `?tab=` it leaves a URL that names a gone team
+- **Job hurt:** 5, Intervene. It only hits pasted or bookmarked bad links, and only after the first Back.
+- **Evidence** (`cold` blocks, all 4 configs):
+  - Load `?team=gone&slot=overlord`. The app shows the efi Overview and pushes `?team=efi` (m2). Back runs `POP ?demo=&team=gone&slot=overlord`, then `replaceState ?demo=&team=efi&slot=overlord`. The screen is the **efi Overlord card** (`Main Game Project › Desk › Overlord`), the gone project's slot applied to efi. This is the leak r2 fixed for cold load, coming back by pop.
+  - Load `?team=gone&tab=inbox`, then Back: the screen is the efi Overview, but the URL stays `?demo=&team=gone&tab=inbox` (no replace). URL ≠ screen. On `304366f4` the same Back replaced the URL to `?team=efi`.
+- **Cause:** `boringLandingFromUrl` returns `{mode:"slot", teamId: team}` without checking that the team exists (`src/BoringAde.tsx:128`). The pop handler then sets the slot lane on the current view (`src/BoringAde.tsx:609-613`), since `onSelectSquad("gone")` at `:605` changes nothing. For the tab case, no derived state changes on that pop, so the URL sync has nothing to rewrite the gone team with.
+- **Fix:** in `boringLandingFromUrl`, return the slot or tab only when `team` is a known view (otherwise `{mode:"project", tab:null}` of the fallback), and have the pop path replace the URL whenever the landed team ≠ the URL team. Fixing m2 (replace on the first sync write after load) removes the stale entry and both symptoms with it.
+- **Files:** `src/BoringAde.tsx`, `src/App.tsx`/`src/urlSync.ts`. **Effort:** XS. **Lane:** @desk U2, with m2.
+
+### Artifacts (r2)
+- `docs/ux-review-r33/drive/r2.mjs` (`node r2.mjs <port> <w> <h> <zoom> <theme> [shotdir]`).
+- Logs: `docs/ux-review-r33/logs/r2-*.log` (force-added; `*.log` is gitignored).
+- Screenshots: `docs/ux-review-r33/r2/` (U1 sequence shots dark-1920 and light-3200, plus `*-r2-*` leak and Storybook shots). The R33 first-pass PNGs are unchanged.
+
+**Verdict (r2): PASS 0/0/2**
