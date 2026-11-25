@@ -1562,6 +1562,22 @@ html[data-vibe="boring"] .btn.phone-crunch-btn.on { color: var(--text); border-c
 html[data-vibe="boring"] .btn.phone-crunch-btn[data-failed] { color: var(--st-err, var(--text)); border-color: var(--st-err, var(--border)); }
 html[data-vibe="boring"] .btn.phone-crunch-btn:disabled { color: var(--muted); }
 
+/* --- @bug idea-945/985 overlap fixes (own section): flex children keep their content height; breadcrumb ellipsizes ancestors first --- */
+html[data-vibe="boring"] .boring-ctx-list > * { flex-shrink: 0; }
+html[data-vibe="boring"] .boring-breadcrumb { min-width: 0; }
+html[data-vibe="boring"] .boring-crumb-seg { flex: 0 1 auto; }
+html[data-vibe="boring"] .boring-crumb-seg:last-child { flex: 0 0 auto; }
+html[data-vibe="boring"] .boring-crumb-sep { flex: none; }
+html[data-vibe="boring"] .boring-crumb-btn { min-width: 3ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-breadcrumb { gap: 0; }
+html[data-vibe="boring"] .boring-crumb-seg { gap: 0; }
+html[data-vibe="boring"] .boring-crumb-sep { padding: 0 2px; }
+html[data-vibe="boring"] .boring-crumb-btn, html[data-vibe="boring"] .boring-crumb-cur { padding: 2px 4px; }
+html[data-vibe="boring"] .boring-topbar-lead { gap: 8px; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { padding: 2px 8px; }
+html[data-vibe="boring"] .boring-project-lanes { padding-left: 10px; }
+html[data-vibe="boring"] .boring-conv-line .boring-conv-title { padding-right: 4px; }
+
 /* === PLAN_PROJECT_ORDER O2: pinned Main project row + drag-reorder (@ui-bois). @boring-mode polish: build on this block, keep the hooks.
    The pin sits OUTSIDE .boring-project-tree (the scroller) so folder collapse and scroll never hide it. It is sized by content, shrinks and
    scrolls inside to keep the footer on screen, and never below its full header (60px collapsed, 220px expanded); below that the sidebar scrolls. */

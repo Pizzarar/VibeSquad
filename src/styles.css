@@ -6445,7 +6445,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .phone-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: var(--muted); }
 .phone-tabs { display: flex; background: var(--panel); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
 .phone-tab {
-  flex: 1;
+  flex: 1 1 auto; /* @bug idea-945: size to content so "Overlord" + badge never ellipsizes (was equal flex:1) */
   min-height: 52px;
   border: 0;
   border-top: 3px solid transparent;
