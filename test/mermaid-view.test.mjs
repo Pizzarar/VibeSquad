@@ -317,6 +317,56 @@ function anyRectOverlap(rects) {
   return false;
 }
 
+// Node bounding boxes (rect / circle / diamond-polygon first shapes of each node group).
+function nodeBoxes(svg) {
+  const out = [];
+  let m;
+  const rectRe = /<g class="mermaid-node"[^>]*>\s*<rect x="([-\d.]+)" y="([-\d.]+)" width="([-\d.]+)" height="([-\d.]+)"/g;
+  while ((m = rectRe.exec(svg))) out.push({ x: +m[1], y: +m[2], w: +m[3], h: +m[4] });
+  const circleRe = /<g class="mermaid-node"[^>]*>\s*<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([-\d.]+)"/g;
+  while ((m = circleRe.exec(svg))) {
+    const r = +m[3];
+    out.push({ x: +m[1] - r, y: +m[2] - r, w: 2 * r, h: 2 * r });
+  }
+  const polyRe = /<g class="mermaid-node"[^>]*>\s*<polygon points="([^"]*)"/g;
+  while ((m = polyRe.exec(svg))) {
+    const nums = m[1].split(/[\s,]+/).map(Number).filter((n) => !Number.isNaN(n));
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      minX = Math.min(minX, nums[i]);
+      maxX = Math.max(maxX, nums[i]);
+      minY = Math.min(minY, nums[i + 1]);
+      maxY = Math.max(maxY, nums[i + 1]);
+    }
+    out.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+  }
+  return out;
+}
+
+function anyPairOverlap(a, b) {
+  for (const ra of a) {
+    for (const rb of b) {
+      const ox = Math.min(ra.x + ra.w, rb.x + rb.w) - Math.max(ra.x, rb.x);
+      const oy = Math.min(ra.y + ra.h, rb.y + rb.h) - Math.max(ra.y, rb.y);
+      if (ox > 0 && oy > 0) return true;
+    }
+  }
+  return false;
+}
+
+// Assert a diagram's edge labels never overlap each other nor any node.
+function assertLabelsClear(code, expectedLabelCount) {
+  const res = renderMermaidSvg(code);
+  assert.equal(res.ok, true);
+  const labels = edgeLabelRects(res.svg);
+  assert.equal(labels.length, expectedLabelCount);
+  assert.equal(anyRectOverlap(labels), false, "edge labels overlap each other");
+  assert.equal(anyPairOverlap(labels, nodeBoxes(res.svg)), false, "edge label overlaps a node");
+}
+
 describe("V1 MermaidView — theme palette", () => {
   test("light theme renders a light canvas, light node fill and ink text; dark is preserved by default", () => {
     const code = "flowchart TD\n  A[Start] -->|yes| B[End]\n  B --> C{C}";
@@ -345,45 +395,95 @@ describe("V1 MermaidView — theme palette", () => {
 
 describe("V1 MermaidView — edge labels never overlap (idea-843)", () => {
   test("TD fan-out: one source, three labeled targets", () => {
-    const code = [
-      "flowchart TD",
-      '  A["Quest step"]',
-      "  A -->|involves location| L1([The Old Mines])",
-      "  A -->|involves character| C1((Foreman))",
-      "  A -->|requires item| I1(Key)",
-    ].join("\n");
-    const res = renderMermaidSvg(code);
-    assert.equal(res.ok, true);
-    const rects = edgeLabelRects(res.svg);
-    assert.equal(rects.length, 3);
-    assert.equal(anyRectOverlap(rects), false);
+    assertLabelsClear(
+      [
+        "flowchart TD",
+        '  A["Quest step"]',
+        "  A -->|involves location| L1([The Old Mines])",
+        "  A -->|involves character| C1((Foreman))",
+        "  A -->|requires item| I1(Key)",
+      ].join("\n"),
+      3,
+    );
   });
 
   test("TD fan-in: three sources, one shared target", () => {
-    const code = [
-      "flowchart TD",
-      '  S1["Source one"] -->|provides item| T[Target]',
-      '  S2["Source two"] -->|provides gold| T',
-      '  S3["Source three"] -->|provides key| T',
-    ].join("\n");
-    const res = renderMermaidSvg(code);
-    assert.equal(res.ok, true);
-    const rects = edgeLabelRects(res.svg);
-    assert.equal(rects.length, 3);
-    assert.equal(anyRectOverlap(rects), false);
+    assertLabelsClear(
+      [
+        "flowchart TD",
+        '  S1["Source one"] -->|provides item| T[Target]',
+        '  S2["Source two"] -->|provides gold| T',
+        '  S3["Source three"] -->|provides key| T',
+      ].join("\n"),
+      3,
+    );
   });
 
   test("parallel edges between the same two nodes stack cleanly", () => {
-    const code = [
-      "flowchart TD",
-      "  A[Start] -->|first path| B[End]",
-      "  A -->|second path| B",
-      "  A -->|third path| B",
-    ].join("\n");
-    const res = renderMermaidSvg(code);
-    assert.equal(res.ok, true);
-    const rects = edgeLabelRects(res.svg);
-    assert.equal(rects.length, 3);
-    assert.equal(anyRectOverlap(rects), false);
+    assertLabelsClear(
+      [
+        "flowchart TD",
+        "  A[Start] -->|first path| B[End]",
+        "  A -->|second path| B",
+        "  A -->|third path| B",
+      ].join("\n"),
+      3,
+    );
+  });
+
+  test("TD parallel-6: six labels on one edge never stack or hit nodes", () => {
+    assertLabelsClear(
+      [
+        "flowchart TD",
+        "  A[Start] -->|first path| B[End]",
+        "  A -->|second path| B",
+        "  A -->|third path| B",
+        "  A -->|fourth path| B",
+        "  A -->|fifth path| B",
+        "  A -->|sixth path| B",
+      ].join("\n"),
+      6,
+    );
+  });
+
+  test("LR fan-out-3: labels clear the source and target nodes", () => {
+    assertLabelsClear(
+      [
+        "flowchart LR",
+        '  A["Quest step"]',
+        "  A -->|involves location| L1([The Old Mines])",
+        "  A -->|involves character| C1((Foreman))",
+        "  A -->|requires item| I1(Key)",
+      ].join("\n"),
+      3,
+    );
+  });
+
+  test("LR fan-in-3: labels clear the shared target and sources", () => {
+    assertLabelsClear(
+      [
+        "flowchart LR",
+        '  S1["Source one"] -->|provides item| T[Target]',
+        '  S2["Source two"] -->|provides gold| T',
+        '  S3["Source three"] -->|provides key| T',
+      ].join("\n"),
+      3,
+    );
+  });
+
+  test("LR fan-out-6: six labels from one source clear every node", () => {
+    assertLabelsClear(
+      [
+        "flowchart LR",
+        '  A["Quest step"]',
+        "  A -->|involves location| L1([Loc])",
+        "  A -->|involves character| C1((Char))",
+        "  A -->|requires item| I1(Item)",
+        "  A -->|requires skill| S1(Skill)",
+        "  A -->|opens room| R1([Room])",
+        "  A -->|defeats enemy| E1((Enemy))",
+      ].join("\n"),
+      6,
+    );
   });
 });

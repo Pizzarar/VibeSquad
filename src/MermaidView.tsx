@@ -961,21 +961,21 @@ interface LabelRect {
   h: number;
 }
 
-function rectsOverlap(a: LabelRect, b: LabelRect, pad: number): boolean {
-  return (
-    a.x - pad < b.x + b.w &&
-    b.x - pad < a.x + a.w &&
-    a.y - pad < b.y + b.h &&
-    b.y - pad < a.y + a.h
-  );
+/** Area of overlap between two rects (0 when disjoint); `pad` inflates each rect by that margin. */
+function overlapArea(a: LabelRect, b: LabelRect, pad = 0): number {
+  const ox = Math.min(a.x + a.w + pad, b.x + b.w + pad) - Math.max(a.x - pad, b.x - pad);
+  const oy = Math.min(a.y + a.h + pad, b.y + b.h + pad) - Math.max(a.y - pad, b.y - pad);
+  return ox > 0 && oy > 0 ? ox * oy : 0;
 }
 
 /**
  * Find a non-colliding centre for one edge label. Baseline is t=0.5 on the
- * Bézier; when that overlaps an already-placed label, nudge first along the edge
- * (t) — which separates stacked parallel edges and fan-in/fan-out labels — then
- * perpendicular to the chord, then combinations. Returns the last-resort baseline
- * if every candidate collides (the diagram is pathological; still no throw).
+ * Bézier; when that overlaps an already-placed label or node box, nudge first
+ * along the edge (t) — which separates stacked parallel edges and fan-in/fan-out
+ * labels — then perpendicular to the chord (stepped by the label's extent on that
+ * axis, so a wide label can clear a vertical edge), then combinations. If every
+ * candidate still collides, return the one with the least total overlap instead
+ * of stacking on the baseline.
  */
 function resolveLabelAnchor(
   g: EdgeGeom,
@@ -989,28 +989,40 @@ function resolveLabelAnchor(
   const px = -dy / len;
   const py = dx / len;
 
-  const dt = 0.08;
-  const perpStep = 16;
-  const tSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5];
-  const pSteps = [1, -1, 2, -2, 3, -3];
+  // Label extent along the perpendicular axis (vertical edge → its width;
+  // horizontal edge → its height), so a full step clears a whole label.
+  const perpExtent = Math.abs(px) * lw + Math.abs(py) * lh;
+  const perpStep = Math.max(16, perpExtent + 6);
+
+  const dt = 0.06;
+  const tSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7];
+  const pSteps = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
 
   const candidates: Array<{ t: number; perp: number }> = [{ t: 0.5, perp: 0 }];
   for (const ts of tSteps) candidates.push({ t: 0.5 + ts * dt, perp: 0 });
   for (const ps of pSteps) candidates.push({ t: 0.5, perp: ps * perpStep });
-  for (const ts of [1, -1, 2, -2, 3, -3]) {
+  for (const ts of tSteps) {
     for (const ps of pSteps) candidates.push({ t: 0.5 + ts * dt, perp: ps * perpStep });
   }
 
   const base = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, 0.5);
+  let best: { x: number; y: number } | null = null;
+  let bestOverlap = Infinity;
   for (const cand of candidates) {
     const tt = Math.min(0.9, Math.max(0.1, cand.t));
     const pt = bezierPoint(g.x1, g.y1, g.cx1, g.cy1, g.cx2, g.cy2, g.x2, g.y2, tt);
     const x = pt.x + px * cand.perp;
     const y = pt.y + py * cand.perp;
     const rect: LabelRect = { x: x - lw / 2, y: y - lh / 2, w: lw, h: lh };
-    if (!placed.some((r) => rectsOverlap(r, rect, 2))) return { x, y };
+    let overlap = 0;
+    for (const r of placed) overlap += overlapArea(r, rect, 2);
+    if (overlap === 0) return { x, y };
+    if (overlap < bestOverlap) {
+      bestOverlap = overlap;
+      best = { x, y };
+    }
   }
-  return base;
+  return best ?? base;
 }
 
 function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>, theme: MermaidTheme): string {
@@ -1145,7 +1157,12 @@ function renderLayeredGraphSvg(parsed: Extract<ParseMermaidResult, { ok: true }>
     lh: number;
   }
   const placedLabels: PlacedLabel[] = [];
+  // Seed with every node's bounding box so labels avoid nodes too (not just each
+  // other); a small pad keeps labels off node edges.
   const placedRects: LabelRect[] = [];
+  for (const n of positioned.values()) {
+    placedRects.push({ x: n.x - n.w / 2 - 4, y: n.y - n.h / 2 - 4, w: n.w + 8, h: n.h + 8 });
+  }
   for (const g of edgeGeoms) {
     if (g.selfLoop || !g.e.label) continue;
     const lw = Math.max(32, g.e.label.length * 7 + 18);
