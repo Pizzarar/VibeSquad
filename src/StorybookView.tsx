@@ -487,6 +487,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <button type="button" className={`sb-btn sb-refresh${busy ? " sb-busy" : ""}`} data-testid="sb-refresh" aria-label="Refresh" aria-busy={busy} title="Re-snapshot Storybook" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}><span className="sb-refresh-icon" aria-hidden="true">↻</span><span className="sb-refresh-text" aria-hidden="true">{busy ? "Refreshing…" : "Refresh"}</span></button>
         </div>
       </header>
+      {checked && <div className="sb-checked sb-checked-row" role="status" data-testid="sb-checked-row">{checked}</div>}
       {notice && <div className="sb-notice" role="status" data-testid="sb-notice">{notice}</div>}
       {state.kind === "loading" && <p className="sb-empty">Loading Storybook…</p>}
       {state.kind === "none" && <p className="sb-empty" data-testid="sb-none">{NO_STORYBOOK}. Storybook needs a registered adapter for the project’s repo; ask the squad lead to add one.</p>}
