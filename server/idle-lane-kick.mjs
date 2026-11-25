@@ -13,6 +13,9 @@ import { briefRootFor } from "./brief-path.mjs";
 import { getInboxPath } from "./inbox.mjs";
 import { appendVsLogEntry } from "./brainstorm.mjs";
 
+// C2 (PLAN_CRUNCH_MODE): re-exported for read-only reuse by crunch-toggle.mjs (liveness / role / busy predicates).
+export { effectiveAgentRole, isLiveAgent };
+
 export const IDLE_KICK_MIN = 10;
 export const IDLE_KICK_ESCALATE_MIN = 30;
 export const IDLE_KICK_TICK_MS = 60_000;
@@ -21,7 +24,7 @@ const OPEN_UNIT = new Set(["todo", "running", "ready", "open", "pending", "queue
 export const IDLE_KICK_WORK_TTL_MS = 5 * 60_000;
 const LOG_TAIL_BYTES = 256 * 1024;
 const NEEDS_YOU_MAX_AGE_MS = 7 * 24 * 3_600_000;
-const BUSY = new Set(["running", "queued", "initializing", "starting", "working"]);
+export const BUSY = new Set(["running", "queued", "initializing", "starting", "working"]);
 
 export const kickText = (item) => `You are idle with open work: ${item}. Pick the next and go (R13); if blocked, log needs-you.`;
 export const escalateText = (lane, item, mins) => `Lane ${lane} went idle again on "${item}" within ${mins} min of an idle-kick and has not moved. Unblock it or re-route it.`;

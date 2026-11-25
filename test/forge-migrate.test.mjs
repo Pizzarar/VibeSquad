@@ -1,4 +1,5 @@
 // scripts/forge-migrate.mjs (docs/PLAN_FORGE_CUTOVER.md C2a/C3). Hermetic: temp dirs only, placeholder paths only.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import { describe, test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

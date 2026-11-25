@@ -609,7 +609,7 @@ const PROFILE_NAME_BY_ID = new Map(DEFAULT_PACK_PROFILES.map((p) => [p.id, p.nam
 /** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
-  if (typeof m.role === "string" && m.role) st.role = m.role;
+  if (typeof m.role === "string" && m.role) st.role = m.role.replace(/^(?:former|old|retired)-/i, ""); // usa-56: retired roles ("former-lead") fold into the live role at the source
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
@@ -1553,17 +1553,27 @@ const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === 
 
 /** Worker runs bucketed by worktree unit name and by lane, in agent order. heap-stall-1114: attributeImplementer() filtered all
  * ~4k agent runs once per merged unit (~0.8 s of every /usage request); getUsage() now builds this once per request. */
+const isWorktreeCwd = (cwd) => /\/worktrees\//i.test(normalizeWorktreeCwd(cwd));
+/** usa-55: workers whose worktree is this unit: exact name first; the `unit-`-less alias only when no exact worktree exists. */
+const workersOfUnit = (index, want) => { const exact = index.byUnit.get(want) ?? []; return exact.length ? exact : (index.byAlias?.get(want) ?? []); };
+/** usa-55: a worker whose own worktree is a merged unit (exact or `unit-`-aliased) is owned by the worktree path, not byRef. */
+const ownsMergedWorktree = (index, a) => { const n = unitNameOfCwd(a.cwd); return !!index.mergedNames?.has(n) || (isWorktreeCwd(a.cwd) && !!index.mergedNames?.has(`unit-${n}`)); };
 function indexWorkers(agents) {
   const byUnit = new Map();
+  const byAlias = new Map(); // usa-55: `unit-<worktree name>` -> workers in a unit-less-named worktree
   const byLane = new Map();
   const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
-    getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
+    const wt = unitNameOfCwd(a.cwd);
+    getOrSet(byUnit, wt, () => []).push(a);
+    // usa-55: some lanes (storybook) name the worktree `sb2-x` but the merged branch `unit-sb2-x`. Alias ONLY real worktree cwds
+    // (never a main checkout like .../VibeSquad), kept apart from exact matches so it can never outrank or pollute them.
+    if (wt && !wt.startsWith("unit-") && isWorktreeCwd(a.cwd)) getOrSet(byAlias, `unit-${wt}`, () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
     if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
   }
-  return { byUnit, byLane, byRef };
+  return { byUnit, byAlias, byLane, byRef };
 }
 
 /** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
@@ -1579,22 +1589,42 @@ function pickImplementer(cands) {
   return null;
 }
 
+/** usa-55: several implementer profiles worked one unit's worktree (Implement + Work Order + Mechanical fixes...). Credit the
+ * primary one: the costliest run that did work (ties: earliest created). The coverage gap was mostly this ambiguity. */
+function pickPrimaryImplementer(cands) {
+  const worked = cands.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : cands;
+  const created = (x) => (x.createdAt ?? Infinity);
+  return pool.slice().sort((x, y) => ((y.costUsd ?? 0) - (x.costUsd ?? 0))
+    || (created(x) === created(y) ? 0 : created(x) < created(y) ? -1 : 1)
+    || String(x.agentId ?? "").localeCompare(String(y.agentId ?? "")))[0] ?? null;
+}
+
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
+  return resolveImplementer(unit, agents, index).implementer;
+}
+
+/** usa-55: `{ implementer, miss }` from ONE decision path, so the miss reason can never drift from the attribution. */
+function resolveImplementer(unit, agents, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
+  const hit = (implementer) => ({ implementer, miss: null });
+  const miss = (reason) => ({ implementer: null, miss: reason });
+  if (!agents.some((a) => a.role === "worker" && sameSquad(unit, a))) return miss("other-repo-unmapped");
+  let evidenceMiss = null;
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
-    const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
-    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return cwdMatches[0];
+    const cwdMatches = workersOfUnit(index, want).filter((a) => sameSquad(unit, a));
+    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return hit(cwdMatches[0]);
     if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
+      if (impls.length > 0) return hit(pickImplementer(impls) ?? pickPrimaryImplementer(impls)); // usa-44: zero-turn runs never spent anything
     }
     // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
     // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
     // Squad) that is not before the run was created, so a later follow-up run is never credited to an earlier merge (R1 M1).
     const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
-      && !index.mergedNames?.has(unitNameOfCwd(a.cwd)) // a run whose own worktree is a merged unit is owned by the byUnit path
+      && !ownsMergedWorktree(index, a) // a run whose own worktree is a merged unit is owned by the worktree path
       && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
     if (refs.length) {
       const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
@@ -1603,17 +1633,38 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
         return !first || first.sha === unit.sha;
       });
       const picked = pickImplementer(mine);
-      if (picked) return picked;
-      return null; // evidence names this unit but another merge owns it (or it is ambiguous): never fall back to the lane guess (R1 M2)
+      if (picked) return hit(picked);
+      return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // never fall back to the lane guess (R1 M2)
     }
-    if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
-    if (cwdMatches.length > 1) return null;
-  }
-  if (!unit.lane || mergedAtMs === null) return null;
+    if (cwdMatches.length === 1) return hit(cwdMatches[0]); // unchanged legacy behaviour: a lone non-implementer worktree run
+    if (cwdMatches.length > 1) return miss("no-implementer-in-worktree");
+    if (!unit.lane) evidenceMiss = "no-worker-cwd-match";
+  } else if (!unit.lane) return miss("no-branch");
+  if (!unit.lane || mergedAtMs === null) return miss(evidenceMiss ?? "no-lane-implementer");
   const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
-  if (laneWorkers.length === 1) return laneWorkers[0];
+  if (laneWorkers.length === 1) return hit(laneWorkers[0]);
   const laneImpls = laneWorkers.filter(isImplementerWorker);
-  return laneImpls.length === 1 ? laneImpls[0] : null;
+  return laneImpls.length === 1 ? hit(laneImpls[0]) : miss("no-lane-implementer");
+}
+
+/** usa-55: enumerated reasons a merged unit has no implementer (set by resolveImplementer). */
+export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match"];
+
+/** usa-55: attributed/total over the raw merged units (ledger-folded rows are added later), split by lane, repo and miss reason. */
+function buildAttributionCoverage(merged) {
+  const tally = (key) => {
+    const m = {};
+    for (const u of merged) {
+      const e = (m[key(u) ?? "none"] ??= { attributed: 0, total: 0 });
+      e.total += 1;
+      if (u.implementerAgentId) e.attributed += 1;
+    }
+    return m;
+  };
+  const attributed = merged.filter((u) => u.implementerAgentId).length;
+  const byMiss = {};
+  for (const u of merged) if (!u.implementerAgentId) byMiss[u.attributionMiss ?? "unknown"] = (byMiss[u.attributionMiss ?? "unknown"] ?? 0) + 1;
+  return { attributed, total: merged.length, rate: merged.length ? Math.round((attributed / merged.length) * 1000) / 1000 : null, byLane: tally((u) => u.lane), byRepo: tally((u) => u.repo), byMiss };
 }
 
 /** handoff entries (type "handoff") from the vs-log dirs under home (logs and teams), deduped (same entry lands in both). */
@@ -2148,7 +2199,7 @@ function providerFamily(provider) {
 function attributeReviewerAgent(unit, implementer, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
   const isRev = (a) => a.jobKind === "reviewer" && sameSquad(unit, a);
-  let revs = typeof unit.unit === "string" && unit.unit ? (index?.byUnit.get(unit.unit.toLowerCase()) ?? []).filter(isRev) : [];
+  let revs = typeof unit.unit === "string" && unit.unit ? workersOfUnit(index ?? {byUnit:new Map()}, unit.unit.toLowerCase()).filter(isRev) : [];
   if (!revs.length && unit.lane && mergedAtMs !== null && implementer) {
     revs = (index?.byLane.get(unit.lane) ?? []).filter((a) => isRev(a) && !unitNameOfCwd(a.cwd) && a.createdAt !== null && a.createdAt >= (implementer.createdAt ?? 0) && a.createdAt <= mergedAtMs);
   }
@@ -3213,6 +3264,8 @@ export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
 export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
+  resolveImplementer,
+  indexWorkers,
   buildPlanScores,
   buildBurstCohorts,
   usageSteps,
@@ -3332,7 +3385,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
-    const implementer = attributeImplementer(u, agents, workerIndex);
+    const { implementer, miss: attributionMiss } = resolveImplementer(u, agents, workerIndex);
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
@@ -3352,6 +3405,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
+      attributionMiss: implementer ? null : attributionMiss,
       reviewerAgentId: reviewer ? reviewer.agentId : null,
       costUsd: implementer ? implementer.costUsd : null,
       inputTokens: implementer ? implementer.inputTokens : 0,
@@ -3364,6 +3418,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     };
   }
   yield;
+  const attributionCoverage = buildAttributionCoverage(merged);
 
   // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
   // of its merged units; reviewer = PASS-line rate; lead (plan done) and Buddy (handoff accepted) leave no reliable log signal
@@ -3583,6 +3638,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     laneRole: lrRows,
     coordination: split(lrRows),
     merged: { units: merged, perLane },
+    attributionCoverage,
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms,

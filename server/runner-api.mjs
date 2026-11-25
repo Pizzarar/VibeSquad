@@ -325,6 +325,31 @@ export function createTesterEventFilter(teamsOf) {
   };
 }
 
+/**
+ * Review rn-630d32bc8390: concurrent GET /runner/events streams one tester device id may hold. Past it a new stream is
+ * refused with 429 (the open ones are never touched): the Tester Desk's runnerBridge recreates a stream after any close with
+ * backoff, so evicting the oldest instead would make a device with cap+1 tabs churn its streams forever, while a refusal
+ * just backs the extra tab off until a slot frees. Owner streams are not counted; owner-playtest devices never stream.
+ */
+export const TESTER_STREAMS_PER_DEVICE = 4;
+const testerStreams = new Map(); // deviceId -> open stream count
+/** Open tester event streams for `deviceId` (tests and diagnostics). */
+export const testerStreamCount = (deviceId) => testerStreams.get(deviceId) ?? 0;
+/** Take one stream slot for `deviceId`: an idempotent release function, or null when the device is at the cap. */
+function takeTesterStreamSlot(deviceId) {
+  const n = testerStreamCount(deviceId);
+  if (n >= TESTER_STREAMS_PER_DEVICE) return null;
+  testerStreams.set(deviceId, n + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = testerStreamCount(deviceId) - 1;
+    if (left > 0) testerStreams.set(deviceId, left);
+    else testerStreams.delete(deviceId);
+  };
+}
+
 /** L1: the SSE side source for tester `deviceId`: { kind: "tester-thread", seq } per line stored under that device only. */
 export const testerThreadTicks = (deviceId) => (write) =>
   onTesterThreadLine(deviceId, ({ seq }) => write({ kind: "tester-thread", ...(Number.isSafeInteger(seq) ? { seq } : {}) }));
@@ -343,7 +368,29 @@ async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, ca
     };
     const allowedNow = async () => testerIntakeAgents(await agentsNow(), teamsOf());
     if (req.method === "GET" && parts.length === 1 && parts[0] === "status") return sendJson(res, 200, { enabled: true });
-    if (req.method === "GET" && parts.length === 1 && parts[0] === "events") return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf), testerThreadTicks(String(caller.id)));
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "events") {
+      const deviceId = String(caller.id);
+      const release = takeTesterStreamSlot(deviceId);
+      if (!release) {
+        res.setHeader?.("retry-after", "15");
+        throw Object.assign(new Error(`too many open event streams for this device (max ${TESTER_STREAMS_PER_DEVICE})`), { status: 429 });
+      }
+      // The slot rides on the side source: streamEvents' close cleanup (req or res close) unsubscribes the ticks and frees it.
+      const ticks = testerThreadTicks(deviceId);
+      const extra = (write) => {
+        const off = ticks(write);
+        return () => {
+          off();
+          release();
+        };
+      };
+      try {
+        return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf), extra);
+      } catch (err) {
+        release(); // idempotent: never leak a slot if the stream failed to start
+        throw err;
+      }
+    }
     if (req.method === "GET" && parts.length === 1 && parts[0] === "agents") {
       if (url.searchParams.has("archived")) throw testerForbidden("forbidden: bug-tester device cannot list archived agents");
       return sendJson(res, 200, { enabled: true, agents: [...(await allowedNow()).values()].map(testerAgentView) });

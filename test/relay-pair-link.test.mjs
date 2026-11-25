@@ -1,7 +1,8 @@
 // E5 §7 item 8 (docs/lanes/android-app/E5_THREAT_MODEL.md, unit-and-e5-relay-links): the relay pairing link the
 // Pair a device dialog hands out. Builder (server/relay-link.mjs), the pair/start offer (auth.mjs relayPairingFor, only
 // while the relay wiring reports running on wss://), and the PairDeviceModal card that renders it.
-// Run: node --test --import ./test/setup/hermetic.mjs test/relay-pair-link.test.mjs
+// Run: node --test test/relay-pair-link.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

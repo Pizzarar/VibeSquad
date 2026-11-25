@@ -3,6 +3,7 @@
 // memory and re-attributes the entry; a wrong token is a 403 from the CLI; `vs handoff` stays a packet writer; an agent
 // id without a token is a 403 before anything is sent (X1d: the rollout fallback and VS_AGENT_TOKEN_REQUIRED are gone).
 // A real Runner + runner HTTP server answers GET /verify-agent; the VS middleware runs on a temp VIBESQUAD_HOME.
+import "./setup/hermetic.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

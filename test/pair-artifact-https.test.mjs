@@ -1,7 +1,8 @@
 // idea-384 (docs/PLAN_INBOX_TOP3_1120.md T1): the pair dialog's desktop installer and Android APK links are https only,
 // the LAN/Meshnet plain-http listener refuses them (301 to https, never the bytes), and each artifact's SHA-256 rides
 // along in the CA-fingerprint shape. /ca.crt stays on plain http: it is the bootstrap, checked by the CA fingerprint.
-// Run: node --test --import ./test/setup/hermetic.mjs test/pair-artifact-https.test.mjs
+// Run: node --test test/pair-artifact-https.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";

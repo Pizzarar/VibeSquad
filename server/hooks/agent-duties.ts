@@ -294,12 +294,12 @@ export const HUB_LEAD_RULES = [
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 
-/** Appended to the Buddy pack only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
-export const VIBE_MODE_BUDDY_RULES = [
-  "Vibe mode is ON for this Squad:",
-  "- Act on your own for bug fixes, approved plan blocks and parity gaps: dispatch them without waiting. Log each auto call as `vs log decision \"(auto) ...\"`.",
-  "- New features, scope changes, public/outward actions, money and destructive actions wait for the user: collect them into ONE needs-you digest, not one ping each.",
-].join("\n");
+/** Appended to the Buddy and Lead packs only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
+export const CRUNCH_MODE_RULES =
+  "Crunch mode is ON for this Squad: act on your lean end-to-end (plan, hand off, dispatch, merge through the normal gates) until the lane has a tryable build. Log each call as `vs log decision \"(auto) ...\"`. Stop only for deletes, releases, money and outward/public actions: put those in ONE needs-you digest and keep working on everything else. Review, suite, UX Reviewer and merge gates still apply; Crunch skips asking, not checking.";
+
+/** Alias kept for tests that import the old name (PLAN_CRUNCH_MODE C1). */
+export const VIBE_MODE_BUDDY_RULES = CRUNCH_MODE_RULES;
 
 export const LEAD_FALLBACK_PACK = [
   "Role: lead.",
@@ -850,9 +850,9 @@ export function rolePack(role: string, cwd: string, vibeMode = false, isHub = fa
     } catch {
       // fall through
     }
-    return [base, isHub && HUB_LEAD_RULES].filter(Boolean).join("\n");
+    return [base, vibeMode && CRUNCH_MODE_RULES, isHub && HUB_LEAD_RULES].filter(Boolean).join("\n");
   }
-  if (role === "brainstorm") return [BRAINSTORM_PACK, vibeMode && VIBE_MODE_BUDDY_RULES, isHub && HUB_BUDDY_RULES].filter(Boolean).join("\n");
+  if (role === "brainstorm") return [BRAINSTORM_PACK, vibeMode && CRUNCH_MODE_RULES, isHub && HUB_BUDDY_RULES].filter(Boolean).join("\n");
   if (role === "worker") return WORKER_PACK;
   return "";
 }
@@ -2509,6 +2509,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             const v = stampVals[k];
             if (v && (nextReqLabels ?? reqLabels)[k] !== v) stamp[k] = v;
           }
+          // R0: spawn_worker's `vs.model` (arm picks) names the model actually run, so re-sync it after failover / the ladder.
+          if ((nextReqLabels ?? reqLabels)["vs.model"] && stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
           if (Object.keys(stamp).length) {
             nextReqLabels = { ...(nextReqLabels ?? reqLabels), ...stamp };
             changed = true;

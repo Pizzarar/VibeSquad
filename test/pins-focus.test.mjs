@@ -258,7 +258,7 @@ test("Desk Psycho U2: the cross-squad Needs-you spine mounts above SQUADS with P
 
 test("Desk Psycho U2: the sidebar where-label drops the 'Desk · ' prefix and carries the full location as a title; Normal keeps Desk", () => {
   const inbox = srcOf("BoringInbox.tsx");
-  assert.ok(inbox.includes('title={sidebarMenu ? `${r.lane} · ${r.project}` : undefined}'));
+  assert.ok(inbox.includes('title={`${r.lane} · ${r.project}`}'));
   assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? null : r.lane}'));
   assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? r.project : ` · ${r.project}`}'));
   assert.match(srcOf("styles.css"), /\.sidebar \.boring-needs-where-inline \{[^}]*min-width: 0[^}]*overflow: hidden[^}]*text-overflow: ellipsis[^}]*white-space: nowrap[^}]*color: var\(--muted\)/);
