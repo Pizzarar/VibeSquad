@@ -163,6 +163,32 @@ test("hooks: spawnWindow + killTargetLocations from data", () => {
   assert.deepEqual(killTargetLocations(reg, "nope"), []);
 });
 
+test("art slots (F4): manifest slots -> art_slot entities (production state, links); coverage findings for art-less characters", async () => {
+  const loaded = await efiAdapter.load(makeReader(fake.clone, fake.sha), fake.sha);
+  const art = loaded.entities.filter((e) => e.kind === "art_slot");
+  assert.equal(art.length, 6);
+  const byId = new Map(art.map((e) => [e.id, e]));
+  // status -> production: PIPELINE -> ai-draft, PLACEHOLDER -> placeholder, COMMISSIONED -> final
+  assert.equal(byId.get("enemy.scav").production, "ai-draft");
+  assert.equal(byId.get("enemy.boss_dockmaster").production, "placeholder");
+  assert.equal(byId.get("item.scrap_metal").production, "final");
+  assert.deepEqual(byId.get("enemy.scav").data, { artKind: "enemy_portrait", slot: "portrait", status: "PIPELINE", batch: "B1", path: "res://art/pipeline/enemy_portrait/x_enemy.scav.png", candidates: null, target: { kind: "enemy", id: "scav" } });
+  // portraits link to their character, sprites to their enemy; non-character art (item_icon) links to nothing
+  assert.ok(byId.get("enemy.scav").links.some((l) => l.rel === "portrait" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(byId.get("sprite.scav").links.some((l) => l.rel === "sprite" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(byId.get("squad.doc").links.some((l) => l.rel === "portrait" && l.kind === "squad" && l.id === "doc"));
+  assert.equal(byId.get("item.scrap_metal").links.length, 0);
+  assert.equal(byId.get("item.scrap_metal").data.slot, "other");
+  // coverage: armored_scav + exo_trooper (no art at all) and trader doc (no portrait)
+  const refs = loaded.findings.map((f) => `${f.entityRef.kind}:${f.entityRef.id}`).sort();
+  assert.deepEqual(refs, ["enemy:armored_scav", "enemy:exo_trooper", "trader:doc"]);
+  for (const f of loaded.findings) {
+    assert.equal(f.check, "coverage");
+    assert.equal(f.severity, "info");
+    assert.ok(f.msg && f.source);
+  }
+});
+
 test("CSV without a current_text column warns instead of throwing", async () => {
   const reader = { sha: "abcdef12", exists: async () => false, listTree: async () => [], readFile: async (p) => (p === "docs/review/text_review.csv" ? "group,file,line\nG,a.gd,3\n" : null) };
   const r = await efiAdapter.load(reader, reader.sha);

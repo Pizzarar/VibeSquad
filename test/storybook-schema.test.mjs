@@ -6,8 +6,8 @@ const src = { path: "data/x.json", line: 3 };
 const mk = (o) => entity({ source: src, ...o });
 
 test("v1 + reserved kinds", () => {
-  assert.deepEqual(Object.keys(KINDS), ["trader", "squad", "enemy", "location", "room", "item", "skill", "contract", "recipe", "quest_step", "line", "voice_card", "lore"]);
-  assert.deepEqual([...RESERVED_KINDS], ["faction", "dialogue_node", "dialogue_choice", "cutscene", "ability", "art_slot", "audio_cue", "map_graph"]);
+  assert.deepEqual(Object.keys(KINDS), ["trader", "squad", "enemy", "location", "room", "item", "skill", "contract", "recipe", "quest_step", "line", "voice_card", "lore", "art_slot"]);
+  assert.deepEqual([...RESERVED_KINDS], ["faction", "dialogue_node", "dialogue_choice", "cutscene", "ability", "audio_cue", "map_graph"]);
   assert.equal(ALL_KINDS.length, 21);
 });
 
