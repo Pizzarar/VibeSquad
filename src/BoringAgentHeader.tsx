@@ -64,6 +64,8 @@ export type BoringAgentHeaderProps = {
   active: boolean;
   stagedSwitch?: ProviderSwitchTarget | null;
   onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
+  /** B16: shared config lifted into AgentDrawer (also feeds the composer bar). Omitted in standalone use: the header then owns its own. */
+  cfg?: ReturnType<typeof useAgentConfig>;
   restartedFrom: string;
   feedbackDismissed: boolean;
   onFeedback: (verdict: "good" | "lost") => Promise<void>;
@@ -89,6 +91,15 @@ function headerLaneCode(laneKey: string): string {
 }
 
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {
+  return p.cfg ? <BoringAgentHeaderBody p={p} cfg={p.cfg} /> : <BoringAgentHeaderOwnCfg {...p} />;
+}
+
+function BoringAgentHeaderOwnCfg(p: BoringAgentHeaderProps) {
+  const cfg = useAgentConfig({ agent: p.agent, active: p.active, isBs: p.isBs, onSuccessor: p.onSuccessor, doRestart: p.doRestart, stagedSwitch: p.stagedSwitch, onStageSwitch: p.onStageSwitch });
+  return <BoringAgentHeaderBody p={p} cfg={cfg} />;
+}
+
+function BoringAgentHeaderBody({ p, cfg }: { p: BoringAgentHeaderProps; cfg: ReturnType<typeof useAgentConfig> }) {
   const { agent } = p;
   const now = useTick();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -97,8 +108,6 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const [flagOpen, setFlagOpen] = useState(false);
   const [resumeBusy, setResumeBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  // Same provider/model/mode/thinking state + Shift+Tab mode cycling as Psycho DrawerHeader (shared hook).
-  const cfg = useAgentConfig({ agent, active: p.active, isBs: p.isBs, onSuccessor: p.onSuccessor, doRestart: p.doRestart, stagedSwitch: p.stagedSwitch, onStageSwitch: p.onStageSwitch });
   const audit = auditAntigravityAgent(agent, p.entries);
   const attachBlocked = !!audit.a5ReadBlocked;
   const hung = audit.a3HungTool;
@@ -308,13 +317,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
                 </>
               )}
               <div className="boring-agent-menu-sep" role="separator" />
-              <div className="boring-agent-menu-section" data-testid="boring-config-section" role="group" aria-label="Model and mode">
-                <div className="boring-agent-menu-title muted">Model &amp; mode</div>
-                <label className="boring-cfg-row"><span>Provider</span>{cfg.providerSelect}</label>
-                <label className="boring-cfg-row"><span>Model</span>{cfg.modelControl}</label>
-                {cfg.modeSelect && <label className="boring-cfg-row"><span>Mode</span>{cfg.modeSelect}</label>}
-                {cfg.thinkingSelect && <label className="boring-cfg-row"><span>Thinking</span>{cfg.thinkingSelect}</label>}
-                {cfg.providerSwitchBtn}
+              <div className="boring-agent-menu-section" data-testid="boring-config-section" role="group" aria-label="Session">
+                <div className="boring-agent-menu-title muted">Session</div>
                 <div className="boring-cfg-chips">
                   <FeaturesMenu agent={agent} />
                   <SandboxView agent={agent} />
@@ -322,7 +326,6 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
                     <span data-testid="drawer-cost-readout" className="chip">{formatCostUsd(cost)}</span>
                   )}
                 </div>
-                <div className="muted small">Shift+Tab cycles the permission mode.</div>
               </div>
               <div className="boring-agent-menu-sep" role="separator" />
               <SessionActions agent={agent} entries={p.entries} />

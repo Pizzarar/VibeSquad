@@ -1490,6 +1490,25 @@ html[data-vibe="boring"] .boring-lane-table .boring-lane-mini.none { box-shadow:
 /* Busts reuse the B13c mini-avatar ring vocabulary (working = lit glow, idle = greyscale, needs-you = amber, error = red). */
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill, html[data-vibe="boring"] .boring-overview-add, html[data-vibe="boring"] .boring-lane-row { transition: none; } }
 
+/* ---- B16 composer bar: Normal-mode two-row composer card (textarea on top; attach / secure input / park + provider, model, thinking, mode + send below). ---- */
+html[data-vibe="boring"] .composer-row.boring-composer-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px 8px 14px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 10px; }
+html[data-vibe="boring"] .boring-composer-row > textarea { width: 100%; min-height: 44px; box-sizing: border-box; padding: 4px 0; resize: vertical; }
+html[data-vibe="boring"] .boring-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding-top: 6px; border-top: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-composer-actions { display: flex; align-items: center; gap: 4px; }
+html[data-vibe="boring"] .boring-composer-icon { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; background: transparent; color: var(--text-1); border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+html[data-vibe="boring"] .boring-composer-icon:hover:not(:disabled) { background: var(--surface-3); border-color: var(--border); }
+html[data-vibe="boring"] .boring-composer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-composer-icon:disabled { opacity: 0.5; cursor: default; }
+html[data-vibe="boring"] .boring-composer-cfg { display: flex; flex: 1 1 280px; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+html[data-vibe="boring"] .boring-composer-mode { display: inline-flex; }
+html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { width: auto; max-width: 150px; min-width: 0; height: 32px; min-height: 32px; padding: 0 4px; font-size: 12px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: 8px; }
+html[data-vibe="boring"] .boring-composer-cfg select:focus-visible, html[data-vibe="boring"] .boring-composer-cfg input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-composer-send { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+html[data-vibe="boring"] .boring-composer-send .btn, html[data-vibe="boring"] .boring-composer-send .composer-interrupt-btn { min-height: 34px; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn { background: color-mix(in srgb, var(--accent) 70%, #000000); border: 1px solid color-mix(in srgb, var(--accent) 70%, #000000); color: #ffffff; font-weight: 600; padding: 0 18px; border-radius: 8px; }
+html[data-vibe="boring"][data-theme="light"] .boring-composer-bar .boring-composer-send .btn.composer-interrupt-btn:not(:disabled) { color: #ffffff; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn:disabled { background: #475569; border-color: #475569; color: #ffffff; opacity: 0.85; }
+
 /* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
 /* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }

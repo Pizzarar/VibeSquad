@@ -37,6 +37,7 @@ import { PermissionCard } from "./PermissionCard";
 import { Composer, formatBtwPrompt, shouldQueueOnSend } from "./Composer";
 import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { BoringAgentHeader } from "./BoringAgentHeader";
+import { useAgentConfig } from "./useAgentConfig";
 import { useVibe } from "./AngelBezel";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers } from "./WorkingBar";
@@ -324,6 +325,10 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     },
     [agent, bsUsedTokens, clearDraft, laneId, restarting, teamId],
   );
+
+  // B16: Normal mode owns one shared config instance for the header and the composer bar. `active` is gated so Psycho (whose
+  // DrawerHeader has its own hook) never gets a second Shift+Tab listener from here.
+  const boringCfg = useAgentConfig({ agent, active: active && boringChat, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch: setStagedSwitch });
 
   const sendLock = useRef(createSendLock());
   const draftRef = useRef(draft);
@@ -620,6 +625,7 @@ ${draft}`);
           active={active}
           stagedSwitch={stagedSwitch}
           onStageSwitch={setStagedSwitch}
+          cfg={boringCfg}
           restartedFrom={restartedFrom}
           feedbackDismissed={feedbackDismissed}
           onFeedback={onFeedback}
@@ -738,6 +744,7 @@ ${draft}`);
         queuedItems={queuedItems}
         onSendQueuedNow={() => void sendQueuedNow()}
         onCancelQueued={cancelQueued}
+        boringConfig={boringChat ? boringCfg : undefined}
       />
     </aside>
   );
