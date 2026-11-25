@@ -19,14 +19,16 @@
 // every `git merge` of a unit branch into master/main (.githooks/pre-merge-commit; .githooks/pre-commit for a conflicted
 // merge's final commit), needs a recorded PASS on the merged tip: the latest server-attested reviewer `done` entry in this
 // repo's own Squad log(s) (teams.json paths, repoSquads) whose hash resolves here to that tip (server/verdict.mjs
-// latestRecordedVerdict). FAIL, none, or no owning Squad refuses. Override (owner/lead only; each use is logged as a `decision`
+// latestRecordedVerdict), or, when no attested digest names it (server not yet restarted onto the writer; a re-tasked reviewer's
+// undigested later turn), the reviewer's own last message read offline from the runner store (readRunnerVerdicts); the newest
+// decides. FAIL, none, or no owning Squad refuses. Override (owner/lead only; each use is logged as a `decision`
 // entry and printed): `git -c vs.verdictOverride=<sha> merge|push ...` or VS_VERDICT_OVERRIDE=<sha>[,<sha>].
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "./verdict.mjs";
+import { entryVerdict, evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "./verdict.mjs";
 
 export const GUARDED_REFS = Object.freeze(["refs/heads/master", "refs/heads/main"]);
 export const HOOKS_PATH = ".githooks";
@@ -249,13 +251,12 @@ export function resolveInRepo({ cwd = process.cwd(), git = defaultGit } = {}) {
 }
 
 /**
- * idea-883: `recorded(tip)` over the team logs of `squads` (the repo's own Squads, repoSquads) under the VS home. Other Squads'
- * logs are never read: a PASS recorded elsewhere cannot satisfy this repo's gate. Only lines that mention one of `tips`' 7-char
- * prefixes are parsed; only server-attested reviewer entries count (verdict.mjs entryVerdict), and `resolve` (resolveInRepo)
- * must map the entry's hash to exactly the tip. No Squad, or a missing/unreadable log, records nothing (fail closed).
+ * idea-883: the team-log entries of `squads` (the repo's own Squads, repoSquads) under the VS home that mention one of `tips`'
+ * 7-char prefixes, per tip (Map tip -> entries, ordered by ts). Other Squads' logs are never read; a missing/unreadable log
+ * gives nothing.
  */
-export function readRecordedVerdicts({ tips = [], home = verdictHome(), squads = [], resolve } = {}) {
-  const want = [...new Set(tips.map((t) => String(t ?? "").toLowerCase()).filter((t) => /^[0-9a-f]{7,64}$/.test(t)))];
+export function squadLogEntries({ tips = [], home = verdictHome(), squads = [] } = {}) {
+  const want = normTips(tips);
   const byTip = new Map(want.map((t) => [t, []]));
   const keys = [...new Set(want.map((t) => t.slice(0, 7)))];
   if (keys.length) {
@@ -271,7 +272,7 @@ export function readRecordedVerdicts({ tips = [], home = verdictHome(), squads =
         if (!keys.some((k) => low.includes(k))) continue;
         let e;
         try {
-          e = JSON.parse(line.replace(/^\uFEFF/, ""));
+          e = JSON.parse(line.replace(/^﻿/, ""));
         } catch {
           continue;
         }
@@ -281,7 +282,163 @@ export function readRecordedVerdicts({ tips = [], home = verdictHome(), squads =
   }
   // Each Squad's log is in append order; across a repo's Squads, order by ts so "latest" is the newest of them.
   for (const list of byTip.values()) list.sort((a, b) => (Date.parse(a?.ts ?? "") || 0) - (Date.parse(b?.ts ?? "") || 0));
-  return (tip) => latestRecordedVerdict(byTip.get(String(tip ?? "").toLowerCase()) ?? [], tip, { resolve });
+  return byTip;
+}
+
+const normTips = (tips) => [...new Set((tips ?? []).map((t) => String(t ?? "").toLowerCase()).filter((t) => /^[0-9a-f]{7,64}$/.test(t)))];
+
+/**
+ * idea-883: `recorded(tip)` over the team logs of `squads` (squadLogEntries). Only server-attested reviewer entries count
+ * (verdict.mjs entryVerdict), and `resolve` (resolveInRepo) must map the entry's hash to exactly the tip. `runner` (Map tip ->
+ * runnerRecordVerdict, from readRunnerVerdicts) adds the reviewers' own runner records; the newest of the two decides. No Squad,
+ * or a missing/unreadable log, records nothing (fail closed).
+ */
+export function readRecordedVerdicts({ tips = [], home = verdictHome(), squads = [], resolve, runner = null, byTip = null } = {}) {
+  const logs = byTip ?? squadLogEntries({ tips, home, squads });
+  return (tip) => {
+    const t = String(tip ?? "").toLowerCase();
+    return newestVerdict(latestRecordedVerdict(logs.get(t) ?? [], tip, { resolve }), runner?.get(t) ?? null);
+  };
+}
+
+/** idea-883: the runner store dirs under <home>/runner the gate reads offline (live logs first; agents-archive: imported logs). */
+export const RUNNER_LOG_DIRS = Object.freeze(["agents", "agents-archive"]);
+/** A runner log older than its tip's commit time (minus this clock slack) cannot hold a review of that tip. */
+export const TIP_TIME_SLACK_MS = 5 * 60 * 1000;
+const HEAD_BYTES = 16 * 1024;
+const RUNNER_FILE_RE = /^rn-[A-Za-z0-9_-]{1,61}\.jsonl$/;
+
+/** idea-883: `git show -s --format=%ct <sha>` in the repo as epoch ms (the tip's committer time), null when unreadable. */
+export function commitTimeInRepo({ cwd = process.cwd(), git = defaultGit } = {}) {
+  return (sha) => {
+    try {
+      const s = Number(git(["show", "-s", "--format=%ct", `${sha}^{commit}`], cwd).trim());
+      return Number.isFinite(s) && s > 0 ? s * 1000 : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** The `created` meta of a runner log (its head, before the long systemPrompt) names a review profile/title/job: a cheap
+ * prefilter only; isReviewerAgent on the folded record decides. */
+function headLooksLikeReview(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
+    const head = buf.toString("utf8", 0, n);
+    const cut = head.indexOf('"systemPrompt"');
+    return /review/i.test(cut >= 0 ? head.slice(0, cut) : head);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ }
+  }
+}
+
+/**
+ * idea-883 fallback: the verdicts reviewers' own runner records give `tips`, read offline from the on-disk runner store
+ * (<home>/runner/agents, agents-archive; the server need not run). Covers a digest `done` written without the attested field
+ * (server not yet restarted onto the writer) and a re-tasked reviewer's later turn that was never digested. Candidates: `ids`
+ * (the digested reviewers of unattested `done` entries naming a tip, always read), plus every runner log modified since the
+ * oldest tip's commit time whose created meta mentions a review. A candidate counts only when its folded record is a reviewer
+ * (isReviewerAgent) of one of `squads`, and its last assistant message (the text `vs verdict` reads) has a verdict line whose
+ * hash `resolve` maps to exactly the tip (verdict.mjs runnerRecordVerdict). Returns Map tip -> the newest such verdict.
+ */
+export async function readRunnerVerdicts({ tips = [], home = verdictHome(), squads = [], resolve, tipTime, ids = [], env = process.env } = {}) {
+  const want = normTips(tips);
+  const out = new Map();
+  const teams = new Set((squads ?? []).map(squadDir));
+  if (!want.length || !teams.size) return out;
+  const times = new Map(want.map((t) => [t, typeof tipTime === "function" ? tipTime(t) : null]));
+  const known = [...times.values()].filter((v) => Number.isFinite(v));
+  const since = known.length ? Math.min(...known) - TIP_TIME_SLACK_MS : null; // no tip time: only the named `ids` are read
+  const forced = new Set((ids ?? []).map((id) => String(id ?? "").trim()).filter((id) => RUNNER_FILE_RE.test(`${id}.jsonl`)));
+  if (since === null && !forced.size) return out;
+  let rb;
+  let tools;
+  try {
+    rb = await import("./backend/runner-backend.mjs");
+    tools = await import("./mcp/tools.mjs");
+  } catch (err) {
+    process.stderr.write(`vs verdict gate: runner store reader unavailable (${String(err?.message ?? err).split("\n")[0]}); attested digests only\n`);
+    return out;
+  }
+  const runnerDir = path.join(home, "runner");
+  const seen = new Set();
+  for (const sub of RUNNER_LOG_DIRS) {
+    let names = [];
+    try {
+      names = fs.readdirSync(path.join(runnerDir, sub));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!RUNNER_FILE_RE.test(name)) continue;
+      const id = name.slice(0, -".jsonl".length);
+      if (seen.has(id)) continue; // a live log wins over its archived copy
+      seen.add(id);
+      const file = path.join(runnerDir, sub, name);
+      if (!forced.has(id)) {
+        let mtime = 0;
+        try {
+          mtime = fs.statSync(file).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (since === null || mtime < since || !headLooksLikeReview(file)) continue;
+      }
+      let text = "";
+      try {
+        text = fs.readFileSync(file, "utf8");
+      } catch {
+        continue;
+      }
+      // No raw-text prefilter on the tip: a streamed reply can split the hash across two `output` events.
+      const fold = rb.newFoldState();
+      const events = [];
+      for (const line of text.split("\n")) {
+        if (!line) continue;
+        let e;
+        try {
+          e = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        events.push(e);
+        rb.feedFoldLine(fold, line);
+      }
+      const agent = rb.finishFold(id, fold, runnerDir, env, null);
+      if (!agent || !teams.has(squadDir(agent.labels?.team))) continue;
+      const lastMessage = tools.lastAssistantText(rb.toTimeline(events), Infinity);
+      const low = lastMessage.toLowerCase();
+      const hit = want.filter((t) => low.includes(t.slice(0, 7)));
+      if (!hit.length) continue;
+      let ts = null;
+      for (let i = events.length - 1; i >= 0; i--) if (events[i]?.type === "output") { ts = events[i].ts ?? null; break; }
+      for (const t of hit) {
+        const v = runnerRecordVerdict({ agent, lastMessage, tip: t, resolve, ts });
+        if (v) out.set(t, newestVerdict(out.get(t) ?? null, v));
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * idea-883: `recorded(tip)` for the hooks: the attested Squad-log digests plus the reviewers' own runner records
+ * (readRunnerVerdicts; the reviewers of unattested `done` digests naming a tip are always read). Never an entry's own text.
+ */
+export async function recordedVerdicts({ tips = [], home = verdictHome(), squads = [], resolve, tipTime, env = process.env } = {}) {
+  const byTip = squadLogEntries({ tips, home, squads });
+  const ids = new Set();
+  for (const list of byTip.values()) {
+    for (const e of list) if (e?.type === "done" && !entryVerdict(e) && Array.isArray(e.refs) && e.refs[0]) ids.add(String(e.refs[0]));
+  }
+  const runner = await readRunnerVerdicts({ tips, home, squads, resolve, tipTime, ids: [...ids], env });
+  return readRecordedVerdicts({ tips, home, squads, resolve, runner, byTip });
 }
 
 /**
@@ -346,7 +503,7 @@ export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd
     const unit = listed.merges.filter((m) => isUnitMergeSubject(m.subject));
     if (unit.length && !squads) squads = await repoSquads({ cwd, git, teams });
     const recorded = unit.length
-      ? readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }) })
+      ? await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env })
       : () => null;
     const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
     results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict });
@@ -471,7 +628,7 @@ export async function checkMergeCommit({ cwd = process.cwd(), env = process.env,
   if (!unit.length) return pass;
   const { teams } = registry ?? (await defaultTeams());
   const squads = await repoSquads({ cwd, git, teams });
-  const recorded = readRecordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }) });
+  const recorded = await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env });
   const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
   return { ok: verdict.ok, message: formatVerdictRefusal(verdict, { action: "merge", squads }), verdict, squads };
 }
@@ -531,7 +688,7 @@ export function summarize(results) {
     if (!result) continue;
     for (const m of result.own) lines.push(`  own       ${m.sha.slice(0, 8)} ${String(m.subject).slice(0, 80)}`);
     for (const m of result.included) lines.push(`  included  ${m.sha.slice(0, 8)} ${String(m.subject).slice(0, 80)}`);
-    for (const m of verdict?.passed ?? []) lines.push(`  verdict   ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: ${m.line.slice(0, 60)}`);
+    for (const m of verdict?.passed ?? []) lines.push(`  verdict   ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: ${m.line.slice(0, 60)}${m.source === "runner" ? ` (reviewer ${m.reviewer}'s runner record)` : ""}`);
     for (const m of verdict?.overridden ?? []) lines.push(`  OVERRIDE  ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: verdict gate overridden (vs.verdictOverride; the hook logs it)`);
     if (direct.length) lines.push(`  note: ${ref} also carries ${direct.length} direct (non-merge) commit(s); check they are yours: git log --first-parent --no-merges <remote>..HEAD`);
   }
