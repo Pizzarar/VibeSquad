@@ -3,6 +3,7 @@
 // loads it eagerly and must stay instant on `initialize` / `tools/list`. Routing itself: spawn-route.mjs roleSpawnProfile.
 // The only import is the provider-family helper (stakes-ladder.mjs, itself light: no profiles load).
 import { routeProviderFamily } from "./stakes-ladder.mjs";
+import { AGY_CLAUDE_FAMILY, isAgyClaudeModel } from "./model-ids.mjs";
 
 /**
  * Label spawn_worker stamps on a role-name spawn whose caller passed its own provider and/or model (H1, idea-974):
@@ -20,7 +21,7 @@ export const ROUTE_OVERRIDE_LABEL = "vs.route-override";
  */
 export const ROUTE_OVERRIDE_ENV = "VS_ROUTE_OVERRIDE";
 
-const LADDER_FAMILIES = new Set(["claude", "antigravity-cli", "opencode"]);
+const LADDER_FAMILIES = new Set(["claude", "antigravity-cli", "opencode", AGY_CLAUDE_FAMILY]);
 
 /**
  * R1 fix r2 (rn-a5cd265243b5 L1): is `model` another provider family's model, so `provider` can't run it? True when the
@@ -31,6 +32,8 @@ const LADDER_FAMILIES = new Set(["claude", "antigravity-cli", "opencode"]);
 export function isForeignModel(provider, model) {
   const m = String(model ?? "").trim();
   const prov = routeProviderFamily(provider);
+  // R10: agy runs Claude (agy-claude family): a claude-opus/sonnet id on antigravity-cli or agy-claude is its own.
+  if ((prov === "antigravity-cli" || prov === AGY_CLAUDE_FAMILY) && isAgyClaudeModel(m)) return false;
   const fam = routeProviderFamily(m);
   if (!m || !prov || !LADDER_FAMILIES.has(fam) || fam === prov) return false;
   return !(prov === "opencode" && m.includes("/"));

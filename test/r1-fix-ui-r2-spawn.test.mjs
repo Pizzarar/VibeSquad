@@ -86,7 +86,7 @@ test("role: every role row routes by ladder through the hook (no legacy-name, pr
         assert.equal(out.labels.profile, key === "lead" || key === "brainstorm" ? key : ROLES[key].name, at); // server labels lead/brainstorm lowercase
         // the model the badge predicts (first provider x tier for stakes) is the model that lands
         const want = ladderPick(ROLES[key], DEFAULT_TIER_LADDER, stakes);
-        assert.equal(out.config.provider, want.provider, at);
+        assert.equal(out.config.provider, want.provider === "agy-claude" ? "antigravity-cli" : want.provider, at);
         assert.equal(out.config.model, want.model, at);
       }
     }
@@ -99,7 +99,7 @@ test("role+stakes: Implement tierA-invariant lands on Opus, mechanical on the ch
   const h = harness();
   try {
     const top = await h.spawn(send("implement", { stakes: "tierA-invariant" }));
-    assert.deepEqual([top.config.provider, top.config.model], ["claude", "claude-opus-5-5"]);
+    assert.deepEqual([top.config.provider, top.config.model], ["antigravity-cli", "claude-opus-5-5-high"]);
     assert.match(metric(top), /reason=ladder tier=top role=implement/);
     // A2 (idea-986): mechanical walks Gemini Flash > Claude Haiku > opencode; the row sends (and the badge shows) Gemini.
     const cheapReq = send("implement", { stakes: "mechanical" });
@@ -191,10 +191,10 @@ test("Paseo shape (config + env only, no labels): role, role+stakes, role+overri
   const h = harness();
   try {
     const role = await h.spawnEnvOnly(send("implement"));
-    assert.deepEqual([role.config.provider, role.config.model], ["claude", "claude-sonnet-5-5"]);
+    assert.deepEqual([role.config.provider, role.config.model], ["antigravity-cli", "claude-sonnet-5-5-medium"]);
 
     const top = await h.spawnEnvOnly(send("implement", { stakes: "tierA-invariant" }));
-    assert.deepEqual([top.config.provider, top.config.model], ["claude", "claude-opus-5-5"]);
+    assert.deepEqual([top.config.provider, top.config.model], ["antigravity-cli", "claude-opus-5-5-high"]);
     const cheap = await h.spawnEnvOnly(send("implement", { stakes: "mechanical" }));
     assert.deepEqual([cheap.config.provider, cheap.config.model], ["antigravity-cli", DEFAULT_TIER_LADDER["antigravity-cli"].cheap.model]); // A2
 

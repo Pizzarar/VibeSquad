@@ -31,3 +31,20 @@ export function migrateModelId(model) {
   const next = RETIRED_MODEL_IDS[base.toLowerCase()];
   return next ? `${prefix}${next}${suffix}` : model;
 }
+
+// R10 (@per, 2026-11-25): Claude served through the Antigravity CLI (agy) is its own quota family, "agy-claude". The
+// runner provider stays antigravity-cli; the model id names the effort as a suffix (agy has no bare claude ids, no
+// Haiku, no xhigh/max — R9 spike). The family has its own cap key and pool rows (antigravity-cli/claude-gpt).
+/** Routing family id for Claude on agy. Never "claude" (direct) and never "antigravity-cli" (Gemini). */
+export const AGY_CLAUDE_FAMILY = "agy-claude";
+/** Top-rung Claude on agy (exact advertised id; effort is the suffix). */
+export const AGY_CLAUDE_TOP_MODEL = "claude-opus-5-5-high";
+/** Mid-rung Claude on agy (exact advertised id; effort is the suffix). */
+export const AGY_CLAUDE_MID_MODEL = "claude-sonnet-5-5-medium";
+/** A suffixed agy Claude id ("claude-sonnet-5-5-medium"). Direct-claude ids never carry an effort suffix. */
+export const AGY_CLAUDE_SUFFIXED_RE = /^claude-(?:opus|sonnet)-.+-(?:low|medium|high)$/i;
+
+/** True for a Claude id agy can serve (opus/sonnet; agy has no Haiku). Pair it with the provider before deciding a family. */
+export function isAgyClaudeModel(model) {
+  return typeof model === "string" && /^claude-(?:opus|sonnet)-/i.test(model.trim());
+}

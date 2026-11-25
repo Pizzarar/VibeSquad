@@ -132,7 +132,7 @@ test(
     const { go, creates, logs, stop } = rig();
     try {
       const a = await go({ profile: "Implement", stakes: "normal" });
-      assert.equal(a.spawned, "Implement · claude-sonnet-5-5 · arm");
+      assert.equal(a.spawned, "Implement · claude-sonnet-5-5-medium · arm");
       assertNoLabelDrift(a, last(creates), "arm sonnet");
       const b = await go({ profile: "Implement", stakes: "normal" });
       assert.equal(b.spawned, "Implement · gemini-4-neon · arm");
@@ -152,7 +152,7 @@ test(
     const { go, creates, logs, stop } = rig();
     try {
       const res = await go({ profile: "Implement", stakes: "tierA-invariant" });
-      assert.equal(res.spawned, "Implement · claude-opus-5-5 · ladder");
+      assert.equal(res.spawned, "Implement · claude-opus-5-5-high · ladder");
       assertNoLabelDrift(res, last(creates), "ladder");
       assert.equal(res.ab, undefined);
       assert.equal(logs.length, 0, "no arm, no arm metric");
@@ -196,7 +196,8 @@ test(
       const c = last(creates);
       assert.equal(res.ab.arm, "neon", "the pick did not know about the cap");
       assert.equal(c.pre.labels["vs.model"], "gemini-4-neon", "spawn_worker's pre-hook pick");
-      assert.equal(c.out.config.provider, "claude");
+      assert.equal(c.out.config.provider, "antigravity-cli");
+      assert.equal(c.out.config.model, "claude-sonnet-5-5-medium");
       assert.equal(res.spawned, `Implement · ${c.out.config.model} · failover`);
       assert.match(c.out.config.model, /^claude-/);
       assertNoLabelDrift(res, c, "failover");
@@ -225,12 +226,16 @@ test(
 test(
   "idea-962: pin / wf / override opt-outs log an implementer-arm metric with refs; they still carry no vs.arm",
   withEnv(async () => {
-    for (const [args, reason] of [[{ labels: { ab: "pin" } }, "pin"], [{ labels: { wf: "sonnet" } }, "wf"], [{ provider: "claude", model: "claude-sonnet-5-5" }, "override"]]) {
+    for (const [args, reason, prov, model] of [
+      [{ labels: { ab: "pin" } }, "pin", "antigravity-cli", "claude-sonnet-5-5-medium"],
+      [{ labels: { wf: "sonnet" } }, "wf", "antigravity-cli", "claude-sonnet-5-5-medium"],
+      [{ provider: "claude", model: "claude-sonnet-5-5" }, "override", "claude", "claude-sonnet-5-5"],
+    ]) {
       const { go, creates, logs, stop } = rig();
       try {
         const res = await go({ profile: "Implement", stakes: "normal", ...args });
         assert.equal(logs.length, 1, reason);
-        assert.match(logs[0].text, new RegExp(`^implementer-arm: Implement -> Implement@claude arm=\\S+ reason=${reason} model=claude-sonnet-5-5 `), reason);
+        assert.match(logs[0].text, new RegExp(`^implementer-arm: Implement -> Implement@${prov} arm=\\S+ reason=${reason} model=${model} `), reason);
         assert.deepEqual(logs[0].refs, [res.id], reason);
         assert.equal(last(creates).out.labels["vs.arm"], undefined, `${reason}: never alternation data`);
       } finally {
@@ -283,7 +288,7 @@ test("digest reviewer stamp names the model: `reviewer=<profile> · <actual mode
 test(
   "all-capped: Implement at normal with every provider capped shows `all-capped` (not arm) in vs.route why= and result.spawned",
   withEnv(async () => {
-    const caps = Object.fromEntries(["claude", "antigravity-cli", "opencode", "codex"].map((k) => [k, { capped: true }]));
+    const caps = Object.fromEntries(["claude", "agy-claude", "antigravity-cli", "opencode", "codex"].map((k) => [k, { capped: true }]));
     const { go, creates, stop } = rig({ hookCaps: caps });
     try {
       const res = await go({ profile: "Implement", stakes: "normal" });

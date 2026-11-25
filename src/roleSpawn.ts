@@ -44,8 +44,11 @@ export function spawnChipTitle(opts: { role?: string; model?: string; reason: st
 }
 
 /** Provider id -> the name the role editor shows. */
-export const PROVIDER_NAME: Record<string, string> = { claude: "Claude", "antigravity-cli": "Gemini", opencode: "OpenCode" };
+export const PROVIDER_NAME: Record<string, string> = { claude: "Claude", "agy-claude": "Claude (AGY)", "antigravity-cli": "Gemini", opencode: "OpenCode" };
 export const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
+
+const AGY_CLAUDE_FAMILY = "agy-claude";
+const AGY_CLAUDE_EXCLUDED_ROLES = new Set(["lead", "brainstorm"]);
 
 export const STAKES_CHOICES = ["normal", "tierA-security", "tierA-invariant", "mechanical"] as const;
 export type Stakes = (typeof STAKES_CHOICES)[number];
@@ -76,9 +79,25 @@ export function walkOrder(role: RoleLike, stakes: string): string[] {
   return [...role.providers].sort((a, b) => rank(a) - rank(b));
 }
 
+/** Effective walk order (R10): worker roles try agy-claude just before direct claude when the ladder has a rung for this tier. */
+function effectiveWalkOrder(role: RoleLike, ladder: LadderLike | undefined, stakes: string): string[] {
+  const order = role.providers.length ? walkOrder(role, stakes) : ["claude"];
+  const tier = tierFor(role, stakes);
+  const ci = order.indexOf("claude");
+  if (
+    !AGY_CLAUDE_EXCLUDED_ROLES.has(role.name.trim().toLowerCase()) &&
+    ci >= 0 &&
+    !order.includes(AGY_CLAUDE_FAMILY) &&
+    ladder?.[AGY_CLAUDE_FAMILY]?.[tier]?.model
+  ) {
+    order.splice(ci, 0, AGY_CLAUDE_FAMILY);
+  }
+  return order;
+}
+
 /** The provider + model the ladder would pick (the first provider of the stakes' walk order x tier for these stakes). */
 export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stakes: string): { provider: string; model: string } {
-  const provider = walkOrder(role, stakes)[0] ?? "claude";
+  const provider = effectiveWalkOrder(role, ladder, stakes)[0] ?? "claude";
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
 }
 
@@ -100,7 +119,7 @@ export function landingPick(
   if (ov && !capped.includes(ov.provider)) {
     return { provider: ov.provider, model: ov.model ?? modelOf(ov.provider), via: ov.model ? "override" : "override (provider, ladder model)", allCapped: false };
   }
-  const providers = role.providers.length ? walkOrder(role, stakes) : ["claude"];
+  const providers = effectiveWalkOrder(role, ladder, stakes);
   const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
   for (const provider of providers) {
     if (ov && provider === ov.provider) continue;
@@ -151,5 +170,6 @@ export function buildRoleSpawn(opts: { roleKey: string; role: RoleLike; ladder?:
     if (v) labels["vs.route-override"] = v;
   }
   const picked = ladderPick(opts.role, opts.ladder, stakes);
-  return { provider: ov?.provider || picked.provider, ...(ov?.model ? { model: ov.model } : {}), profile: opts.roleKey, labels };
+  const runnerProvider = picked.provider === AGY_CLAUDE_FAMILY ? "antigravity-cli" : picked.provider;
+  return { provider: ov?.provider || runnerProvider, ...(ov?.model ? { model: ov.model } : {}), profile: opts.roleKey, labels };
 }

@@ -6,7 +6,7 @@
 // Legacy profile names (Workaround, removed in P5f) do NOT use the tier ladder: they replay today's routing exactly
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
 import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
-import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
+import { AGY_CLAUDE_FAMILY, GEMINI_TOP_MODEL } from "./model-ids.mjs";
 import { ROLE_PROVIDER_CHAINS, TIER_PROVIDER_CHAINS } from "./provider-failover.mjs";
 import {
   DEFAULT_STAKES_LADDER,
@@ -260,6 +260,9 @@ function nonEmpty(v) {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
+/** R10: roles that never walk agy-claude (they keep direct claude first). */
+export const AGY_CLAUDE_EXCLUDED_ROLES = Object.freeze(new Set(["lead", "brainstorm"]));
+
 const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped", "failover", "stakes"];
 
 /**
@@ -270,6 +273,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  * @param {Iterable<string>|Record<string, boolean>} [input.caps] capped/over-quota providers (any alias)
  * @param {object} [input.ladder]       tier ladder (role names); default DEFAULT_TIER_LADDER. Pass loadTierLadder().
  * @param {object} [input.stakesLadder] old per-stakes ladder (legacy names); default DEFAULT_STAKES_LADDER. Pass loadStakesLadder().
+ * @param {boolean} [input.directClaude] R10: never walk agy-claude (a caller's explicit Claude model/effort pins direct claude)
  * @param {object} [opts]           {roles, legacy, hops, aliases} table overrides (tests, P5b)
  * @returns {null | {provider, model, effort, modeId, tier, reason, reasons, capped, stakes, role, legacy, alias, hop}}
  *   hop = the legacy profile name the walk landed on (legacy names only, else null).
@@ -279,7 +283,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  *   or "explicit-capped" (an explicit provider, or a model naming its own family, on a capped provider: the resolver
  *   only reports it; P5c lets the cap win for profile spawns, as agent-duties.ts does today).
  */
-export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadder } = {}, opts = {}) {
+export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
   const ex = explicit && typeof explicit === "object" ? explicit : {};
   const exProvider = nonEmpty(ex.provider);
   const exModel = nonEmpty(ex.model);
@@ -312,11 +316,20 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     const rank = (p) => (tierChain.includes(p) ? tierChain.indexOf(p) : tierChain.length);
     order.sort((a, b) => rank(a) - rank(b));
   }
+  // R10 (@per): worker roles try Claude on agy (its own pool) just before direct claude, on the tiers it has a rung for
+  // (top/mid; no Haiku on agy, so cheap stays direct). Leads and Buddies stay direct claude. Role names only: legacy
+  // names replay today's routing. The pool (>= AGY_CLAUDE_FAILOVER_THRESHOLD) or `vs cap add agy-claude` caps it.
+  const ci = order.indexOf("claude");
+  if (!legacy && !directClaude && !AGY_CLAUDE_EXCLUDED_ROLES.has(found?.key) && ci >= 0 && !order.includes(AGY_CLAUDE_FAMILY) && rungs[AGY_CLAUDE_FAMILY]?.[tier]?.model) {
+    order.splice(ci, 0, AGY_CLAUDE_FAMILY);
+  }
 
   // Provider: explicit > (model's own family, when only a model is given) > walk skipping capped (all capped = first).
   const capped = cappedSet(caps);
   const modelFam = !exProvider && exModel ? routeProviderFamily(exModel) : "";
   let provider;
+  /** R10: the walk chose `provider` (an uncapped family), so the capped ones before it were really walked past. */
+  let walked = false;
   if (exProvider || (modelFam && (rungs[modelFam] || order.includes(modelFam)))) {
     provider = exProvider ? routeProviderFamily(exProvider) || exProvider : modelFam;
     if (capped.has(provider)) reasons.push("explicit-capped");
@@ -325,8 +338,9 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     if (!provider) {
       provider = order[0];
       if (order.length) reasons.push("all-capped");
-    } else if (provider !== order[0]) {
-      reasons.push("failover");
+    } else {
+      walked = true;
+      if (provider !== order[0]) reasons.push("failover");
     }
   }
   if (legacy) reasons.push("legacy-name");
@@ -346,7 +360,8 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     modeId = hop.modeId;
   } else {
     const rung = rungs[provider]?.[tier] ?? {};
-    const roleMode = roleDef?.modes?.[provider] ?? {};
+    // agy-claude runs on the antigravity-cli runner: same mode set as Gemini unless a stored role names its own.
+    const roleMode = roleDef?.modes?.[provider] ?? (provider === AGY_CLAUDE_FAMILY ? roleDef?.modes?.["antigravity-cli"] : undefined) ?? {};
     model = rung.model;
     effort = rung.effort ?? roleMode.effort;
     modeId = roleMode.modeId;
@@ -370,5 +385,9 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     legacy: legacy?.name ?? null,
     alias: legacy?.alias ?? null,
     hop: hop?.name ?? null,
+    // R10: the walk order and the capped families walked past before `provider` (label family=/why=failover). An
+    // explicit provider/model or an all-capped route walked nothing: [].
+    walk: [...order],
+    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p)) : [],
   };
 }

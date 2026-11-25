@@ -28,7 +28,7 @@ import {
 } from "../server/spawn-route.mjs";
 import { DEFAULT_TIER_LADDER, STAKES_VALUES } from "../server/stakes-ladder.mjs";
 import { ROUTE_OVERRIDE_ENV, isForeignModel } from "../server/route-override.mjs";
-import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, a2Rerouted, row, today, todayHook } from "./helpers/route-golden.mjs";
+import { A, AGY, C, CAP_SETS, GOLDEN, O, USER_PROFILES, a2Rerouted, row, today, todayHook } from "./helpers/route-golden.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -145,20 +145,21 @@ test(
   withEnv(async () => {
     const h = harness({ cappedProviders: {} });
     try {
+      // R10: a worker Claude mid/top rung runs on agy-claude first (the antigravity-cli runner, exact suffixed id).
       const impl = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
-      assert.deepEqual(landed(impl), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      assert.deepEqual(landed(impl), { provider: A, model: "claude-sonnet-5-5-medium", effort: "medium", modeId: "accept-edits" });
       assert.equal(impl.labels.profile, "Implement");
       assert.deepEqual(
         [impl.labels.provider, impl.labels.model, impl.labels.tier, impl.labels.stakes],
-        [C, "claude-sonnet-5-5", "mid", "normal"],
+        [A, "claude-sonnet-5-5-medium", "mid", "normal"],
       );
-      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement why=ladder$/);
+      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement family=agy-claude why=ladder$/);
       assert.doesNotMatch(impl.labels[ROUTE_LABEL], /legacy-name/);
 
       const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "tierA-invariant" }) });
-      assert.deepEqual(landed(top), { provider: C, model: "claude-opus-5-5", effort: "high", modeId: "auto" });
+      assert.deepEqual(landed(top), { provider: A, model: "claude-opus-5-5-high", effort: "high", modeId: "accept-edits" });
       assert.deepEqual([top.labels.tier, top.labels.stakes], ["top", "tierA-invariant"]);
-      assert.match(top.labels[ROUTE_LABEL], /reason=ladder tier=top role=implement/);
+      assert.match(top.labels[ROUTE_LABEL], /reason=ladder tier=top role=implement family=agy-claude/);
 
       // config.provider alone is a filled-in default (every spawn carries one), not the caller's choice: the role routes.
       // A caller-given provider comes with spawn_worker's ROUTE_OVERRIDE_LABEL (H1): see the "H1 override" tests below.
@@ -224,8 +225,9 @@ test(
         assert.deepEqual(h.calls.refused, [], name);
       }
       // A Tier A request through a DeepSeek name keeps tierA (lead ruling 11-25): Opus high, never the cheap rung.
+      // R10: it runs as the Implement role, so its top rung is agy-claude first.
       const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Work Order - DSP", { stakes: "tierA-invariant" }) });
-      assert.deepEqual(landed(top), row(C, "claude-opus-5-5", "high", "auto"));
+      assert.deepEqual(landed(top), row(A, "claude-opus-5-5-high", "high", "accept-edits"));
       assert.deepEqual([top.labels.profile, top.labels.stakes, top.labels.tier], ["Implement", "tierA-invariant", "top"]);
       assert.match(top.labels[ROUTE_LABEL], /legacy-name/);
     } finally {
@@ -338,7 +340,12 @@ test("r2 isForeignModel: another ladder family's model is foreign; opencode vend
     ["claude", "gemini-4-neon", true],
     ["claude", "deepseek/deepseek-flash", true],
     ["opencode", "claude-opus-5-5", true],
-    ["antigravity-cli", "claude-sonnet-5-5", true],
+    // R10: agy serves Claude opus/sonnet (agy-claude), so those ids are not foreign on antigravity-cli; Haiku still is.
+    ["antigravity-cli", "claude-sonnet-5-5", false],
+    ["antigravity-cli", "claude-opus-5-5-high", false],
+    ["antigravity-cli", "claude-haiku-5-5", true],
+    [AGY, "claude-sonnet-5-5-medium", false],
+    [AGY, "gemini-4-neon", true],
     ["opencode", "gemini-4-neon", true],
     ["claude", "claude-sonnet-5-5", false],
     ["antigravity-cli", "gemini-3.8-flash", false],
@@ -361,7 +368,8 @@ test(
         ["claude", "gemini-4-neon", C, "auto"],
         ["claude", "deepseek/deepseek-flash", C, "auto"],
         ["opencode", "claude-opus-5-5", O, "build"],
-        [A, "claude-sonnet-5-5", A, "default"],
+        // R10: a Claude id agy can't serve (Haiku) is still foreign on antigravity-cli (opus/sonnet are agy-claude now).
+        [A, "claude-haiku-5-5", A, "default"],
       ]) {
         const at = `${prov} + ${model}`;
         // The caller's model rides in the config too (not profile-derived): it must not come back as an explicit model.
@@ -425,8 +433,8 @@ test(
     } finally {
       h.stop?.();
     }
-    // Every provider capped: the caller's provider is kept (nothing to hop to), still reason=override.
-    const all = harness({ cappedProviders: capMap([C, A, O]) });
+    // Every provider capped (R10: agy-claude too, else the hop lands there): the caller's provider is kept, still reason=override.
+    const all = harness({ cappedProviders: capMap([C, A, O, AGY]) });
     try {
       const out = await all.spawn({ provider: "claude" }, { labels: LABELS("Review", OV("claude")) });
       assert.equal(out.config.provider, C);
@@ -675,7 +683,7 @@ test(
     try {
       // UI spawnEnvFor / MCP create_agent: the profile comes by env only, no labels, no stakes -> routed at normal.
       const out = await h.spawn({ provider: "claude", title: "impl env" }, { env: { VS_PROFILE: "implement" } });
-      assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      assert.deepEqual(landed(out), { provider: A, model: "claude-sonnet-5-5-medium", effort: "medium", modeId: "accept-edits" });
       assert.equal(out.env.VS_PROFILE, "Implement", "env carrier names the role label, as labels do");
 
       // The stakes label lands later (tierA-invariant would be tier=top); the agent really runs the mid rung.
@@ -692,7 +700,7 @@ test(
       const last = stamped.filter((s) => s.id === "impl-env-1").at(-1);
       assert.ok(last, "agent.created stamped labels");
       assert.equal(last.labels.tier, "mid", "tier = the rung before() routed (normal), not top from the stakes label");
-      assert.equal(last.labels.model, "claude-sonnet-5-5");
+      assert.equal(last.labels.model, "claude-sonnet-5-5-medium");
     } finally {
       h.stop?.();
     }
@@ -709,8 +717,9 @@ test(
         id: "impl-lbl-1",
         title: "impl label only",
         cwd: CWD,
-        provider: "claude",
-        model: "claude-opus-5-5",
+        // R10: the tierA Implement route is agy-claude top (a direct-claude agent here is off-route and refused).
+        provider: A,
+        model: "claude-opus-5-5-high",
         labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Implement", stakes: "tierA-invariant" },
       };
       await h.onCreated({ agent }, { paseo: paseoFor(agent) });
@@ -757,7 +766,7 @@ test(
 test(
   "role spawn with every provider capped: route metric says reason=all-capped (Gemini L2)",
   withEnv(async () => {
-    const h = harness({ cappedProviders: capMap([C, A, O]) });
+    const h = harness({ cappedProviders: capMap([C, A, O, AGY]) });
     try {
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
       assert.equal(out.labels.profile, "Implement");
@@ -853,7 +862,8 @@ test(
 test(
   "agent.created consumes before()'s title::cwd keys: a second label-only role spawn with the same title::cwd is still enforced (Sonnet r2 L1)",
   withEnv(async () => {
-    const h = harness({ cappedProviders: {} });
+    // R10: agy-claude capped, so Implement's route is direct claude and the settings (model patch) path below applies.
+    const h = harness({ cappedProviders: capMap([AGY]) });
     try {
       // Refusal path: before() routed an env-only Review spawn (beforeConfiguredSpawns title::cwd key set).
       const out = await h.spawn({ provider: "claude", title: "dup review" }, { env: { VS_PROFILE: "Review" } });
@@ -916,8 +926,9 @@ test(
         { provider: "claude", title: "same pick", model: "claude-sonnet-5-5", thinkingOptionId: "medium" },
         { labels: LABELS("Implement") },
       );
-      assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
-      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement why=ladder$/);
+      // R10: the caller's pick equals the rung's model (agy suffix aside), so the spawn runs the agy-claude rung's exact id.
+      assert.deepEqual(landed(same), { provider: A, model: "claude-sonnet-5-5-medium", effort: "medium", modeId: "accept-edits" });
+      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement family=agy-claude why=ladder$/);
       assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
     } finally {
       h.stop?.();
@@ -931,7 +942,7 @@ test(
     const h = harness({ cappedProviders: {} });
     try {
       const before = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
-      assert.deepEqual(landed(before), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      assert.deepEqual(landed(before), { provider: A, model: "claude-sonnet-5-5-medium", effort: "medium", modeId: "accept-edits" });
       // Owner saves Implement as a top-tier role that prefers Gemini first, with a cleared Gemini effort.
       const impl = structuredClone(ROLE_TABLE.implement);
       saveRoles(
@@ -950,14 +961,21 @@ test(
       assert.equal(after.config.modeId, "accept-edits");
       assert.equal(after.labels.tier, "top");
       assert.match(String(after.labels[ROUTE_LABEL]), /tier=top role=implement/);
-      // A cap on the first provider walks the saved order, not the shipped one.
+      // A cap on the first provider walks the saved order, not the shipped one (R10: agy-claude sits just before claude).
       const capped = harness({ cappedProviders: capMap([A]) });
       try {
         const walked = await capped.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
+        assert.deepEqual([walked.config.provider, walked.config.model], [A, "claude-opus-5-5-high"]);
+      } finally {
+        capped.stop?.();
+      }
+      const capped2 = harness({ cappedProviders: capMap([A, AGY]) });
+      try {
+        const walked = await capped2.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
         assert.equal(walked.config.provider, C);
         assert.equal(walked.config.model, "claude-opus-5-5");
       } finally {
-        capped.stop?.();
+        capped2.stop?.();
       }
     } finally {
       h.stop?.();
@@ -968,15 +986,18 @@ test(
 test("R1 spawn-route units: roleSpawnProfile/roleSpawnConfig prefer = the arm's provider first, model from the ladder rung", () => {
   const neon = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer: "antigravity-cli" });
   assert.deepEqual([neon.profileName, neon.spawnCfg.provider, neon.spawnCfg.model, neon.spawnCfg.modeId, neon.route.reason], ["Implement", A, "gemini-4-neon", "accept-edits", "default"]);
+  // R10: the claude (sonnet) arm and the plain role both run Claude on agy first (agy-claude mid rung).
   const sonnet = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer: "claude" });
-  assert.deepEqual([sonnet.spawnCfg.provider, sonnet.spawnCfg.model], [C, "claude-sonnet-5-5"]);
+  assert.deepEqual([sonnet.spawnCfg.provider, sonnet.spawnCfg.model], [A, "claude-sonnet-5-5-medium"]);
   for (const prefer of [undefined, "", "codex", "bogus"]) {
     const r = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer });
-    assert.deepEqual([r.spawnCfg.provider, r.spawnCfg.model], [C, "claude-sonnet-5-5"], String(prefer));
+    assert.deepEqual([r.spawnCfg.provider, r.spawnCfg.model], [A, "claude-sonnet-5-5-medium"], String(prefer));
   }
-  // A capped preferred family fails over along the role's own list (claude first), reason says so.
+  // A capped preferred family fails over along the role's own list (agy-claude, then claude), reason says so.
   const capped = roleSpawnProfile("Implement", { prefer: A, caps: [A] });
-  assert.deepEqual([capped.profile.provider, capped.route.reason], [C, "failover"]);
+  assert.deepEqual([capped.profile.provider, capped.profile.model, capped.route.provider, capped.route.reason], [A, "claude-sonnet-5-5-medium", AGY, "failover"]);
+  const capped2 = roleSpawnProfile("Implement", { prefer: A, caps: [A, AGY] });
+  assert.deepEqual([capped2.profile.provider, capped2.route.reason], [C, "failover"]);
   // Stakes still pick the tier on the preferred family; the shared ROLE_TABLE is never mutated.
   assert.equal(roleSpawnProfile("Implement", { prefer: A, stakes: "tierA-invariant" }).profile.thinkingOptionId, "high");
   assert.deepEqual(ROLE_TABLE.implement.providers, [C, A, O]);
@@ -991,9 +1012,10 @@ test(
       const run = (extra) => h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS("Implement", { stakes: "normal", "vs.profile-derived": "model,thinking", ...extra }) });
       const n = await run({ "vs.arm": "neon", "vs.model": "gemini-4-neon" });
       assert.deepEqual([n.config.provider, n.config.model, n.labels.profile], [A, "gemini-4-neon", "Implement"]);
+      // R10: the sonnet arm (and no arm) runs Claude Sonnet on agy first: the exact suffixed id, the derived bare id dropped.
       for (const extra of [{ "vs.arm": "sonnet" }, {}]) {
         const s = await run(extra);
-        assert.deepEqual([s.config.provider, s.config.model, s.labels.profile], [C, "claude-sonnet-5-5", "Implement"], JSON.stringify(extra));
+        assert.deepEqual([s.config.provider, s.config.model, s.labels.profile], [A, "claude-sonnet-5-5-medium", "Implement"], JSON.stringify(extra));
       }
       // tierA stakes on the neon arm: top rung of the preferred family (arms only exist at normal, but the hook is pure routing).
       const t = await run({ "vs.arm": "neon", stakes: "tierA-invariant" });
@@ -1013,10 +1035,11 @@ test(
     }
     const hc = harness({ cappedProviders: capMap([A]) });
     try {
+      // R10: the role list's next family is agy-claude (Claude Sonnet on the antigravity-cli runner, its own quota).
       const c = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "neon" }) });
-      assert.equal(c.config.provider, C, "a capped arm provider fails over along the role list");
+      assert.deepEqual([c.config.provider, c.config.model], [A, "claude-sonnet-5-5-medium"], "a capped arm provider fails over along the role list");
       const cf = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "flash" }) });
-      assert.deepEqual([cf.config.provider, cf.config.model], [C, "claude-sonnet-5-5"], "a capped flash arm fails over to Claude mid rung");
+      assert.deepEqual([cf.config.provider, cf.config.model], [A, "claude-sonnet-5-5-medium"], "a capped flash arm fails over to Claude mid rung");
     } finally {
       hc.stop?.();
     }

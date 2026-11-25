@@ -45,8 +45,9 @@ const spawn = (ctx, args) => callTool(ctx, "spawn_worker", { title: "t", prompt:
 
 test("role names spawn as the role: labels.profile = role, config pre-filled from the role route", async () => {
   const rows = [
-    ["Implement", "Implement", "claude", "claude-sonnet-5-5", "medium"],
-    ["implement", "Implement", "claude", "claude-sonnet-5-5", "medium"],
+    // R10: Implement's mid rung runs Claude on agy first (antigravity-cli runner, exact suffixed id).
+    ["Implement", "Implement", "antigravity-cli", "claude-sonnet-5-5-medium", "medium"],
+    ["implement", "Implement", "antigravity-cli", "claude-sonnet-5-5-medium", "medium"],
     ["Review", "Review", "antigravity-cli", "gemini-4-neon", undefined],
     ["Work Order", "Work Order", "opencode", undefined, undefined],
     ["Pre-check", "Pre-check", "antigravity-cli", "gemini-3.8-flash", undefined],
@@ -68,7 +69,9 @@ test("role names spawn as the role: labels.profile = role, config pre-filled fro
 test("role name + stakes tierA-invariant pre-fills the top rung (the hook re-routes it the same way)", async () => {
   const { ctx, creates } = ctxFor();
   await spawn(ctx, { profile: "Implement", stakes: "tierA-invariant" });
-  assert.equal(creates[0].config.model, "claude-opus-5-5");
+  // R10: the top rung is agy-claude first.
+  assert.equal(creates[0].config.provider, "antigravity-cli");
+  assert.equal(creates[0].config.model, "claude-opus-5-5-high");
   assert.equal(creates[0].config.thinkingOptionId, "high");
   assert.equal(creates[0].labels.stakes, "tierA-invariant");
   assert.equal(creates[0].labels["vs.profile-derived"], "model,thinking");

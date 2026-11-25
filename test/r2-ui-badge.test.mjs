@@ -105,8 +105,8 @@ test("seam: landingPick lands on the same provider (and model) as the hook's rol
   const { roleSpawnProfile } = await import("../server/spawn-route.mjs");
   const { ROLE_TABLE } = await import("../server/role-route.mjs");
   const { DEFAULT_TIER_LADDER } = await import("../server/stakes-ladder.mjs");
-  const fams = ["claude", "antigravity-cli", "opencode"];
-  const capSets = [[], ["claude"], ["antigravity-cli"], ["claude", "antigravity-cli"], fams];
+  const fams = ["claude", "agy-claude", "antigravity-cli", "opencode"];
+  const capSets = [[], ["agy-claude"], ["claude"], ["antigravity-cli"], ["agy-claude", "claude"], ["claude", "antigravity-cli"], fams];
   let n = 0;
   for (const [key, def] of Object.entries(ROLE_TABLE)) {
     const roleRow = { name: def.name ?? key, tier: def.tier, providers: [...(def.providers ?? [])] };

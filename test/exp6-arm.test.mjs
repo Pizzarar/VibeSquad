@@ -261,11 +261,12 @@ test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon visibly, ke
   const agents = [];
   const logs = [];
   const { ctx, creates } = ctxWith(agents, logs);
+  // R10: the sonnet arm on role-name Implement walks agy-claude first (runner antigravity-cli, claude-sonnet-5-5-medium).
   const want = [
-    ["sonnet", "claude", "claude-sonnet-5-5", false],
+    ["sonnet", "antigravity-cli", "claude-sonnet-5-5-medium", false],
     ["neon", "antigravity-cli", "gemini-4-neon", true],
     ["neon", "antigravity-cli", "gemini-4-neon", true],
-    ["sonnet", "claude", "claude-sonnet-5-5", false],
+    ["sonnet", "antigravity-cli", "claude-sonnet-5-5-medium", false],
   ];
   for (const [i, [arm, provider, model, swapped]] of want.entries()) {
     const res = await go(ctx, { profile: "Implement", stakes: "normal" });
@@ -282,10 +283,10 @@ test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon visibly, ke
     const res = await go(c2, { profile: "Implement", stakes: "normal", ...args });
     assert.deepEqual([res.ab.reason, res.ab.swapped, cr2[0].labels["vs.arm"], cr2[0].labels.profile], [reason, false, undefined, "Implement"], reason);
   }
-  // Capped Gemini: the Neon arm is skipped, the role stays on Claude.
+  // Capped Gemini: the Neon arm is skipped, the role stays on the Sonnet arm (R10: agy-claude, separate cap from Gemini).
   const { ctx: c3, creates: cr3 } = ctxWith([ag("sonnet")], [], { env: { VIBESQUAD_HOME: home({ "antigravity-cli": {} }) } });
   const r3 = await go(c3, { profile: "Implement", stakes: "normal" });
-  assert.deepEqual([cr3[0].config.provider, r3.ab.reason, cr3[0].labels.profile], ["claude", "capped:antigravity-cli", "Implement"]);
+  assert.deepEqual([cr3[0].config.provider, cr3[0].config.model, r3.ab.reason, cr3[0].labels.profile], ["antigravity-cli", "claude-sonnet-5-5-medium", "capped:antigravity-cli", "Implement"]);
 });
 
 test("spawn_worker: caller-supplied vs.arm / vs.model labels are replaced; a throwing writeLog never fails the spawn", async () => {

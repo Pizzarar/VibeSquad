@@ -13,7 +13,8 @@
 //   read-only and the server refuses legacy writes that would change a role (roles-api.mjs legacyProfilesConflict).
 import { buildRolesFromProfiles, loadRoles } from "./profiles-v2.mjs";
 import { legacyProfileRole } from "./profiles.mjs";
-import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failover.mjs";
+import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota, spawnFamily } from "./provider-failover.mjs";
+import { AGY_CLAUDE_FAMILY } from "./model-ids.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
 import { TIERS, loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
 import { armCapped } from "./exp6-arm.mjs";
@@ -24,7 +25,15 @@ export { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, isForeignModel, parseRouteOve
 /** Labels every routed spawn is stamped with (plus `profile` = the role or old profile name, and `wf`). */
 export const ROUTE_STAMP_LABELS = Object.freeze(["provider", "model", "tier", "stakes"]);
 
-const ROUTE_FAMILIES = ["claude", "antigravity-cli", "opencode"];
+const ROUTE_FAMILIES = ["claude", "antigravity-cli", "opencode", AGY_CLAUDE_FAMILY];
+
+/**
+ * R10: the runner provider for a routing family. agy-claude is a quota family, not a runner: it runs on antigravity-cli
+ * (the model id picks Claude). Every other family is its own runner provider.
+ */
+export function runnerProviderOf(family) {
+  return family === AGY_CLAUDE_FAMILY ? "antigravity-cli" : family;
+}
 
 /**
  * Roles a spawn routes by. Migrated profiles.json (v2 roles block, P5d role editor) = the stored roles (loadRoles).
@@ -97,10 +106,11 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * from `vs.arm` via exp6-arm.mjs armProvider). Only a family already in the role's provider list moves to the front; the
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
+ * `directClaude` (R10): the walk skips agy-claude (resolveRoute), so the route is exactly the pre-R10 one.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override } = {}) {
+export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override, directClaude = false } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
@@ -124,9 +134,12 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   }
   const found = roleNameHit(hint, table);
   const rungs = ladder ?? loadTierLadder();
-  const base = { role: found.key, stakes, caps, ladder: rungs };
-  const ovProvider = String(override?.provider ?? "").trim();
+  const base = { role: found.key, stakes, caps, ladder: rungs, directClaude: Boolean(directClaude) };
   const ovModelRaw = String(override?.model ?? "").trim();
+  // R10: an override of antigravity-cli + a Claude id is the agy-claude family (own cap/pool), so the cap check and
+  // failover hop judge agy-claude, never Gemini.
+  const ovProviderRaw = String(override?.provider ?? "").trim();
+  const ovProvider = ovProviderRaw && spawnFamily(ovProviderRaw, ovModelRaw) === AGY_CLAUDE_FAMILY ? AGY_CLAUDE_FAMILY : ovProviderRaw;
   const modelDropped = Boolean(ovProvider && isForeignModel(ovProvider, ovModelRaw));
   const ovModel = modelDropped ? "" : ovModelRaw;
   const ovModelFam = routeProviderFamily(ovModel);
@@ -157,12 +170,13 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
     }
   }
   const def = found.role;
-  const mode = def.modes?.[route.provider] ?? {};
+  // agy-claude runs on the antigravity-cli runner with that provider's mode set (unless a stored role names its own).
+  const mode = def.modes?.[route.provider] ?? (route.provider === AGY_CLAUDE_FAMILY ? def.modes?.["antigravity-cli"] : undefined) ?? {};
   const profile = {
     name: roleProfileLabel(found.key, table),
     role: lifecycleRoleOf(found.key),
     roleKey: found.key,
-    provider: route.provider,
+    provider: runnerProviderOf(route.provider),
     ...(route.model ? { model: route.model } : {}),
     ...(route.modeId ? { modeId: route.modeId } : {}),
     ...(route.effort ? { thinkingOptionId: route.effort } : {}),
@@ -279,16 +293,18 @@ export function routeRoleKeyOf(name) {
  * `+legacy-name` on the reason when the caller named an old profile/alias (P5f watches it fall to 0), then tier + role,
  * `explicit-capped=dropped` when a caller model on a capped family was dropped, `model-dropped=family` when an override
  * model of another family than the override provider was dropped (r2), and `shadow=<diff>` when resolveRoute's
- * replay of an old name disagrees with today's walk (legacyShadowMismatch).
+ * replay of an old name disagrees with today's walk (legacyShadowMismatch). `family=` (R10): the quota family when the
+ * route ran on agy-claude, or `claude` when agy-claude was walked past as capped (then reason/why is failover).
  */
-export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, modelDropped = false, shadow = "" }) {
+export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, modelDropped = false, shadow = "", family = "" }) {
   const r = legacyName ? (reason === "default" ? "legacy-name" : `${reason}+legacy-name`) : reason;
   return (
     `stakes=${normalizeStakes(stakes)} model=${model || "-"} effort=${effort || "-"} reason=${r}` +
     ` tier=${tier || "-"} role=${role || "-"}` +
     (explicitCapped ? " explicit-capped=dropped" : "") +
     (modelDropped ? " model-dropped=family" : "") +
-    (shadow ? ` shadow=${shadow}` : "")
+    (shadow ? ` shadow=${shadow}` : "") +
+    (family ? ` family=${family}` : "")
   );
 }
 

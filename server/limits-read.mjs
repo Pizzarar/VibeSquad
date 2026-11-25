@@ -8,6 +8,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isForbiddenRealHome } from "./test-guard.mjs";
 import { vibesquadHome } from "./user-settings.mjs";
+import { AGY_CLAUDE_FAMILY } from "./model-ids.mjs";
 
 const BURN_LOOKBACK_MS = 2 * 3600_000;
 
@@ -98,14 +99,19 @@ export const QUOTA_WINDOW_MS = Object.freeze({ "5h": 5 * 3600_000, weekly: 7 * 2
  * readLimits rows -> usageProviders entries ({ id, source, windows: [{ window, usedPct, resetsAt }] }, one per provider
  * family) for provider-failover.isProviderOverQuota. A row is dropped when its reading is older than maxAgeMs (a weekly
  * row with resetsAt ahead: older than its window, QUOTA_WINDOW_MS), when its
- * resetsAt has passed (the window rolled over: the old % no longer applies), or when usedPct is not a number. Pool rows
- * (`antigravity-cli/claude-gpt`: the Claude/GPT quota on the Google plan) are dropped: normalizeProviderFamily would fold
- * them into antigravity-cli, but Gemini spawns don't draw on that pool. Missing data -> [] (no switch).
+ * resetsAt has passed (the window rolled over: the old % no longer applies), or when usedPct is not a number. The agy
+ * Claude/GPT pool rows (`antigravity-cli/claude-gpt`) feed the agy-claude family only (R10: id `agy-claude`, same age and
+ * resetsAt guards), never antigravity-cli: Gemini spawns don't draw on that pool. Other `/` pool rows are dropped.
+ * Missing data -> [] (no switch).
  */
+/** R10: pool rows that belong to a routing family of their own (provider row -> usageProviders id). */
+const POOL_ROW_FAMILIES = Object.freeze({ "antigravity-cli/claude-gpt": AGY_CLAUDE_FAMILY });
+
 export function usageFromLimits(rows, { now = Date.now(), maxAgeMs = QUOTA_READING_MAX_AGE_MS } = {}) {
   const byProvider = new Map();
   for (const r of Array.isArray(rows) ? rows : []) {
-    const provider = String(r?.provider ?? "").trim();
+    const raw = String(r?.provider ?? "").trim();
+    const provider = POOL_ROW_FAMILIES[raw.toLowerCase()] ?? raw;
     if (!provider || provider.includes("/")) continue;
     const used = Number(r?.usedPct);
     if (r?.usedPct === null || r?.usedPct === undefined || !Number.isFinite(used)) continue;

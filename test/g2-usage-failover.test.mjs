@@ -67,7 +67,10 @@ test("G2: a reading whose resetsAt has passed (window rolled over) never trigger
 
 test("G2: the Antigravity Claude/GPT pool row never marks Gemini over quota; missing data = no switch", () => {
   const u = usage([row("antigravity-cli/claude-gpt", 100), row("claude", 99)]);
-  assert.deepEqual(u.map((e) => e.id), ["claude"]);
+  // R10: the pool row feeds the agy-claude family (its own id), never antigravity-cli.
+  assert.deepEqual(u.map((e) => e.id), ["agy-claude", "claude"]);
+  assert.equal(isProviderOverQuota("antigravity-cli", u).overQuota, false);
+  assert.equal(isProviderOverQuota("agy-claude", u).overQuota, true);
   assert.equal(leadFo(u).profile.name, "Lead - Gemini");
   assert.deepEqual(usage([]), []);
   assert.deepEqual(usage(undefined), []);
@@ -422,7 +425,8 @@ test("G2 r1 M1: at claude >=95% live quota a plain Implement spawn picks the Neo
   };
   // Baseline (no quota data): the first pick ties and keeps the requested Sonnet arm.
   const base = await spawnOnce(null);
-  assert.deepEqual([base.res.ab.arm, base.res.ab.reason, base.c.config.provider], ["sonnet", "alternation", "claude"]);
+  // R10: the sonnet arm runs Sonnet on agy (agy-claude: no pool rows = headroom).
+  assert.deepEqual([base.res.ab.arm, base.res.ab.reason, base.c.config.provider, base.c.config.model], ["sonnet", "alternation", "antigravity-cli", "claude-sonnet-5-5-medium"]);
   // 96%: the claude arm is capped by quota, the pick (and its labels) go to Neon on Gemini.
   const over = await spawnOnce(96);
   assert.deepEqual(over.caps.claude, { reason: "claude usage 96% >= 95%", quota: true });
@@ -431,5 +435,5 @@ test("G2 r1 M1: at claude >=95% live quota a plain Implement spawn picks the Neo
   assert.match(over.c.config.model, /^gemini-/);
   // 94%: no quota cap, Sonnet as before.
   const under = await spawnOnce(94);
-  assert.deepEqual([under.res.ab.arm, under.res.ab.reason, under.c.config.provider], ["sonnet", "alternation", "claude"]);
+  assert.deepEqual([under.res.ab.arm, under.res.ab.reason, under.c.config.provider], ["sonnet", "alternation", "antigravity-cli"]);
 });
