@@ -488,7 +488,7 @@ html[data-vibe="boring"] .angel-boring-bar { background: var(--panel); border-ra
 /* B5 polish: composer field, banners, timeline items, usage panels. */
 html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px; padding: 6px 8px 6px 14px; align-items: center; gap: 8px; }
 html[data-vibe="boring"] .composer textarea,
-html[data-vibe="boring"] .composer input:not([type="file"]) { background: transparent; border: 0; box-shadow: none; outline: none !important; /* U3 survivor: beats styles.css :is(...):focus-visible { outline: 2px solid var(--violet) } */ border-radius: 10px; }
+html[data-vibe="boring"] .composer input:not([type="file"]):not(.boring-composer-cfg input) { background: transparent; border: 0; box-shadow: none; outline: none !important; /* U3 survivor: beats styles.css :is(...):focus-visible { outline: 2px solid var(--violet) } */ border-radius: 10px; }
 html[data-vibe="boring"] .composer-more-tab { border: 0; border-radius: 10px; background: transparent; color: var(--muted); }
 html[data-vibe="boring"] .composer-more-tab:hover,
 html[data-vibe="boring"] .composer-more-tab:focus-visible,
@@ -877,9 +877,8 @@ html[data-vibe="boring"] .drawer-head .btn.on {
   border: 1px solid var(--border-strong); font-weight: 500;
 }
 
-/* Plan / Tasks bar and permission card sit on the centred conversation column. */
+/* Plan / Tasks bar sits on the centred conversation column. */
 html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
-html[data-vibe="boring"] .perm-card { width: 100%; max-width: var(--measure-prose); margin-inline: auto; box-sizing: border-box; }
 
 /* Sidebar: default text-2/400, selected text-1/500; row pitch exactly --row-h. */
 html[data-vibe="boring"] .boring-project-name { font-weight: 500; }
@@ -1353,7 +1352,7 @@ html[data-vibe="boring"] .boring-lane-mini.none { background: transparent; box-s
 html[data-vibe="boring"] .boring-lane-mini.idle { filter: grayscale(0.85) brightness(0.8); }
 html[data-vibe="boring"] .boring-lane-mini.attn { box-shadow: 0 0 0 1.5px var(--st-attn); }
 html[data-vibe="boring"] .boring-lane-mini.err { box-shadow: 0 0 0 1.5px var(--st-err); }
-html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit { box-shadow: 0 0 0 1.5px var(--living-warm); }
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-lane-mini.lit:not(.attn) { box-shadow: 0 0 0 1.5px var(--living-warm); }
 html[data-vibe="boring"] [data-squad-state="idle"] .boring-lane-mini.lit { filter: grayscale(0.85) brightness(0.8); }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-mate-av, html[data-vibe="boring"] .boring-lane-mini { transition: none; } }
 
@@ -1378,22 +1377,21 @@ html[data-vibe="boring"] .boring-now-chips { display: flex; flex-wrap: wrap; jus
 html[data-vibe="boring"] .boring-now-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 2px; border: 0; border-radius: 999px; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 html[data-vibe="boring"] .boring-now-chip:hover { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-now-chip img { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 1.5px var(--living-warm); }
-/* m6: centre the Working-now strip + permission card on the timeline column (which sits left of the context panel),
-   not the whole drawer. Constrain their width to the timeline column and centre on it (like the message column);
-   no translateX, so nothing clips at narrow widths (M1). */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) { --ctx-panel-w: 460px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-panel-w: 36px; }
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .boring-now,
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
-  --timeline-col: min(var(--measure-col), calc(100% - var(--ctx-panel-w, 0px) - 48px));
-  width: var(--timeline-col);
-  margin-left: calc(50% - var(--timeline-col) / 2 - var(--ctx-panel-w, 0px) / 2);
-  margin-right: calc(50% - var(--timeline-col) / 2 + var(--ctx-panel-w, 0px) / 2);
+/* Bor19 (n5/n6): the Working-now strip + permission card live INSIDE the chat column (the flex row's left child,
+   beside the context panel), not as full-width siblings of the panel row, so the panel spans full height. The column
+   centres strip/card/messages on the same --measure-col, so their left edges share; no translateX / ctx-panel width math. */
+html[data-vibe="boring"] .drawer-shell > .boring-convo-col {
+  display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden;
 }
-/* the permission card is prose-measure (narrower than the Working-now card): centre it at its own width */
-html[data-vibe="boring"] .drawer:has(.boring-context-panel) .perm-card {
-  --timeline-col: min(var(--measure-prose), calc(100% - var(--ctx-panel-w, 0px) - 48px));
-}
+/* The timeline-col is now one level deeper, so re-apply the chat counter-zoom that .drawer-shell > .timeline-col got in styles.css. */
+html[data-vibe="boring"] .boring-convo-col > .timeline-col { zoom: var(--chat-zoom, 1); --u3-px: var(--u3-px-chat, 2px); }
+/* strip + perm-card stack are fixed-height at the top of the column; the timeline below scrolls. */
+html[data-vibe="boring"] .boring-convo-col > .boring-now,
+html[data-vibe="boring"] .boring-convo-col > .boring-perm-stack { flex: none; }
+/* n7 (idea-751): cap the pending-permission stack so 2-3 cards at 1280x720 never crush the timeline to 0px or clip Allow/Deny. */
+html[data-vibe="boring"] .boring-convo-col > .boring-perm-stack { min-height: 0; max-height: 55%; overflow-y: auto; }
+/* n8 (UX R17): a permission card below already says "needs your OK"; collapse the redundant amber strip. */
+html[data-vibe="boring"] .boring-now[data-has-perm] { display: none; }
 @media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-now, html[data-vibe="boring"] .boring-now-big { transition: none; } }
 
 /* Message avatars: 44px bust (--boring-bust) in a left gutter + "Name · Role" line (--boring-who / --boring-role), as in .m of the mockup. */
@@ -1418,6 +1416,104 @@ html[data-vibe="boring"] .perm-card .perm-preview-input { border-radius: 8px; fo
 html[data-vibe="boring"] .perm-card .btn { border-radius: 9px; font-weight: 700; }
 html[data-vibe="boring"] .perm-card .btn.perm-allow,
 html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }
+
+/* ---- B15 Working-now strip (idea-918): full-width segregated strip under the agent header, spanning chat + context panel. Normal only. ---- */
+html[data-vibe="boring"] .drawer > .boring-now { flex: none; display: flex; align-items: center; gap: 14px; margin: 0; width: auto; max-width: none; min-height: 46px; box-sizing: border-box; padding: 5px 20px; border-radius: 0; border: 0; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface-1) 78%, transparent); box-shadow: none; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="busy"] { border-color: var(--border); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--living-warm) 35%, transparent); }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="needs-you"] { border-color: var(--border); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--st-attn) 45%, transparent); }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-big { width: 36px; height: 36px; border-radius: 10px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-big .boring-bust-img { width: 36px; height: 36px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] { min-height: 62px; padding: 7px 20px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-big { width: 48px; height: 48px; border-radius: 12px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-big .boring-bust-img { width: 48px; height: 48px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="busy"] .boring-now-big { box-shadow: 0 0 0 2px var(--living-warm), 0 0 16px -3px color-mix(in srgb, var(--living-warm) 60%, transparent); }
+/* One line: micro-label, headline and meta share a baseline row and ellipsize; multi stacks label over headline. */
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-text { display: flex; align-items: baseline; gap: 4px 12px; min-width: 0; flex: 1 1 0; overflow: hidden; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-text { flex-wrap: wrap; row-gap: 0; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-t { flex: 0 0 100%; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-t { flex: none; font-size: 11px; line-height: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-h { flex: 0 1 auto; min-width: 0; margin: 0; font-size: 15px; line-height: 20px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-h { margin-top: 1px; font-size: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-s2 { flex: 0 100000 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="idle"] .boring-now-t { color: var(--text-2); }
+/* Multi-agent: a row of clickable 30px busts with warm rings (right edge); +N past six. */
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chips { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; flex: none; max-width: 55%; padding: 6px; overflow: visible; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 2px var(--living-warm), 0 0 12px -2px color-mix(in srgb, var(--living-warm) 55%, transparent); overflow: hidden; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip img { width: 30px; height: 30px; border-radius: 50%; background: transparent; box-shadow: none; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-more { flex: none; display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 6px; box-sizing: border-box; border-radius: 15px; background: var(--surface-3); color: var(--text-1); font-size: 12px; font-weight: 700; }
+html[data-vibe="boring"] .drawer > .boring-now[data-has-perm] { display: none; }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .drawer > .boring-now, html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip { transition: none; } }
+
+/* ---- B14b Overview: Living Signature lane table (mockup 2-living). Quiet graphite/alabaster tone-stepped card,
+   hairline borders, Plus Jakarta Sans + IBM Plex Mono, Art14 canon mini-busts on every row, calm segmented tabs
+   that harmonize with the living sky via [data-squad-state]. Normal only; Psycho never matches. ---- */
+html[data-vibe="boring"] .boring-overview-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+/* Segmented tabs: one hairline-bordered tone-stepped control; the active segment steps up one surface, no bevel. */
+html[data-vibe="boring"] .boring-overview-tabs { display: inline-flex; align-items: center; gap: 2px; padding: 3px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill {
+  min-height: 30px; padding: 4px 14px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font: 500 var(--t-ui, 13px)/20px var(--sans);
+  transition: background-color 0.9s cubic-bezier(.2,.7,.2,1), color 0.9s cubic-bezier(.2,.7,.2,1), box-shadow 0.9s cubic-bezier(.2,.7,.2,1);
+}
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill:hover { background: var(--surface-2); color: var(--text-1); }
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on { background: var(--surface-3); color: var(--text-1); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+/* Living-sky harmony: the active segment warms while the squad is busy, stays quiet while idle. */
+html[data-vibe="boring"] [data-squad-state="busy"] .boring-overview-tabs .boring-switch-pill.on { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--living-warm) 55%, var(--border-strong)); }
+/* + New lane: a quiet hairline secondary button matching the segmented control. */
+html[data-vibe="boring"] .boring-overview-add {
+  margin-left: 0; opacity: 1; min-height: 34px; padding: 4px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); color: var(--text-2); font: 500 var(--t-ui, 13px)/20px var(--sans);
+  transition: background-color 0.9s cubic-bezier(.2,.7,.2,1), color 0.9s cubic-bezier(.2,.7,.2,1), border-color 0.9s cubic-bezier(.2,.7,.2,1);
+}
+html[data-vibe="boring"] .boring-overview-add:hover { background: var(--surface-3); color: var(--text-1); border-color: var(--border-strong); }
+/* Tone-stepped card: the lane table is a surface-1 card with a hairline border + radius. Separate borders keep the
+   sticky header working inside the scroll container; the corner cells clip the rounded corners. */
+html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--sans); font-size: var(--t-ui, 13px); color: var(--text-2); }
+html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 8px 14px; font: 600 var(--t-small, 12px)/16px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); background: var(--surface-2); border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; }
+html[data-vibe="boring"] .boring-lane-table thead th:first-child { border-top-left-radius: calc(var(--radius) - 1px); }
+html[data-vibe="boring"] .boring-lane-table thead th:last-child { border-top-right-radius: calc(var(--radius) - 1px); }
+html[data-vibe="boring"] .boring-lane-table td { padding: 0; height: 44px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+html[data-vibe="boring"] .boring-lane-table tbody tr:last-child td { border-bottom: 0; }
+html[data-vibe="boring"] .boring-lane-table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
+html[data-vibe="boring"] .boring-lane-table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
+html[data-vibe="boring"] .boring-lane-table td.boring-conv-age,
+html[data-vibe="boring"] .boring-lane-table td.boring-lane-event { padding: 0 14px; }
+html[data-vibe="boring"] .boring-lane-event { color: var(--text-3); font-family: var(--mono); font-size: var(--t-caption, 11px); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-lane-cell { display: flex; align-items: center; gap: 10px; width: 100%; height: 44px; padding: 0 14px; border: 0; background: transparent; color: var(--text-2); font: 500 var(--t-ui, 13px)/20px var(--sans); text-align: left; cursor: pointer; border-radius: 0; }
+html[data-vibe="boring"] .boring-lane-cell:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-lane-row { transition: background-color 0.9s cubic-bezier(.2,.7,.2,1); }
+html[data-vibe="boring"] .boring-lane-row:hover { background: var(--surface-2); }
+html[data-vibe="boring"] .boring-lane-row.attn { box-shadow: inset 3px 0 0 var(--st-attn); }
+html[data-vibe="boring"] .boring-lane-row.desk { opacity: 1; background: color-mix(in srgb, var(--surface-2) 35%, var(--surface-1)); }
+html[data-vibe="boring"] .boring-lane-row.desk:hover { background: var(--surface-2); }
+html[data-vibe="boring"] .boring-lane-name { color: var(--text-1); font-weight: 600; }
+html[data-vibe="boring"] .boring-lane-code { font-family: var(--mono); font-size: var(--t-caption, 11px); color: var(--text-3); background: transparent; }
+html[data-vibe="boring"] .boring-lane-stat { font-family: var(--mono); font-size: var(--t-caption, 11px); letter-spacing: 0.01em; color: var(--text-2); white-space: nowrap; }
+/* Empty-role bust slots (no Brainstorm/Lead) read as broken images: soften the full-strength box to a low-opacity ghost. */
+html[data-vibe="boring"] .boring-lane-table .boring-lane-mini.none { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 40%, transparent); }
+/* Busts reuse the B13c mini-avatar ring vocabulary (working = lit glow, idle = greyscale, needs-you = amber, error = red). */
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill, html[data-vibe="boring"] .boring-overview-add, html[data-vibe="boring"] .boring-lane-row { transition: none; } }
+
+/* ---- B16 composer bar: Normal-mode two-row composer card (textarea on top; attach / secure input / park + provider, model, thinking, mode + send below). ---- */
+html[data-vibe="boring"] .composer-row.boring-composer-row { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px 8px 14px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 10px; }
+html[data-vibe="boring"] .boring-composer-row > textarea { width: 100%; min-height: 44px; box-sizing: border-box; padding: 4px 0; resize: vertical; }
+html[data-vibe="boring"] .boring-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding-top: 6px; border-top: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-composer-actions { display: flex; align-items: center; gap: 4px; }
+html[data-vibe="boring"] .boring-composer-icon { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; background: transparent; color: var(--text-1); border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+html[data-vibe="boring"] .boring-composer-icon:hover:not(:disabled) { background: var(--surface-3); border-color: var(--border); }
+html[data-vibe="boring"] .boring-composer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-composer-icon:disabled { opacity: 0.5; cursor: default; }
+html[data-vibe="boring"] .boring-composer-cfg { display: flex; flex: 1 1 280px; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
+html[data-vibe="boring"] .boring-composer-field { display: inline-flex; align-items: center; gap: 4px; }
+html[data-vibe="boring"] .boring-composer-field-label { font-size: 11px; color: var(--text-2); }
+html[data-vibe="boring"] .boring-composer-staged { flex: 1 1 100%; font-size: 12px; color: var(--st-attn); }
+html[data-vibe="boring"] .boring-composer-cfg .btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { width: auto; max-width: 240px; min-width: 0; height: 32px; min-height: 32px; padding: 0 4px; font-size: 12px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: 8px; }
+html[data-vibe="boring"] .boring-composer-cfg select:focus-visible, html[data-vibe="boring"] .boring-composer-cfg input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-composer-send { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+html[data-vibe="boring"] .boring-composer-send .btn, html[data-vibe="boring"] .boring-composer-send .composer-interrupt-btn { min-height: 34px; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn { background: color-mix(in srgb, var(--accent) 70%, #000000); border: 1px solid color-mix(in srgb, var(--accent) 70%, #000000); color: #ffffff; font-weight: 600; padding: 0 18px; border-radius: 8px; }
+html[data-vibe="boring"][data-theme="light"] .boring-composer-bar .boring-composer-send .btn.composer-interrupt-btn:not(:disabled) { color: #ffffff; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn:disabled { background: #475569; border-color: #475569; color: #ffffff; opacity: 0.85; }
 
 /* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
 /* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */

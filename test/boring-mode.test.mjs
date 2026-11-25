@@ -1104,10 +1104,13 @@ test("D3a fix: provider/model/mode/thinking + Shift+Tab live in ONE shared hook 
   assert.ok(!psycho.includes("e.shiftKey && e.key === \"Tab\""), "no duplicate Shift+Tab logic in DrawerHeader");
   assert.match(psycho, /useAgentConfig\(\{/);
   assert.match(normal, /useAgentConfig\(\{/);
-  assert.match(normal, /cfg\.providerSelect/);
-  assert.match(normal, /cfg\.modelControl/);
-  assert.match(normal, /cfg\.modeSelect/);
-  assert.match(normal, /cfg\.thinkingSelect/);
+  // B16: the controls render in the composer bar (fed from the lifted hook), no longer in the header menu
+  const composer = d3src("Composer.tsx");
+  assert.match(composer, /boringConfig\.providerSelect/);
+  assert.match(composer, /boringConfig\.modelControl/);
+  assert.match(composer, /boringConfig\.modeSelect/);
+  assert.match(composer, /boringConfig\.thinkingSelect/);
+  assert.doesNotMatch(normal, /cfg\.providerSelect/);
   // staged switch + active flag are threaded through from AgentDrawer to the Normal header
   assert.match(d3src("AgentDrawer.tsx"), /<BoringAgentHeader[\s\S]*?stagedSwitch=\{stagedSwitch\}[\s\S]*?active=\{active\}/);
 });
@@ -2333,7 +2336,10 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
-  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>\}/);
+  assert.match(drawer, /<div className="boring-convo-col">/);
+  assert.match(drawer, /<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>[\s\S]*?<div className="drawer-shell">/); // B15: full-width strip above the shell
+  assert.match(drawer, /\{!boringChat && permCards\}/);
+  assert.match(drawer, /const permCards = agent\.pendingPermissions\?\.map/);
   assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
   assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
   const i = css.indexOf("/* ---- B13d:");
