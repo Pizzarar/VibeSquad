@@ -50,13 +50,14 @@ export function urlSyncAgent(o: { boring: boolean; liveShown: string | null | un
 
 // U1 (idea-997/895): the screen keys that are not an agent: an empty Desk slot card (?slot=) and the Overview sub-tab (?tab=). BoringApp
 // publishes them tagged with their project (setBoringScreenKeys); like urlSyncAgent they are trusted only for the team being written.
-type ScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
-/** The ?slot= / ?tab= App's URL sync writes. Psycho / phone: none. Normal: the live published keys (`live`, read at effect time) when they
+type ScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null; view?: "decisions" | null };
+/** The ?slot= / ?tab= / ?view=decisions App's URL sync writes. Psycho / phone: none. Normal: the live published keys (`live`, read at effect time) when they
  * belong to `team`, else the render-time ones (`rendered`) when those do, else none (that project's default Overview). BoringApp not
  * mounted (live undefined, e.g. the Storybook takeover): keep the URL's own keys (`kept`), so its entry still names the screen to return to. */
-export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined; rendered: ScreenKeys | undefined; team: string | null; kept: { slot?: ScreenKeys["slot"]; tab?: ScreenKeys["tab"] } }): { slot: ScreenKeys["slot"]; tab: ScreenKeys["tab"] } {
+export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined; rendered: ScreenKeys | undefined; team: string | null; kept: { slot?: ScreenKeys["slot"]; tab?: ScreenKeys["tab"]; view?: ScreenKeys["view"] } }): { slot: ScreenKeys["slot"]; tab: ScreenKeys["tab"]; view?: ScreenKeys["view"] } {
   if (!o.boring) return { slot: null, tab: null };
-  if (o.live === undefined) return { slot: o.kept.slot ?? null, tab: o.kept.tab ?? null };
+  if (o.live === undefined) return { slot: o.kept.slot ?? null, tab: o.kept.tab ?? null, ...(o.kept.view ? { view: o.kept.view } : {}) };
+  if (o.live.view) return { slot: null, tab: null, view: o.live.view };
   const k = o.live.team === o.team ? o.live : o.rendered && o.rendered.team === o.team ? o.rendered : null;
-  return k ? { slot: k.slot, tab: k.tab } : { slot: null, tab: null };
+  return k ? { slot: k.slot, tab: k.tab, ...(k.view ? { view: k.view } : {}) } : { slot: null, tab: null };
 }

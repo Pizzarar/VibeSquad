@@ -15,7 +15,7 @@ import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from
 import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { setBoringLandedGen, setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
+import { setBoringLandedGen, setBoringScreenKeys, setBoringScreenView, setBoringShownAgent, spinUpPin } from "./pinFocus";
 import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
@@ -35,6 +35,7 @@ import { CrunchToggle } from "./CrunchToggle";
 import { mainView } from "./projectOrder";
 import { knownFolderNames, projectOrder } from "./projectOrderActions";
 import { UsageDashboard } from "./UsageDashboard";
+import { BoringDecisionDesk, DECISION_DESK_DEFAULT_LANDING, useDecisionCount } from "./BoringDecisionDesk";
 
 export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
 
@@ -43,7 +44,7 @@ export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirs
 // Thanks to Antigravity by Google DeepMind for the layout inspiration.
 
 type Role = "brainstorm" | "lead";
-type Mode = "chat" | "project" | "usage";
+type Mode = "chat" | "project" | "usage" | "decisions";
 type OverviewTab = "overview" | "inbox" | "feed";
 // U1 (idea-997/895): URL keys for the screens that have no agent. ?slot= names an empty Desk/Trinity card; ?tab= the Overview sub-tab.
 const SLOT_LANE: Record<UrlSlot, "_overlord" | "_riffbot" | "_bugs"> = { overlord: "_overlord", riffbot: "_riffbot", bugs: "_bugs" };
@@ -120,8 +121,9 @@ export function boringLandingFromUrl(
   views: TeamView[],
   search: string,
   known: (id: string) => boolean = () => true,
-): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "slot"; teamId: string; slot: UrlSlot } | { mode: "project"; teamId: string | null; tab: UrlTab | null } | null {
-  const { team, agent, slot, tab } = parseUrlState(search);
+): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "slot"; teamId: string; slot: UrlSlot } | { mode: "project"; teamId: string | null; tab: UrlTab | null } | { mode: "decisions"; teamId: null } | null {
+  const { team, agent, slot, tab, view } = parseUrlState(search);
+  if (view === "decisions") return { mode: "decisions", teamId: null };
   if (agent) {
     const land = boringAgentLanding(views, agent, known);
     if (!land) return null;
@@ -165,6 +167,7 @@ export type Crumb = { key: "project" | "lane" | "agent"; label: string };
 /** U1 r2 (UX R33 m1): the Overview page names the sub-tab on screen (its pill label, without the count). */
 const TAB_CRUMB: Record<OverviewTab, string> = { overview: "Overview", inbox: "Idea Inbox", feed: "Standup Feed" };
 export function boringBreadcrumb(o: { project: string; mode: Mode; laneLabel: string | null; agentLabel: string | null; tab?: OverviewTab }): Crumb[] {
+  if (o.mode === "decisions") return [{ key: "project", label: "Decision Desk" }];
   const out: Crumb[] = [{ key: "project", label: o.project || "No project" }];
   if (o.mode === "usage") out.push({ key: "lane", label: "Usage & workflows" });
   else if (o.mode === "project") out.push({ key: "lane", label: TAB_CRUMB[o.tab ?? "overview"] });
@@ -187,7 +190,7 @@ export type ActiveSelection = { teamId: string | null; mode: Mode; laneId: strin
  */
 export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId: string | null; agentId: string | null; laneId: string | null; role: Role; workerId: string | null }): ActiveSelection {
   const base = { teamId: o.teamId, mode: o.mode, laneId: null, role: null, workerId: null, agentLabel: null, rowKey: null } as ActiveSelection;
-  if (o.mode === "usage") return base;
+  if (o.mode === "usage" || o.mode === "decisions") return base;
   if (o.mode === "project") return { ...base, rowKey: o.teamId ? `${o.teamId}|project` : null };
   let teamId = o.teamId;
   let laneId = o.laneId;
@@ -430,9 +433,18 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // ?team=gone fallback, a Ctrl+K switch out of Storybook while the URL still names the old project) adopts nothing; a view that resolves
   // after mount (registry / roster arrive late) adopts them when it becomes the URL's team (pendingUrl0 below).
   const urlKeys0 = url0 && url0.team && url0.team === (view?.team.id ?? null) ? url0 : null;
-  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : urlKeys0?.slot ? "chat" : "project"));
+  const [mode, setMode] = useState<Mode>(() =>
+    takeColdUsageFocus() ? "usage"
+    : url0?.view === "decisions" ? "decisions"
+    : urlKeys0?.slot ? "chat"
+    : DECISION_DESK_DEFAULT_LANDING && !url0?.team && !url0?.agent ? "decisions"
+    : "project",
+  );
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
+  const decisionCount = useDecisionCount();
+  useEffect(() => setBoringScreenView(mode === "decisions" ? "decisions" : null), [mode]);
+  useEffect(() => () => setBoringScreenView(null), []);
   useEffect(() => {
     const open = () => setMode("usage");
     window.addEventListener(OPEN_USAGE_EVENT, open);
@@ -616,6 +628,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         setSelectedWorkerId(null);
       }
       setMode("chat");
+    } else if (land.mode === "decisions") {
+      setMode("decisions");
     } else if (land.mode === "slot") {
       setSelectedLaneId(SLOT_LANE[land.slot]);
       setSelectedRole("brainstorm");
@@ -1099,6 +1113,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             <span aria-hidden="true">⌕</span><span>Search</span><kbd className="boring-kbd">Ctrl+K</kbd>
           </button>
         </div>
+        <button type="button" className={`boring-decision-nav${mode === "decisions" ? " on" : ""}`} data-testid="boring-decisions-nav" onClick={() => setMode("decisions")}>
+          <span className="boring-decision-nav-label">Decisions</span>
+          <span className="boring-decision-nav-count" data-testid="boring-decisions-nav-count">{`· ${decisionCount}`}</span>
+        </button>
         <BoringInbox views={awakeViews} onOpen={openNeedsYou} now={now} />
         <div className="boring-section-head" data-testid="boring-projects-head">
           <span className="boring-section-label">Projects</span>
@@ -1208,6 +1226,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         )}
         {opening && (
           <div className="boring-opening" data-testid="boring-opening" role="status">Opening agent…</div>
+        )}
+        {!opening && mode === "decisions" && (
+          <div className="boring-dashboard-wrap boring-decision-wrap" data-testid="boring-decisions-view">
+            <BoringDecisionDesk views={awakeViews} now={now} onOpenAgent={openAgentIn} onOpenProject={(id) => { onSelectSquad(id); setMode("project"); }} />
+          </div>
         )}
         {!opening && mode === "usage" && (
           <div className="boring-dashboard-wrap" data-testid="boring-usage-view">
