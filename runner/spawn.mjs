@@ -67,13 +67,18 @@ export function spawnNoShell(cmd, args, opts = {}, spawnImpl = spawn) {
   return child;
 }
 
-// A spawn 'error' (not a normal child exit). The common one is ENOENT: the executable resolved fine (it existed at
-// resolve time) but vanished before spawn — a CLI mid-update. Say so plainly so the failed run reads as
-// "<cmd> binary not found at <path>", not a bare "spawn <path> ENOENT".
-export function spawnErrorMessage(cmd, err) {
-  if (err?.code === 'ENOENT') return `${cmd} binary not found at ${err.path ?? cmd}`;
+// A spawn 'error' (not a normal child exit). ENOENT has two causes and node names the executable for both: the binary
+// vanished after resolve (a CLI mid-update), or the cwd is gone (a swept worktree; idea-821: rn-bc6c5973958c and
+// rn-f57bd761eafd read "claude/agy binary not found" while both binaries were present). Name the real one: a missing cwd
+// is the task's problem, never the provider's, so it must not read as a binary fault (that caps the provider, idea-826).
+export function spawnErrorMessage(cmd, err, { cwd, exists = existsSync } = {}) {
+  if (err?.code === 'ENOENT') {
+    if (cwd && !safeExists(exists, cwd)) return `working directory not found: ${cwd} (spawn ${cmd} ENOENT; worktree removed?)`;
+    return `${cmd} binary not found at ${err.path ?? cmd}`;
+  }
   return String(err?.message ?? err);
 }
+function safeExists(exists, p) { try { return exists(p); } catch { return false; } }
 
 // Kill a child and its descendants. child.kill() on win32 only ends the direct child, so a claude/opencode
 // that spawned tools would leak them. taskkill /T /F runs without a shell (args are a fixed list).

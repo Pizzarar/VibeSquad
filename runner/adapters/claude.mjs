@@ -183,7 +183,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
-      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err) }));
+      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err, { cwd }) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
       let settled = false;
       const ready = new Promise((resolve, reject) => {

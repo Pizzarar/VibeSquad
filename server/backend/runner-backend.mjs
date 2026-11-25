@@ -19,7 +19,9 @@ import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { indexedFold, indexedFoldSync } from "./roster-index.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
-import { setProviderCapped } from "../provider-failover.mjs";
+import { normalizeProviderFamily, readLiveCapDoc, setProviderCapped } from "../provider-failover.mjs";
+import { effectiveAgentRole } from "../identity.mjs";
+import { noteLaneSpawnOutcome } from "../spawn-streak.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -532,25 +534,71 @@ export function reduceTurn(t, e) {
 
 /** How long an agent that died on an upstream model-API failure keeps its provider capped (idea-442). */
 export const UPSTREAM_CAP_TTL_MS = 10 * 60 * 1000;
+/** idea-826: an out-of-credit provider stays out until the owner tops up (`vs cap off <provider>` lifts it early). */
+export const BALANCE_CAP_TTL_MS = 60 * 60 * 1000;
+/** idea-826: a provider CLI missing from the host (true resolve/ENOENT miss, not a gone cwd: runner/spawn.mjs spawnErrorMessage). */
+export const BINARY_CAP_TTL_MS = 10 * 60 * 1000;
+// DeepSeek: "Internal error: Insufficient Balance" (an `error` event, the agent stays parked); OpenAI/Anthropic wordings alike.
+export const BALANCE_ERROR_RE = /insufficient[ _](account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|payment required/i;
+// runner/spawn.mjs: "<cmd> binary not found at <path>" (spawn ENOENT, cwd present) / resolveExecutable's 'executable "<cmd>" not found'.
+export const BINARY_MISSING_RE = /\bbinary not found at\b|\bexecutable "[^"]+" not found\b/i;
 
 /**
- * idea-442: opencode/deepseek workers sometimes die on "Internal error: Internal service failure" (the model API, not the task) and
- * left a silent closed agent that failover kept routing to. An exit that carries `upstream: true` (runner/adapters/acp.mjs) caps the
- * provider for a few minutes so spawn failover routes around it, and says so on stderr. Never throws. Returns the cap written or null.
+ * The provider-side fault a runner event reports, or null (idea-442 + idea-826): `balance` (error or exit), `binary-missing`
+ * (error or exit) or `upstream` (exit flagged by the ACP adapter). Task-side failures (bad tool call, gone cwd) are never one.
  */
-export function capProviderOnUpstreamExit(provider, e, { cap = setProviderCapped, log = logRunnerMetric, now = Date.now() } = {}) {
-  if (e?.type !== "exit" || e.upstream !== true || !provider) return null;
+export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
+  if (e?.type !== "exit" && e?.type !== "error") return null;
+  const msg = String((e.type === "exit" ? e.error : e.message) ?? "");
+  if (msg && BALANCE_ERROR_RE.test(msg)) return { kind: "balance", ttlMs: BALANCE_CAP_TTL_MS, msg };
+  // A runner from before the spawnErrorMessage cwd check still names the binary when the agent's cwd is gone: not a binary fault.
+  if (msg && BINARY_MISSING_RE.test(msg)) return cwd && !safeExists(exists, cwd) ? null : { kind: "binary-missing", ttlMs: BINARY_CAP_TTL_MS, msg };
+  if (e.type === "exit" && e.upstream === true) return { kind: "upstream", ttlMs: UPSTREAM_CAP_TTL_MS, msg };
+  return null;
+}
+
+function safeExists(exists, p) { try { return exists(p); } catch { return false; } }
+
+const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient balance", "binary-missing": "binary missing" };
+
+/**
+ * The provider circuit breaker (reuses the `vs cap` store, server/provider-failover.mjs setProviderCapped). idea-442: opencode/deepseek
+ * workers died on "Internal error: Internal service failure" and failover kept routing to them; idea-826: the same for an out-of-credit
+ * provider and a missing CLI binary. A provider fault (providerFaultOf) caps the provider for its TTL so spawn failover
+ * (resolveProfileWithFailover / resolveRoute) routes around it, and says so on stderr. A longer live cap (a manual `vs cap`) is never
+ * shortened. Never throws. Returns the cap written or null.
+ */
+export function capProviderOnUpstreamExit(provider, e, { cwd, cap = setProviderCapped, readCaps = cap === setProviderCapped ? () => readLiveCapDoc().capped : null, log = logRunnerMetric, now = Date.now(), exists = fs.existsSync } = {}) {
+  const fault = provider ? providerFaultOf(e, { cwd, exists }) : null;
+  if (!fault) return null;
   const ageMs = Number.isFinite(e.ts) ? Math.max(0, now - e.ts) : 0;
-  const ttlMs = UPSTREAM_CAP_TTL_MS - ageMs;
-  if (ttlMs <= 0) return null; // a restart catch-up replaying an old exit must not re-cap a provider that has since recovered
-  const reason = `upstream failure: ${String(e.error ?? "agent exited").slice(0, 160)}`;
+  const ttlMs = fault.ttlMs - ageMs;
+  if (ttlMs <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
+  const reason = `${FAULT_REASON[fault.kind]}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
+  try {
+    const have = readCaps?.()?.[normalizeProviderFamily(provider)];
+    if (have && !(Number(have.resetsAt) < now + ttlMs)) return null; // already capped at least as long (manual caps have no resetsAt)
+  } catch { /* unreadable caps: write ours */ }
   try {
     cap(provider, true, { reason, ttlMs });
     log(`${provider} capped for ${Math.ceil(ttlMs / 60000)} min: ${reason}`);
-    return { provider, reason };
+    return { provider, reason, kind: fault.kind };
   } catch {
     return null; // best effort: the exit already carries the reason
   }
+}
+
+/**
+ * idea-820: the per-lane fail-streak input (server/spawn-streak.mjs) for one lifecycle event, or null. Only a worker's
+ * turn_ended counts (leads, Buddies and digests never hold a lane); stepLaneStreak keeps only first turns.
+ */
+export function spawnOutcomeOf(agent, lifecycle) {
+  if (lifecycle?.kind !== "turn_ended" || !agent?.id) return null;
+  const lane = String(agent.labels?.lane ?? "").trim();
+  if (!lane || effectiveAgentRole(agent) !== "worker") return null;
+  const kind = lifecycle.outcome?.kind;
+  if (kind !== "completed" && kind !== "failed") return null;
+  return { team: String(agent.labels?.team ?? ""), lane, agentId: agent.id, outcome: kind, error: String(lifecycle.outcome?.error?.message ?? "") };
 }
 
 /** One stderr line plus a `metric` entry in the team log (same path the runner hook failure uses); never throws. */
@@ -1545,6 +1593,7 @@ export class RunnerBackend {
     await this.trackTools(id, e, gen);
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
+      if (e.type === "error" && providerFaultOf(e)) await this.capOnProviderError(id, e); // idea-826: "Insufficient Balance" is an error, not an exit
       return;
     }
     if (e.type === "unarchive") {
@@ -1599,15 +1648,26 @@ export class RunnerBackend {
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
+    const spawnOutcome = spawnOutcomeOf(shown, lifecycle);
+    if (spawnOutcome) void noteLaneSpawnOutcome(spawnOutcome, this.spawnStreakFile ? { file: this.spawnStreakFile } : undefined); // idea-820
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending
     if (e.type === "exit") {
-      capProviderOnUpstreamExit(agent.provider, e);
       // idea-504: after the cap (so spawn failover already routes around the provider), tell the hooks: a worker that died on
-      // an upstream failure in its first turn is re-spawned once on the alternate provider (agent-duties). A cancel never is.
-      if (e.upstream === true && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
+      // an upstream failure, or on a missing CLI binary (idea-821), in its first turn is re-spawned once on the alternate provider
+      // (agent-duties). A cancel never is.
+      const fault = capProviderOnUpstreamExit(agent.provider, e, { cwd: agent.cwd })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
+      if ((e.upstream === true || fault === "binary-missing") && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
     }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /** idea-826: a provider fault reported as an `error` event (the agent stays parked) trips the provider cap. Never throws. */
+  async capOnProviderError(id, e) {
+    try {
+      const agent = this.live.known.get(id) ?? (await bounded(this.fetchAgent(id))).agent;
+      capProviderOnUpstreamExit(agent?.provider, e, { cwd: agent?.cwd });
+    } catch { /* best effort: the error event already carries the reason */ }
   }
 
   /**
