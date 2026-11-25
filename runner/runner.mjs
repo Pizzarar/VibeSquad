@@ -613,7 +613,7 @@ export class Runner {
   }
 
   // A hold the drain refuses: every background shell was started after the drain began. A shell without a start time
-  // (POSIX ps) is treated as older work and keeps holding: the drain never stops what it cannot date.
+  // (macOS ps; Linux ps carries etimes since idea-697) is treated as older work and keeps holding: the drain never stops what it cannot date.
   _drainRefusesHold(work) {
     const d = this.drainState();
     return !!d && work.length > 0 && work.every((w) => Number.isFinite(w.createdMs) && w.createdMs >= d.since);

@@ -52,7 +52,7 @@ export function backgroundWork(procs, rootPid) {
     for (const c of kids.get(pid) ?? []) {
       if (seen.has(c.pid)) continue;
       seen.add(c.pid);
-      if (parent?.createdMs && c.createdMs && c.createdMs + 50 < parent.createdMs) continue;
+      if (parent?.createdMs && c.createdMs && c.createdMs + Math.max(50, c.createdTolMs ?? 0, parent.createdTolMs ?? 0) < parent.createdMs) continue; // createdTolMs: ps etimes is whole seconds, read per row
       if (isSidecar(c)) continue; // at any depth: wrapper CLIs start their MCP servers one level down
       if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: shellCmdTail(c.cmd, 240), ...(c.createdMs ? { createdMs: c.createdMs } : {}) }); continue; } // createdMs: a restart drain refuses holds on work started after it (Runner._drainRefusesHold)
       walk(c.pid);
@@ -71,8 +71,10 @@ export function snapshotProcesses({ platform = process.platform, spawnImpl = nul
   const win = platform === 'win32';
   const [file, args] = win
     ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WIN_SCRIPT]]
-    : ['ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'args=']];
-  if (!spawnImpl) return spawnCaptureOffLoop(file, args, { timeoutMs }).then((out) => (win ? parseWin(out) : parsePs(out)));
+    : ['ps', ['-A', '-o', 'pid=', '-o', 'ppid=', ...(platform === 'linux' ? ['-o', 'etimes='] : []), '-o', 'args=']]; // idea-697: etimes (Linux procps) gives createdMs
+  const now = Date.now();
+  const parse = (out) => (win ? parseWin(out) : parsePs(out, { etimes: platform === 'linux', now }));
+  if (!spawnImpl) return spawnCaptureOffLoop(file, args, { timeoutMs }).then(parse);
   return new Promise((resolve, reject) => {
     let out = '';
     let done = false;
@@ -84,7 +86,7 @@ export function snapshotProcesses({ platform = process.platform, spawnImpl = nul
     child.on('error', (err) => finish(reject, err));
     child.on('close', (code) => {
       if (code !== 0) return finish(reject, new Error(`process snapshot exited ${code}`));
-      try { finish(resolve, win ? parseWin(out) : parsePs(out)); } catch (err) { finish(reject, err); }
+      try { finish(resolve, parse(out)); } catch (err) { finish(reject, err); }
     });
   });
 }
@@ -94,9 +96,15 @@ function parseWin(text) {
   return (Array.isArray(j) ? j : [j]).map((r) => ({ pid: r.p, ppid: r.q, name: r.n ?? '', cmd: r.c ?? '', createdMs: r.t || 0 }));
 }
 
-function parsePs(text) {
+// POSIX `ps -o pid= -o ppid= [-o etimes=] -o args=`. idea-697: with etimes (Linux) each row gets createdMs, so a restart drain
+// can tell work started after it (Runner._drainRefusesHold) on Linux too. etimes counts whole seconds back from `now`, so
+// createdMs is the earliest the process can have started (now - (etimes + 1) s: work from just before a drain never reads as
+// after it) and createdTolMs says how coarse it is. A row without the etimes column (3 fields) parses as before, undated.
+export function parsePs(text, { etimes = false, now = Date.now() } = {}) {
   const out = [];
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of String(text).split(/\r?\n/)) {
+    const e = etimes ? /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S.*)$/.exec(line) : null;
+    if (e) { out.push({ pid: Number(e[1]), ppid: Number(e[2]), name: e[4].split(/\s+/)[0] ?? '', cmd: e[4], createdMs: now - (Number(e[3]) + 1) * 1000, createdTolMs: 2000 }); continue; }
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (m) out.push({ pid: Number(m[1]), ppid: Number(m[2]), name: m[3].split(/\s+/)[0] ?? '', cmd: m[3] });
   }

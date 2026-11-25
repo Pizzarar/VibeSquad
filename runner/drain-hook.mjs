@@ -1,6 +1,7 @@
 // Claude Code PreToolUse hook for runner agents (ideas 198 + 186): while a `vs restart` drains the runner, a NEW background
 // command (Bash/PowerShell with run_in_background) is refused with a clear message instead of becoming a park hold the
-// restart has to wait out. Foreground commands and everything outside a drain pass untouched.
+// restart has to wait out. idea-697: so is a FOREGROUND command that backgrounds itself (`nohup x &`, setsid; selfBackgrounds).
+// Other foreground commands and everything outside a drain pass untouched.
 //   node runner/drain-hook.mjs <runner home>/drain.json      (installed by adapters/claude.mjs via --settings hooks)
 // The drain file is written by Runner.setDrain and removed on clear, expiry and runner start; the hook also checks `until`
 // itself, so a file a crashed runner left behind never blocks anything past its TTL. Any read/parse error allows (exit 0).
@@ -27,12 +28,48 @@ export function drainRefusalText(drain) {
     'Do not start the suite/build in the foreground instead; finish your turn and retry it after the restart.';
 }
 
+// idea-697: a FOREGROUND command that backgrounds itself (`nohup x > log &`, `setsid x`, `(x &)`, `disown`) leaves the tool
+// shell at once: the shell exits, the work is reparented outside the CLI's tree and no park hold or drain refusal ever sees
+// it. Quoted strings, escapes and comments are dropped first (`echo "a & b"`, `grep '&'`), so only a real control operator
+// counts; `&&`, `2>&1`, `>&2`, `&>`, `|&` never match. PowerShell: `&` is the call operator, so only Start-Job /
+// Start-ThreadJob, Start-Process without -Wait, and a statement-ending `&` (PowerShell 7's background job) count.
+const BASH_STRIP = /\\[\s\S]|'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g;
+const PS_STRIP = /`[\s\S]|'(?:[^']|'')*'|"(?:[^"`]|`[\s\S])*"/g;
+const COMMENT = /(^|\s)#.*$/gm;
+const BASH_AMP = /(?:^|[^&|<>])&(?![&>])/m;
+const BASH_DETACH = /\b(?:nohup|setsid|disown)\b/;
+// A heredoc body is data (`git commit -F - <<'EOF' ... R&D ... EOF`): dropped, its opening line kept.
+const HEREDOC = /<<-?\s*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?^\s*\2\s*$/gm;
+export function selfBackgrounds(command, tool = 'Bash') {
+  const raw = String(command ?? '');
+  if (!raw.trim()) return false;
+  if (tool === 'PowerShell') {
+    const t = raw.replace(PS_STRIP, ' _ ').replace(COMMENT, '$1'); // a placeholder: a call operator's quoted path stays an operand
+    if (/\bStart-(?:Thread)?Job\b/i.test(t)) return true;
+    if (/&\s*(?:$|;|\r?\n)/m.test(t.replace(/&&/g, ' '))) return true;
+    return t.split(/[;\r\n|]/).some((seg) => /\bStart-Process\b|\bsaps\b/i.test(seg) && !/-Wait\b/i.test(seg));
+  }
+  const t = raw.replace(HEREDOC, '<<_$3\n').replace(BASH_STRIP, ' _ ').replace(COMMENT, '$1');
+  return BASH_AMP.test(t) || BASH_DETACH.test(t);
+}
+
+/** The refusal text for a foreground command that backgrounds itself while draining (idea-697). */
+export function drainDetachRefusalText(drain) {
+  const what = drain?.kind === 'request'
+    ? `restart drain open (${drain.request?.id ? `restart request ${drain.request.id}` : 'a restart request'})`
+    : `VibeSquad is draining for a runtime restart (${drain?.reason || 'vs restart'})`;
+  return `${what}: this command backgrounds itself (\`&\`, nohup, setsid or disown; PowerShell Start-Job / Start-Process without -Wait). ` +
+    'Work started that way leaves your shell at once, outside anything the restart can see, so new detached work is refused during a drain ' +
+    '(and the runner stops any that slips through). Run it in the foreground without & / nohup only if it is short; otherwise finish your turn and rerun it after restart-done.';
+}
+
 /** Pure: the refusal text when `input` (the hook's stdin JSON) is a background launch during an unexpired drain, else null. */
 export function drainHookDecision(input, drain, now = Date.now()) {
   if (!drain || !Number.isFinite(drain.until) || now >= drain.until) return null;
   if (!DRAIN_TOOLS.has(input?.tool_name)) return null;
-  if (input?.tool_input?.run_in_background !== true) return null;
-  return drainRefusalText(drain);
+  if (input?.tool_input?.run_in_background === true) return drainRefusalText(drain);
+  if (selfBackgrounds(input?.tool_input?.command, input.tool_name)) return drainDetachRefusalText(drain); // idea-697
+  return null;
 }
 
 // idea-673: the drain file lags an abort (the server clears the request drain on its next tick, ~15 s, or the drain lapses
