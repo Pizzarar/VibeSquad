@@ -257,7 +257,7 @@ export function feedFoldLine(st, line) {
   else if (e.type === "park-held") st.bgHeld = true;
   else if (e.type === "status") { if (e.status !== "idle") st.bgHeld = false; st.status = e.status; st.queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
   else if (e.type === "exit") { st.exited = true; st.bgHeld = false; }
-  else if (e.type === "park-forced" || e.type === "parked" || e.type === "park-held-dead" || e.type === "bg-stopped" || e.type === "bg-wake") st.bgHeld = false;
+  else if (e.type === "park-forced" || e.type === "parked" || e.type === "bg-stopped" || e.type === "bg-wake") st.bgHeld = false;
   else if (e.type === "archive") st.archivedAt = e.ts;
   else if (e.type === "unarchive") st.archivedAt = null;
   else if (e.type === "usage") { const u = {}; for (const k of USAGE_KEYS) if (k in e) u[k] = e[k]; st.usage = u; }

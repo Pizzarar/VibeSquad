@@ -1836,9 +1836,10 @@ export class Runner {
   // no shell (it parks, leaving live) or the hold dropped (bg-stopped / held-dead clear heldSince).
   _bgHeldNow(id) {
     const e = this.live.get(id);
-    if (!e || e.status !== 'idle') return false;
+    if (!e || e.status !== 'idle' || e.perms.size > 0) return false; // a pending permission reads blocked (permission), not waiting-bg
     if (e.heldSince !== null && e.heldSince !== undefined) return true;
-    return !!(this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0);
+    if (this._wakeOwed(e)) return true; // the hold's shells exited (held-dead / probe saw none): the bg-wake turn is coming, not a report
+    return !!(this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0 && (e.parkTimer !== null || e.probing)); // post-turn window, only while a park check is coming
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.

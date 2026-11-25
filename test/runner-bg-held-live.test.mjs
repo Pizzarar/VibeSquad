@@ -55,7 +55,7 @@ test('live path: post-turn probe window, then a held shell, is waiting-bg via fe
   assert.equal(classify(a).state, 'waiting');
 
   // The hold drops (stop --background / shells dead): not held any more.
-  h.runner.live.get(h.id).heldSince = null; h.runner.live.get(h.id).work = [];
+  Object.assign(h.runner.live.get(h.id), { heldSince: null, heldWork: null, work: [] }); // stop --background: no wake owed
   a = (await h.backend.fetchAgent(h.id)).agent;
   assert.notEqual(a.bgHeld, true, 'hold dropped');
   assert.equal(classify(a).state, 'done');
@@ -76,4 +76,38 @@ test('live path: a running agent is never bgHeld', async (t) => {
   const h = harness(t);
   const a = (await h.backend.fetchAgent(h.id)).agent;
   assert.notEqual(a.bgHeld, true);
+});
+
+test('live path (review H1): shells exited after a long hold (held-dead), the wake is still owed: stays held until the wake turn', async (t) => {
+  const h = harness(t);
+  h.em('turn_done', {}); h.em('status', { status: 'idle' });
+  await h.tick(GRACE);
+  h.probes[0].resolve([{ pid: 4242, name: 'bash', cmd: 'npm test' }]);
+  await h.tick(0);
+  assert.equal((await h.backend.fetchAgent(h.id)).agent.bgHeld, true);
+  // The next poll's probe sees the shell gone: hold ends, the grace before the wake runs.
+  await h.tick(15_000);
+  h.probes[1]?.resolve([]);
+  await h.tick(0);
+  const types = h.runner.timeline(h.id).map((e) => e.type);
+  assert.ok(!types.includes('bg-wake'), 'wake not sent yet');
+  const a = (await h.backend.fetchAgent(h.id)).agent;
+  assert.equal(a.bgHeld, true, 'held until the wake turn starts');
+  assert.equal(classify(a).phase, 'waiting-bg');
+});
+
+test('live path (review M1): an idle agent with a pending permission is not bgHeld (it reads blocked)', async (t) => {
+  const h = harness(t);
+  h.em('turn_done', {}); h.em('status', { status: 'idle' });
+  assert.equal((await h.backend.fetchAgent(h.id)).agent.bgHeld, true);
+  h.runner.live.get(h.id).perms.add('p1');
+  assert.notEqual((await h.backend.fetchAgent(h.id)).agent.bgHeld, true);
+});
+
+test('live path (review M1): the unprobed window ends when no park check is coming', async (t) => {
+  const h = harness(t);
+  h.em('turn_done', {}); h.em('status', { status: 'idle' });
+  const e = h.runner.live.get(h.id);
+  clearTimeout(e.parkTimer); e.parkTimer = null; e.probing = false;
+  assert.notEqual((await h.backend.fetchAgent(h.id)).agent.bgHeld, true);
 });
