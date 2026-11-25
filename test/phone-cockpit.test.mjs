@@ -359,3 +359,14 @@ test("usa-57: drawer button, banner route and ≤600px CSS", () => {
   assert.match(css, /\.phone-usage-body \.usage-limits \{ grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(css, /\.phone-usage-body \.usage-table-wrap[^}]*overflow-x: auto/);
 });
+
+test("usa-57 R1: cold ?focus=usage opens the phone view, safe-area top, dialog a11y, banner inside the overlay", () => {
+  const app = src("App.tsx"), css = src("styles.css"), v = src("PhoneUsageView.tsx");
+  assert.match(app, /takeColdUsageFocus\(\)\) \{\s*if \(isPhoneShell\(isAndroidUserAgent\(\), window\.innerWidth\)\) openPhoneUsage\(\)/);
+  assert.match(css, /\.phone-usage-bar \{[^}]*var\(--phone-safe-top, 0px\)/);
+  assert.match(css, /\.phone-usage-body \{[^}]*safe-area-inset-bottom/);
+  assert.match(v, /aria-modal="true"/);
+  assert.match(v, /backRef\.current\?\.focus\(\)/);
+  assert.match(v, /prev\.focus\(\)/);
+  assert.match(v, /<QuotaAlertBanner canOpenUsage=\{false\} \/>/);
+});

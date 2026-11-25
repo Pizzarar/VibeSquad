@@ -54,6 +54,7 @@ import { BoringApp } from "./BoringAde";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { isPhoneShell } from "./phoneCockpitLogic";
+import { openPhoneUsage } from "./phoneUsageStore";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { TesterCockpit } from "./TesterCockpit";
@@ -1627,7 +1628,10 @@ export function App() {
     if (linkedAgent) {
       openAgent(linkedAgent);
     }
-    if (takeColdUsageFocus() && vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    if (takeColdUsageFocus()) {
+      if (isPhoneShell(isAndroidUserAgent(), window.innerWidth)) openPhoneUsage(); // quota-alert push (/?focus=usage) on the phone shell
+      else if (vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    }
     if (linkedFocus === "needs-you") {
       setFocus(true);
       setTimeout(() => {
