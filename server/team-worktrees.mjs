@@ -472,9 +472,13 @@ export function mergedStatus(repoRoot, head, refs, { git = defaultGit, treeCache
   const tree = tryGit(git, ["rev-parse", `${head}^{tree}`], repoRoot)?.trim();
   if (tree) {
     for (const ref of refs) {
-      if (!treeCache.has(ref)) {
-        const byTree = new Map(); // tree -> commits on ref carrying it
-        const out = tryGit(git, ["log", "--format=%T %H", `--max-count=${TREE_SCAN_MAX}`, ref], repoRoot) ?? "";
+      let byTree = treeCache.get(ref);
+      if (!byTree) {
+        const out = tryGit(git, ["log", "--format=%T %H", `--max-count=${TREE_SCAN_MAX}`, ref], repoRoot);
+        // A failed (or step-timed-out) scan is not cached: an empty index would hide every tree match for the rest of the
+        // repo's worktrees (Review-Gemini 1043 r1 #3). This head just gets no tree match (fail closed); the next one rescans.
+        if (out === null) continue;
+        byTree = new Map(); // tree -> commits on ref carrying it
         for (const line of out.split(/\r?\n/)) {
           const [t, c] = line.trim().split(" ");
           if (t && c) byTree.set(t, [...(byTree.get(t) ?? []), c]);
@@ -483,7 +487,7 @@ export function mergedStatus(repoRoot, head, refs, { git = defaultGit, treeCache
       }
       // The matching commit must not be one head already contains: an empty commit, or work reverted back to the fork
       // point, has the base's tree but merged nothing. A merge-base error skips the commit (fail closed).
-      for (const c of (treeCache.get(ref).get(tree) ?? []).slice(0, 8)) {
+      for (const c of (byTree.get(tree) ?? []).slice(0, 8)) {
         const mb = tryGit(git, ["merge-base", c, head], repoRoot)?.trim();
         if (mb && mb !== c) return { merged: true, how: "tree", ref };
       }
@@ -518,7 +522,10 @@ const diffBody = (t) =>
     .filter((l) => l.startsWith("diff --git ") || l.startsWith("\\ ") || ((l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++ ") && !l.startsWith("--- ")))
     .join("\n");
 
-/** patch-id -> non-merge commits on `ref`, scanned once per sweep (kept in the shared `cache`, like the tree index). Null on a git error. */
+/**
+ * patch-id -> non-merge commits on `ref`, scanned once per sweep (kept in the shared `cache`, like the tree index). Null on a
+ * git error, and a null is not cached: a step timeout part way through must not disable the ref for the repo's other worktrees.
+ */
 function basePatchIds(repoRoot, ref, git, cache) {
   const key = `patch:${ref}`;
   if (cache.has(key)) return cache.get(key);
@@ -547,7 +554,7 @@ function basePatchIds(repoRoot, ref, git, cache) {
     // end the scan early (idea-999).
     if ((log.match(/^commit [0-9a-f]{7,}/gm) ?? []).length < SQUASH_CHUNK) break;
   }
-  cache.set(key, map);
+  if (map) cache.set(key, map);
   return map;
 }
 

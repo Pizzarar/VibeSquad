@@ -397,3 +397,45 @@ test("Review-Gemini 1043 r1 #2: throttledHoldCwds = holdAgentCwds of the roster 
   assert.equal(throttledHoldCwds(() => [])(), null);
   assert.equal(throttledHoldCwds(() => { throw new Error("x"); })(), null);
 });
+
+test("Review-Gemini 1043 r1 #3: a timed-out tree / patch-id scan is not cached; the next worktree rescans and still finds its squash merge", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const a = addWorktree(repo, sanct, "unit-a-open");
+    commitFile(a, "a.txt", "a\n"); // unmerged: judged first, its scans hit the injected timeout
+    const b = addWorktree(repo, sanct, "unit-b-squash");
+    commitFile(b, "b.txt", "b1\n");
+    commitFile(b, "b.txt", "b2\n");
+    git(["merge", "-q", "--squash", "unit-b-squash"], repo);
+    git(["commit", "-q", "-m", "squash unit-b"], repo); // main's tip tree == unit-b's tree: a tree match
+    const timeoutOnce = (match) => {
+      let hit = 0;
+      return (args, cwd, opts) => {
+        if (match(args) && hit++ === 0) throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+        return defaultGit(args, cwd, opts);
+      };
+    };
+    const opts = { sanctuaryRoot: sanct, freshGraceMs: 0, targetBranch: "main", targetRefs: ["refs/heads/main"] };
+    const treeScan = (args) => args[0] === "log" && args[1] === "--format=%T %H";
+    const r1 = byBranch(sweepMergedWorktrees(repo, { ...opts, git: timeoutOnce(treeScan) }));
+    assert.equal(r1["unit-a-open"].reason, "step-timeout");
+    assert.equal(r1["unit-b-squash"].action, "would-remove", JSON.stringify(r1["unit-b-squash"]));
+    assert.equal(r1["unit-b-squash"].mergedBy, "tree", "the tree index was rebuilt, not read empty from the cache");
+
+    // unit-c: the base moved before its squash (no tree match) and its two commits were folded (cherry sees no per-commit
+    // equivalent): only squash-patch finds it.
+    const c = addWorktree(repo, sanct, "unit-c-squash");
+    commitFile(c, "c.txt", "c1\n");
+    commitFile(c, "c.txt", "c2\n");
+    commitFile(repo, "pre.txt", "pre\n");
+    git(["merge", "-q", "--squash", "unit-c-squash"], repo);
+    git(["commit", "-q", "-m", "squash unit-c"], repo);
+    const patchScan = (args) => args[0] === "log" && args[1] === "-p";
+    const only = (w) => w.branch !== "unit-b-squash";
+    const r2 = byBranch(sweepMergedWorktrees(repo, { ...opts, only, git: timeoutOnce(patchScan) }));
+    assert.equal(r2["unit-a-open"].reason, "step-timeout");
+    assert.equal(r2["unit-c-squash"].action, "would-remove", JSON.stringify(r2["unit-c-squash"]));
+    assert.equal(r2["unit-c-squash"].mergedBy, "squash-patch", "the patch-id index was rebuilt, not read null from the cache");
+  }));
