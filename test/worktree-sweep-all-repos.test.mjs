@@ -181,6 +181,35 @@ test("idea-978: squash merge after master moved on (tree differs) is merged by s
     assert.equal(res["unit-dirty"].reason, "dirty");
   }));
 
+test("idea-978 Tier A: a whitespace-only unmerged commit after a squash is NOT merged; squash scan is cached per ref", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    commitFile(repo, "a.py", "def f():\n    pass\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-ws");
+    commitFile(wt, "a.py", "def f():\n    return 1\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-ws"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    commitFile(repo, "after.txt", "y\n");
+    // squashed work is merged...
+    assert.equal(byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-ws"].merged, true);
+    // ...then an unmerged indentation-only commit lands on the branch: same whitespace-insensitive patch-id as the squash
+    commitFile(wt, "a.py", "def f():\n        return 1\n", "reindent");
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-ws"];
+    assert.equal(r.merged, false);
+    assert.equal(r.reason, "unmerged");
+    // the per-ref scan runs once for many worktrees
+    const calls = [];
+    const spy = (args, cwd, o) => (calls.push(args.join(" ")), execFileSync("git", args, { cwd, encoding: "utf8", input: o?.input, stdio: [o?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }).trim());
+    const cache = new Map();
+    const head = git(["rev-parse", "unit-ws"], repo);
+    mergedStatus(repo, head, ["refs/heads/master"], { git: spy, treeCache: cache });
+    mergedStatus(repo, head, ["refs/heads/master"], { git: spy, treeCache: cache });
+    assert.equal(calls.filter((c) => c.startsWith("log -p")).length, 1);
+  }));
+
 test("dirty: untracked build output is ignored, tracked edits and other untracked files are not", () =>
   withTmp((root) => {
     const repo = join(root, "repo");
