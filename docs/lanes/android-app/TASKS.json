@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-23T15:34:27.120Z",
+  "updatedAt": "2026-11-25T02:21:03.172Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -479,6 +479,49 @@
       "status": "done",
       "branch": "unit-and-trinity-bugs-463",
       "commit": "53d29a01"
+    },
+    {
+      "id": "unit-and-headless-host-health",
+      "goal": "idea-74 H1: hostLabel/headless/restartRequest in getAuthStatus + Phone Cockpit host block",
+      "files": [
+        "server/auth.mjs",
+        "server/auth.d.mts",
+        "src/phoneCockpitLogic.ts",
+        "src/PhoneCockpit.tsx",
+        "src/styles.css",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs test/android-pair.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-headless-host-health",
+      "commit": "a278420f"
+    },
+    {
+      "id": "unit-and-phone-restart-host",
+      "goal": "idea-74 H2: owner-only /__vibesquad/restart-host via restart-request.mjs drain + Phone Cockpit Restart Host",
+      "files": [
+        "server/vibesquad-api.mjs",
+        "src/PhoneCockpit.tsx",
+        "test/phone-cockpit.test.mjs",
+        "test/phone-restart-host.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs test/phone-restart-host.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-phone-restart-host",
+      "commit": "40811dae"
+    },
+    {
+      "id": "unit-and-restart-sync-894",
+      "goal": "idea-894: RestartHost local req yields to newer hostRestart prop (pickLiveRestart)",
+      "files": [
+        "src/PhoneCockpit.tsx",
+        "src/phoneCockpitLogic.ts",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-restart-sync-894",
+      "commit": "c6f33285"
     }
   ]
 }
