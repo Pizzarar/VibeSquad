@@ -10,7 +10,8 @@ import { ROLE_TABLE } from "../server/role-route.mjs";
 import { routeOverrideLabel } from "../server/route-override.mjs";
 import { DEFAULT_TIER_LADDER } from "../server/stakes-ladder.mjs";
 import { spawnEnvFor } from "../src/spawn-env.ts";
-import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, overrideValue, parseOverrideValue } from "../src/roleSpawn.ts";
+import { STAKES_CHOICES, TIER_PROVIDER_ORDER, buildRoleSpawn, ladderPick, overrideGroups, overrideValue, parseOverrideValue, walkOrder } from "../src/roleSpawn.ts";
+import { TIER_PROVIDER_CHAINS } from "../server/provider-failover.mjs";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
 
 const ISOLATED = join(tmpdir(), `vs-r1fixui2-missing-${process.pid}`);
@@ -100,12 +101,24 @@ test("role+stakes: Implement tierA-invariant lands on Opus, mechanical on the ch
     const top = await h.spawn(send("implement", { stakes: "tierA-invariant" }));
     assert.deepEqual([top.config.provider, top.config.model], ["claude", "claude-opus-5-5"]);
     assert.match(metric(top), /reason=ladder tier=top role=implement/);
-    const cheap = await h.spawn(send("implement", { stakes: "mechanical" }));
-    assert.equal(cheap.config.model, DEFAULT_TIER_LADDER.claude.cheap.model);
+    // A2 (idea-986): mechanical walks Gemini Flash > Claude Haiku > opencode; the row sends (and the badge shows) Gemini.
+    const cheapReq = send("implement", { stakes: "mechanical" });
+    assert.equal(cheapReq.provider, "antigravity-cli");
+    const cheap = await h.spawn(cheapReq);
+    assert.deepEqual([cheap.config.provider, cheap.config.model], ["antigravity-cli", DEFAULT_TIER_LADDER["antigravity-cli"].cheap.model]);
   } finally {
     h.stop?.();
   }
 }));
+
+test("A2 parity: src/roleSpawn.ts TIER_PROVIDER_ORDER mirrors server TIER_PROVIDER_CHAINS; walkOrder only re-orders forced tiers", () => {
+  assert.deepEqual(TIER_PROVIDER_ORDER, Object.fromEntries(Object.entries(TIER_PROVIDER_CHAINS).map(([k, v]) => [k, [...v]])));
+  const impl = ROLES.implement;
+  assert.deepEqual(walkOrder(impl, "mechanical"), ["antigravity-cli", "claude", "opencode"]);
+  for (const s of ["normal", "tierA-invariant", "tierA-security"]) assert.deepEqual(walkOrder(impl, s), [...impl.providers], s);
+  // pre-check runs cheap by default, but only forced stakes re-order (as resolveRoute does).
+  assert.deepEqual(walkOrder(ROLES["pre-check"], "normal"), [...ROLES["pre-check"].providers]);
+});
 
 test("role+override: model and provider overrides land as picked (not reverted), reason=override, label shape = spawn_worker's", withEnv(async () => {
   const h = harness();
@@ -117,7 +130,7 @@ test("role+override: model and provider overrides land as picked (not reverted),
     assert.deepEqual([o.config.provider, o.config.model], ["claude", "claude-opus-5-5"]);
     assert.match(metric(o), /reason=override/);
     assert.doesNotMatch(metric(o), /legacy-name/);
-    // Every provider in every role's list, every ladder model, plus the provider-only rung.
+    // Every provider in every role's list, every ladder model, plus the provider-only ladder model.
     for (const [key, role] of Object.entries(ROLES)) {
       for (const g of overrideGroups(role, DEFAULT_TIER_LADDER)) {
         for (const m of g.models) {
@@ -183,9 +196,9 @@ test("Paseo shape (config + env only, no labels): role, role+stakes, role+overri
     const top = await h.spawnEnvOnly(send("implement", { stakes: "tierA-invariant" }));
     assert.deepEqual([top.config.provider, top.config.model], ["claude", "claude-opus-5-5"]);
     const cheap = await h.spawnEnvOnly(send("implement", { stakes: "mechanical" }));
-    assert.equal(cheap.config.model, DEFAULT_TIER_LADDER.claude.cheap.model);
+    assert.deepEqual([cheap.config.provider, cheap.config.model], ["antigravity-cli", DEFAULT_TIER_LADDER["antigravity-cli"].cheap.model]); // A2
 
-    // Override survives (model, then provider rung under stakes, then non-Claude providers).
+    // Override survives (model, then provider ladder model under stakes, then non-Claude providers).
     const opus = await h.spawnEnvOnly(send("implement", { override: { provider: "claude", model: "claude-opus-5-5" } }));
     assert.deepEqual([opus.config.provider, opus.config.model], ["claude", "claude-opus-5-5"]);
     for (const [key, role2] of Object.entries(ROLES)) {
@@ -219,6 +232,6 @@ test("R31 round 3 wiring: search keyword, badge ink, Add Buddy badges, New Agent
   const ta = rd("TeamActions.tsx");
   assert.ok(ta.includes('data-testid="add-buddy-badges"'));
   assert.ok(ta.includes("labels = roleSpawn ? { ...baseLabels, ...roleSpawn.labels } : baseLabels"));
-  assert.ok(ta.includes("label={providerName(g.provider)}") && ta.includes("{providerName(g.provider)} · ladder rung"));
+  assert.ok(ta.includes("label={providerName(g.provider)}") && ta.includes("{providerName(g.provider)} · ladder model"));
   assert.ok(ta.includes("<option value={g.provider}>") && ta.includes("`${g.provider}|${m}`"));
 });

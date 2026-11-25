@@ -737,7 +737,7 @@ test("idea-360: --force is refused for a Buddy, a non-hub lead, the Overlord's o
     await assert.rejects(direct("rn-lead", "site-polish"), (e) => e.status === 403 && /Overlord/.test(e.message));
     await assert.rejects(direct("rn-hub-lead", "site-hub"), (e) => e.status === 403 && /own lane/.test(e.message));
     // The coordinator itself refuses a same-lane forced retire too.
-    const coord = createLeadHandoffCoordinator({ rootDir: t.dir, listAgents: async () => agentsForTest, getAgent: async (id) => t.agents.get(id) ?? null, setLabels: async () => {}, deleteHeartbeat: async () => {}, appendLog: () => {} });
+    const coord = createLeadHandoffCoordinator({ rootDir: t.dir, baseHome: t.vsHome, usageProviders: () => [], listAgents: async () => agentsForTest, getAgent: async (id) => t.agents.get(id) ?? null, setLabels: async () => {}, deleteHeartbeat: async () => {}, appendLog: () => {} });
     await assert.rejects(coord.retireStaleLeads({ teamId: "site", laneId: "site-polish", callerId: "rn-buddy", force: true }), /forbidden/);
     await assert.rejects(coord.retireStaleLeads({ teamId: "site", laneId: "site-polish", callerId: "rn-lead", force: true }), /forbidden/);
     assert.equal(t.agents.get("rn-lead").labels.role, "lead");

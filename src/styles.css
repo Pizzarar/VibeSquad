@@ -5933,6 +5933,12 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 
 /* usa-57: phone Usage view (<=600px): full-screen, one-column limit cards, tables scroll inside their own box, no page-level sideways scroll */
 .phone-usage-btn { min-height: 44px; width: 100%; }
+.phone-crunch-btn { min-height: 44px; width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 0; }
+.phone-crunch-btn .phone-crunch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-crunch-btn .phone-crunch-label { flex: 0 0 auto; white-space: pre; }
+.phone-crunch-btn.on { color: var(--cyan-t); border-color: var(--cyan); background: var(--cyan-dim); box-shadow: inset 3px 0 0 var(--cyan); }
+.phone-crunch-btn[data-failed] { color: var(--st-err, var(--text)); border-color: var(--st-err, var(--line)); }
+.phone-crunch-btn:disabled { color: var(--muted); cursor: progress; opacity: 1; }
 .phone-usage-view { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); min-width: 0; max-width: 100vw; overflow: hidden; }
 .phone-usage-bar { display: flex; align-items: center; gap: var(--sp-3, 12px); padding: calc(var(--sp-2, 8px) + var(--phone-safe-top, 0px)) var(--sp-3, 12px) var(--sp-2, 8px); border-bottom: 1px solid var(--line); flex: none; }
 .phone-usage-back { min-height: 44px; }
@@ -6414,7 +6420,11 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   background: var(--panel);
   font-size: 0.85rem;
 }
-.phone-active-provider { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-active-provider { color: var(--muted); overflow: hidden; white-space: nowrap; display: inline-flex; min-width: 0; flex: 0 1 auto; }
+/* R2 (UX m4b): like .role-model-chip, the provider · model part ellipsizes first; the reason (why) never shrinks. */
+.phone-active-provider .pap-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.phone-active-provider .pap-why { flex: 0 0 auto; white-space: pre; }
+.phone-active-provider .pap-why[data-reason="all-capped"], .phone-active-provider .pap-why[data-reason="failover"] { color: var(--pink-t); }
 .phone-switch-provider-btn { min-height: 40px; padding: 0 12px; white-space: nowrap; flex: none; }
 .phone-cockpit[data-vibe="boring"] .phone-bar { box-shadow: none; }
 .phone-cockpit[data-vibe="boring"] .phone-tab.on { border-top-color: var(--text); }
@@ -6771,9 +6781,15 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   flex: 0 1 auto;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: inline-flex;
 }
+/* R2 fix r1 (UX M1): the model ellipsizes first; the reason (why) never shrinks. */
+.role-model-chip .rmc-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.role-model-chip .rmc-why { flex: 0 0 auto; white-space: pre; }
+.role-model-chip .rmc-why[data-reason="all-capped"], .role-model-chip .rmc-why[data-reason="failover"] { color: var(--pink-t); }
 .drawer-head-compact .role-model-chip { font-size: 10px; }
+/* R2 fix r1 (UX m3): the all-capped landing badge and its note read as a warning, not a healthy pick. */
+.def-badge.def-badge-warn { border-color: var(--pink-t); color: var(--pink-t); }
 
 .re-section { border-left-color: var(--violet-t, #b69cff); }
 .re-role-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
@@ -6826,3 +6842,65 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 html[data-vibe="boring"] .role-model-chip { border-radius: 6px; }
 html[data-vibe="boring"] .re-save .btn.ok:disabled { background: color-mix(in srgb, var(--cyan) 22%, var(--panel)); color: var(--muted); cursor: not-allowed; }
 html[data-vibe="boring"] .re-actions .btn:disabled { border: 1px solid transparent; background: transparent; color: color-mix(in srgb, var(--muted) 55%, transparent); cursor: not-allowed; }
+
+/* usa-62: phone (<=600px) Usage table fit — stack burst split cells, wrap Model x Stakes labels, right-edge scroll hint */
+@media (max-width: 600px) {
+  .usage-table-wrap {
+    background:
+      linear-gradient(to right, var(--usage-tbl-bg, var(--well)) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--usage-tbl-bg, var(--well)) 30%, transparent) right center / 28px 100% no-repeat local,
+      linear-gradient(to right, color-mix(in srgb, var(--text) 22%, transparent), transparent) left center / 22px 100% no-repeat scroll,
+      linear-gradient(to left, color-mix(in srgb, var(--text) 22%, transparent), transparent) right center / 22px 100% no-repeat scroll;
+  }
+  html[data-vibe="boring"] .usage-table-wrap { --usage-tbl-bg: var(--panel); }
+
+  [data-testid="usage-burst-split-table"],
+  [data-testid="usage-burst-split-table"] tbody {
+    display: block;
+    width: 100%;
+  }
+  [data-testid="usage-burst-split-table"] thead {
+    display: none;
+  }
+  [data-testid="usage-burst-split-table"] tr {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-testid="usage-burst-split-table"] td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 4px;
+    border-bottom: 0;
+    white-space: normal;
+  }
+  [data-testid="usage-burst-split-table"] td:first-child {
+    display: block;
+    font-weight: 600;
+    padding: 2px 4px 4px;
+    overflow-wrap: anywhere;
+  }
+  [data-testid="usage-burst-split-table"] td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 400;
+    text-align: left;
+    flex: 0 0 auto;
+  }
+
+  [data-testid="usage-workflow-table"] th:first-child,
+  [data-testid="usage-workflow-table"] td:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 140px;
+    max-width: 190px;
+    width: 190px;
+  }
+  [data-testid="usage-workflow-table"] td:first-child .usage-low-coverage {
+    display: inline-block;
+    white-space: nowrap;
+  }
+}

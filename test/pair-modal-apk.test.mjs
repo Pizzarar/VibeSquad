@@ -1,4 +1,5 @@
 // Block A2d-2 (PLAN_ANDROID_MESHNET.md): PairDeviceModal Android APK download + empty meshnetHost QR fallback.
+// idea-69 (PLAN_MESHNET_CA_STABILITY_69.md): Meshnet-IP-first defaults; explicit Home LAN renders via initialNetworkMode.
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,10 +34,10 @@ const transpiled = transformSync("PairDeviceModal.tsx", src, { lang: "tsx", jsx:
   .concat("\nexport { formatDeviceRoleBadge, pairStartInit };\n");
 const modFile = join(dir, "PairDeviceModal.mjs");
 writeFileSync(modFile, transpiled);
-const { PairDeviceModal, resolvePairModalUrls, formatDeviceRoleBadge, pairStartInit } = await import(pathToFileURL(modFile).href);
+const { PairDeviceModal, resolvePairModalUrls, defaultPairNetworkMode, formatDeviceRoleBadge, pairStartInit } = await import(pathToFileURL(modFile).href);
 
-function renderModal(initialPair, initialRole) {
-  return renderToStaticMarkup(React.createElement(PairDeviceModal, { onClose: () => {}, initialPair, initialRole }));
+function renderModal(initialPair, initialRole, initialNetworkMode) {
+  return renderToStaticMarkup(React.createElement(PairDeviceModal, { onClose: () => {}, initialPair, initialRole, initialNetworkMode }));
 }
 
 const basePair = (overrides = {}) => ({
@@ -60,8 +61,37 @@ const basePair = (overrides = {}) => ({
 });
 
 describe("PairDeviceModal rendered APK download & gating", () => {
-  test("renders Download VibeSquad.apk button with LAN URL when androidApkAvailable=true on LAN", () => {
+  test("idea-69: with both a Meshnet IP and a LAN IP the dialog defaults to Meshnet by IP (APK, pair link and QR)", () => {
     const html = renderModal(basePair());
+    assert.match(html, /data-testid="download-android-apk"/);
+    assert.match(html, /href="https:\/\/100\.64\.0\.10:4180\/VibeSquad\.apk"/);
+    assert.match(html, /class="on"[^>]*data-testid="mode-meshnet"/);
+    assert.doesNotMatch(html, /class="on"[^>]*data-testid="mode-home-lan"/);
+    assert.match(html, /https:\/\/100\.64\.0\.10:4180\/pair\?code=123456/, "pair link is the Meshnet IP URL (pairIpUrl)");
+    assert.match(html, /id='ip-qr'/, "QR is the Meshnet IP QR (qrSvgIp)");
+    assert.doesNotMatch(html, /id='host-qr'|id='lan-qr'/);
+  });
+
+  test("idea-69: defaultPairNetworkMode is meshnet whenever a Meshnet IP exists; lan only without one", () => {
+    assert.equal(defaultPairNetworkMode("100.64.0.10", "192.0.2.10"), "meshnet");
+    assert.equal(defaultPairNetworkMode("100.64.0.10", null), "meshnet");
+    assert.equal(defaultPairNetworkMode("", "192.0.2.10"), "lan");
+    assert.equal(defaultPairNetworkMode(null, " 192.0.2.10 "), "lan");
+    assert.equal(defaultPairNetworkMode(" ", ""), "meshnet");
+    assert.equal(defaultPairNetworkMode(undefined, undefined), "meshnet");
+  });
+
+  test("idea-69: Home LAN is the default only when there is no Meshnet IP", () => {
+    const html = renderModal(basePair({ meshnetIp: "", meshnetHost: "", pairUrl: "https://192.0.2.10:4180/pair?code=123456", pairIpUrl: "https://192.0.2.10:4180/pair?code=123456" }));
+    assert.match(html, /class="on"[^>]*data-testid="mode-home-lan"/);
+    assert.match(html, /href="https:\/\/192\.0\.2\.10:4180\/VibeSquad\.apk"/);
+    assert.match(html, /id='lan-qr'/);
+  });
+
+  test("renders Download VibeSquad.apk button with LAN URL when androidApkAvailable=true on LAN (Home LAN picked)", () => {
+    const html = renderModal(basePair(), undefined, "lan");
+    assert.match(html, /class="on"[^>]*data-testid="mode-home-lan"/);
+    assert.match(html, /id='lan-qr'/);
     assert.match(html, /data-testid="download-android-apk"/);
     assert.match(html, /href="https:\/\/192\.0\.2\.10:4180\/VibeSquad\.apk"/);
     assert.match(html, /download="VibeSquad\.apk"/);
@@ -243,6 +273,8 @@ describe("idea-384: rendered dialog links installer/APK over https only and show
         desktopInstallerSha256: { full: "AB".repeat(32), short: "AB".repeat(8) },
         androidApkSha256: { full: "CD".repeat(32), short: "CD".repeat(8) },
       }),
+      undefined,
+      "lan",
     );
     assert.doesNotMatch(html, /http:\/\/[^"<\s]*(VibeSquad-setup\.exe|VibeSquad\.apk)/i);
     assert.match(html, /href="https:\/\/192\.0\.2\.10:4180\/VibeSquad-setup\.exe"/);

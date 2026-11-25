@@ -229,7 +229,8 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'brainstorm', lane: 'evil' } });
-  assert.deepEqual({ ...out, ab: undefined, route: undefined }, { id: 'rn-new', title: 'Do it', ab: undefined, route: undefined });
+  assert.deepEqual({ ...out, ab: undefined, route: undefined, spawned: undefined }, { id: 'rn-new', title: 'Do it', ab: undefined, route: undefined, spawned: undefined });
+  assert.match(out.spawned, /^Implement · \S+ · arm$/, 'R2: Role · model · reason');
   const [, req] = runnerBackend.calls[0];
   assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd], ['claude', 'claude-sonnet-5-5', 'auto', '/work']);
   assert.equal(req.initialPrompt, 'go');
@@ -347,6 +348,16 @@ test('status / get_agent_status surface the queue position for a queued agent (i
   assert.deepEqual(st.queued, { ahead: 3 }, 'the Paseo-name alias carries it too');
 });
 
+test('status / get_agent_status read "archived" for an archived agent, never its parked "idle" (idea-783: status and send agree)', async () => {
+  let archivedAt = '2026-11-24T10:48:39.000Z';
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgent: async (id) => ({ agent: { id, status: 'idle', title: 'Art Director', archivedAt } }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1' })).status, 'archived', 'send answers "not running" for it: status must not say idle');
+  assert.equal((await callTool(ctx, 'get_agent_status', { agentId: 'rn-1' })).status, 'archived');
+  archivedAt = null; // a parked (unarchived) agent: send resumes it, so idle is the truth
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1' })).status, 'idle');
+});
+
 test('report writes as the caller; types are restricted', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'blocker', text: 'stuck' });
@@ -376,11 +387,14 @@ test('every Paseo-name alias maps to its VS tool and logs a metric with caller +
   await callTool(ctx, 'wait_for_agent', { agentId: 'rn-1', timeout: 3 });
   assert.deepEqual(runnerBackend.calls.at(-1), ['wait', 'rn-1', 3000]);
 
-  const metrics = ctx.logs.filter((l) => l.type === 'metric').map((l) => l.text);
+  // idea-962: create_agent's explicit model on an implementer profile is an `override` opt-out, which logs its arm metric too.
+  const all = ctx.logs.filter((l) => l.type === 'metric').map((l) => l.text);
+  assert.equal(all.filter((t) => /^implementer-arm: .* reason=override /.test(t)).length, 1);
+  const metrics = all.filter((t) => t.startsWith('mcp-alias:'));
   for (const name of Object.keys(ALIASES)) assert.ok(metrics.includes(`mcp-alias: tool=${name} caller=rn-caller lane=own`), `metric for ${name}`);
   assert.equal(metrics.length, Object.keys(ALIASES).length);
   await callTool(ctx, 'send', { id: 'rn-1', text: 'canonical' });
-  assert.equal(ctx.logs.filter((l) => l.type === 'metric').length, Object.keys(ALIASES).length, 'canonical tools log no alias metric');
+  assert.equal(ctx.logs.filter((l) => l.type === 'metric' && l.text.startsWith('mcp-alias:')).length, Object.keys(ALIASES).length, 'canonical tools log no alias metric');
 });
 
 // ---------- vs CLI parity ----------
@@ -389,7 +403,8 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x' }, ctx);
-  assert.deepEqual({ ...spawned, ab: undefined, route: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined, route: undefined });
+  assert.deepEqual({ ...spawned, ab: undefined, route: undefined, spawned: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined, route: undefined, spawned: undefined });
+  assert.match(spawned.spawned, /^Implement · \S+ · arm$/, 'R2: Role · model · reason');
   assert.equal(runnerBackend.calls[0][1].labels.role, 'worker');
   assert.deepEqual(await runAgentVerb('send', { _: ['rn-1', 'hello', 'there'] }, ctx), { id: 'rn-1', sent: true });
   assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'hello there']);
@@ -403,7 +418,7 @@ test('vs spawn --stakes parses and the stakes value reaches the spawn request (i
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'mechanical' }, ctx);
-  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' }); // mechanical is never EXP6-picked: no ab
+  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job', spawned: 'Implement · claude-sonnet-5-5 · legacy-name' }); // mechanical is never EXP6-picked: no ab
   assert.equal(runnerBackend.calls[0][1].labels.stakes, 'mechanical');
   await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
 });
@@ -460,7 +475,7 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
       (s) => { out += s; },
     );
     assert.equal(code, 0);
-    assert.deepEqual({ ...JSON.parse(out), ab: undefined, route: undefined }, { id: 'rn-new', title: 'Sub job', ab: undefined, route: undefined });
+    assert.deepEqual({ ...JSON.parse(out), ab: undefined, route: undefined, spawned: undefined }, { id: 'rn-new', title: 'Sub job', ab: undefined, route: undefined, spawned: undefined });
     assert.deepEqual(seen, [{ agentId: 'rn-work1', token: FAKE_TOKEN, team: 'efi', lane: 'own', role: 'worker' }]);
     const req = runnerBackend.calls[0][1];
     assert.deepEqual(

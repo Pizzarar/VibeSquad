@@ -317,9 +317,12 @@ admission queue (`vs status` shows them `queued`). On forge the cap, not RAM or 
 tree, 53 GB free). Drop-in `~/.config/systemd/user/vibesquad.service.d/runner.conf`:
 ```
 [Service]
-Environment=VS_RUNNER_MAX_LIVE=24
-Environment=VS_RUNNER_TURN_CAP_ANTIGRAVITY=6
+Environment=VS_RUNNER_MAX_LIVE=32
+Environment=VS_RUNNER_TURN_CAP_ANTIGRAVITY=12
 ```
-then `systemctl --user daemon-reload`; it takes effect at the next drained restart. Disk is the next limit (EFI worktrees
-290-560 MB each, `/` at 83%): go to 28+ only after the disk is extended. Per-provider turn caps (`VS_RUNNER_TURN_CAP_<FAMILY>`,
-defaults claude 12 / gemini 4 / antigravity 3 / other 4): forge sets `VS_RUNNER_TURN_CAP_ANTIGRAVITY=6` in the same drop-in (owner 11-25, Gemini quota mostly unused; 3 had no recorded reason).
+then `systemctl --user daemon-reload`; it takes effect at the next drained restart. History: 16 -> 24 (11-25, `/` at 83%), then
+24 -> 32 (11-25 18:36Z, Hub3, after the owner extended `/` to 936G; EFI throughput ask). Per-provider turn caps
+(`VS_RUNNER_TURN_CAP_<FAMILY>`, defaults claude 12 / gemini 4 / antigravity 3 / other 4): forge sets antigravity 6 (owner 11-25),
+then 12 (11-25, @per EXP12 rn-27392a1d0bae: at 6, 55.8% of antigravity spawns queued, p90 16m, at 6% of 5h quota; Claude parity,
+DeepSeek off). Live since the 2026-11-25T18:56:51Z restart, verified in runner `/proc/<pid>/environ`. EFI Godot slots live in
+`slots.conf` (`VS_SLOT_MAX_GODOT=8`, `VS_SLOT_RESERVE_GODOT=efi:6`, `EFI_GODOT_SLOTS=6`).

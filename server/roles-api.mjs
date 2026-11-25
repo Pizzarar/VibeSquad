@@ -10,6 +10,7 @@
 // other fault (fs, lock) = the caller's serverError (500, logged, generic). Writes run under a file lock (handler).
 import { existsSync, readFileSync } from "node:fs";
 import { withFileLock } from "./file-lock.mjs";
+import { readCappedProviders } from "./provider-failover.mjs";
 import { getProfilesPath, loadProfiles, normalizeProfile, profilesFileBody } from "./profiles.mjs";
 import { buildRolesFromProfiles, loadRoles, migrateProfilesFile, normalizeRole, normalizeRoles, roleKeyOf } from "./profiles-v2.mjs";
 import { ROLE_TABLE, isHiddenRole } from "./role-route.mjs";
@@ -51,6 +52,15 @@ function checkEffort(value, where) {
   if (v && !EFFORT_VALUES.includes(v)) throw bad(`${where}: unknown effort "${v}" (${EFFORT_VALUES.join(", ")}, or blank)`);
 }
 
+/** R2: provider families a spawn would skip right now (capped); [] when the cap files are unreadable. */
+function cappedFamilies() {
+  try {
+    return Object.keys(readCappedProviders({ useDiskCaps: true }) ?? {});
+  } catch {
+    return [];
+  }
+}
+
 export function getRolesState({ profilesPath, ladderPath } = {}) {
   const loaded = loadRoles(profilesPath);
   return {
@@ -64,6 +74,7 @@ export function getRolesState({ profilesPath, ladderPath } = {}) {
     tiers: [...TIERS],
     efforts: [...EFFORT_VALUES],
     providers: [...ROLE_PROVIDERS],
+    capped: cappedFamilies(),
     path: getProfilesPath(profilesPath),
   };
 }

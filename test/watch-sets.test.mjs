@@ -722,6 +722,56 @@ test("restart item: restart-<ts>.json ok:true = done, ok:false = stall, none aft
   }
 });
 
+// idea-996: the stall clock of a restart item starts at the request's window, not when the watch was armed.
+test("restart item: a request queued for a future window is not stalled before the window; a past window that never ran stalls after window + stall", async () => {
+  const sb = sandbox();
+  try {
+    const win = T0 + 6 * 60 * MIN;
+    writeFileSync(join(sb.home, "restart-request.json"), JSON.stringify({ current: { id: "rr-7560", tip: "abc", state: "queued", windowAt: iso(win) }, history: [] }));
+    const w = addWatch({ owner: "lead-1", stallMin: 15, items: [{ kind: "restart", ref: "rr-7560" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    clock.t = T0 + 60 * MIN; // armed long ago, window still ahead: the old clock would have stalled it
+    await engine.tick();
+    clock.t = win - MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "not stalled before the window");
+    clock.t = win + 10 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "not stalled inside window + stallMin");
+    clock.t = win + 16 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /stalled \(no-result\)/);
+    assert.equal(delivered[0].setId, w.id);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("restart item (idea-996): no-ref watch follows the open request; draining waits for its deadline, urgent promotion ignores the stale window; done/aborted and other ids are ignored", async () => {
+  const run = async (reqDoc, ref, probes) => {
+    const sb = sandbox();
+    try {
+      writeFileSync(join(sb.home, "restart-request.json"), JSON.stringify(reqDoc));
+      addWatch({ owner: "lead-1", stallMin: 15, items: [{ kind: "restart", ...(ref ? { ref } : {}) }] }, { home: sb.home, now: T0 });
+      const { engine, delivered, clock } = engineFor(sb);
+      const out = [];
+      for (const at of probes) { clock.t = at; await engine.tick(); out.push(delivered.length); }
+      return out;
+    } finally { sb.cleanup(); }
+  };
+  const win = T0 + 6 * 60 * MIN;
+  // no ref, queued future window: quiet until window + 15
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "queued", windowAt: iso(win) }, history: [] }, "", [T0 + MIN, T0 + 60 * MIN, win + 10 * MIN, win + 16 * MIN]), [0, 0, 0, 1]);
+  // draining: window long past, deadline ahead
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "draining", windowAt: iso(T0 + 10 * MIN), deadline: iso(T0 + 120 * MIN) }, history: [] }, "", [T0 + MIN, T0 + 100 * MIN, T0 + 130 * MIN, T0 + 136 * MIN]), [0, 0, 0, 1]);
+  // urgent-promoted: state requested, old future windowAt, near deadline -> clock follows the deadline
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "requested", windowAt: iso(win), deadline: iso(T0 + 30 * MIN) }, history: [] }, "", [T0 + MIN, T0 + 40 * MIN, T0 + 46 * MIN]), [0, 0, 1]);
+  // a done request is ignored (armed-time clock), as is a different id (rr-1 vs rr-10)
+  assert.deepEqual(await run({ current: { id: "rr-1", state: "done", windowAt: iso(win) }, history: [] }, "", [T0 + 16 * MIN]), [1]);
+  assert.deepEqual(await run({ current: { id: "rr-10", state: "queued", windowAt: iso(win) }, history: [] }, "rr-1", [T0 + 16 * MIN]), [1]);
+});
+
 // idea-398 fix round (Hub13): the 11-20 02:54 silent old-code restart. A restart fired by a request whose sync was
 // skipped pings with the runtime NOT updated note; a request fired long before, or one that synced, adds nothing.
 test("restart item: a restart fired after a skipped sync pings 'runtime NOT updated: still <sha>, N behind <tip>, reason <why>'", async () => {
@@ -1283,6 +1333,54 @@ test(
       assert.equal(h.watch.get(id).owner, "lead-new");
       assert.equal(h.watch.get(id).reowned?.[0]?.from, "lead-old");
       assert.equal(h.watch.get(id).reowned?.[0]?.reason, "retired-owner delivery");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-871): a live '(old)'-titled lead that armed the watch is skipped: the ping goes to the new lead, the old one gets nothing",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-old", { ...mk("lead-old", "lead"), title: "(old) Bug1" }],
+      ["lead-new", mk("lead-new", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0, JSON.stringify(h.sent));
+      const toNew = h.sent.filter((s) => s.to === "lead-new" && s.text.includes(`Watch ${id}`));
+      assert.equal(toNew.length, 1, JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-871): a former-lead owner gets nothing; a lone '(old)' lead with no successor keeps today's delivery",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-old", { ...mk("lead-old", "lead"), title: "(old) Bug1" }],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const toOld = h.sent.filter((s) => s.to === "lead-old" && s.text.includes(`Watch ${id}`));
+      assert.equal(toOld.length, 1, "no lead at all: the owner still gets its ping");
     } finally {
       h.stop();
     }

@@ -477,6 +477,7 @@ export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string; 
   { id: "remote-control", section: "remote", label: "Remote control & link device" },
   { id: "teams", section: "team", label: "Teams and lanes" },
   { id: "path-matchers", section: "team", label: "Path matchers" },
+  { id: "crunch-mode", section: "team", label: "Crunch mode (per-Squad auto-pilot)", keywords: ["crunch", "vibe", "auto", "lean", "autopilot"] },
   { id: "token-thresholds", section: "team", label: "Token thresholds" },
   { id: "runner-providers", section: "runner", label: "Runner & Providers" },
   { id: "profiles", section: "profiles", label: "Agent profiles" },
@@ -529,6 +530,7 @@ export function flashSettingTarget(root: { querySelector(sel: string): unknown }
   if (!el) return false;
   if (el.getAttribute("role") === "tab" && el.getAttribute("aria-selected") !== "true") el.click();
   el.scrollIntoView?.({ block: "center" });
+  (el as FlashEl & { querySelector?: (s: string) => { focus?: (o?: { preventScroll?: boolean }) => void } | null }).querySelector?.("[data-crunch-check]")?.focus?.({ preventScroll: true }); // UX R26c n2: Crunch row focuses its checkbox
   el.setAttribute("data-flash", "");
   setTimeout(() => el.removeAttribute("data-flash"), ms);
   return true;

@@ -45,7 +45,10 @@ import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
+import { isDuetDirector, liveDuetPainterOf } from "../art-duet.mjs";
 import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
+import { liveQuotaUsage } from "../limits-read.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -55,6 +58,7 @@ import {
   ROUTE_STAMP_LABELS,
   cappedFamilies,
   isForeignModel,
+  legacyDeepSeekReroute,
   legacyRouteMeta,
   legacyShadowMismatch,
   liveRoles,
@@ -65,7 +69,7 @@ import {
   routeRoleKeyOf,
   routeTierOf,
 } from "../spawn-route.mjs";
-import { armProvider, armTier } from "../exp6-arm.mjs";
+import { armRouteFor } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { completedTurnText, createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
@@ -171,7 +175,7 @@ export const UPSTREAM_RESPAWN_TIMELINE_LIMIT = 200;
 const RESPAWN_SAFE_TOOL_KINDS = new Set(["read", "search", "think", "fetch"]);
 /** Labels the replacement must not inherit: the spawn hook re-derives them for the new provider/profile. */
 const RESPAWN_DROPPED_LABELS = new Set([
-  "profile", "provider", "model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
+  "profile", "provider", "model", "vs.model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
   RESPAWNED_AS_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
   // The respawn moves to the alternate provider on purpose: an inherited caller override would pin it back on the dead one.
   ROUTE_OVERRIDE_LABEL,
@@ -258,6 +262,7 @@ export const WORKER_PACK = [
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
   "- Your final message IS the report: the server forwards it to your lead when your turn ends. Do not spend a turn on `vs send`/`report` to the lead afterwards, whatever the task prompt says (`Report to ★ …` means just finish with a final message). Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
+  "- Run your tests, builds and audits in the FOREGROUND (a plain Bash call; raise `timeout` if needed). Never use `run_in_background` or Monitor for them, and never end your turn while one is still running: your final message is the report and goes out as DONE, so a turn ended on a running job reaches your lead with no verdict. If a run is too long, split it or run fewer files.",
 ].join("\n");
 
 export const BRAINSTORM_PACK = [
@@ -589,6 +594,12 @@ export function isRetiredLeadSnap(
   return isRetiredRole(target.labels?.role);
 }
 
+/** idea-871: a handed-off lead that is still live: role former-lead (any retired role) or a title starting "(old)". */
+export function isFormerLeadSnap(target: { title?: string | null; labels?: Labels } | null | undefined): boolean {
+  if (!target) return false;
+  return isRetiredRole(target.labels?.role) || /^\s*\(old\)/i.test(String(target.title ?? ""));
+}
+
 /** The live role a retired agent used to hold: a former Buddy maps to brainstorm, every other retired role to lead. */
 export function retiredHolderRole(target: { labels?: Labels } | null | undefined): "lead" | "brainstorm" {
   return String(target?.labels?.role ?? "").trim().toLowerCase() === "former-brainstorm" ? "brainstorm" : "lead";
@@ -620,6 +631,21 @@ export function parseAgentMessageEnvelope(
     messageId: decode(attrs["message-id"] ?? ""),
     body: decode(m[2]!.trim()),
   };
+}
+
+/**
+ * idea-768: the sender's notice for a send redirected from a retired holder. Names the real target (its title and lane), not
+ * the ord label extractLeadShortName falls back to, which read as if the sender's own ord had been redirected.
+ */
+export function redirectNoticeText(
+  oldTarget: { id: string; title?: string | null; labels?: Labels },
+  current: { id: string; title?: string | null; labels?: Labels },
+  lane: string,
+  role: "lead" | "brainstorm" = "lead",
+): string {
+  const title = String(current.title ?? "").split(" · ")[0]!.trim() || extractLeadShortName(current);
+  const where = lane ? ` (${lane} ${role === "brainstorm" ? "Buddy" : "lead"})` : "";
+  return `${extractLeadShortName(oldTarget)} (${oldTarget.id.slice(0, 8)}) is retired; delivered to ${title}${where}. Send to ${current.id.slice(0, 8)} or \`vs who ${role === "brainstorm" ? "brainstorm" : "lead"}\` next time.`;
 }
 
 export function extractLeadShortName(target: { id: string; title?: string | null; labels?: Labels }): string {
@@ -1547,6 +1573,9 @@ const DEFAULT_DEPS: Deps = {
   doneSweepIntervalMs: 5 * 60_000,
   doneArchiveGraceMs: 30 * 60_000,
   unitBranchState: gitUnitBranchState,
+  // G2 (idea-1012): live quota from runner/limits.jsonl (what the usage panel shows), stale/rolled-over readings dropped,
+  // so QUOTA_FAILOVER_THRESHOLD actually fires at spawn. Before this, production passed nothing and only `vs cap` failed over.
+  usageProviders: () => liveQuotaUsage({ home: baseDir() }),
 };
 
 // ---------------------------------------------------------------------------
@@ -1842,8 +1871,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             stakes: labels.stakes,
             caps: cappedFamilies(currentUsageList()),
             roles,
-            prefer: armProvider(labels["vs.arm"]),
-            tier: armTier(labels["vs.arm"]),
+            ...armRouteFor(hint, labels["vs.arm"]),
             override: parseRouteOverride(labels[ROUTE_OVERRIDE_LABEL]), // H1: the caller's provider/model still win here
           });
           if (hit) match = { profile: hit.profile as StoredProfile, explicit: true };
@@ -1964,6 +1992,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /** deps.usageProviders as a list. A source that throws or returns a non-list = [] (no switch: the requested provider runs). */
+    const quotaList = (): any[] => {
+      try {
+        const q = typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders;
+        return Array.isArray(q) ? q : [];
+      } catch (err) {
+        log(`usageProviders failed (no quota failover this spawn): ${err}`);
+        return [];
+      }
+    };
+
     /**
      * The usage list spawn failover judges caps on: deps.usageProviders (quota reports) + every capped family as an
      * `exhausted` entry. Shared by before(agent.create), enforceProfileAfterSpawn and agent.created (P5c).
@@ -1972,13 +2011,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // Capped families FIRST: isProviderOverQuota reads the first entry that matches a family, so a quota report for the
       // same provider (antigravity-cli, codex) must not shadow its cap.
       const list: any[] = Object.keys(readCappedProviderMap()).map((family) => ({ id: family, status: "exhausted", usedPct: 100 }));
-      list.push(
-        ...(typeof deps.usageProviders === "function"
-          ? deps.usageProviders()
-          : Array.isArray(deps.usageProviders)
-            ? deps.usageProviders
-            : []),
-      );
+      list.push(...quotaList());
       return list;
     };
 
@@ -1996,7 +2029,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
       const stored = loadStoredProfiles();
       const capped = Object.keys(readCappedProviderMap());
-      const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+      const quota = quotaList();
       for (;;) {
         // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
         const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
@@ -2024,7 +2057,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const failedFam = normalizeProviderFamily(failedProvider);
       if (roleNameHit(fromProfile, roles)) {
         const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
-        const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+        const quota = quotaList();
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
         const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
         const p = (route?.profile ?? null) as StoredProfile | null;
@@ -2147,23 +2180,52 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               explicitModel: rawCallerModel,
               override: routeOverride,
               // R1: an R0 implementer arm pick (spawn_worker stamps vs.arm) routes the role onto that arm's provider first.
-              prefer: armProvider(reqLabels["vs.arm"]),
-              tier: armTier(reqLabels["vs.arm"]),
+              ...armRouteFor(requestedProfileName, reqLabels["vs.arm"]),
             });
           }
-          if (roleRoute) {
-            matchedProfile = roleRoute.profile as StoredProfile;
-            profileMatch = { profile: matchedProfile, explicit: true };
-            // Role-name spawns carry profile=<Role> (old names keep their old name during the window).
-            const roleName = String(roleRoute.profile.name);
-            if (nextReqLabels?.profile) nextReqLabels.profile = roleName;
-            if (config?.labels?.profile && config.labels.profile !== roleName) {
-              next.labels = { ...(next.labels ?? config.labels), profile: roleName };
-              changed = true;
+        }
+        // A2 (idea-986): an old name that pins DeepSeek (Work Order - DSP, Mechanical - DSF, alias Coder) runs as a role
+        // spawn of Implement at stakes=mechanical (tierA stakes kept) while opencode is capped in the `vs cap` map: no
+        // pinned model, the cheap walk (Flash, Haiku, DeepSeek last). Uncapped = today's walk. The metric keeps
+        // `legacy-name` (legacyRerouted) so R5's old-name count still sees it.
+        let legacyRerouted = false;
+        if (!roleRoute && requestedProfileName && profileMatch?.explicit && matchedProfile) {
+          const reroute = legacyDeepSeekReroute(requestedProfileName, {
+            capped: readCappedProviderMap(),
+            profile: matchedProfile,
+            stakes: stakesRaw,
+          });
+          if (reroute) {
+            roleRoute = roleSpawnProfile(reroute.role, {
+              stakes: reroute.stakes,
+              caps: cappedFamilies(usageList, [provider]),
+              roles: liveRoles(loadStoredProfiles()),
+              explicitModel: rawCallerModel,
+            });
+            if (roleRoute) {
+              legacyRerouted = true;
+              // As a failover relabel: a label-less spawn still carries the old name at agent.created, so
+              // enforceProfileAfterSpawn relabels it to the role instead of refusing the off-profile provider.
+              const at = Date.now();
+              const label = String(roleRoute.profile.name);
+              failoverSpawns.set(`${title}::${cwd}`, { profile: label, at });
+              if (reqAgentId) failoverSpawns.set(reqAgentId, { profile: label, at });
+              log(`legacy-deepseek-reroute: ${requestedProfileName} -> ${roleRoute.profile.name} stakes=${reroute.stakes} provider=${roleRoute.route.provider} (opencode capped)`);
             }
-            // Every carrier says the role, also when the role came by config.profile / env VS_PROFILE only (as failover relabels).
-            reqLabels.profile = roleName;
           }
+        }
+        if (roleRoute) {
+          matchedProfile = roleRoute.profile as StoredProfile;
+          profileMatch = { profile: matchedProfile, explicit: true };
+          // Role-name spawns carry profile=<Role> (old names keep their old name during the window).
+          const roleName = String(roleRoute.profile.name);
+          if (nextReqLabels?.profile) nextReqLabels.profile = roleName;
+          if (config?.labels?.profile && config.labels.profile !== roleName) {
+            next.labels = { ...(next.labels ?? config.labels), profile: roleName };
+            changed = true;
+          }
+          // Every carrier says the role, also when the role came by config.profile / env VS_PROFILE only (as failover relabels).
+          reqLabels.profile = roleName;
         }
 
         // Remember whether the caller explicitly named the profile BEFORE any failover, so a
@@ -2471,7 +2533,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           let routeRole = "";
           let explicitCapped = false;
           let shadow = "";
-          const legacyName = wasExplicit && !roleRoute && Boolean(legacyProfileRole(requestedProfileName));
+          const legacyName = legacyRerouted || (wasExplicit && !roleRoute && Boolean(legacyProfileRole(requestedProfileName)));
           if (roleRoute) {
             routeTier = roleRoute.route.tier;
             routeRole = roleRoute.route.role;
@@ -2519,9 +2581,25 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             shadow,
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
+          // R2 (PLAN_PER_ROLES_LADDER_1125): the reason the spawn SHOWS (`Role · model · reason`: drawer header, spawn_worker
+          // result) rides the label as ` why=<reason>` (server/spawn-reason.mjs); the `route:` metric above keeps its fields.
+          const why = shownSpawnReason({
+            hookReason: reason,
+            // A role route that skipped a capped provider is a failover even when the metric names `ladder` (stakes win there).
+            // G2: a caller that already failed over before spawning (lead-handoff successor) says so in `vs.failover` / VS_FAILOVER.
+            failover:
+              Boolean(failoverProfileName) ||
+              Boolean(roleRoute?.override?.hopped) ||
+              Boolean(roleRoute?.route?.reasons?.includes("failover")) ||
+              Boolean(String(reqLabels["vs.failover"] ?? env?.VS_FAILOVER ?? "").trim()),
+            override: Boolean(roleRoute?.override) || keepCaller,
+            arm: Boolean(String(reqLabels["vs.arm"] ?? "").trim()),
+            legacyName,
+            routed: Boolean(matchedProfile && profileMatch?.explicit),
+          });
           // idea-87: the id does not exist yet, so the route rides the spawn's labels and agent.created logs `route-agent` with it.
           if (!reqAgentId && (request as any).labels) {
-            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [ROUTE_LABEL]: routeText };
+            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [ROUTE_LABEL]: `${routeText} ${ROUTE_WHY_KEY}=${why}` };
             changed = true;
           }
         }
@@ -2547,10 +2625,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             const v = stampVals[k];
             if (v && (nextReqLabels ?? reqLabels)[k] !== v) stamp[k] = v;
           }
-          // R0: spawn_worker's `vs.model` (arm picks) names the model actually run, so re-sync it after failover / the ladder.
-          if ((nextReqLabels ?? reqLabels)["vs.model"] && stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
+          // R0/R2: `vs.model` names the model actually run on every routed spawn (not only arm picks, not only when the
+          // caller pre-filled it: a provider-only override arrives without one), re-synced after failover / the ladder.
+          if (stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
           if (Object.keys(stamp).length) {
             nextReqLabels = { ...(nextReqLabels ?? reqLabels), ...stamp };
+            changed = true;
+          }
+          // R2: no final model (the provider's own default runs) = a caller's `vs.model` names a model that does not run: drop it.
+          if (!stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== undefined) {
+            const { ["vs.model"]: _stale, ...rest } = nextReqLabels ?? reqLabels;
+            nextReqLabels = rest;
             changed = true;
           }
         }
@@ -3672,6 +3757,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (status === "running" || status === "initializing") return;
       if (((fresh as any).pendingPermissions?.length ?? 0) > 0 || (fresh as any).requiresAttention) return;
       doneReported.delete(agentId);
+      // idea-783: an Art Director's every turn gets a digest `done`, but it is mid-duet while its Painter is live. Archived, it
+      // left `vs who` and its Painter's next send failed "not running" (a worker may not unarchive a peer it did not spawn).
+      // It stays parked instead; the Painter's send resumes it. Unknown (list failed) keeps it too: never close on a guess.
+      if (isDuetDirector(fresh.labels)) {
+        const painter = await liveDuetPainter(paseo, fresh);
+        if (painter !== null) {
+          log(`worker auto-close skipped: ${agentId} is the Art Director of live Painter ${painter || "(roster unreadable)"}`);
+          return;
+        }
+      }
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
       let archived = false;
@@ -3688,6 +3783,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!opts.turnEnded) inflightDigests.delete(agentId);
       }
       log(`worker auto-closed after done report: ${agentId}`);
+    }
+
+    /** idea-783: the live Painter id an Art Director serves, null when none, "" when the roster could not be read. */
+    async function liveDuetPainter(paseo: Paseo, director: AgentSnap): Promise<string | null> {
+      try {
+        const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        return liveDuetPainterOf(director, (res.entries as any[]).map((e) => e?.agent).filter(Boolean));
+      } catch {
+        return "";
+      }
     }
 
     function noteWorkerDone(entry: LogEntry) {
@@ -3778,11 +3883,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     /** Where a set's ping goes: its owner while live, else the current live lead of the set's lane (the successor). */
     async function resolveWatchTarget(paseo: Paseo, set: WatchSet): Promise<AgentSnap | null> {
       const owner = await snap(paseo, set.owner);
-      if (owner && isLiveAgent(owner)) return owner;
+      const live = owner && isLiveAgent(owner) ? owner : null;
+      // idea-871: a live owner that handed off (former-lead / "(old)") is not the target while the lane has a current lead.
+      if (live && !isFormerLeadSnap(live)) return live;
       const lane = set.lane || owner?.labels?.lane || "";
       const team = set.team || owner?.labels?.team || "";
-      if (!team) return null;
-      return findLead(paseo, teamIdOf(team, currentTeams()), lane);
+      if (!team) return live;
+      return (await findLead(paseo, teamIdOf(team, currentTeams()), lane)) ?? live;
     }
 
     /**
@@ -4152,6 +4259,7 @@ ${detail}` : text, refs: [d.setId] };
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => isLiveAgent(a))
         .filter((a) => effectiveAgentRole(a) === role)
+        .filter((a) => !isFormerLeadSnap(a)) // idea-871: "(old)" is never the lane's lead, whatever its role label says
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
           const aTeam = teamIdOf(d.team || a.labels.team, currentTeams());
@@ -4160,6 +4268,16 @@ ${detail}` : text, refs: [d.setId] };
         });
       return resolveLeadWinner(leads).winner ?? null;
     }
+
+    /** idea-871: the current lead of a former lead's lane (other than itself), null when there is none. */
+    async function formerLeadSuccessor(paseo: Paseo, old: AgentSnap): Promise<AgentSnap | null> {
+      const where = teamOf(old.labels, old.cwd);
+      if (!where) return null;
+      const cur = await findLead(paseo, teamIdOf(where.team, currentTeams()), where.lane);
+      return cur && cur.id !== old.id ? cur : null;
+    }
+
+    const staleSendersLogged = new Set<string>();
 
     async function handleSendAgentPrompt(input: any, ctx?: { paseo?: Paseo }) {
       const paseo = ctx?.paseo ?? paseoApi;
@@ -4225,8 +4343,13 @@ ${detail}` : text, refs: [d.setId] };
         throw new Error(`${oldShort} is retired and no live ${role === "brainstorm" ? "Buddy" : "lead"} exists for ${team}/${lane}`);
       }
       const currentLead = current;
-      const newShort = extractLeadShortName(currentLead);
-      const notice = `${oldShort} is retired; delivered to ${newShort}`;
+      const notice = redirectNoticeText(target, currentLead, lane, role);
+      // idea-768: one log line per sender + stale id (not per message): which senders keep using a retired id.
+      const staleKey = `${senderId || "?"}->${target.id}`;
+      if (!staleSendersLogged.has(staleKey)) {
+        staleSendersLogged.add(staleKey);
+        log(`stale-id send: sender=${senderId || "?"} used retired ${oldShort} (${target.id}); redirected to ${currentLead.id}`);
+      }
       await paseo.agents.ref(currentLead.id).send(promptText);
       if (senderId) {
         await paseo.agents
@@ -4461,9 +4584,12 @@ ${detail}` : text, refs: [d.setId] };
         // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
         // through the normal queueWake/dispatchWakes path to the current lead.
         // Watch pings: a live non-lead owner (a Buddy) keeps its own; a retired one's are dropped and re-offered by the engine.
-        if (effectiveAgentRole(liveLead) !== "lead") {
+        // idea-871: a live "(old)"-titled agent still labelled lead is a handed-off lead too, once a successor exists.
+        const successor = isLiveAgent(liveLead) && isFormerLeadSnap(liveLead) ? await formerLeadSuccessor(paseo, liveLead) : null;
+        if (effectiveAgentRole(liveLead) !== "lead" || successor) {
           const entries = pendingWake.get(leadId) ?? [];
-          const keep = isLiveAgent(liveLead) ? entries.filter((e) => watchKeyOf.has(e)) : [];
+          // idea-871: a former-lead's pings are dropped (the engine re-offers them to the current lead) unless the lane has none.
+          const keep = isLiveAgent(liveLead) && !successor ? entries.filter((e) => watchKeyOf.has(e)) : [];
           const reroute = entries.filter((e) => !watchKeyOf.has(e));
           if (entries.length && !keep.length) {
             pendingWake.delete(leadId);
@@ -4679,12 +4805,12 @@ ${detail}` : text, refs: [d.setId] };
     /**
      * B1 (lean boot): archive finished WORKERS that the immediate close missed or that waited out their grace. Same archive
      * path as `vs archive` / closeFinishedWorker (deps.archiveAgent + the auto-archived marker, so a later send revives).
-     * Skips leads, Buddies, Overlord, digests (role must be worker), running/permission-blocked workers, a last report that says
+     * Skips leads, Buddies, Overlord, digests (role must be worker), an Art Director whose Painter is live (idea-783), running/permission-blocked workers, a last report that says
      * FAIL, and workers whose unit branch is not merged yet (fix rounds go to them). Returns the archived ids.
      * B3: `sweepDoneWorkersReport` is the same predicate with `apply: false` (dry run: no marker, no archive) and a per-Squad/lane
      * breakdown of what it would archive and why the rest is kept; `apply: true` archives through the identical path.
      */
-    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad";
+    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad" | "duet-partner";
     interface SweepItem { id: string; team: string; lane: string }
     interface SweepReport {
       dryRun: boolean;
@@ -4708,7 +4834,7 @@ ${detail}` : text, refs: [d.setId] };
         archive: [],
         count: 0,
         byLane: {},
-        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [] },
+        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [], "duet-partner": [] },
       };
       const paseo = paseoApi;
       if (!paseo) return report;
@@ -4743,6 +4869,10 @@ ${detail}` : text, refs: [d.setId] };
           const keep = (reason: SweepKeepReason) => void report.kept[reason].push(item);
           if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) {
             keep("not-worker");
+            continue;
+          }
+          if (liveDuetPainterOf(a, (res.entries as any[]).map((x) => x?.agent).filter(Boolean))) {
+            keep("duet-partner"); // idea-783: an Art Director stays while its Painter is live (same rule as closeFinishedWorker)
             continue;
           }
           if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) {

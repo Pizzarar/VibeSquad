@@ -10,6 +10,7 @@ import {
   formatPairCode,
   mintedByLabel,
   pairStartInit,
+  phonePairLinkAndQr,
   secondsLeft,
   type DeviceRole,
   type PendingPair,
@@ -23,8 +24,10 @@ import {
 type PairStart = {
   code: string;
   pairUrl: string;
+  pairIpUrl?: string | null;
   lanPairUrl?: string | null;
   qrSvg: string;
+  qrSvgIp?: string | null;
   lanQrSvg?: string | null;
   expiresAt: number;
   requiresApproval?: boolean;
@@ -187,8 +190,7 @@ export function PhonePairSheet() {
   };
 
   const expired = pair ? secondsLeft(pair.expiresAt, now) === 0 : false;
-  const link = pair?.lanPairUrl || pair?.pairUrl || "";
-  const qr = pair?.lanQrSvg || pair?.qrSvg || "";
+  const { link, qr } = phonePairLinkAndQr(pair); // idea-69: Meshnet IP first, then pairUrl, then Home LAN
 
   return (
     <div className="phone-pair" data-testid="phone-pair">
