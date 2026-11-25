@@ -90,10 +90,15 @@ export function probeStorybook(projectId: string): boolean {
     void fetch(api(projectId), { method: "HEAD" }).then((r) => {
       if (r.status === 404) { probe.set(projectId, "missing"); probeEmit(); }
       else if (r.ok) { probe.set(projectId, "present"); probeEmit(); }
-      else { probeFailed.add(projectId); probe.delete(projectId); probeEmit(); }
+      else { probeFailed.add(projectId); probeReprobeAt.set(projectId, Date.now()); probe.delete(projectId); probeEmit(); }
       if (probe.has(projectId)) { probeFailed.delete(projectId); probeReprobeAt.delete(projectId); }
-    }).catch(() => { probeFailed.add(projectId); probe.delete(projectId); probeEmit(); });
+    }).catch(() => { probeFailed.add(projectId); probeReprobeAt.set(projectId, Date.now()); probe.delete(projectId); probeEmit(); });
   }
+  return probe.get(projectId) === "missing";
+}
+
+/** Pure cache read (no fetch): true once a project is known to have no Storybook (404). */
+export function isStorybookMissing(projectId: string): boolean {
   return probe.get(projectId) === "missing";
 }
 
@@ -103,6 +108,25 @@ function reprobeStorybook(projectId: string): void {
   if (now - (probeReprobeAt.get(projectId) ?? -Infinity) < PROBE_REPROBE_MS) return;
   probeReprobeAt.set(projectId, now);
   probeStorybook(projectId);
+}
+
+/** Probe a project if never probed, or re-probe through the 5s throttle if a prior probe failed. Call from effects only. */
+export function ensureStorybookProbe(projectId: string): void {
+  if (probe.has(projectId)) return;
+  if (probeFailed.has(projectId)) reprobeStorybook(projectId);
+  else probeStorybook(projectId);
+}
+
+/** Subscribe to probe store updates and trigger throttled probes for a list of projects in an effect. */
+export function useStorybookProbes(projectIds: readonly string[], active = true): number {
+  const [rev, setRev] = useState(0);
+  useEffect(() => subscribeProbe(() => setRev((n) => n + 1)), []);
+  const key = projectIds.join("\n");
+  useEffect(() => {
+    if (!active || !key) return;
+    for (const id of key.split("\n")) ensureStorybookProbe(id);
+  }, [active, key]);
+  return rev;
 }
 
 function useStorybookProbe(projectId: string | null): void {

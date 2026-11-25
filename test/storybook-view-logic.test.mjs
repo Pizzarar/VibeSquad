@@ -277,7 +277,8 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     await flush();
     assert.equal(h.render(), false);
 
-    // Server recovers; window focus triggers re-probe.
+    // Server recovers; after throttle window, window focus triggers re-probe.
+    fakeNow += 5_000;
     fetchHandler = async () => ({ ok: true, status: 200 });
     fire(winListeners, "focus");
     assert.equal(fetchCalls.length, 2);
@@ -298,7 +299,8 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     await flush();
     assert.equal(h.render(), false);
 
-    // Hidden transition must not re-probe.
+    // Hidden transition must not re-probe (even after throttle window).
+    fakeNow += 5_000;
     visibilityState = "hidden";
     fire(docListeners, "visibilitychange");
     assert.equal(fetchCalls.length, 1);
@@ -313,10 +315,62 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     h.unmount();
   });
 
+  test("first retry immediately after initial failure is throttled for 5s (idea-1047)", async () => {
+    const { useStorybookPresent, ensureStorybookProbe, isStorybookMissing } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 25_000;
+    fetchHandler = async () => ({ ok: false, status: 503 });
+
+    const h5xx = mountHook(useStorybookPresent, "proj-init-throttle-5xx");
+    assert.equal(fetchCalls.length, 1);
+    await flush();
+    assert.equal(isStorybookMissing("proj-init-throttle-5xx"), false);
+
+    // First focus / visibilitychange / ensureStorybookProbe right after initial 5xx failure must be throttled.
+    fire(winListeners, "focus");
+    visibilityState = "visible";
+    fire(docListeners, "visibilitychange");
+    ensureStorybookProbe("proj-init-throttle-5xx");
+    assert.equal(fetchCalls.length, 1);
+
+    // Still throttled at +4999ms.
+    fakeNow = 29_999;
+    fire(winListeners, "focus");
+    ensureStorybookProbe("proj-init-throttle-5xx");
+    assert.equal(fetchCalls.length, 1);
+
+    // Allowed at +5000ms.
+    fakeNow = 30_000;
+    fetchHandler = async () => ({ ok: true, status: 200 });
+    fire(winListeners, "focus");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+    assert.equal(h5xx.render(), true);
+    h5xx.unmount();
+
+    // Same for initial network rejection.
+    fetchCalls.length = 0;
+    fakeNow = 31_000;
+    fetchHandler = async () => { throw new Error("net-down"); };
+    const hNet = mountHook(useStorybookPresent, "proj-init-throttle-net");
+    assert.equal(fetchCalls.length, 1);
+    await flush();
+    fire(winListeners, "focus");
+    ensureStorybookProbe("proj-init-throttle-net");
+    assert.equal(fetchCalls.length, 1);
+    fakeNow = 36_000;
+    fetchHandler = async () => ({ ok: false, status: 404 });
+    ensureStorybookProbe("proj-init-throttle-net");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+    assert.equal(isStorybookMissing("proj-init-throttle-net"), true);
+    hNet.unmount();
+  });
+
   test("throttle: at most once per 5s per project on repeated errors, independent across projects", async () => {
     const { useStorybookPresent } = await loadMod();
     fetchCalls.length = 0;
-    fakeNow = 30_000;
+    fakeNow = 40_000;
     fetchHandler = async () => ({ ok: false, status: 502 });
 
     const hA = mountHook(useStorybookPresent, "proj-throttle-a");
@@ -324,7 +378,8 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     assert.equal(fetchCalls.length, 2);
     await flush();
 
-    // First focus re-probes both projects (both fail again).
+    // Advance past initial failure throttle; focus re-probes both projects (both fail again).
+    fakeNow = 45_000;
     fire(winListeners, "focus");
     assert.equal(fetchCalls.length, 4);
     await flush();
@@ -337,12 +392,12 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     assert.equal(fetchCalls.length, 4);
 
     // At +4999ms: still throttled.
-    fakeNow = 34_999;
+    fakeNow = 49_999;
     fire(winListeners, "focus");
     assert.equal(fetchCalls.length, 4);
 
     // At +5000ms: allowed again.
-    fakeNow = 35_000;
+    fakeNow = 50_000;
     fetchHandler = async (url) => (url.includes("proj-throttle-a") ? { ok: true, status: 200 } : { ok: false, status: 502 });
     fire(winListeners, "focus");
     assert.equal(fetchCalls.length, 6);
@@ -352,6 +407,13 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
 
     hA.unmount();
     hB.unmount();
+  });
+
+  test("CommandPalette does not call probeStorybook during render (idea-1047)", () => {
+    const cp = readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
+    assert.ok(!cp.includes("probeStorybook"), "CommandPalette must not import or call probeStorybook");
+    assert.ok(cp.includes("isStorybookMissing("), "CommandPalette reads pure isStorybookMissing cache");
+    assert.ok(cp.includes("useStorybookProbes("), "CommandPalette triggers throttled probes via effect hook");
   });
 
   test("no re-probe after a definite answer (200 or 404)", async () => {
