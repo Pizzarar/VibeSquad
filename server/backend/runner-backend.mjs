@@ -501,9 +501,10 @@ async function injectedPrefix(role, cwd) {
  */
 export function reduceTurn(t, e) {
   const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
-  // A fresh prompt opens a new awaited turn: a failure/cancel flag left from an already-closed turn is not this one's.
-  if (e.type === "input") { if (!inTurn) { t.errored = false; t.error = undefined; t.cancelled = false; } t.awaiting = true; return null; }
-  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
+  // A fresh prompt opens a new awaited turn. `errored` stays (the shown status keeps "error" until that turn runs); only
+  // `errSinceInput` (idea-868: did THIS prompt's wait see an error) starts over.
+  if (e.type === "input") { if (!inTurn) t.errSinceInput = false; t.awaiting = true; return null; }
+  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; t.errSinceInput = true; } return null; }
   if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
   if (e.type === "status" && e.status && e.resume === true) {
     // A prompt-less resume (Runner._settleResume / unwedge): the process came back (or gave up), no turn ran. Never a
@@ -513,7 +514,7 @@ export function reduceTurn(t, e) {
     if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; }
     return null;
   }
-  if (e.type === "status" && e.status === "parked" && (e.queued === true || (t.queued && !t.errored))) {
+  if (e.type === "status" && e.status === "parked" && (e.queued === true || (t.queued && !t.errSinceInput))) {
     // idea-868: the runner parked an idle process whose next prompt still waits in its family queue (to free a live slot).
     // Nothing ran and nothing ended: that prompt's turn is still owed, so the turn state (queued, awaiting) stays as it is.
     // The runner tags such a park `queued: true`; an untagged one (older runner) is read the same way while the log says
