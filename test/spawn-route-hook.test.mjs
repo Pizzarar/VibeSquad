@@ -19,6 +19,7 @@ import {
   roleNameHit,
   roleProfileLabel,
   roleSpawnConfig,
+  roleSpawnProfile,
   roleMcpExtras,
   routeMetricText,
 } from "../server/spawn-route.mjs";
@@ -221,7 +222,7 @@ test("spawn-route units: roleNameHit, roleProfileLabel, cappedFamilies", () => {
   assert.equal(roleNameHit("No Such Thing"), null);
 
   const labels = Object.keys(ROLE_TABLE).map((k) => roleProfileLabel(k));
-  assert.deepEqual(labels, ["lead", "brainstorm", "Implement", "Work Order", "Review", "Pre-check", "Art Director", "Art Painter"]);
+  assert.deepEqual(labels, ["lead", "brainstorm", "Planner", "Implement", "Work Order", "Review", "Pre-check", "Art Director", "Art Painter"]);
   for (const [i, k] of Object.keys(ROLE_TABLE).entries()) assert.equal(roleNameHit(labels[i])?.key, k, `label ${labels[i]} reads back as ${k}`);
 
   assert.deepEqual(cappedFamilies([]), []);
@@ -636,6 +637,52 @@ test(
       }
     } finally {
       h.stop?.();
+    }
+  }),
+);
+
+test("R1 spawn-route units: roleSpawnProfile/roleSpawnConfig prefer = the arm's provider first, model from the ladder rung", () => {
+  const neon = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer: "antigravity-cli" });
+  assert.deepEqual([neon.profileName, neon.spawnCfg.provider, neon.spawnCfg.model, neon.spawnCfg.modeId, neon.route.reason], ["Implement", A, "gemini-4-neon", "accept-edits", "default"]);
+  const sonnet = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer: "claude" });
+  assert.deepEqual([sonnet.spawnCfg.provider, sonnet.spawnCfg.model], [C, "claude-sonnet-5-5"]);
+  for (const prefer of [undefined, "", "codex", "bogus"]) {
+    const r = roleSpawnConfig("Implement", { profiles: USER_PROFILES, prefer });
+    assert.deepEqual([r.spawnCfg.provider, r.spawnCfg.model], [C, "claude-sonnet-5-5"], String(prefer));
+  }
+  // A capped preferred family fails over along the role's own list (claude first), reason says so.
+  const capped = roleSpawnProfile("Implement", { prefer: A, caps: [A] });
+  assert.deepEqual([capped.profile.provider, capped.route.reason], [C, "failover"]);
+  // Stakes still pick the tier on the preferred family; the shared ROLE_TABLE is never mutated.
+  assert.equal(roleSpawnProfile("Implement", { prefer: A, stakes: "tierA-invariant" }).profile.thinkingOptionId, "high");
+  assert.deepEqual(ROLE_TABLE.implement.providers, [C, A, O]);
+  assert.equal(roleSpawnProfile("Implement - Sonnet", { prefer: A }), null, "old names never take a prefer");
+});
+
+test(
+  "R1 hook: a role-name Implement spawn carrying vs.arm=neon runs on Gemini (ladder model), vs.arm=sonnet / none on Claude",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      const run = (extra) => h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS("Implement", { stakes: "normal", "vs.profile-derived": "model,thinking", ...extra }) });
+      const n = await run({ "vs.arm": "neon", "vs.model": "gemini-4-neon" });
+      assert.deepEqual([n.config.provider, n.config.model, n.labels.profile], [A, "gemini-4-neon", "Implement"]);
+      for (const extra of [{ "vs.arm": "sonnet" }, {}]) {
+        const s = await run(extra);
+        assert.deepEqual([s.config.provider, s.config.model, s.labels.profile], [C, "claude-sonnet-5-5", "Implement"], JSON.stringify(extra));
+      }
+      // tierA stakes on the neon arm: top rung of the preferred family (arms only exist at normal, but the hook is pure routing).
+      const t = await run({ "vs.arm": "neon", stakes: "tierA-invariant" });
+      assert.equal(t.config.provider, A);
+    } finally {
+      h.stop?.();
+    }
+    const hc = harness({ cappedProviders: capMap([A]) });
+    try {
+      const c = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "neon" }) });
+      assert.equal(c.config.provider, C, "a capped arm provider fails over along the role list");
+    } finally {
+      hc.stop?.();
     }
   }),
 );

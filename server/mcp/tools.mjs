@@ -218,7 +218,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles, { stakes } = {}) {
+    async resolveProfile(name, profiles, { stakes, prefer } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
       // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
       // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
@@ -228,7 +228,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const stored = (Array.isArray(profiles) ? profiles : []).some((p) => clean(p?.name).toLowerCase() === key || (p?.id && p.id === clean(name)));
       if (!stored) {
         const { roleSpawnConfig } = await import("../spawn-route.mjs");
-        const roleCfg = roleSpawnConfig(name, { profiles, stakes });
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer }); // prefer: R1 arm provider for a role spawn
         if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
       }
       const profile = findProfile(name, profiles);
@@ -383,6 +383,8 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   // (idea-703). ab=pin / wf=<arm> / an explicit provider/model opt out. Every outcome is visible: result.ab carries
   // arm + reason + model and the spawn labels carry vs.arm / vs.arm-reason / vs.model (no silent swap).
   // ctx.implementerArms overrides the arm set (tests; R3/R8 seam); unset = IMPLEMENTER_ARMS.
+  // R1: the role name `Implement` alternates too, but keeps profile=Implement: the arm only sets the provider the role
+  // route tries first (ab.provider -> resolveProfile prefer; the hook re-reads it from vs.arm), the ladder names the model.
   let ab = null;
   let pickedProfile = profileName;
   const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
@@ -402,11 +404,11 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
       capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
-    if (ab?.swapped) pickedProfile = ab.profile;
+    if (ab?.swapped && !ab.role) pickedProfile = ab.profile;
   }
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const stk = { stakes: clean(args.labels?.stakes) || clean(args.stakes) };
+    const stk = { stakes: clean(args.labels?.stakes) || clean(args.stakes), ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}) };
     let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
     if (!hit && ab?.swapped) { // fail open: the swapped-to profile is not installed, keep the requested one
       hit = await ctx.resolveProfile(profileName, profiles, stk);
@@ -537,13 +539,15 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
     const shown = labels.profile ?? profileName;
     result.ab = {
       arm: ab.arm, reason: ab.reason, model: model || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
-      ...(ab.swapped ? { requested: profileName } : {}), ...(ab.capped ? { capped: true } : {}),
+      ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: provider || null } : {}), ...(ab.capped ? { capped: true } : {}),
     };
     // One line a lead can read without digging: `arm=neon reason=alternation model=gemini-4-neon (Implement - Sonnet -> ...)`.
-    result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"}${ab.swapped ? ` (${profileName} -> ${shown})` : ""}`;
+    // A role spawn keeps its name, so a swap shows the provider it moved to: `(Implement -> antigravity-cli)`.
+    const moved = ab.role ? provider : shown;
+    result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"}${ab.swapped ? ` (${profileName} -> ${moved})` : ""}`;
     const counts = ab.counts ? ` counts=${Object.entries(ab.counts).map(([k, v]) => `${k}:${v}`).join(",")}` : "";
     // Arm picks only: opt-outs (pin / wf / override) are visible in the result + labels and are not alternation data.
-    const metric = ["pin", "wf", "override"].includes(ab.reason) ? "" : `implementer-arm: ${profileName} -> ${shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"} lane=${labels.lane ?? ""}${counts}`;
+    const metric = ["pin", "wf", "override"].includes(ab.reason) ? "" : `implementer-arm: ${profileName} -> ${ab.role ? `${shown}@${provider}` : shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"} lane=${labels.lane ?? ""}${counts}`;
     if (metric) { try { await ctx.writeLog({ type: "metric", text: metric }); } catch { /* metrics are best effort: never fail the spawn */ } }
   }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
@@ -1094,7 +1098,7 @@ const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
-    description: "Start a worker agent in your lane from a VS profile. Optional stakes (tierA-security | tierA-invariant | normal | mechanical) routes the model + effort by stakes (same as labels.stakes; labels.stakes wins if both). Returns {id, title}.",
+    description: "Start a worker agent in your lane. profile = a role name (Implement, Review, Planner, Pre-check, Art Director, Art Painter; see `vs profiles`). stakes picks the model + effort from the role's tier ladder (tierA-security | tierA-invariant | normal | mechanical; same as labels.stakes, labels.stakes wins if both); pass provider/model only to override. Returns {id, title}.",
     inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },
@@ -1111,12 +1115,12 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Optional profile (a role=lead profile name, e.g. \"Lead - Claude\"; see `vs profiles --role lead`) spawns the successor with that profile's provider/model/mode instead of inheriting the old lead's; unknown or non-lead profiles are refused. action=\"retire\" with force=true retires a LIVE lead too (the Squad's Overlord on another lane, or the owner; logged as a decision). Returns {id, title, oldLeadId}.",
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Optional profile: the role name \"lead\" (the tier ladder picks the model, skipping capped providers) instead of inheriting the old lead's profile; an old lead alias from `vs profiles --role lead` pins its provider/model. Unknown or non-lead profiles are refused. action=\"retire\" with force=true retires a LIVE lead too (the Squad's Overlord on another lane, or the owner; logged as a decision). Returns {id, title, oldLeadId}.",
     inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" }, profile: S }),
     run: handoffLead,
   },
   restart_buddy: {
-    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (a Brainstorm profile name) or provider (claude|gemini). Returns {id, oldBuddyId, lane, team, title, started?}.",
+    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (the role name \"brainstorm\"; the tier ladder picks the model) or provider (claude|gemini) to override. Returns {id, oldBuddyId, lane, team, title, started?}.",
     inputSchema: obj({ lane: S, reason: S, profile: S, provider: S }),
     run: restartBuddy,
   },

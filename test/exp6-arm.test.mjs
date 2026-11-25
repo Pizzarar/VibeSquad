@@ -8,7 +8,7 @@ import test from "node:test";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { verifiedIdentity } from "./helpers/agent-token.mjs";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
-import { ARMS, IMPLEMENTER_ARMS, armCapKey, armCapped, armOfProfile, countArms, decideArm, experimentOpen, hasVerdictEntry, pickArm, readArmCaps, readPerfectionVerdict } from "../server/exp6-arm.mjs";
+import { ARMS, IMPLEMENTER_ARMS, armCapKey, armCapped, armOfProfile, armProvider, countArms, decideArm, experimentOpen, hasVerdictEntry, pickArm, readArmCaps, readPerfectionVerdict } from "../server/exp6-arm.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 const SONNET = "Implement - Sonnet";
@@ -24,7 +24,11 @@ test("arm table: Sonnet + Neon only, DSP is never an arm", () => {
   assert.equal(armOfProfile(SONNET).wf, "sonnet");
   assert.equal(armOfProfile("worker").wf, "sonnet");
   assert.equal(armOfProfile(NEON).wf, "neon");
-  for (const name of [DSP, "Mechanical - DSF", "implement", "Implement", "Implement - Opus", "Review - Gemini"]) assert.equal(armOfProfile(name), null, name);
+  for (const name of [DSP, "Mechanical - DSF", "Implement - Opus", "Review - Gemini", "review", "Work Order", "Planner - Sonnet", "Spec - Opus", "Senior Reasoning - DSP"]) assert.equal(armOfProfile(name), null, name);
+  // R1: the role name joins (requested arm = the ladder default, Sonnet) and is flagged so it is never swapped to an old name.
+  for (const name of ["implement", "Implement", " IMPLEMENT "]) assert.deepEqual([armOfProfile(name)?.wf, armOfProfile(name)?.role], ["sonnet", true], name);
+  assert.equal(armOfProfile(SONNET).role, undefined);
+  assert.deepEqual([armProvider("sonnet"), armProvider("neon"), armProvider("NEON"), armProvider("dsp"), armProvider("")], ["claude", "antigravity-cli", "antigravity-cli", "", ""]);
 });
 
 test("decideArm: per-lane alternation sonnet -> neon -> sonnet (only vs.arm picks count)", async () => {
@@ -81,7 +85,7 @@ test("decideArm opt-outs and non-arm requests", async () => {
   for (const stakes of ["tierA-invariant", "tierA-security", "mechanical"]) assert.equal(await decideArm(base({ stakes, listAgents: skew })), null, stakes);
   assert.equal(await decideArm(base({ asLead: true, listAgents: skew })), null);
   assert.equal(await decideArm(base({ lane: "", listAgents: skew })), null);
-  for (const profile of [DSP, "Mechanical - DSF", "Implement - Opus", "Review - Gemini", "implement", "Implement"]) assert.equal(await decideArm(base({ profile, listAgents: skew })), null, profile);
+  for (const profile of [DSP, "Mechanical - DSF", "Implement - Opus", "Review - Gemini", "review", "Work Order"]) assert.equal(await decideArm(base({ profile, listAgents: skew })), null, profile);
   // Arm set off ([] or one arm) = no pick at all.
   assert.equal(await decideArm(base({ arms: [], listAgents: skew })), null);
   assert.equal(await decideArm(base({ arms: ["sonnet"], listAgents: skew })), null);
@@ -93,6 +97,21 @@ const PLANNING = [
   { name: "Spec - Opus", role: "worker", provider: "claude", model: "claude-opus-5-5", modeId: "auto", thinkingOptionId: "medium" },
   { name: "Senior Reasoning - DSP", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-pro", modeId: "build", thinkingOptionId: "high" },
 ];
+
+test("R1 decideArm: the role name Implement alternates but keeps its name; the arm only picks the provider", async () => {
+  const r1 = await decideArm(base({ profile: "Implement", listAgents: async () => [ag("sonnet")] }));
+  assert.deepEqual([r1.arm, r1.reason, r1.swapped, r1.profile, r1.role, r1.provider], ["neon", "alternation", true, "Implement", true, "antigravity-cli"]);
+  const r2 = await decideArm(base({ profile: "implement", listAgents: async () => [ag("sonnet"), ag("neon")] }));
+  assert.deepEqual([r2.arm, r2.swapped, r2.profile, r2.provider], ["sonnet", false, "implement", "claude"]);
+  // Shared per-lane counts: old-name and role-name picks feed one alternation.
+  const r3 = await decideArm(base({ profile: SONNET, listAgents: async () => [ag("neon")] }));
+  assert.equal(r3.arm, "sonnet");
+  const pin = await decideArm(base({ profile: "Implement", labels: { ab: "pin" }, listAgents: async () => [ag("sonnet")] }));
+  assert.deepEqual([pin.arm, pin.reason, pin.swapped, pin.profile, pin.role, pin.provider], ["sonnet", "pin", false, "Implement", true, undefined]);
+  for (const stakes of ["tierA-invariant", "mechanical"]) assert.equal(await decideArm(base({ profile: "Implement", stakes })), null, stakes);
+  const capped = await decideArm(base({ profile: "Implement", capProbe: async () => ({ "antigravity-cli": {} }), listAgents: async () => [ag("sonnet")] }));
+  assert.deepEqual([capped.arm, capped.reason, capped.profile, capped.provider], ["sonnet", "capped:antigravity-cli", "Implement", "claude"]);
+});
 
 test("D1b decideArm: planning/spec profiles never join the alternation", async () => {
   for (const { name } of PLANNING) assert.equal(await decideArm(base({ profile: name, stakes: "normal", listAgents: async () => [ag("sonnet")] })), null, name);
@@ -222,7 +241,8 @@ test("spawn_worker: tierA/mechanical/lead-less/planning/role-name spawns keep to
     [{ profile: "Implement - Opus", stakes: "tierA-security" }, "Implement - Opus"],
     [{ profile: "Mechanical - DSF", stakes: "mechanical" }, "Mechanical - DSF"],
     [{ profile: SONNET, stakes: "mechanical" }, SONNET],
-    [{ profile: "implement", stakes: "normal" }, "Implement"],
+    [{ profile: "implement", stakes: "tierA-invariant" }, "Implement"],
+    [{ profile: "Implement", stakes: "mechanical" }, "Implement"],
     ...PLANNING.map((p) => [{ profile: p.name, stakes: "normal" }, p.name]),
   ]) {
     const logs = [];
@@ -233,6 +253,36 @@ test("spawn_worker: tierA/mechanical/lead-less/planning/role-name spawns keep to
     assert.equal(creates[0].labels["vs.arm-reason"], undefined);
     assert.equal(logs.length, 0);
   }
+});
+
+test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon visibly, keeps profile=Implement, model from the ladder", async () => {
+  const agents = [];
+  const logs = [];
+  const { ctx, creates } = ctxWith(agents, logs);
+  const want = [
+    ["sonnet", "claude", "claude-sonnet-5-5", false],
+    ["neon", "antigravity-cli", "gemini-4-neon", true],
+    ["sonnet", "claude", "claude-sonnet-5-5", false],
+  ];
+  for (const [i, [arm, provider, model, swapped]] of want.entries()) {
+    const res = await go(ctx, { profile: "Implement", stakes: "normal" });
+    const c = creates[i];
+    assert.deepEqual([c.labels.profile, c.config.provider, c.config.model], ["Implement", provider, model], `spawn ${i}`);
+    assert.deepEqual([c.labels["vs.arm"], c.labels["vs.arm-reason"], c.labels["vs.model"]], [arm, "alternation", model], `spawn ${i}`);
+    assert.deepEqual([res.ab.arm, res.ab.reason, res.ab.model, res.ab.profile, res.ab.swapped, res.ab.requested], [arm, "alternation", model, "Implement", swapped, undefined], `spawn ${i}`);
+    assert.equal(res.route, `arm=${arm} reason=alternation model=${model}${swapped ? " (Implement -> antigravity-cli)" : ""}`);
+    assert.match(logs[i].text, new RegExp(`^implementer-arm: Implement -> Implement@${provider} arm=${arm} reason=alternation model=${model} lane=feat counts=`));
+  }
+  // Opt-outs on the role name: visible, not counted, ladder default route.
+  for (const [args, reason] of [[{ labels: { ab: "pin" } }, "pin"], [{ provider: "antigravity-cli", model: "gemini-4-neon" }, "override"]]) {
+    const { ctx: c2, creates: cr2 } = ctxWith([ag("sonnet")], []);
+    const res = await go(c2, { profile: "Implement", stakes: "normal", ...args });
+    assert.deepEqual([res.ab.reason, res.ab.swapped, cr2[0].labels["vs.arm"], cr2[0].labels.profile], [reason, false, undefined, "Implement"], reason);
+  }
+  // Capped Gemini: the Neon arm is skipped, the role stays on Claude.
+  const { ctx: c3, creates: cr3 } = ctxWith([ag("sonnet")], [], { env: { VIBESQUAD_HOME: home({ "antigravity-cli": {} }) } });
+  const r3 = await go(c3, { profile: "Implement", stakes: "normal" });
+  assert.deepEqual([cr3[0].config.provider, r3.ab.reason, cr3[0].labels.profile], ["claude", "capped:antigravity-cli", "Implement"]);
 });
 
 test("spawn_worker: caller-supplied vs.arm / vs.model labels are dropped; a throwing writeLog never fails the spawn", async () => {

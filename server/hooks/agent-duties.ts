@@ -61,6 +61,7 @@ import {
   routeRoleKeyOf,
   routeTierOf,
 } from "../spawn-route.mjs";
+import { armProvider } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
@@ -1831,7 +1832,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
-          const hit = roleSpawnProfile(hint, { stakes: labels.stakes, caps: cappedFamilies(currentUsageList()), roles });
+          const hit = roleSpawnProfile(hint, { stakes: labels.stakes, caps: cappedFamilies(currentUsageList()), roles, prefer: armProvider(labels["vs.arm"]) });
           if (hit) match = { profile: hit.profile as StoredProfile, explicit: true };
         }
       }
@@ -2121,6 +2122,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               caps: cappedFamilies(usageList, [provider]),
               roles,
               explicitModel: rawCallerModel,
+              // R1: an R0 implementer arm pick (spawn_worker stamps vs.arm) routes the role onto that arm's provider first.
+              prefer: armProvider(reqLabels["vs.arm"]),
             });
           }
           if (roleRoute) {

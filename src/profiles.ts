@@ -166,11 +166,11 @@ const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
   "Blocked on an owner decision → flag it (`vs log needs-you \"<reason>\"`; workers put it in the final message) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats aren't needed while a `vs watch` is armed.",
-  "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
-  "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF. Art work → Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other). Normal-mode UI phases (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) also go to UX Reviewer - Opus at phase end, and are not done while it has a critical or major finding open.",
+  "Never read sweeps, long logs or raw worker output yourself. Send them to a Pre-check worker and read only the result.",
+  "Routing: spawn by role name (`vs profiles`); stakes picks the model and effort from the tier ladder, provider/model only to override. Code → Implement. Work orders and specs → Planner. Read-only checks, lookups and censuses → Pre-check. Art work → Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) also go to UX Reviewer - Opus at phase end, and are not done while it has a critical or major finding open.",
   "Every spawn states `stakes=`: tierA-security for auth/crypto/relay/remote-proxy, tierA-invariant for state machines/locks/data migrations, mechanical for renames/copy/docs; otherwise normal.",
-  "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
-  "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
+  "Review: spawn Review on a different provider family than the writer. Claude work → Review (Gemini; Tier A waits if Gemini is capped; Tier B falls back to Review with provider=claude unless Sonnet wrote it). Gemini work → Review with provider=claude. DeepSeek work → Review (Gemini); if capped, Pre-check with provider=claude, then Review with provider=claude only on a FAIL or doubt.",
+  "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover walks each role's provider chain, see `vs profiles`).",
   PRIOR_ART_CHECK_RULE,
   SPIN_UP_BUDDY_RULE,
   JSON_WRITE_RULE,
@@ -191,7 +191,7 @@ const BRAINSTORM_NOTE_BODY = [
 
 const ART_PAINTER_NOTE_BODY = [
   "Art Painter in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). You are the only one who edits code or assets, in your own worktree. Draw from the brief using curated palettes per character or screen (never random seeded colours that clash with props).",
-  "After each pass, render a 4x gallery PNG of every sprite/portrait (or take screenshots for UI screens) and send the image path to Art Director - Gemini via `send` (VS MCP or `vs send`). Fix only the numbered items the Director returns. Stop on PASS or after round 4, then hand the final gallery PNG and summary to the lead.",
+  "After each pass, render a 4x gallery PNG of every sprite/portrait (or take screenshots for UI screens) and send the image path to the Art Director via `send` (VS MCP or `vs send`). Fix only the numbered items the Director returns. Stop on PASS or after round 4, then hand the final gallery PNG and summary to the lead.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
   "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
@@ -240,7 +240,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
-    notes: note(`${LEAD_NOTE_BODY}\nYour planning docs are Gemini-written, so Review - Sonnet reviews them.`),
+    notes: note(`${LEAD_NOTE_BODY}\nYour planning docs are Gemini-written, so Review with provider=claude reviews them.`),
     brief: LEAD_BRIEF,
   },
   {
@@ -267,7 +267,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
-    notes: note(`${BRAINSTORM_NOTE_BODY}\nBackup brainstorm for when Claude usage should be saved.`),
+    notes: note(`${BRAINSTORM_NOTE_BODY}\nBrainstorm on Gemini: the failover when Claude is capped, or picked with provider=antigravity-cli. Judge it like any role: first-try results, then fix-after-merge, then fit; $ only breaks ties.`),
     brief: BRAINSTORM_BRIEF,
   },
   {
@@ -281,7 +281,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      'Writes specs for new systems and final revisions after review: behavior, invariants, edge cases. Writes draft spec files in its own folder only; the lead files them. Never edits source. Every open design question goes in an "Owner decisions" section with options and a recommendation; never decide one yourself.\nReview: Tier A by Review - Gemini; if Gemini is capped, the spec waits. Small first drafts may come from a Gemini profile instead; Review - Sonnet reviews those.',
+      'Writes specs for new systems and final revisions after review: behavior, invariants, edge cases. Writes draft spec files in its own folder only; the lead files them. Never edits source. Every open design question goes in an "Owner decisions" section with options and a recommendation; never decide one yourself.\nReview: Tier A by Review (Gemini); if Gemini is capped, the spec waits. Small first drafts may come from a Planner on Gemini instead; Review with provider=claude reviews those.',
     ),
     brief: defaultBriefFor("Spec - Opus", "worker"),
   },
@@ -296,7 +296,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Turns one block into a work order that Work Order - DSP can execute exactly. Read the spec and the code, quote the current line for every step (file:line), list the files exhaustively, and give exact verification commands with expected results. Write only the work-order file at the path the lead gives. Never edit source or decide design: if the order needs a design call, stop and report it. Keep it under ~150 lines. Skip blocks of one file or less (those go to Mechanical - DSF). If the repo has a work-order template, use it.",
+      "Turns one block into a work order that an Implement worker can execute exactly. Read the spec and the code, quote the current line for every step (file:line), list the files exhaustively, and give exact verification commands with expected results. Write only the work-order file at the path the lead gives. Never edit source or decide design: if the order needs a design call, stop and report it. Keep it under ~150 lines. Skip blocks of one file or less (those go straight to Implement at stakes=mechanical). If the repo has a work-order template, use it.",
     ),
     brief: defaultBriefFor("Planner - Sonnet", "worker"),
   },
@@ -311,7 +311,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Default implementer for work without a clean work order: ambiguous or exploratory blocks. Medium effort; the lead never raises it. Tier A invariant work goes to Implement - Opus instead. Work on the task branch only.\nReview: Review - Gemini. If Gemini is capped, the block waits (Review - Sonnet can't review Sonnet work).",
+      "Default implementer for work without a clean work order: ambiguous or exploratory blocks. Medium effort; the lead never raises it. Tier A invariant work is spawned at stakes=tierA-invariant (the top rung) instead. Work on the task branch only.\nReview: Review on a different provider family than the writer (Gemini for Claude work, provider=claude for Gemini work). If that reviewer is capped, the block waits (the same family can't review its own work).",
     ),
     brief: defaultBriefFor("Implement - Sonnet", "worker"),
   },
@@ -326,7 +326,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Only for Tier A invariant work: data or save formats and migrations, determinism, numeric precision, security, or changes spanning 2+ systems. Never routine features, refactors, UI or read-only work. Medium effort; the lead may raise it to high for format, determinism or precision work.\nReview: Review - Gemini only. If Gemini is capped, the block waits; there is no fallback reviewer.",
+      "Only for Tier A invariant work: data or save formats and migrations, determinism, numeric precision, security, or changes spanning 2+ systems. Never routine features, refactors, UI or read-only work. Medium effort; the lead may raise it to high for format, determinism or precision work.\nReview: Review (Gemini) only. If Gemini is capped, the block waits; there is no fallback reviewer.",
     ),
     brief: defaultBriefFor("Implement - Opus", "worker"),
   },
@@ -342,7 +342,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "high",
     featureValues: { auto_accept: true },
     notes: note(
-      "Executes a Planner - Sonnet work order exactly, on its own task branch. Do only the listed steps, in the listed files. If a quoted line isn't where the order says, a file outside the list seems needed, or a test fails for a reason the order doesn't explain: STOP and report with raw output. Never improvise. Never touch Tier A areas unless the order names them.\nReport: raw terminal output, `git diff --stat`, test pass/fail counts and commit hashes.\nReview: Review - Gemini. If Gemini is capped: Check - Haiku first, then Review - Sonnet only on a Haiku FAIL or doubt.",
+      "Executes a Planner work order exactly, on its own task branch. Do only the listed steps, in the listed files. If a quoted line isn't where the order says, a file outside the list seems needed, or a test fails for a reason the order doesn't explain: STOP and report with raw output. Never improvise. Never touch Tier A areas unless the order names them.\nReport: raw terminal output, `git diff --stat`, test pass/fail counts and commit hashes.\nReview: Review (Gemini). If Gemini is capped: Pre-check with provider=claude first, then Review with provider=claude only on a FAIL or doubt.",
     ),
     brief: defaultBriefFor("Work Order - DSP", "worker"),
   },
@@ -358,7 +358,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "default",
     featureValues: { auto_accept: true },
     notes: note(
-      "Primary low-judgment worker: renames, tests against an existing spec, data or config edits, behavior-neutral refactors, follow-up cleanups, one-file blocks, and scripted measurement runs under a read-only brief. Never touch Tier A areas; stop and report on any design decision.\nReview: same as Work Order - DSP. If the result is procedurally fine but the reasoning is thin, the lead escalates to Senior Reasoning - DSP.",
+      "Primary low-judgment worker: renames, tests against an existing spec, data or config edits, behavior-neutral refactors, follow-up cleanups, one-file blocks, and scripted measurement runs under a read-only brief. Never touch Tier A areas; stop and report on any design decision.\nReview: same as a work order. If the result is procedurally fine but the reasoning is thin, the lead respawns it as Implement at normal stakes or higher.",
     ),
     brief: defaultBriefFor("Mechanical - DSF", "worker"),
   },
@@ -374,7 +374,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "default",
     featureValues: { auto_accept: true },
     notes: note(
-      "Read-only census and audits: enumerate usages, map dependencies, inventory files, find dead code. Fallback for Scout - Flash. Never edit files. Report raw findings with file:line, not prose summaries. Mark anything unverifiable UNVERIFIED. Runs that need to execute tools go to Mechanical - DSF (this profile is in plan mode).",
+      "Read-only census and audits: enumerate usages, map dependencies, inventory files, find dead code. The DeepSeek hop of the Pre-check role. Never edit files. Report raw findings with file:line, not prose summaries. Mark anything unverifiable UNVERIFIED. Runs that need to execute tools go to Implement at stakes=mechanical (this profile is in plan mode).",
     ),
     brief: defaultBriefFor("Audit - DSF", "worker"),
   },
@@ -389,7 +389,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Claude-family reviewer:\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND Check - Haiku failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nFinal verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`). For a docs-only review of untracked lane docs (no commit), put a docs target in the sha slot instead: `docs:<repo-relative path>` (e.g. `PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md`) or a bare repo-relative path ending in `.md` (e.g. `PASS 0/0/0 EXP3.md`).\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Claude-family reviewer (Review with provider=claude):\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND the claude Pre-check failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nFinal verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`). For a docs-only review of untracked lane docs (no commit), put a docs target in the sha slot instead: `docs:<repo-relative path>` (e.g. `PASS 0/0/0 docs:docs/lanes/perfection/EXP3.md`) or a bare repo-relative path ending in `.md` (e.g. `PASS 0/0/0 EXP3.md`).\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -418,7 +418,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "low",
     notes: note(
-      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. Fallback for Pre-check - Flash on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. The claude hop of Pre-check on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review with provider=claude. Never a Tier A gate. Never checks Claude-written work.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -434,7 +434,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "low",
     featureValues: { approvalPolicy: "skip" },
     notes: note(
-      "Checks a worker's report before the lead reads it. Read-only. In the worker's worktree, check that:\n1. Raw output is present for every claimed command.\n2. `git diff --stat` is present and matches the brief's scope, with nothing extra.\n3. The claimed commits exist on the branch.\n4. Test counts are present with 0 failures and meet any floor the repo defines.\n5. Every stop condition the worker hit was reported, not worked around.\n\nOutput exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Apply the cause-vs-symptom gate below; otherwise don't judge design. If Gemini is down: Check - Haiku for DeepSeek reports, Mechanical - DSF (read-only brief) otherwise.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Checks a worker's report before the lead reads it. Read-only. In the worker's worktree, check that:\n1. Raw output is present for every claimed command.\n2. `git diff --stat` is present and matches the brief's scope, with nothing extra.\n3. The claimed commits exist on the branch.\n4. Test counts are present with 0 failures and meet any floor the repo defines.\n5. Every stop condition the worker hit was reported, not worked around.\n\nOutput exactly PASS or FAIL, one evidence line per check, then ≤5 summary lines. Apply the cause-vs-symptom gate below; otherwise don't judge design. If Gemini is down, Pre-check fails over along its provider chain (claude, then DeepSeek read-only).\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: defaultBriefFor("Pre-check - Flash", "worker"),
   },
@@ -450,7 +450,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "low",
     featureValues: { approvalPolicy: "skip" },
     notes: note(
-      'Answers one lookup question for a lead ("where is X used", "what does Y return"). Reply in ≤20 lines: the answer first, then file:line citations. No opinions or fixes. Read-only. If it isn\'t in the code, say NOT FOUND and list where you looked. One question per session. If Gemini is down, the lead uses Audit - DSF.',
+      'Answers one lookup question for a lead ("where is X used", "what does Y return"). Reply in ≤20 lines: the answer first, then file:line citations. No opinions or fixes. Read-only. If it isn\'t in the code, say NOT FOUND and list where you looked. One question per session. If Gemini is down, Pre-check fails over to DeepSeek.',
     ),
     brief: defaultBriefFor("Scout - Flash", "worker"),
   },

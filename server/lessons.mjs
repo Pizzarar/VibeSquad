@@ -174,7 +174,7 @@ export const STANDING_RULES = [
   `Run unit work in \`${sanctuaryRuleDir()}${process.platform === "win32" ? "\\<repo>\\<unit>" : "/<repo>/<unit>"}\`; never \`git worktree add ../<repo>-<unit>\` into \`projects/\`.`,
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
   "Never end a turn on a background task with nothing armed: leads/Buddies arm `vs watch add ...`; workers use `vs wait <id> --timeout <s>`.",
-  "Route by Role + Tier (from P5c): profile = role; model/effort from the provider x tier ladder; stakes shift the tier; a cap beats an explicit model; failover Claude -> Gemini -> DeepSeek; old names route as today until P5f.",
+  "Route by role name (Implement, Review, Planner, Pre-check, Lead, Brainstorm, Art Director, Art Painter; `vs profiles`): stakes picks the model + effort from the tier ladder; provider/model only to override; a cap beats an explicit model; failover walks the role's provider chain. Judge picks by first-try PASS, then fix-after-merge, then fit; $ only breaks ties.",
   "Detach live children before archiving a Paseo-backed agent (Paseo cascades archives to its children; the runner has no such cascade, so this applies only to Paseo-backed lanes).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",
   "Every master merge commit carries Live-Needs: none|frontend-reload|build|server-restart|runner-restart in the final trailer block, with Co-Authored-By; sync-runtime reads it.",
