@@ -1,0 +1,15 @@
+import { createRequire } from "node:module";
+const { chromium } = createRequire("/tmp/pwtool/")("playwright-core");
+const [port, w, lane, proj, shot] = process.argv.slice(2);
+const b = await chromium.launch({ executablePath: "/usr/bin/chromium-browser", args: ["--no-sandbox"] });
+const ctx = await b.newContext({ viewport: { width: +w, height: 1000 }, colorScheme: "dark" });
+await ctx.addInitScript(`localStorage.setItem("vs.vibePicked","1");`);
+const rw=[["Main Game Project","PRJ__X"],["Main Game",lane],["PRJ__X",proj]];
+await ctx.route(/\/assets\/index-.*\.js$/, async (route) => { const r = await route.fetch(); let body = await r.text(); for (const [a,c] of rw) body = body.split(a).join(c); route.fulfill({ response: r, body }); });
+const page = await ctx.newPage();
+await page.goto(`http://127.0.0.1:${port}/?demo=1&riff=1`);
+await page.waitForSelector('[data-testid="boring-needs-you-item"]'); if (process.env.FIXCSS) await page.addStyleTag({content: process.env.FIXCSS}); await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(1500);
+const r = await page.evaluate(() => { const li=[...document.querySelectorAll('[data-testid="boring-needs-you-item"]')].find(l=>l.innerText.includes("Lead 75")); const g=s=>li.querySelector(s); const f=e=>{const b=e.getBoundingClientRect();return {x:+b.left.toFixed(2),w:+b.width.toFixed(2),sw:e.scrollWidth,cw:e.clientWidth, font:getComputedStyle(e).fontFamily.slice(0,30), ls:getComputedStyle(e).letterSpacing}}; return {where:f(g('[data-testid="boring-needs-where"]')),lane:f(g(".boring-needs-lane")),proj:f(g(".boring-needs-proj")), fonts:[...document.fonts].filter(x=>x.status=="loaded").map(x=>x.family+x.weight).join(",")}; });
+console.log(JSON.stringify(r));
+if (shot) await page.locator('[data-testid="boring-needs-you"]').screenshot({ path: shot });
+await b.close();

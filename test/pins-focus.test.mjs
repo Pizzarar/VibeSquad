@@ -260,6 +260,9 @@ test("Desk Psycho U2: the sidebar where-label drops the 'Desk · ' prefix and ca
   const inbox = srcOf("BoringInbox.tsx");
   assert.ok(inbox.includes('title={`${r.lane} · ${r.project}`}'));
   assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? null : r.lane}'));
-  assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? r.project : ` · ${r.project}`}'));
+  assert.ok(inbox.includes("<span className=\"boring-needs-proj\">{r.project}</span>"));
   assert.match(srcOf("styles.css"), /\.sidebar \.boring-needs-where-inline \{[^}]*min-width: 0[^}]*overflow: hidden[^}]*text-overflow: ellipsis[^}]*white-space: nowrap[^}]*color: var\(--muted\)/);
+  // U3: the ' · ' separator is CSS ::before only when .boring-needs-lane is non-empty (no stray leading '·' when Desk drops the lane).
+  assert.match(srcOf("boring.css"), /\.boring-needs-lane:not\(:empty\)\s*\+\s*\.boring-needs-proj::before\s*\{\s*content:\s*"\\00a0·\\00a0";\s*\}/);
+  assert.match(srcOf("styles.css"), /\.sidebar \.boring-needs-lane:not\(:empty\)\s*\+\s*\.boring-needs-proj::before\s*\{\s*content:\s*"\\00a0·\\00a0";\s*\}/);
 });

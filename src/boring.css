@@ -1258,8 +1258,10 @@ html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #88
 html[data-vibe="boring"] .boring-needs-main { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-who { flex: 1 1 0; min-width: min(20ch, 100%); max-width: none; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { display: flex; flex: 0 0 100%; max-width: 100%; min-width: 0; overflow: hidden; }
-html[data-vibe="boring"] .boring-needs-open .boring-needs-lane { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Desk U3 (UX R25 m1, R32 m1+m2): lead rows keep the lane whole when it fits (capped at 100%-6ch so a 27+ch lane leaves a project floor); project elides first; separator is ::before only when lane is non-empty. */
+html[data-vibe="boring"] .boring-needs-open .boring-needs-lane { flex: 0 0 auto; min-width: 0; max-width: calc(100% - 6ch); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { flex: 0 1 auto; min-width: 0; max-width: 100%; text-indent: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-lane:not(:empty) + .boring-needs-proj::before { content: "\00a0·\00a0"; }
 
 /* idea-257: optional 2-pane split in the chat column (src/panes.ts). Grid only, no width media queries. */
 html[data-vibe="boring"] .boring-chat-column:has(.boring-chat-split) { max-width: 100%; }

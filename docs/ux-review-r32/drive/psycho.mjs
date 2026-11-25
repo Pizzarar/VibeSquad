@@ -1,0 +1,14 @@
+import { createRequire } from "node:module";
+const { chromium } = createRequire("/tmp/pwtool/")("playwright-core");
+const [port, vibe, theme, shot] = process.argv.slice(2);
+const b = await chromium.launch({ executablePath: "/usr/bin/chromium-browser", args: ["--no-sandbox"] });
+const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } });
+await ctx.addInitScript(`localStorage.setItem("vs.vibePicked","1");localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.prefs.v1",JSON.stringify({"app.theme":"${theme}","app.vibe":"${vibe}"}));`);
+const page = await ctx.newPage(); const errs=[]; page.on("pageerror",e=>errs.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/?demo=1&riff=1`);
+await page.waitForTimeout(2500);
+const r = await page.evaluate(() => ({ vibe: document.documentElement.dataset.vibe, rows: [...document.querySelectorAll('[data-testid="boring-needs-where"]')].map(w => ({ text: w.innerText.replace(/\n/g,"⏎"), title: w.getAttribute("title"), sep: getComputedStyle(w.querySelector(".boring-needs-proj"),"::before").content, vis: w.getBoundingClientRect().width>0 })) }));
+console.log(JSON.stringify({errs, ...r}));
+const el = page.locator('.sidebar [data-testid="boring-needs-you"], .sidebar .boring-needs').first();
+if (shot && await el.count()) await el.screenshot({ path: shot }); else if (shot) await page.screenshot({ path: shot });
+await b.close();

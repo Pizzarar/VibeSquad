@@ -54,7 +54,7 @@ test("R4-3: Needs-you line 1 puts the lane first so end-ellipsis cuts the projec
   const [, lanePart, projectPart] = where;
   assert.match(lanePart, /r\.lane\}/, "the lane is rendered before the project span");
   assert.doesNotMatch(lanePart, /r\.project\}/, "no project text may precede the project span");
-  assert.match(projectPart, /` · \$\{r\.project\}`/, "the Normal path keeps ' · ${r.project}' inside the project span");
+  assert.match(projectPart, /\{r\.project\}/, "the project span holds the project; the separator is a CSS pseudo-element shown only with a lane (U3)");
   assert.doesNotMatch(inbox, /\{r\.project\} › \{r\.lane\}<\/span>/);
 });
 

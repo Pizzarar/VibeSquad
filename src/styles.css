@@ -6644,6 +6644,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-main { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; } /* unstyled it kept its min-content width and pushed the age chip 35px past the button (idea-734) */
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-lane:not(:empty) + .boring-needs-proj::before { content: "\00a0·\00a0"; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-conv-age { flex: none; font-size: 11px; font-weight: 400; color: var(--muted); }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-dot { flex: none; width: 8px; height: 8px; background: var(--amber); border: 1px solid var(--shadow-hard); }
