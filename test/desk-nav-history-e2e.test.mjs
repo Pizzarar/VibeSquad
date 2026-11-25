@@ -336,19 +336,28 @@ const B2_ROUTES = {
   },
   "d project row": (page) => page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(),
   "e notification click": (page) => page.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui" }, "*")),
+  // Round 2 (Review-Gemini M1): the notification lands the agent a commit before its team; a pinsHome flip (from the Overview) or a
+  // pinLayout flip (focus=needs-you) in that commit used to push ?team=<old>&agent=<new> first.
+  "f notification click from the Overview": (page) => page.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui" }, "*")),
+  "g notification click with focus=needs-you": (page) => page.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui", url: "/?focus=needs-you" }, "*")),
 };
-const B2_FINAL = { "a Ctrl+K agent pick": "?demo=&team=efi&agent=demo-lead-ui", "b Needs-you row": "?demo=&team=efi&agent=demo-lead-efi", "c sidebar agent row": "?demo=&team=efi&agent=demo-lead-ui", "d project row": "?demo=&team=efi", "e notification click": "?demo=&team=efi&agent=demo-lead-ui" };
+const B2_FROM_OVERVIEW = new Set(["f notification click from the Overview"]);
+const B2_FINAL = { "a Ctrl+K agent pick": "?demo=&team=efi&agent=demo-lead-ui", "b Needs-you row": "?demo=&team=efi&agent=demo-lead-efi", "c sidebar agent row": "?demo=&team=efi&agent=demo-lead-ui", "d project row": "?demo=&team=efi", "e notification click": "?demo=&team=efi&agent=demo-lead-ui", "f notification click from the Overview": "?demo=&team=efi&agent=demo-lead-ui", "g notification click with focus=needs-you": "?demo=&team=efi&agent=demo-lead-ui" };
 for (const [route, act] of Object.entries(B2_ROUTES)) {
-  test(`B2 e2e (${route}): cross-project nav from a chat = exactly 1 entry, no mixed entry, one Back returns to the chat`, async (t) => {
+  const fromOv = B2_FROM_OVERVIEW.has(route);
+  test(`B2 e2e (${route}): cross-project nav from ${fromOv ? "the Overview" : "a chat"} = exactly 1 entry, no mixed entry, one Back returns`, async (t) => {
     if (unavailable) return t.skip(unavailable);
     const { context, page, take } = await openChat("dark");
     const errs = [];
     page.on("pageerror", (e) => errs.push(String(e)));
     await page.evaluate(() => { window.__w = []; for (const k of ["pushState", "replaceState"]) { const o = history[k].bind(history); history[k] = (...a) => { window.__w.push([k, String(a[2]).replace(/^.*\?/, "?")]); return o(...a); }; } });
-    await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
-    await page.waitForTimeout(900);
+    if (!fromOv) {
+      await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+      await page.waitForTimeout(900);
+    }
     const s0 = await take();
-    assert.equal(s0.url, "?demo=&team=vibesquad&agent=demo-aud");
+    assert.equal(s0.url, fromOv ? "?demo=&team=vibesquad" : "?demo=&team=vibesquad&agent=demo-aud");
+    assert.equal(s0.chat, !fromOv);
     await page.evaluate(() => { window.__w = []; });
     await act(page);
     await page.waitForTimeout(900);
@@ -361,8 +370,8 @@ for (const [route, act] of Object.entries(B2_ROUTES)) {
     await page.goBack();
     await page.waitForTimeout(900);
     const s2 = await take();
-    assert.equal(s2.url, s0.url, "one Back returns to the chat's URL");
-    assert.equal(s2.chat, true, "one Back shows the chat again (not a dead Back)");
+    assert.equal(s2.url, s0.url, "one Back returns to the start URL");
+    assert.equal(s2.chat, s0.chat, "one Back shows the start screen again (not a dead Back)");
     assert.equal(pushes(s2), 0, `Back never pushes (${JSON.stringify(s2.h)})`);
     assert.deepEqual(errs, [], "no page errors");
     await context.close();
@@ -370,7 +379,7 @@ for (const [route, act] of Object.entries(B2_ROUTES)) {
 }
 
 // B2 unit: App's URL sync names the agent BoringApp published THIS commit (read live at effect time), so team + agent are one push.
-test("B2: urlSyncAgent reads the live shown agent in Normal; one commit = one push, no mixed entry", async () => {
+test("B2: urlSyncAgent reads the live shown agent in Normal only while it belongs to the team being written; one entry, no mixed entry", async () => {
   const { transformSync } = await import("rolldown/utils");
   const { readFileSync } = await import("node:fs");
   const pal = readFileSync(path.join(REPO_ROOT, "src", "CommandPalette.tsx"), "utf8");
@@ -380,18 +389,21 @@ test("B2: urlSyncAgent reads the live shown agent in Normal; one commit = one pu
   const { urlSyncAgent, urlSyncDecision, serializeUrlState } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
 
   // Helper contract.
-  assert.equal(urlSyncAgent({ boring: true, liveShown: "new", activeAgentId: "tab", rendered: "old" }), "new", "Normal: the live published agent, not the stale render value");
-  assert.equal(urlSyncAgent({ boring: true, liveShown: null, activeAgentId: "tab", rendered: "old" }), null, "Normal Overview/usage: no ?agent=");
-  assert.equal(urlSyncAgent({ boring: true, liveShown: undefined, activeAgentId: "tab", rendered: "old" }), "tab", "BoringApp not mounted: the active tab stands in");
-  assert.equal(urlSyncAgent({ boring: false, liveShown: "new", activeAgentId: "tab", rendered: "psycho" }), "psycho", "Psycho/phone: App's render-time value, untouched");
+  const owners = { "demo-aud": "vibesquad", "demo-lead-ui": "efi", new: "efi", old: "vibesquad" };
+  const teamOf = (id) => owners[id] ?? null;
+  const A = (o) => urlSyncAgent({ boring: true, activeAgentId: "tab", rendered: "old", team: "efi", teamOf, ...o });
+  // Helper contract.
+  assert.equal(A({ liveShown: "new" }), "new", "Normal: the live published agent (owned by the team being written), not the stale render value");
+  assert.equal(A({ liveShown: "unpinned" }), "unpinned", "Normal: a live agent with no known owner is trusted (no team switch can follow)");
+  assert.equal(A({ liveShown: null }), null, "Normal Overview/usage: no ?agent=");
+  assert.equal(A({ liveShown: undefined }), "tab", "BoringApp not mounted: the active tab stands in");
+  assert.equal(A({ liveShown: "new", team: "vibesquad" }), "old", "Gemini M1: live agent owned by ANOTHER project (its team lands next commit): the render-time value stands in");
+  assert.equal(A({ boring: false, liveShown: "new", rendered: "psycho" }), "psycho", "Psycho/phone: App's render-time value, untouched");
 
-  // Simulate App's URL sync over the commits of a cross-project nav from a chat (A=vibesquad/demo-aud -> B=efi/<agent>).
-  // Commit 1: team flips to efi and BoringApp's child effect publishes the new agent; App's render-time value is still demo-aud.
-  // Commit 2: the store re-render; render value catches up. `agentOf(commit)` picks which value the sync names.
-  const run = (final, agentOf) => {
-    let search = "?demo=&team=vibesquad&agent=demo-aud";
+  // Simulate App's URL sync over the commits of a nav; each commit = { team, rendered (App's render-time agent), live (store at effect time) }.
+  const run = (start, commits, agentOf) => {
+    let search = start;
     const entries = [search];
-    const commits = [{ team: "efi", rendered: "demo-aud", live: final }, { team: "efi", rendered: final, live: final }];
     for (const c of commits) {
       const next = serializeUrlState({ team: c.team, agent: agentOf(c) }, search);
       const d = urlSyncDecision({ next, current: search, popActive: false, storybookReplace: () => false });
@@ -401,11 +413,23 @@ test("B2: urlSyncAgent reads the live shown agent in Normal; one commit = one pu
     }
     return entries;
   };
-  const live = (c) => urlSyncAgent({ boring: true, liveShown: c.live, activeAgentId: c.live, rendered: c.rendered });
+  const live = (c) => urlSyncAgent({ boring: true, liveShown: c.live, activeAgentId: c.live, rendered: c.rendered, team: c.team, teamOf });
   const stale = (c) => c.rendered; // pre-B2: App's render-time useBoringShownAgent()
+  const r1 = (c) => urlSyncAgent({ boring: true, liveShown: c.live, activeAgentId: c.live, rendered: c.rendered, team: c.team, teamOf: () => null }); // 86775348: live, unconditionally
+  // (a)-(d): from a chat in A, team + selection in one batch. Commit 1: team=efi, BoringApp published the new agent, render value still demo-aud.
+  const chat = "?demo=&team=vibesquad&agent=demo-aud";
   for (const final of ["demo-lead-ui", null]) {
+    const commits = [{ team: "efi", rendered: "demo-aud", live: final }, { team: "efi", rendered: final, live: final }];
     const want = final ? `?demo=&team=efi&agent=${final}` : "?demo=&team=efi";
-    assert.deepEqual(run(final, live), ["?demo=&team=vibesquad&agent=demo-aud", want], `B2 (${final}): exactly one new entry, the final URL`);
-    assert.deepEqual(run(final, stale), ["?demo=&team=vibesquad&agent=demo-aud", "?demo=&team=efi&agent=demo-aud", want], `pre-B2 (${final}): the mixed interim entry the fix removes`);
+    assert.deepEqual(run(chat, commits, live), [chat, want], `B2 (${final}): exactly one new entry, the final URL`);
+    assert.deepEqual(run(chat, commits, stale), [chat, "?demo=&team=efi&agent=demo-aud", want], `pre-B2 (${final}): the mixed interim entry the fix removes`);
+  }
+  // (f)/(g) notification: Commit 1 = agent published, team still vibesquad (and a pinsHome/pinLayout flip fires the sync); Commit 2 = team
+  // switched by BoringApp's landing effect; Commit 3 = the store re-render.
+  for (const [start, prev] of [["?demo=&team=vibesquad", null], [chat, "demo-aud"]]) {
+    const commits = [{ team: "vibesquad", rendered: prev, live: "demo-lead-ui" }, { team: "efi", rendered: "demo-lead-ui", live: "demo-lead-ui" }, { team: "efi", rendered: "demo-lead-ui", live: "demo-lead-ui" }];
+    const want = "?demo=&team=efi&agent=demo-lead-ui";
+    assert.deepEqual(run(start, commits, live), [start, want], `round 2 (from ${start}): one entry, no ?team=<old>&agent=<new>`);
+    assert.deepEqual(run(start, commits, r1), [start, "?demo=&team=vibesquad&agent=demo-lead-ui", want], `86775348 (from ${start}): the mixed entry Gemini M1 found`);
   }
 });

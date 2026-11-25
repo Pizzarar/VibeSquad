@@ -50,7 +50,7 @@ import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
-import { BoringApp } from "./BoringAde";
+import { BoringApp, boringAgentLanding } from "./BoringAde";
 import { urlSyncAgent, urlSyncDecision } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
@@ -1876,7 +1876,10 @@ export function App() {
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
-    const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId });
+    // Only while that agent belongs to the team being written (a notification lands the agent a commit before its team: Gemini M1).
+    const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`
+    const teamOf = (id: string) => boringAgentLanding(boringViews, id)?.view?.team.id ?? null;
+    const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId, team: activeTeamId || null, teamOf });
     const next = serializeUrlState({ team: activeTeamId || null, agent, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);

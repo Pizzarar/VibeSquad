@@ -1,5 +1,5 @@
 // @desk B2 measure: from a chat in project A (VibeSquad, Audit - token scout), open project B (Main Game Project / efi) via
-// (a) Ctrl+K agent pick, (b) Needs-you row, (c) sidebar agent row, (d) project row. Logs every history write, history.length delta,
+// (a) Ctrl+K agent pick, (b) Needs-you row, (c) sidebar agent row, (d) project row, (e)-(g) notification click (see below). Logs every history write, history.length delta,
 // mixed entries (a written URL that is neither the start nor the final URL), and whether one Back changes the screen back to the chat.
 // Usage: PLAYWRIGHT_DIR=… PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=… node artifacts/desk-b2/drive/measure.mjs [dark|light] (needs a built dist/)
 import { createServer } from "node:http";
@@ -27,6 +27,10 @@ const SEQ = {
   "d-project": async (p) => { await p.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); },
   // (e) extra: a notification click (service-worker vs:select-agent) opens the agent first; the team follows in BoringApp's landing effect.
   "e-notify": async (p) => { await p.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui" }, "*")); },
+  // (f)/(g) round 2 (Review-Gemini M1): the notification opens the agent a commit before the team; a pinsHome / pinLayout flip in that commit
+  // used to fire the URL sync with the old team and the new (live) agent. (f) starts on VibeSquad's Overview, (g) on the chat with focus=needs-you.
+  "f-notify-ov": async (p) => { await p.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui" }, "*")); },
+  "g-notify-focus": async (p) => { await p.evaluate(() => window.postMessage({ type: "vs:select-agent", agentId: "demo-lead-ui", url: "/?focus=needs-you" }, "*")); },
 };
 const snap = (p) => p.evaluate(() => { const t = (e) => (e?.textContent || "").replace(/\s+/g, " ").trim(); return { h: window.__h.splice(0), hlen: history.length, url: location.search, chat: !!document.querySelector(".boring-timeline, .timeline"), crumb: t(document.querySelector(".boring-crumb-seg")?.parentElement).slice(0, 60) }; });
 const results = [];
@@ -37,7 +41,7 @@ for (const [name, act] of Object.entries(SEQ)) {
   const page = await ctx.newPage(); const errs = []; page.on("pageerror", (e) => errs.push(String(e)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?demo=&team=vibesquad`);
   await page.waitForSelector(".boring-sidebar"); await page.waitForTimeout(900);
-  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click(); await page.waitForTimeout(900);
+  if (name !== "f-notify-ov") { await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click(); await page.waitForTimeout(900); }
   const s0 = await snap(page);
   await act(page); await page.waitForTimeout(900);
   const s1 = await snap(page);
