@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildQualityByModel, buildQualitySummary, QUALITY_MIN_N, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildQualityByModel, buildQualitySummary, QUALITY_MIN_N, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type CreditRow, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -171,6 +171,28 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
       </div>
       {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? etDateTime(checked) || undefined : undefined}>{sampled}</div>}
       <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
+    </div>
+  );
+}
+
+function CreditCard({ c, thresholdUsd, now }: { c: CreditRow; thresholdUsd: number; now: number }) {
+  const ok = c.status === "ok" && typeof c.balance === "number" && Number.isFinite(c.balance);
+  const low = ok && (c.balance as number) < thresholdUsd;
+  const level = !ok ? "warn" : low ? "hot" : "ok";
+  const cur = (c.currency ?? "USD").toUpperCase();
+  const sym = cur === "USD" ? "$" : `${cur} `;
+  const sampled = limitSampledText(c.checkedAt, now);
+  return (
+    <div className={`usage-limit usage-${level}`} data-testid="usage-credit-card" data-provider={c.provider} data-low={low ? "true" : undefined}>
+      <div className="usage-limit-head">
+        <span className="usage-limit-name">{providerLabel(c.provider)}</span>
+        <span className="usage-limit-win">credit</span>
+      </div>
+      <div className="usage-limit-pct">
+        {ok ? `${sym}${(c.balance as number).toFixed(2)}` : c.status}
+        <small>{ok ? (low ? `below $${thresholdUsd} threshold` : `${cur} balance`) : "balance check failed"}</small>
+      </div>
+      {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-credit-sampled" title={c.checkedAt ? etDateTime(c.checkedAt) || undefined : undefined}>{sampled}</div>}
     </div>
   );
 }
@@ -415,11 +437,19 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         )}
       </div>
       <div className="usage-limits" data-testid="usage-limits">
-        {limits.length === 0 ? (
-          <div className="usage-empty muted small" data-testid="usage-limits-empty">no limit data yet — appears after the next Claude/Gemini turn</div>
-        ) : (
-          limits.map((l) => <LimitCard key={`${l.provider}|${l.window}`} l={l} now={now} />)
-        )}
+        {(() => {
+          const visibleCredits = (data?.credits ?? []).filter((c) => c.status !== "no-key");
+          const creditThreshold = typeof data?.creditThresholdUsd === "number" ? data.creditThresholdUsd : 10;
+          if (limits.length === 0 && visibleCredits.length === 0) {
+            return <div className="usage-empty muted small" data-testid="usage-limits-empty">no limit data yet — appears after the next Claude/Gemini turn</div>;
+          }
+          return (
+            <>
+              {limits.map((l) => <LimitCard key={`${l.provider}|${l.window}`} l={l} now={now} />)}
+              {visibleCredits.map((c) => <CreditCard key={`credit|${c.provider}`} c={c} thresholdUsd={creditThreshold} now={now} />)}
+            </>
+          );
+        })()}
       </div>
 
       {data.autonomy && (
