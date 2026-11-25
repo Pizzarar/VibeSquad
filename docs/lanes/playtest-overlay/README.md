@@ -41,7 +41,7 @@ On another machine, do the manual recipe: install as above, then `claude mcp add
 
 When the VS server runs on a remote host (forge) and the game runs on the dev PC:
 
-- **Report URL.** Set `vs_playtest/server_url` to `https://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS). The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the MagicDNS name.
+- **Report URL.** Set `vs_playtest/server_url` to `https://<forge mesh host>:<VS port>`. The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the mesh host name. Copy the exact address from the Pair Device dialog (Playtest role).
 - **Remote is https only.** Plain http is refused for a remote `server_url`; the token and the pairing code never ride on it. The one exception is the `GET /ca.crt` bootstrap fetch, which carries nothing secret. The device token is only sent over TLS pinned to the VS CA the owner confirmed, never the system trust store.
 - **Owner pairing** (the game on the dev PC becomes a Playtest device; a Playtest code gives the least-privilege `owner-playtest` role, report/thread only):
   1. Set `vs_playtest/server_url` to the https URL above.
