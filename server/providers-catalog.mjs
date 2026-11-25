@@ -1140,11 +1140,12 @@ const NUMSTAT_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat
 /** usa-54: a merge OF the default branch (`git pull` on main, "Merge origin/master into unit-x"): never a unit itself. */
 const BACK_MERGE_RE = /^Merge (?:(?:remote-tracking )?branch '(?:origin\/)?(?:main|master)'|(?:origin\/)?(?:main|master)(?=[\s:,(]|$))/i;
 /** Merge subject -> unit branch. "Merge branch 'x'" (git, GitLab "... into 'main'"), the hand-typed "Merge unit-<name>: ..."
- * form some leads used 11-19..11-20 (usa-44), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
+ * or "Merge <hyphen-slug>: ..." form leads use (usa-44/usa-65), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
 export function mergeSubjectBranch(subject) {
   const s = String(subject ?? "");
   return /Merge branch '([^']+)'/i.exec(s)?.[1]
     ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(s)?.[1]
+    ?? /^Merge ([A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9._-]*[A-Za-z0-9])(?=:|\s+\()/.exec(s)?.[1]
     ?? /^Merge pull request #\d+ from [^/\s]+\/(\S*[^\s.,:;)])/.exec(s)?.[1]
     ?? null;
 }
@@ -3703,6 +3704,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (st.handoff) la.handoffs += 1;
     la.byRole.set(st.role, (la.byRole.get(st.role) ?? 0) + 1);
     if (st.turns > LOOP_TURN_THRESHOLD && !st.pass) loops.push({ agentId: n.slice(0, -6), lane: st.lane, role: st.role, title: st.title, turns: st.turns });
+    const stIsImplementer = classifyJobKind(st) === "implementer";
     for (const b of st.buckets.values()) {
       if ((since && b.day < since) || (until && b.day > until)) continue;
       const a = getOrSet(agg, `${b.provider}|${b.model}|${b.lane}|${b.day}`, () => ({ provider: b.provider, model: b.model, lane: b.lane, day: b.day, ...zeroStats(), agents: 0 }));
@@ -3710,12 +3712,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       const aKey = `${b.provider}|${b.model}|${b.lane}|${b.day}`;
       a.agents = getOrSet(aggAgents, aKey, () => new Set()).add(n).size;
       addStats(getOrSet(laneRole, `${b.lane}|${b.role}`, () => ({ lane: b.lane, role: b.role, ...zeroStats() })), b);
-      // usa-65: provider x quota family split (day-filtered like byProvider)
+      // usa-65: provider x quota family split (day-filtered like byProvider; implementerCostUsd isolates $/unit from lead/Buddy/reviewer spend)
       const pfFam = familyKeyOf(st.family);
       const pfKey = `${b.provider}|${pfFam}`;
-      const pf = getOrSet(providerFamily, pfKey, () => ({ provider: b.provider, family: pfFam, runs: 0, units: 0, turns: 0, costUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+      const pf = getOrSet(providerFamily, pfKey, () => ({ provider: b.provider, family: pfFam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
       pf.turns += b.turns;
       pf.costUsd += b.costUsd;
+      if (stIsImplementer) pf.implementerCostUsd += b.costUsd;
       pf.runs = getOrSet(providerFamilyAgents, pfKey, () => new Set()).add(n).size;
     }
   }
@@ -4094,14 +4097,21 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const byDayFinal = by("day");
   if (foldedDayRows.length) for (const d of foldedDayRows) byDayFinal.push({ day: d.day, ...addStats(zeroStats(), d) });
   const byWorkflow = buildByWorkflow(merged, agentById);
-  // usa-65: fold merged unit counts + first-try PASS into providerFamily so byProvider[*].byFamily has units, $/unit, first-try PASS.
+  // usa-65: fold merged unit counts + first-try PASS into providerFamily in the same [since, until] window as byProvider.
   for (const u of merged) {
     if (!u.implementerProvider) continue;
+    if (since || until) {
+      const uDay = typeof u.mergedAt === "string" && u.mergedAt.length >= 10 ? u.mergedAt.slice(0, 10) : null;
+      if (!uDay || (since && uDay < since) || (until && uDay > until)) continue;
+    }
     const fam = familyKeyOf(u.implementerFamily);
     const pfKey = `${u.implementerProvider}|${fam}`;
-    const pf = getOrSet(providerFamily, pfKey, () => ({ provider: u.implementerProvider, family: fam, runs: 0, units: 0, turns: 0, costUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+    const pf = getOrSet(providerFamily, pfKey, () => ({ provider: u.implementerProvider, family: fam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
     pf.units += 1;
-    if (!u.implementerShared) pf.costUnits += 1;
+    if (!u.implementerShared) {
+      pf.costUnits += 1;
+      if (u.fromLedger && Number.isFinite(u.costUsd)) pf.implementerCostUsd += u.costUsd;
+    }
     const ft = unitFirstTry(u);
     if (ft !== null) { pf.firstTryKnown += 1; if (ft) pf.firstTryPassCount += 1; }
   }
@@ -4113,7 +4123,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       units: f.units,
       turns: f.turns,
       costUsd: f.costUsd,
-      costPerUnit: f.costUnits ? f.costUsd / f.costUnits : null,
+      implementerCostUsd: f.implementerCostUsd,
+      costPerUnit: f.costUnits ? f.implementerCostUsd / f.costUnits : null,
       firstTryPassCount: f.firstTryPassCount,
       firstTryKnown: f.firstTryKnown,
       firstTryPassRate: f.firstTryKnown ? Math.round((f.firstTryPassCount / f.firstTryKnown) * 1000) / 1000 : null,

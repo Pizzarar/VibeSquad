@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearUsageCache, getUsage, parseRouteFamily, usageTestHooks } from '../server/providers-catalog.mjs';
+import { clearUsageCache, getUsage, mergeSubjectBranch, parseRouteFamily, usageTestHooks } from '../server/providers-catalog.mjs';
 import './helpers/keep-alive.mjs';
 
 function makeHome() {
@@ -206,7 +206,146 @@ test('sonnet arm splits agy-claude ($0), claude (paid), unlabeled (pre-R10), and
     assert.equal(agyProv.byFamily.length, 1);
     assert.equal(agyProv.byFamily[0].family, 'agy-claude');
     assert.equal(agyProv.byFamily[0].units, 1);
+    assert.equal(agyProv.byFamily[0].implementerCostUsd, 0);
     assert.equal(agyProv.byFamily[0].costPerUnit, 0);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    clearUsageCache();
+  }
+});
+
+test('byProvider.byFamily.costPerUnit excludes lead/Buddy/reviewer spend via implementerCostUsd', () => {
+  clearUsageCache();
+  const home = makeHome();
+  try {
+    // 1 implementer run ($2.50) + 1 lead ($10.00) + 1 Buddy ($4.00) + 1 reviewer ($1.50), all family=claude
+    writeLog(home, 'ag-impl', [
+      {
+        type: 'created', ts: '2026-11-25T10:00:00Z', provider: 'claude', model: 'claude-sonnet-5-5',
+        cwd: '/tmp/wt/unit-usa-m1',
+        meta: { role: 'worker', lane: 'usage', profile: 'Implement', labels: { wf: 'sonnet', 'vs.route': 'stakes=normal model=claude-sonnet-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T10:02:00Z', costUsd: 2.5 },
+    ]);
+    writeLog(home, 'ag-lead', [
+      {
+        type: 'created', ts: '2026-11-25T09:00:00Z', provider: 'claude', model: 'claude-opus-5-5',
+        cwd: '/tmp/repo',
+        meta: { role: 'lead', lane: 'usage', profile: 'Lead', labels: { 'vs.route': 'stakes=normal model=claude-opus-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T09:10:00Z', costUsd: 10.0 },
+    ]);
+    writeLog(home, 'ag-buddy', [
+      {
+        type: 'created', ts: '2026-11-25T09:05:00Z', provider: 'claude', model: 'claude-opus-5-5',
+        cwd: '/tmp/repo',
+        meta: { role: 'brainstorm', lane: 'usage', profile: 'Brainstorm', labels: { 'vs.route': 'stakes=normal model=claude-opus-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T09:15:00Z', costUsd: 4.0 },
+    ]);
+    writeLog(home, 'ag-rev', [
+      {
+        type: 'created', ts: '2026-11-25T10:05:00Z', provider: 'claude', model: 'claude-sonnet-5-5',
+        cwd: '/tmp/wt/unit-usa-m1',
+        meta: { role: 'worker', lane: 'usage', profile: 'Review', labels: { 'vs.route': 'stakes=normal model=claude-sonnet-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T10:06:00Z', costUsd: 1.5 },
+    ]);
+
+    const git = fakeGit([
+      { sha: 'bbbb111', ts: '2026-11-25T10:10:00Z', subject: "Merge branch 'unit-usa-m1' (review r1, @usa)" },
+    ]);
+    const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+    const claudeProv = u.byProvider.find((p) => p.provider === 'claude');
+    assert.ok(claudeProv);
+    assert.equal(claudeProv.costUsd, 18.0);
+    const fam = claudeProv.byFamily.find((f) => f.family === 'claude');
+    assert.ok(fam);
+    assert.equal(fam.runs, 4);
+    assert.equal(fam.units, 1);
+    assert.equal(fam.costUsd, 18.0, 'provider family costUsd sums all roles to match parent byProvider');
+    assert.equal(fam.implementerCostUsd, 2.5, 'implementerCostUsd isolates implementer spend');
+    assert.equal(fam.costPerUnit, 2.5, 'costPerUnit divides implementerCostUsd, not lead/Buddy/reviewer spend');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    clearUsageCache();
+  }
+});
+
+test('byProvider.byFamily keeps runs/cost and merged units/firstTry in the same [since, until] day window', () => {
+  clearUsageCache();
+  const home = makeHome();
+  try {
+    // Day 1 (2026-11-20): $1.00, 2 review rounds (not first-try PASS)
+    writeLog(home, 'ag-d1', [
+      {
+        type: 'created', ts: '2026-11-20T10:00:00Z', provider: 'claude', model: 'claude-sonnet-5-5',
+        cwd: '/tmp/wt/unit-usa-d1',
+        meta: { role: 'worker', lane: 'usage', profile: 'Implement', labels: { wf: 'sonnet', 'vs.route': 'stakes=normal model=claude-sonnet-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-20T10:05:00Z', costUsd: 1.0 },
+    ]);
+    // Day 2 (2026-11-25): $3.00, 1 review round (first-try PASS)
+    writeLog(home, 'ag-d2', [
+      {
+        type: 'created', ts: '2026-11-25T10:00:00Z', provider: 'claude', model: 'claude-sonnet-5-5',
+        cwd: '/tmp/wt/unit-usa-d2',
+        meta: { role: 'worker', lane: 'usage', profile: 'Implement', labels: { wf: 'sonnet', 'vs.route': 'stakes=normal model=claude-sonnet-5-5 family=claude' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T10:05:00Z', costUsd: 3.0 },
+    ]);
+
+    const git = fakeGit([
+      { sha: 'cccc111', ts: '2026-11-20T10:10:00Z', subject: "Merge branch 'unit-usa-d1' (review r2, @usa)" },
+      { sha: 'cccc222', ts: '2026-11-25T10:10:00Z', subject: "Merge branch 'unit-usa-d2' (review r1, @usa)" },
+    ]);
+
+    const u = getUsage({ home, git, laneCodes: { usa: 'usage' }, since: '2026-11-25', until: '2026-11-25' });
+    const claudeProv = u.byProvider.find((p) => p.provider === 'claude');
+    assert.ok(claudeProv);
+    assert.equal(claudeProv.costUsd, 3.0);
+    const fam = claudeProv.byFamily.find((f) => f.family === 'claude');
+    assert.ok(fam);
+    assert.equal(fam.runs, 1);
+    assert.equal(fam.units, 1, 'only the 2026-11-25 merged unit is counted');
+    assert.equal(fam.costUsd, 3.0);
+    assert.equal(fam.implementerCostUsd, 3.0);
+    assert.equal(fam.costPerUnit, 3.0);
+    assert.equal(fam.firstTryPassCount, 1);
+    assert.equal(fam.firstTryKnown, 1);
+    assert.equal(fam.firstTryPassRate, 1);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    clearUsageCache();
+  }
+});
+
+test('mergeSubjectBranch parses hand-typed hyphenated unit slugs (e.g. Merge hub-relay-rule: ...) and attributes agy-claude', () => {
+  assert.equal(mergeSubjectBranch('Merge hub-relay-rule: team rule R18 (@vibesquad)'), 'hub-relay-rule');
+  assert.equal(mergeSubjectBranch('Merge desk-u2-history-races (incl. U1 desk-u1-url-keys): URL slot key'), 'desk-u2-history-races');
+  assert.equal(mergeSubjectBranch('Merge sf-m2 into sf-m3'), null);
+  assert.equal(mergeSubjectBranch('Merge fix: single word not a hyphen slug'), null);
+
+  clearUsageCache();
+  const home = makeHome();
+  try {
+    writeLog(home, 'ag-hub', [
+      {
+        type: 'created', ts: '2026-11-25T22:06:55Z', provider: 'antigravity-cli', model: 'claude-sonnet-5-5-medium',
+        cwd: '/home/user/.vibesquad/worktrees/VibeSquad/hub-relay-rule',
+        meta: { role: 'worker', lane: 'vibesquad', profile: 'Implement', labels: { wf: 'sonnet', 'vs.route': 'stakes=normal model=claude-sonnet-5-5-medium effort=medium reason=default tier=mid role=implement family=agy-claude why=arm' } },
+      },
+      { type: 'turn_done', ts: '2026-11-25T22:08:00Z', costUsd: 0 },
+    ]);
+    const git = fakeGit([
+      { sha: '1bb07d0c', ts: '2026-11-25T22:10:38Z', subject: 'Merge hub-relay-rule: team rule R18 (@vibesquad; review r1)' },
+    ]);
+    const u = getUsage({ home, git, laneCodes: { vibesquad: 'vibesquad' } });
+    const hub = u.merged.units.find((m) => m.sha === '1bb07d0c');
+    assert.ok(hub);
+    assert.equal(hub.unit, 'hub-relay-rule');
+    assert.equal(hub.implementerFamily, 'agy-claude');
+    assert.equal(hub.workflowMode, 'sonnet');
   } finally {
     rmSync(home, { recursive: true, force: true });
     clearUsageCache();

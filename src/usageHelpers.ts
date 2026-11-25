@@ -81,6 +81,7 @@ export type FamilySplitRow = {
   units: number;
   turns: number;
   costUsd: number;
+  implementerCostUsd?: number;
   costPerUnit: number | null;
   firstTryPassCount: number;
   firstTryKnown: number;
