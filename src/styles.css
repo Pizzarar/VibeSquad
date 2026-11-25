@@ -5932,7 +5932,8 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .phone-crunch-btn { min-height: 44px; width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 0; }
 .phone-crunch-btn .phone-crunch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .phone-crunch-btn .phone-crunch-label { flex: 0 0 auto; white-space: pre; }
-.phone-crunch-btn.on { color: var(--cyan-t); border-color: var(--cyan); background: var(--cyan-dim); }
+.phone-crunch-btn.on { color: var(--cyan-t); border-color: var(--cyan); background: var(--cyan-dim); box-shadow: inset 3px 0 0 var(--cyan); }
+.phone-crunch-btn[data-failed] { color: var(--st-err, var(--text)); border-color: var(--st-err, var(--line)); }
 .phone-crunch-btn:disabled { color: var(--muted); cursor: progress; opacity: 1; }
 .phone-usage-view { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); min-width: 0; max-width: 100vw; overflow: hidden; }
 .phone-usage-bar { display: flex; align-items: center; gap: var(--sp-3, 12px); padding: calc(var(--sp-2, 8px) + var(--phone-safe-top, 0px)) var(--sp-3, 12px) var(--sp-2, 8px); border-bottom: 1px solid var(--line); flex: none; }

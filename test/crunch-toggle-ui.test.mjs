@@ -23,7 +23,7 @@ test("CrunchToggle writes only vibeMode on the matching Squad and reads it live 
 
 test("all three surfaces use the Crunch label and the shared state", () => {
   const ade = src("BoringAde.tsx"), app = src("App.tsx"), modal = src("TeamSettingsModal.tsx");
-  assert.ok(ade.includes('<CrunchToggle teamId={view.team.id} variant="boring" />'), "Normal topbar pill");
+  assert.ok(ade.includes('<CrunchToggle key={view.team.id} teamId={view.team.id} variant="boring" />'), "Normal topbar pill");
   assert.ok(ade.indexOf("<CrunchToggle") > ade.indexOf('data-testid="boring-details-toggle"'), "last in the actions cluster, after Split/Details (does not shift)");
   assert.ok(ade.includes("<ProjectTabs projectId={view.team.id}"), "Code|Storybook tabs intact");
   assert.ok(app.includes('<CrunchToggle teamId={props.squadId} variant="psycho" />'), "Psycho chip, always rendered");
@@ -43,17 +43,27 @@ test("N1: light-mode active Code|Storybook label uses --text; Crunch pill styled
 
 test("phone drawer row, palette command and settings search find Crunch mode", () => {
   const ph = src("PhoneCockpit.tsx"), pal = src("CommandPalette.tsx"), prefs = src("prefs.ts"), css = src("styles.css");
-  assert.ok(ph.includes('<CrunchToggle teamId={view.team.id} variant="phone" />'));
+  assert.ok(ph.includes('<CrunchToggle key={view.team.id} teamId={view.team.id} variant="phone" />'));
   assert.ok(ph.indexOf("<CrunchToggle") < ph.indexOf('data-testid="phone-usage-btn"'), "near Usage");
   assert.match(css, /\.phone-crunch-btn \{ min-height: 44px;/, "44px touch target");
-  assert.match(pal, /Crunch mode: \$\{on \? "off" : "on"\} \(\$\{v\.team\.name\}\)/);
+  assert.match(src("crunchMode.ts"), /Turn Crunch \$\{s\.on \? "off" : "on"\} · \$\{s\.name\}/);
   assert.match(pal, /id\.startsWith\("crunch:"\)/);
   assert.match(prefs, /id: "crunch-mode"[^}]*keywords: \["crunch"/);
-  assert.match(src("TeamSettingsModal.tsx"), /data-setting-id=\{i === 0 \? "crunch-mode"/);
 });
 
 test("UX m3: sb-head pill type (weight 600) is Psycho-only so Normal keeps the topbar weight", () => {
   const css = src("storybook.css");
   assert.ok(!/\n\.sb-head \.project-tabs \.boring-switch-pill \{[^}]*font-weight/.test(css));
   assert.match(css, /html:not\(\[data-vibe="boring"\]\) \.sb-head \.project-tabs \.boring-switch-pill \{[^}]*font-weight: 600/);
+});
+
+test("r2: keyed toggles, current-Squad settings target, Normal sb-head 13px, failed colour wins hover, phone edge", () => {
+  assert.ok(src("BoringAde.tsx").includes('<CrunchToggle key={view.team.id} teamId'));
+  assert.ok(src("PhoneCockpit.tsx").includes('<CrunchToggle key={view.team.id} teamId'));
+  assert.match(src("TeamSettingsModal.tsx"), /data-setting-id=\{t\.id === crunchTargetId \? "crunch-mode" : undefined\}/);
+  assert.match(src("storybook.css"), /\n\.sb-head \.project-tabs \.boring-switch-pill \{[^}]*font-size: 13px/);
+  assert.match(src("boring.css"), /boring-crunch-pill\[data-failed\]\[aria-pressed\]:hover:not\(:disabled\) \{ color: var\(--st-err/);
+  const css = src("styles.css");
+  assert.match(css, /\.phone-crunch-btn\[data-failed\] \{ color: var\(--st-err/);
+  assert.match(css, /\.phone-crunch-btn\.on \{[^}]*box-shadow: inset 3px 0 0 var\(--cyan\)/);
 });

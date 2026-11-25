@@ -8,6 +8,8 @@ import { clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restore
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, getTeams, type FolderDef, type Member, type TeamView } from "./teams";
 import { setCrunchMode } from "./CrunchToggle";
+import { getCurrentSquadId } from "./currentSquad";
+import { crunchPaletteItems } from "./crunchMode";
 import { getLastFolder, patchTeamsFolder, setLastFolder } from "./boringFolders";
 import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
@@ -646,11 +648,7 @@ export function CommandPaletteHost(props: {
     // T2: Storybook is reached via the Code | Storybook tabs (Normal) and this command (keyboard / Psycho); hidden once a project is known-missing.
     // `mode` is a dep so the probe result is re-read each time the palette opens.
     const storybooks = props.views.filter((v) => !probeStorybook(v.team.id)).map<PaletteItem>((v) => ({ id: `action:storybook:${v.team.id}`, kind: "action", label: `Open Storybook: ${v.team.name}`, hint: "storybook" }));
-    // C3: "Crunch mode: on/off (<Squad>)" flips the Squad's vibeMode (label names the state you will get).
-    const crunches = props.views.filter((v) => getTeams().some((t) => t.id === v.team.id)).map<PaletteItem>((v) => {
-      const on = getTeams().find((t) => t.id === v.team.id)?.vibeMode === true;
-      return { id: `action:crunch:${v.team.id}`, kind: "action", label: `Crunch mode: ${on ? "off" : "on"} (${v.team.name})`, hint: "crunch auto-pilot" };
-    });
+    const crunches = crunchPaletteItems(props.views.filter((v) => getTeams().some((t) => t.id === v.team.id)).map((v) => ({ id: v.team.id, name: v.team.name, on: getTeams().find((t) => t.id === v.team.id)?.vibeMode === true })), getCurrentSquadId(), q);
     const stops = runningCwds(props.members.map((m) => m.agent)).map<PaletteItem>((c) => ({
       id: `action:stopcwd:${c.cwd}`,
       kind: "action",
@@ -675,7 +673,7 @@ export function CommandPaletteHost(props: {
       // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
       ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.members, props.views, bindings, mode]);
+  }, [all, props.members, props.views, bindings, mode, q]);
 
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {

@@ -1456,4 +1456,4 @@ html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunc
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"] { color: var(--muted); opacity: 1; }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"]:hover:not(:disabled) { color: var(--text); }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill:disabled { cursor: progress; opacity: 1; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed] { color: var(--st-err, var(--text)); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed], html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed][aria-pressed]:hover:not(:disabled) { color: var(--st-err, var(--text)); }

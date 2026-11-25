@@ -387,7 +387,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
               <span className="phone-storybook-name">{view.team.name}</span>
             </button>
           )}
-          {view && <CrunchToggle teamId={view.team.id} variant="phone" />}
+          {view && <CrunchToggle key={view.team.id} teamId={view.team.id} variant="phone" />}
           <button
             type="button"
             className="btn ghost phone-usage-btn"

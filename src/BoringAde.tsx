@@ -1041,7 +1041,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
               </button>
             )}
             {/* Last, so it stays put when Split/Details appear with an open agent (UX R26 n1). */}
-            {view && <CrunchToggle teamId={view.team.id} variant="boring" />}
+            {view && <CrunchToggle key={view.team.id} teamId={view.team.id} variant="boring" />}
           </div>
         </header>
         {view && activeAsleep && (

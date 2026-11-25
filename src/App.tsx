@@ -44,6 +44,7 @@ import {
 } from "./teams";
 import { getFolders, isHubLaneId, titleFor } from "./teams";
 import { CrunchToggle } from "./CrunchToggle";
+import { setCurrentSquadId } from "./currentSquad";
 import { filterAwakeViews } from "./boringFolders";
 import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
@@ -1651,6 +1652,7 @@ export function App() {
   }, []);
 
   const view = sidebarViews.find((v) => v.team.id === teamId) ?? sidebarViews[0] ?? views[0];
+  setCurrentSquadId(view?.team.id);
   const activeTeamId = view?.team.id ?? teamId;
 
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.

@@ -27,3 +27,17 @@ export function createCrunchSetter(deps: CrunchDeps) {
     return run;
   };
 }
+
+export type CrunchPaletteItem = { id: string; kind: "action"; label: string; hint: string };
+
+/**
+ * C3: "Turn Crunch on/off · <Squad>". Only the current Squad is offered by default (a bare "crunch" + Enter must never flip another
+ * Squad); other Squads appear only when the query also matches their name. No current Squad: nothing unless a name is typed.
+ */
+export function crunchPaletteItems(squads: { id: string; name: string; on: boolean }[], currentId: string | null, q: string): CrunchPaletteItem[] {
+  const needle = q.trim().toLowerCase();
+  return squads
+    .filter((s) => s.id === currentId || (needle !== "" && needle.split(/\s+/).some((t) => t !== "crunch" && s.name.toLowerCase().includes(t))))
+    .map<CrunchPaletteItem>((s) => ({ id: `action:crunch:${s.id}`, kind: "action", label: `Turn Crunch ${s.on ? "off" : "on"} · ${s.name}`, hint: "crunch mode auto-pilot" }));
+}
+
