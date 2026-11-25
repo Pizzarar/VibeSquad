@@ -8,6 +8,10 @@
 export const GEMINI_TOP_MODEL = "gemini-4-neon";
 /** Cheap-tier Gemini (scouts, pre-check, mechanical). Unchanged by N1. */
 export const GEMINI_CHEAP_MODEL = "gemini-3.8-flash";
+/** Top/mid-tier DeepSeek on opencode (Work Order - DSP, Senior Reasoning - DSP). */
+export const DEEPSEEK_TOP_MODEL = "deepseek/deepseek-v4-pro";
+/** Cheap-tier DeepSeek on opencode (mechanical stakes, cheap rung; Mechanical/Audit - DSF). R7 2026-11-25. */
+export const DEEPSEEK_CHEAP_MODEL = "deepseek/deepseek-flash";
 
 /** Retired model family id -> its replacement. Read by the profiles.json load-time migration (server/profiles.mjs). */
 export const RETIRED_MODEL_IDS = Object.freeze({
