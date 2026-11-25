@@ -1,0 +1,147 @@
+{
+ "url": "?demo=&view=decisions",
+ "nav": "Decisions· 12",
+ "navRect": {
+  "x": 12,
+  "y": 90,
+  "w": 355,
+  "h": 34
+ },
+ "summary": "12 open across 3 Squads",
+ "desk": {
+  "x": 1383,
+  "y": 76,
+  "w": 813,
+  "h": 2513
+ },
+ "deskScroll": {
+  "sh": 2513,
+  "ch": 2513
+ },
+ "strip": {
+  "x": 1383,
+  "y": 127,
+  "w": 813,
+  "h": 518
+ },
+ "stripScroll": {
+  "sh": 518,
+  "ch": 518,
+  "sw": 813,
+  "cw": 813
+ },
+ "stripLines": [
+  {
+   "t": "Deskno leaddoneNightly build green on all zones30m",
+   "trunc": false,
+   "x": 1394,
+   "y": 188,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "Main Game@main-gameneeds youdoneBounty tracker refactor landed14m",
+   "trunc": false,
+   "x": 1394,
+   "y": 220,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "UI Lab@ui-labidleNo recent done/decision3m",
+   "trunc": false,
+   "x": 1394,
+   "y": 252,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "Deskno leadNo recent done/decision",
+   "trunc": false,
+   "x": 1394,
+   "y": 334,
+   "w": 791,
+   "h": 28
+  },
+  {
+   "t": "Site Polish@site-polishidledecisionStandardized PNG compression at level 622m",
+   "trunc": false,
+   "x": 1394,
+   "y": 364,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "DeskrunningdecisionDecision Desk approved for Normal default landing25m",
+   "trunc": false,
+   "x": 1394,
+   "y": 446,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "Plugins@pluginsidledoneMerged U1+U2 URL history cleanup18m",
+   "trunc": false,
+   "x": 1394,
+   "y": 478,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "UI Bois@ui-boisidledoneShipped D2 owner-only decisions API11m",
+   "trunc": false,
+   "x": 1394,
+   "y": 510,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "Art Direction@art-directionidleNo recent done/decision8m",
+   "trunc": false,
+   "x": 1394,
+   "y": 542,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "Runner Pilot@runner-pilotidleNo recent done/decision12m",
+   "trunc": false,
+   "x": 1394,
+   "y": 574,
+   "w": 791,
+   "h": 30
+  },
+  {
+   "t": "wiki@wikiidleNo recent done/decision15m",
+   "trunc": false,
+   "x": 1394,
+   "y": 606,
+   "w": 791,
+   "h": 30
+  }
+ ],
+ "stripText": "LIVE STATUS\n11 lanes\nMain Game Project\nDesk\nno lead\nDONE\nNightly build green on all zones\n30m\nMain Game\n@main-game\nneeds you\nDONE\nBounty tracker refactor landed\n14m\nUI Lab\n@ui-lab\nidle\nNo recent done/decision\n3m\nSite\nDesk\nno lead\nNo recent done/decision\nSite Polish\n@site-polish\nidle\nDECISION\nStandardized PNG compression at level 6\n22m\nVibeSquad\nDesk\nrunning\nDECISION\nDecision Desk approved for Normal default landing\n25m\nPlugins\n@plugins\nidle\nDONE\nMerged U1+U2 URL history cleanup\n18m\nUI Bois\n@ui-bois\nidle\nDONE\nShipped D2 owner-only decisions API\n11m\nArt Direction\n@art-direction\nidle\nNo recent done/decision\n8m\nRunner Pilot\n@runner-pilot\nidle\nNo recent done/decision\n12m\nwiki\n@wiki\nidle\nNo recent done/decision\n15m",
+ "send": {
+  "x": 2046,
+  "y": 1753,
+  "w": 133,
+  "h": 34
+ },
+ "sendText": "Send 0 answers",
+ "deskText": "Decision Desk\n12 open across 3 Squads\nRefresh\nLIVE STATUS\n11 lanes\nMain Game Project\nDesk\nno lead\nDONE\nNightly build green on all zones\n30m\nMain Game\n@main-game\nneeds you\nDONE\nBounty tracker refactor landed\n14m\nUI Lab\n@ui-lab\nidle\nNo recent done/decision\n3m\nSite\nDesk\nno lead\nNo recent done/decision\nSite Polish\n@site-polish\nidle\nDECISION\nStandardized PNG compression at level 6\n22m\nVibeSquad\nDesk\nrunning\nDECISION\nDecision Desk approved for Normal default landing\n25m\nPlugins\n@plugins\nidle\nDONE\nMerged U1+U2 URL history cleanup\n18m\nUI Bois\n@ui-bois\nidle\nDONE\nShipped D2 owner-only decisions API\n11m\nArt Direction\n@art-direction\nidle\nNo recent done/decision\n8m\nRunner Pilot\n@runner-pilot\nidle\nNo recent done/decision\n12m\nwiki\n@wiki\nidle\nNo recent done/decision\n15m\nDECISIONS\nOldest first · 9\nVibeSquad\n3\n@ui-bois\nUI Bois · Lead 2\n1h\nMake Decision Desk the default Normal landing page?\nDecides: Sets whether opening the app lands on Decision Desk or Project Overview\nLEAN\nYes, default landing + sidebar entry\nSidebar entry only\nNot that\n@plugins\nPlugins · Lead 1\n1h\nMerge URL history cleanup into master now?\nDecides: Ships U1+U2 Back/Forward fixes ahead of the next beta cut\nLEAN\nMerge after green suite\nHold for D4 bundle\nNot that\n@runner-pilot\nRunner Pilot · Lead 1\n1h\nWhich default timeout (ms) should idle worker health checks use?\nDecides: Controls when quiet workers flip to stalled in the sidebar\nDismiss\nMain Game Project\n3\n@main-game\nMain Game · Lead 3\n58m\nKeep daily bounty resets at 00:00 UTC or align to server midnight?\nDecides: Changes quest rollover timing for all players\nLEAN\nKeep 00:00 UTC\nAlign to server local midnight\nRolling 24h per player\nNot that\n@ui-lab\nUI Lab · Lead 1\ninferred\n49m\nDrop legacy parry buffer window from 180ms to 120ms?\nDecides: Tightens parry timing across melee weapons\nLEAN\nDrop to 120ms\nTry 150ms first\nNot that\n@main-game\nMain Game · Lead 2\n41m\nWhat max player cap should the harbor zone use for stress tests?\nDecides: Sets the bot spawn count in the harbor benchmark\nDismiss\nSite\n3\n@site-polish\nSite Polish · Lead 1\n×2 grouped\n27m\nSwitch sprite atlas packing from shelf to maxrects?\nDecides: Cuts atlas VRAM by ~18% and regenerates sprite manifests\nLEAN\nSwitch to maxrects\nKeep shelf packer\nNot that\n@site-polish\nSite Polish · Lead 2\n19m\nAllow non-power-of-two textures in dev builds?\nDecides: Relaxes asset import validation outside release builds\nLEAN\nWarn in dev, error in release\nError everywhere\nNot that\n@site-polish\nSite Polish · Lead 1\n12m\nWhich artifact retention window (days) do we want for nightly builds?\nDecides: Sets storage cleanup policy on the build bucket\nDismiss\nOFF-SCREEN · TEST, MONEY & RELEASE\n3\nVibeSquad\n@art-direction\n1h\nSign and publish v1.14.2 beta to the desktop updater\nDecides: Pushes the signed installer to beta testers\nMark done\nDismiss\nMain Game Project\n@ui-lab\n34m\nPlaytest the rain reverb mix on studio headphones\nDecides: Unblocks final mastering of ambient weather stems\nMark done\nDismiss\nSite\n@site-polish\n6m\nApprove the $20/mo build-cache storage upgrade\nDecides: Increases remote cache quota for CI runners\nMark done\nDismiss\nFlip a lean, pick an option, or type an answer to queue a batch.\nUse all leans (6)\nSend 0 answers",
+ "needsHead": [
+  "Needs you5Ctrl+J"
+ ],
+ "sidebarText": "VibeSquad\n⌕\nSearch\nCtrl+K\nDecisions\n· 12\nNeeds you\n5\nCtrl+J\nAudit - token scout\nDesk\nVibeSquad\n5m\n⋯\nBash: rg --stats\nAllow\nDeny\nReview - Sonnet · drawer\nDesk\nVibeSquad\n9m\n⋯\npick option A or B\nLead 75\nMain Game\nMain Game Project\n3m\n⋯\nLead at 150k+ tokens: wrap up and hand off at a good stopping point, then approve the save-format merge\nReview - Gemini · retry\nDesk\nVibeSquad\n2m\n⋯\nEOF · Post cloudcode-pa.googleapis.com\nMechanical - rename sweep\nDesk\nVibeSquad\n14m\n⋯\nStalled: no update for 14m\n▸ Done recently · 4\nProjects\n+\n▾\nMain Game Project\n⋯\n+ lane\nDESK\n★ Overlord\nno agent\nRiffBot\nno agent\nBugs\nno agent\nLANES\n▸\nMain Game\n3m ago\n1\n⋯\n▸\nUI Lab\n3m ago\n⋯\n▸\nSite\n⋯\n▸\nVibeSquad\n4\n⋯\n▸\nBacklog\n· 0\n💤\nAsleep\n⋯\nUsage & workflows\nSettings",
+ "selected": [],
+ "crumb": "Decision Desk",
+ "fonts": [
+  "13px",
+  "20px",
+  "12px",
+  "11px",
+  "10px",
+  "14px"
+ ],
+ "errs": []
+}
