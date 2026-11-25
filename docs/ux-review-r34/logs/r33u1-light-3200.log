@@ -1,0 +1,164 @@
+== slot-bugs (light 3200x1800@1.2)
+  start          ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2
+  click Bugs     ?demo=&team=vibesquad&slot=bugs | CARD[No Brainstorm session is running for this conversa] crumb=VibeSquad›Bugs›Brainstorm on=["boring-mate:Bugsno agent"] len=3  :: pushState ?demo=&team=vibesquad&slot=bugs
+  back           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=3  :: POP ?demo=&team=vibesquad
+  forward        ?demo=&team=vibesquad&slot=bugs | CARD[No Brainstorm session is running for this conversa] crumb=VibeSquad›Bugs›Brainstorm on=["boring-mate:Bugsno agent"] len=3  :: POP ?demo=&team=vibesquad&slot=bugs
+  reload final   ?demo=&team=vibesquad&slot=bugs | CARD[No Brainstorm session is running for this conversa] crumb=VibeSquad›Bugs›Brainstorm on=["boring-mate:Bugsno agent"] len=3
+  back after rl  ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=3  :: POP ?demo=&team=vibesquad
+  pageerrors=0 
+== slot-efi (light 3200x1800@1.2)
+  audit chat     ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=3  :: pushState ?demo=&team=vibesquad&agent=demo-aud
+  efi Overlord   ?demo=&team=efi&slot=overlord | CARD[No Overlord is running for this project yet.Start ] crumb=Main Game Project›Desk›Overlord on=["boring-mate:★ Overlordno agent"] len=4  :: pushState ?demo=&team=efi&slot=overlord
+  efi RiffBot    ?demo=&team=efi&slot=riffbot | CARD[RiffBot is sleeping.Start RiffBot] crumb=Main Game Project›Desk›RiffBot on=["boring-mate:RiffBotno agent"] len=5  :: pushState ?demo=&team=efi&slot=riffbot
+  back           ?demo=&team=efi&slot=overlord | CARD[No Overlord is running for this project yet.Start ] crumb=Main Game Project›Desk›Overlord on=["boring-mate:★ Overlordno agent"] len=5  :: POP ?demo=&team=efi&slot=overlord
+  back2          ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=5  :: POP ?demo=&team=vibesquad&agent=demo-aud
+  fwd            ?demo=&team=efi&slot=overlord | CARD[No Overlord is running for this project yet.Start ] crumb=Main Game Project›Desk›Overlord on=["boring-mate:★ Overlordno agent"] len=5  :: POP ?demo=&team=efi&slot=overlord
+  fwd2           ?demo=&team=efi&slot=riffbot | CARD[RiffBot is sleeping.Start RiffBot] crumb=Main Game Project›Desk›RiffBot on=["boring-mate:RiffBotno agent"] len=5  :: POP ?demo=&team=efi&slot=riffbot
+  reload ovl     ?demo=&team=efi&slot=overlord | CARD[No Overlord is running for this project yet.Start ] crumb=Main Game Project›Desk›Overlord on=["boring-mate:★ Overlordno agent"] len=6
+  reload rb      ?demo=&team=efi&slot=riffbot | CARD[RiffBot is sleeping.Start RiffBot] crumb=Main Game Project›Desk›RiffBot on=["boring-mate:RiffBotno agent"] len=7
+  pageerrors=0 
+== tabs (light 3200x1800@1.2)
+  start          ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2
+  inbox          ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=3  :: pushState ?demo=&team=vibesquad&tab=inbox
+  standup        ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=4  :: pushState ?demo=&team=vibesquad&tab=standup
+  standup again  ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=4
+  back           ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=inbox
+  back2          ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad
+  fwd            ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=inbox
+  fwd2           ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=standup
+  reload inbox   ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=5
+  reload standup ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=6
+  click Overview ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=7  :: pushState ?demo=&team=vibesquad
+  back           ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=7  :: POP ?demo=&team=vibesquad&tab=standup
+  pageerrors=0 
+== proj-switch (light 3200x1800@1.2)
+  vs inbox       ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=3  :: pushState ?demo=&team=vibesquad&tab=inbox
+  efi row        ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=4  :: pushState ?demo=&team=efi
+  efi standup    ?demo=&team=efi&tab=standup | ov[tab=Standup Feed (7)] crumb=Main Game Project›Standup Feed on=["boring-project-row:Main Game Project"] len=5  :: pushState ?demo=&team=efi&tab=standup
+  vs row again   ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=6  :: pushState ?demo=&team=vibesquad
+  back           ?demo=&team=efi&tab=standup | ov[tab=Standup Feed (7)] crumb=Main Game Project›Standup Feed on=["boring-project-row:Main Game Project"] len=6  :: POP ?demo=&team=efi&tab=standup
+  back2          ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=6  :: POP ?demo=&team=efi
+  back3          ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=6  :: POP ?demo=&team=vibesquad&tab=inbox
+  fwd            ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=6  :: POP ?demo=&team=efi
+  reload back3   ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=5
+  pageerrors=0 
+== ctrlk (light 3200x1800@1.2)
+  vs inbox       ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=3  :: pushState ?demo=&team=vibesquad&tab=inbox
+  ctrlk UI Lab   ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=["boring-worker-row:Lead3m ago"] len=4  :: pushState ?demo=&team=efi&agent=demo-lead-ui
+  dLen=1
+  back           ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=inbox
+  back2          ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad
+  fwd            ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=inbox
+  fwd2           ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=["boring-worker-row:Lead3m ago"] len=4  :: POP ?demo=&team=efi&agent=demo-lead-ui
+  pageerrors=0 
+== ctrlk-same (light 3200x1800@1.2)
+  vs standup     ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=3  :: pushState ?demo=&team=vibesquad&tab=standup
+  ctrlk Audit    ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=4  :: pushState ?demo=&team=vibesquad&agent=demo-aud
+  dLen=1
+  back           ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=standup
+  back2          ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad
+  pageerrors=0 
+== unknown ?demo= (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=nope (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&foo=1 (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad&foo=1 | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&view=bogus (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=bogus (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&slot=bogus (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=overview (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=feed (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&slot=overlord (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad&agent=demo-lead-vs | chat crumb=VibeSquad›Desk›Overlord on=["boring-mate:★ Overlordworking"] len=2  :: replaceState ?demo=&team=vibesquad&agent=demo-lead-vs
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=efi&slot=lead (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=efi&slot=brainstorm (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=efi&slot=overlord&tab=inbox (light 3200x1800@1.2)
+  load           ?demo=&team=efi&slot=overlord | CARD[No Overlord is running for this project yet.Start ] crumb=Main Game Project›Desk›Overlord on=["boring-mate:★ Overlordno agent"] len=2  :: replaceState ?demo=&team=efi&slot=overlord
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=inbox&agent=demo-aud (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=2  :: replaceState ?demo=&team=vibesquad&agent=demo-aud
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=efi&slot=overlord&agent=demo-aud (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=2  :: replaceState ?demo=&team=efi&agent=demo-aud | replaceState ?demo=&team=vibesquad&agent=demo-aud
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&slot=overlord (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&tab=inbox (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=nope&tab=inbox (light 3200x1800@1.2)
+  load           ?demo=&team=efi | ov[tab=Overview] crumb=Main Game Project›Overview on=["boring-project-row:Main Game Project"] len=2  :: replaceState ?demo=&team=efi
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=INBOX (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== unknown ?demo=&team=vibesquad&tab=inbox&tab=standup (light 3200x1800@1.2)
+  load           ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad&tab=inbox
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== storybook-ov (light 3200x1800@1.2)
+  vs overview    ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=2
+  storybook      ?demo=&team=vibesquad&sb=vibesquad | ov[tab=] crumb= on=[] len=3 SB  :: pushState ?demo=&team=vibesquad&sb=vibesquad
+  esc            ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=3  :: back  | POP ?demo=&team=vibesquad
+  back            | ov[tab=] crumb= on=[] len=3 SB
+  back2           | ov[tab=] crumb= on=[] len=3 SB
+  fwd            ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=3
+  pageerrors=0 
+== storybook (light 3200x1800@1.2)
+  vs inbox       ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=3  :: pushState ?demo=&team=vibesquad&tab=inbox
+  storybook      ?demo=&team=vibesquad&tab=inbox&sb=vibesquad | ov[tab=] crumb= on=[] len=4 SB  :: pushState ?demo=&team=vibesquad&tab=inbox&sb=vibesquad
+  esc            ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: back  | POP ?demo=&team=vibesquad&tab=inbox
+  back           ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad
+  back2           | ov[tab=] crumb= on=[] len=4 SB
+  fwd            ?demo=&team=vibesquad | ov[tab=Overview] crumb=VibeSquad›Overview on=["boring-project-row:VibeSquad"] len=4
+  pageerrors=0 
+== storybook-url (light 3200x1800@1.2)
+  load sb+tab    ?demo=&team=vibesquad&tab=standup&sb=1 | ov[tab=] crumb= on=[] len=2 SB
+  esc            ?demo=&team=vibesquad&tab=standup | ov[tab=Standup Feed (7)] crumb=VibeSquad›Standup Feed on=["boring-project-row:VibeSquad"] len=2  :: replaceState ?demo=&team=vibesquad&tab=standup
+  back            | ov[tab=] crumb= on=[] len=2 SB
+  pageerrors=0 
+== open-in-inbox (light 3200x1800@1.2)
+  audit chat     ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=3  :: pushState ?demo=&team=vibesquad&agent=demo-aud
+  open in inbox  ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: pushState ?demo=&team=vibesquad&tab=inbox
+  dLen=1
+  back           ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=["boring-worker-row:Audit - token scout5m ago"] len=4  :: POP ?demo=&team=vibesquad&agent=demo-aud
+  fwd            ?demo=&team=vibesquad&tab=inbox | ov[tab=Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=["boring-project-row:VibeSquad"] len=4  :: POP ?demo=&team=vibesquad&tab=inbox
+  pageerrors=0 

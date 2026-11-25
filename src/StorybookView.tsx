@@ -28,7 +28,9 @@ const withSb = (projectId: string | null): string => {
   return `${location.pathname}${q ? `?${q}` : ""}${location.hash}`;
 };
 let pushed = false;
+let popped = false; // U2: the open Storybook is a ?sb= entry Back/Forward landed on (not openStorybook's push, not a cold link)
 let replaceUntil = 0;
+let backUntil = 0; // U1 r2: a close's history.back() is in flight until its popstate (bounded, in case it never arrives)
 /** After a forward-nav close ("replace"), the next URL sync should replaceState (the stripped entry is reused, so history has no duplicate). */
 export function takeStorybookReplace(): boolean {
   const r = Date.now() < replaceUntil;
@@ -39,6 +41,7 @@ export function openStorybook(projectId: string, name?: string): void {
   target = { projectId, name: name || projectId };
   history.pushState({ sb: projectId }, "", withSb(projectId));
   pushed = true;
+  popped = false;
   emit();
 }
 /**
@@ -50,11 +53,12 @@ export function openStorybook(projectId: string, name?: string): void {
 export function closeStorybook(mode?: unknown): void {
   if (!target) return;
   const replace = mode === "replace"; // anything else (a click event handed in as a handler, undefined) means user Back
-  const mine = pushed && Boolean(urlProject()) && history.state?.sb === target.projectId;
+  const mine = Boolean(urlProject()) && ((pushed && history.state?.sb === target.projectId) || popped);
   target = null;
   pushed = false;
+  popped = false;
   if (replace) replaceUntil = Date.now() + 1000;
-  if (mine && !replace) history.back(); // popstate finds no ?sb= and target already null: nothing more to do
+  if (mine && !replace) { backUntil = Date.now() + 1000; history.back(); } // popstate finds no ?sb= and target already null: nothing more to do
   else if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
   emit();
 }
@@ -62,11 +66,20 @@ if (typeof window !== "undefined") {
   const id0 = urlProject();
   target = id0 ? { projectId: id0, name: id0 } : null; // reload / shared link
   window.addEventListener("popstate", () => {
+    backUntil = 0;
     const id = urlProject();
-    if (!id) { if (target) { target = null; pushed = false; emit(); } }
-    else if (target?.projectId !== id) { target = { projectId: id, name: id }; emit(); }
+    if (!id) { if (target) { target = null; pushed = false; popped = false; emit(); } return; }
+    // U2 (idea-971): a ?sb= entry reached by Back/Forward is one of this session's entries, so Esc / Close on it goes Back, as right after
+    // opening. Stripping ?sb= in place (the cold-link close) could leave two identical entries side by side: a dead Back press.
+    popped = true;
+    if (target?.projectId !== id) { target = { projectId: id, name: id }; emit(); }
   });
 }
+/** Live value (module state) for effects that run in the commit that opened / closed the takeover (App's URL sync). */
+export const getStorybookTarget = (): Target => target;
+/** U1 r2: true between a close's history.back() and its popstate. BoringApp remounts (target already null) before the pop lands, and
+ * the URL still names the Storybook entry: App's URL sync must not write until the pop re-lands the screen (B1 then replaces). */
+export const storybookBackInFlight = (): boolean => Date.now() < backUntil;
 export function useStorybookTarget(): Target {
   return useSyncExternalStore((cb) => { subs.add(cb); return () => { subs.delete(cb); }; }, () => target, () => null);
 }

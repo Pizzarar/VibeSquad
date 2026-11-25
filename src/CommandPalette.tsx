@@ -35,22 +35,36 @@ export function dateBucket(iso: string | null | undefined, now = Date.now()): Da
   return "older";
 }
 
-export type UrlState = { team: string | null; agent: string | null };
+/** U1 (idea-997): an empty Desk/Trinity slot on screen (its card, no agent): `?slot=overlord|riffbot|bugs`. */
+export type UrlSlot = "overlord" | "riffbot" | "bugs";
+/** U1 (idea-895): the Overview sub-tab; the default Overview tab is omitted from the URL. */
+export type UrlTab = "inbox" | "standup";
+export type UrlState = { team: string | null; agent: string | null; slot?: UrlSlot | null; tab?: UrlTab | null };
 
+/** One screen, one URL: an agent wins over a slot, a slot over a tab. Unknown slot/tab values fall back to the Overview (null). */
 export function parseUrlState(search: string): UrlState {
   const p = new URLSearchParams(search);
-  return { team: p.get("team") || null, agent: p.get("agent") || null };
+  const agent = p.get("agent") || null;
+  const rawSlot = p.get("slot");
+  const slot = !agent && (rawSlot === "overlord" || rawSlot === "riffbot" || rawSlot === "bugs") ? rawSlot : null;
+  const rawTab = p.get("tab");
+  const tab = !agent && !slot && (rawTab === "inbox" || rawTab === "standup") ? rawTab : null;
+  return { team: p.get("team") || null, agent, slot, tab };
 }
 
-/** Merges team/agent into an existing query string, keeping unrelated params (demo, dock, ...). */
+/** Merges team/agent (+ U1 slot/tab) into an existing query string, keeping unrelated params (demo, dock, sb, ...). */
 export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, search = ""): string {
   const p = new URLSearchParams(search);
   p.delete("team");
   p.delete("agent");
   p.delete("view");
+  p.delete("slot");
+  p.delete("tab");
   if (state.squadsHome) p.set("view", "squads"); // Squads Home survives a reload/reconnect
   if (state.team) p.set("team", state.team);
   if (state.agent) p.set("agent", state.agent);
+  else if (state.slot) p.set("slot", state.slot);
+  else if (state.tab) p.set("tab", state.tab);
   const s = p.toString();
   return s ? `?${s}` : "";
 }

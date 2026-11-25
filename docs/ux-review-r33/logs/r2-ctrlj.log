@@ -1,0 +1,7 @@
+efi feed   ?demo=&team=efi&tab=standup tab=Standup Feed (7) crumb=Main Game Project›Standup Feed on=1 len=3 :: pushState ?demo=&team=efi&tab=standup
+ctrl+j     ?demo=&team=vibesquad&agent=demo-aud tab= crumb=VibeSquad›Desk›Worker on=1 len=4 :: pushState ?demo=&team=vibesquad&agent=demo-aud
+needs row  ?demo=&team=vibesquad&agent=demo-rev tab= crumb=VibeSquad›Desk›Worker on=1 len=5 :: pushState ?demo=&team=vibesquad&agent=demo-rev
+back       ?demo=&team=vibesquad&agent=demo-aud tab= crumb=VibeSquad›Desk›Worker on=1 len=5 :: POP ?demo=&team=vibesquad&agent=demo-aud
+back2      ?demo=&team=efi&tab=standup tab=Standup Feed (7) crumb=Main Game Project›Standup Feed on=1 len=5 :: POP ?demo=&team=efi&tab=standup | replaceState ?demo=&team=efi&agent=demo-aud | replaceState ?demo=&team=efi&tab=standup
+back3      ?demo=&team=efi tab=Overview crumb=Main Game Project›Overview on=1 len=5 :: POP ?demo=&team=efi
+fwd        ?demo=&team=efi&tab=standup tab=Standup Feed (7) crumb=Main Game Project›Standup Feed on=1 len=5 :: POP ?demo=&team=efi&tab=standup

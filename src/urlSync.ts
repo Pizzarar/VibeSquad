@@ -6,10 +6,18 @@
 
 export type UrlWrite = { write: boolean; replace: boolean };
 
+/** U1 r2 (UX R33 M1): two query strings name the same screen when they hold the same key=value pairs, in any order. serializeUrlState
+ * re-appends team/agent/slot/tab after params other code set (?sb=), so a raw string compare saw a reorder as a new screen and pushed. */
+export function sameQuery(a: string, b: string): boolean {
+  if (a === b) return true;
+  const norm = (q: string) => [...new URLSearchParams(q)].map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).sort().join("&");
+  return norm(a) === norm(b);
+}
+
 /** Decide the history write for one run of the URL sync. `next` = URL derived from the screen; `current` = location.search. */
 export function urlSyncDecision(o: { next: string; current: string; popActive: boolean; storybookReplace: () => boolean }): UrlWrite {
   const { next, current } = o;
-  if (next === current) return { write: false, replace: o.popActive };
+  if (sameQuery(next, current)) return { write: false, replace: o.popActive };
   if (o.popActive) {
     o.storybookReplace(); // drain a stale Storybook one-shot so the next user nav can push
     return { write: true, replace: true };
@@ -38,4 +46,17 @@ export function urlSyncAgent(o: { boring: boolean; liveShown: string | null | un
   if (o.liveShown === null) return null;
   const owner = o.teamOf(o.liveShown);
   return owner && owner !== o.team ? o.rendered : o.liveShown;
+}
+
+// U1 (idea-997/895): the screen keys that are not an agent: an empty Desk slot card (?slot=) and the Overview sub-tab (?tab=). BoringApp
+// publishes them tagged with their project (setBoringScreenKeys); like urlSyncAgent they are trusted only for the team being written.
+type ScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
+/** The ?slot= / ?tab= App's URL sync writes. Psycho / phone: none. Normal: the live published keys (`live`, read at effect time) when they
+ * belong to `team`, else the render-time ones (`rendered`) when those do, else none (that project's default Overview). BoringApp not
+ * mounted (live undefined, e.g. the Storybook takeover): keep the URL's own keys (`kept`), so its entry still names the screen to return to. */
+export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined; rendered: ScreenKeys | undefined; team: string | null; kept: { slot?: ScreenKeys["slot"]; tab?: ScreenKeys["tab"] } }): { slot: ScreenKeys["slot"]; tab: ScreenKeys["tab"] } {
+  if (!o.boring) return { slot: null, tab: null };
+  if (o.live === undefined) return { slot: o.kept.slot ?? null, tab: o.kept.tab ?? null };
+  const k = o.live.team === o.team ? o.live : o.rendered && o.rendered.team === o.team ? o.rendered : null;
+  return k ? { slot: k.slot, tab: k.tab } : { slot: null, tab: null };
 }
