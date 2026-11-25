@@ -317,7 +317,8 @@ tree, 53 GB free). Drop-in `~/.config/systemd/user/vibesquad.service.d/runner.co
 ```
 [Service]
 Environment=VS_RUNNER_MAX_LIVE=24
+Environment=VS_RUNNER_TURN_CAP_ANTIGRAVITY=6
 ```
 then `systemctl --user daemon-reload`; it takes effect at the next drained restart. Disk is the next limit (EFI worktrees
 290-560 MB each, `/` at 83%): go to 28+ only after the disk is extended. Per-provider turn caps (`VS_RUNNER_TURN_CAP_<FAMILY>`,
-defaults claude 12 / gemini 4 / antigravity 3 / other 4) are unchanged.
+defaults claude 12 / gemini 4 / antigravity 3 / other 4): forge sets `VS_RUNNER_TURN_CAP_ANTIGRAVITY=6` in the same drop-in (owner 11-25, Gemini quota mostly unused; 3 had no recorded reason).
