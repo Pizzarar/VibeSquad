@@ -29,6 +29,7 @@ export function useCrunchFlip(teamId: string) {
   const [failed, setFailed] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => { setBusy(false); setFailed(false); }, [teamId]); // a Squad switch never carries busy/failed over
   useEffect(() => {
     if (!failed) return;
     const t = setTimeout(() => setFailed(false), 4000);

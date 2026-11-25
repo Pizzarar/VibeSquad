@@ -1457,3 +1457,7 @@ html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunc
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"]:hover:not(:disabled) { color: var(--text); }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill:disabled { cursor: progress; opacity: 1; }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed], html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed][aria-pressed]:hover:not(:disabled) { color: var(--st-err, var(--text)); }
+/* C3 r3 (UX R26c n1): the generic `html[data-vibe="boring"] .btn` (0,2,1) beat the phone row's own colours; Normal tokens, same specificity bump. */
+html[data-vibe="boring"] .btn.phone-crunch-btn.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: inset 3px 0 0 var(--accent); }
+html[data-vibe="boring"] .btn.phone-crunch-btn[data-failed] { color: var(--st-err, var(--text)); border-color: var(--st-err, var(--border)); }
+html[data-vibe="boring"] .btn.phone-crunch-btn:disabled { color: var(--muted); }

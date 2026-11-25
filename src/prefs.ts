@@ -529,6 +529,7 @@ export function flashSettingTarget(root: { querySelector(sel: string): unknown }
   if (!el) return false;
   if (el.getAttribute("role") === "tab" && el.getAttribute("aria-selected") !== "true") el.click();
   el.scrollIntoView?.({ block: "center" });
+  (el as FlashEl & { querySelector?: (s: string) => { focus?: (o?: { preventScroll?: boolean }) => void } | null }).querySelector?.("[data-crunch-check]")?.focus?.({ preventScroll: true }); // UX R26c n2: Crunch row focuses its checkbox
   el.setAttribute("data-flash", "");
   setTimeout(() => el.removeAttribute("data-flash"), ms);
   return true;

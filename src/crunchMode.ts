@@ -30,14 +30,25 @@ export function createCrunchSetter(deps: CrunchDeps) {
 
 export type CrunchPaletteItem = { id: string; kind: "action"; label: string; hint: string };
 
+const COMMAND_WORDS = ["turn", "crunch", "on", "off", "mode", "auto", "pilot", "auto-pilot"];
+const words = (n: string) => n.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
 /**
- * C3: "Turn Crunch on/off · <Squad>". Only the current Squad is offered by default (a bare "crunch" + Enter must never flip another
- * Squad); other Squads appear only when the query also matches their name. No current Squad: nothing unless a name is typed.
+ * C3: "Turn Crunch on/off · <Squad>". The current Squad is always offered, first. Another Squad appears only when, after dropping
+ * command words (any prefix of turn/crunch/on/off/mode/auto-pilot), a remaining token of 2+ chars is a prefix of a word in its name
+ * or equals its id or initials ("efi" finds Escape From Idle). A bare "crunch" + Enter therefore never reaches another Squad.
  */
 export function crunchPaletteItems(squads: { id: string; name: string; on: boolean }[], currentId: string | null, q: string): CrunchPaletteItem[] {
-  const needle = q.trim().toLowerCase();
-  return squads
-    .filter((s) => s.id === currentId || (needle !== "" && needle.split(/\s+/).some((t) => t !== "crunch" && s.name.toLowerCase().includes(t))))
-    .map<CrunchPaletteItem>((s) => ({ id: `action:crunch:${s.id}`, kind: "action", label: `Turn Crunch ${s.on ? "off" : "on"} · ${s.name}`, hint: "crunch mode auto-pilot" }));
+  const tokens = q.trim().toLowerCase().split(/\s+/).filter((t) => t && !COMMAND_WORDS.some((w) => w.startsWith(t)));
+  const initials = (n: string) => words(n).map((w) => w[0]).join("");
+  const hit = (s: { id: string; name: string }) =>
+    tokens.some((t) => t.length >= 2 && (words(s.name).some((w) => w.startsWith(t)) || t === s.id.toLowerCase() || t === initials(s.name)));
+  const cur = squads.filter((s) => s.id === currentId);
+  const others = squads.filter((s) => s.id !== currentId && hit(s));
+  return [...cur, ...others].map<CrunchPaletteItem>((s) => ({
+    id: `action:crunch:${s.id}`,
+    kind: "action",
+    label: `Turn Crunch ${s.on ? "off" : "on"} · ${s.name}`,
+    hint: `crunch mode on off auto-pilot ${s.id} ${initials(s.name)}`,
+  }));
 }
-

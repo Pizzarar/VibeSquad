@@ -26,7 +26,7 @@ test("all three surfaces use the Crunch label and the shared state", () => {
   assert.ok(ade.includes('<CrunchToggle key={view.team.id} teamId={view.team.id} variant="boring" />'), "Normal topbar pill");
   assert.ok(ade.indexOf("<CrunchToggle") > ade.indexOf('data-testid="boring-details-toggle"'), "last in the actions cluster, after Split/Details (does not shift)");
   assert.ok(ade.includes("<ProjectTabs projectId={view.team.id}"), "Code|Storybook tabs intact");
-  assert.ok(app.includes('<CrunchToggle teamId={props.squadId} variant="psycho" />'), "Psycho chip, always rendered");
+  assert.ok(app.includes('<CrunchToggle key={props.squadId} teamId={props.squadId} variant="psycho" />'), "Psycho chip, always rendered");
   assert.ok(!app.includes("vibe-mode-chip") && !/Vibe mode/.test(app), "old one-way chip is gone");
   assert.match(modal, /aria-label="Crunch mode"/);
   assert.match(modal, /checked=\{t\.vibeMode === true\}/, "same field");
@@ -66,4 +66,14 @@ test("r2: keyed toggles, current-Squad settings target, Normal sb-head 13px, fai
   const css = src("styles.css");
   assert.match(css, /\.phone-crunch-btn\[data-failed\] \{ color: var\(--st-err/);
   assert.match(css, /\.phone-crunch-btn\.on \{[^}]*box-shadow: inset 3px 0 0 var\(--cyan\)/);
+});
+
+test("r3: Psycho chip keyed, flip hook resets on Squad change, Storybook-aware current Squad, Normal phone colours", () => {
+  assert.ok(src("App.tsx").includes('<CrunchToggle key={props.squadId} teamId={props.squadId} variant="psycho" />'));
+  assert.match(src("CrunchToggle.tsx"), /setBusy\(false\); setFailed\(false\); \}, \[teamId\]/);
+  assert.match(src("App.tsx"), /setCurrentSquadId\(resolveCurrentSquad\(view\?\.team\.id, sbTarget\?\.projectId, deviceRole\)\)/);
+  const b = src("boring.css");
+  assert.match(b, /html\[data-vibe="boring"\] \.btn\.phone-crunch-btn\.on \{[^}]*box-shadow: inset 3px 0 0 var\(--accent\)/);
+  assert.match(b, /\.btn\.phone-crunch-btn\[data-failed\] \{ color: var\(--st-err/);
+  assert.ok(!/phone-crunch-btn[^{]*\{[^}]*opacity: (?!1;)/.test(b));
 });

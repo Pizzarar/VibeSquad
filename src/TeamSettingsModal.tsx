@@ -881,6 +881,7 @@ export function TeamSettingsModal({
           <label className="muted small" style={{ display: "block", margin: "6px 0" }} data-setting-id={t.id === crunchTargetId ? "crunch-mode" : undefined}>
             <input
               type="checkbox"
+              data-crunch-check={t.id === crunchTargetId ? "" : undefined}
               aria-label="Crunch mode"
               checked={t.vibeMode === true}
               onChange={(e) => patch(i, { vibeMode: e.target.checked })}
