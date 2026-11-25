@@ -26,6 +26,9 @@
 .sb-title { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; } /* UX R22 M1: pill follows the title, like the topbar breadcrumb */
 .sb-title h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--sb-text); overflow-wrap: anywhere; }
 .sb-back-arrow { line-height: 1; }
+.sb-refresh-icon { display: none; }
+@keyframes sb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sb-refresh.sb-busy .sb-refresh-icon { animation: none; } }
 .sb-sep { color: var(--sb-text2); font-weight: 500; }
 .sb-proj { color: var(--sb-text2); font-weight: 500; }
 .sb-eye { font-size: 22px; color: var(--sb-accent-text); display: inline-block; animation: sb-drift 7s ease-in-out infinite alternate; }
@@ -116,8 +119,12 @@
   .sb-word, .sb-sep { display: none; } /* UX R22 m2 / R23 m2: the pill already says Storybook; no orphan '·' before the name */
   .sb-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
   .sb-head-right { order: 3; flex: 0 0 auto; width: auto; flex-wrap: nowrap; margin-left: 0; }
-  .sb-head-right > :not(.sb-needs) { display: none; } /* sha, "checked" note and Refresh stay on desktop; the one-row header keeps Back, title, pill */
-  .sb-head-right:not(:has(.sb-needs)) { display: none; }
+  .sb-head-right > .sb-sha, .sb-head-right > .sb-checked { display: none; } /* sha + checked note stay on desktop; Refresh and needs-you stay reachable */
+  .sb-head-right { gap: 8px; }
+  .sb-refresh { flex: 0 0 auto; width: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 20px; }
+  .sb-refresh-text { display: none; }
+  .sb-refresh-icon { display: inline-block; }
+  .sb-refresh.sb-busy .sb-refresh-icon { animation: sb-spin 1s linear infinite; }
   .sb-head:has(.sb-needs) { flex-wrap: wrap; } /* needs-you present: it gets a slim second row instead of squeezing the title */
   .sb-head:has(.sb-needs) .sb-head-right { width: 100%; }
   .sb-head-right .sb-needs { flex: 1 1 auto; min-height: 40px; }
