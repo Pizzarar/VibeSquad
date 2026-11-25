@@ -7,6 +7,7 @@
 //    catch-up state never written, empty runner-log lookups). The TMPDIR also split the "machine-wide" suite lock by caller.
 //  - VIBESQUAD_MESHNET_HOST/IP, VIBESQUAD_LAN, VIBESQUAD_PORT, VIBESQUAD_START_RUNNER, VS_LANE/TEAM/ROLE...: the live server's
 //    network and identity config leaked into URLs and routing under test.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -56,4 +57,28 @@ export function hermeticizeEnv(env = process.env, opts = {}) {
 // that agent and runner shells export; a test must never sync into it, and hermetic.mjs then sets a per-process temp one).
 export function childEnv(env) {
   return hermeticizeEnv({ ...env });
+}
+
+// idea-977: every test process (test/setup/hermetic.mjs) works inside ONE scratch dir "vs-t-XXXXXX" under the OS temp, so each
+// mkdtemp in a test file lands there and one rm on exit removes it all. A killed process (watchdog, SIGKILL) leaves its dir;
+// the suite runner ages those out at start.
+export const TEST_SCRATCH_PREFIX = "vs-t-";
+export const TEST_SCRATCH_MAX_AGE_MS = 3 * 3_600_000;
+
+/** Removes stale "vs-t-*" scratch dirs (real directories, mtime older than maxAgeMs) directly under `base`. Returns the count removed. */
+export function sweepTestScratch(base = os.tmpdir(), { now = Date.now(), maxAgeMs = TEST_SCRATCH_MAX_AGE_MS } = {}) {
+  let removed = 0;
+  let names;
+  try { names = fs.readdirSync(base); } catch { return 0; }
+  for (const name of names) {
+    if (!name.startsWith(TEST_SCRATCH_PREFIX)) continue;
+    const p = path.join(base, name);
+    try {
+      const st = fs.lstatSync(p);
+      if (!st.isDirectory() || now - st.mtimeMs < maxAgeMs) continue;
+      fs.rmSync(p, { recursive: true, force: true });
+      removed++;
+    } catch {}
+  }
+  return removed;
 }
