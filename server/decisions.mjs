@@ -304,7 +304,7 @@ export function buildAnswerPrompt(item, ans, { ownerName = "the owner", target =
     "--- END needs-you ---",
   );
   if (ans.text) {
-    lines.push(`--- BEGIN owner reply (${ownerName}) ---`, defangPromptFences(ans.text), "--- END owner reply ---");
+    lines.push(`--- BEGIN owner reply (${owner}) ---`, defangPromptFences(ans.text), "--- END owner reply ---");
   }
   return lines.join("\n");
 }
