@@ -152,3 +152,70 @@ test("idea-1046: runner POST /agents with agent headers: Pre-check / Scout - Fla
     runner.shutdown();
   }
 });
+
+// Per3 (R5 alias removal owner) asked for these two by name: they must hold before and after the legacy aliases go.
+async function agentSpawnHarness() {
+  const dir = path.join(mkdtempSync(path.join(os.tmpdir(), "vs-1046-ab-")), "agents");
+  dirs.push(path.dirname(dir));
+  const adapter = { canPark: true, start({ id, emit }) { setImmediate(() => emit("session", { sessionId: `sess-${id}` })); return { pid: 4343, ready: Promise.resolve(), send() {}, cancel() {}, kill() {} }; } };
+  const runner = new Runner({ dir, adapters: { claude: adapter }, parkGraceMs: 60_000, bgProbe: null });
+  const mk = (meta) => runner.create({ provider: "claude", cwd: process.cwd(), meta });
+  const ids = { lead: mk({ team: "sq", lane: "art", role: "lead", labels: {} }) };
+  ids.worker = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.lead } });
+  const srv = createRunnerServer(runner, { token: "adm", hash: "h", onShutdown: () => {} });
+  const port = await new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
+  const spawn = async (who, meta) => {
+    const r = await fetch(`http://127.0.0.1:${port}/agents`, { method: "POST", headers: { "content-type": "application/json", "x-vs-agent-id": who, "x-vs-agent-token": runner.tokensById.get(who) }, body: JSON.stringify({ provider: "claude", cwd: process.cwd(), meta }) });
+    const text = await r.text();
+    let body = null; try { body = JSON.parse(text); } catch { /* empty */ }
+    return { status: r.status, body, text };
+  };
+  const stop = async () => { await new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }); runner.shutdown(); };
+  return { runner, ids, spawn, stop };
+}
+
+test("idea-1046 (a): an agent spawn of role \"Pre-check\" with no labels.digestFor is ALLOWED", async () => {
+  for (const caller of [lead, worker]) {
+    const m = spawnMetaForAgent(caller, { profile: "Pre-check", labels: { profile: "Pre-check" } });
+    assert.equal(m.role, "worker");
+    assert.equal(m.profile, "Pre-check");
+    assert.equal(m.labels.digestFor, undefined);
+    assert.equal(isDigestMeta(m), false);
+    assert.equal(isDigestAgent(m.labels), false, "the server does not read it as a digest either");
+  }
+  const h = await agentSpawnHarness();
+  try {
+    for (const who of [h.ids.lead, h.ids.worker]) {
+      const r = await h.spawn(who, { profile: "Pre-check", labels: { profile: "Pre-check" } });
+      assert.equal(r.status, 201, `${who}: ${r.text}`);
+      const meta = h.runner.status(r.body.id).meta;
+      assert.equal(meta.role, "worker");
+      assert.equal(meta.profile, "Pre-check");
+      assert.equal(meta.labels.digestFor, undefined);
+      assert.equal(isDigestMeta(meta), false);
+    }
+  } finally { await h.stop(); }
+});
+
+test("idea-1046 (b): a spawn that sets labels.digestFor, or uses the exact DIGEST_PROFILE name, is still REFUSED", async () => {
+  const DIGEST_PROFILE = "Pre-check - Flash"; // runner.mjs / identity.mjs / agent-duties.ts DIGEST_PROFILE
+  const refused = [
+    { profile: "Pre-check", labels: { digestFor: "rn-x" } },
+    { labels: { digestFor: "rn-x" } },
+    { profile: DIGEST_PROFILE },
+    { labels: { profile: DIGEST_PROFILE } },
+    { profile: DIGEST_PROFILE, labels: { digestFor: "rn-x" } },
+  ];
+  for (const caller of CALLERS) {
+    for (const meta of refused) assert.throws(() => spawnMetaForAgent(caller, meta), (e) => e.status === 403, `${caller.id} ${JSON.stringify(meta)}`);
+  }
+  const h = await agentSpawnHarness();
+  try {
+    for (const who of [h.ids.lead, h.ids.worker]) {
+      for (const meta of refused) {
+        const r = await h.spawn(who, meta);
+        assert.equal(r.status, 403, `${who} ${JSON.stringify(meta)}: ${r.text}`);
+      }
+    }
+  } finally { await h.stop(); }
+});
