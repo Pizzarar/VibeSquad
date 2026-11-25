@@ -103,3 +103,24 @@ export function pairStartInit(role: DeviceRole, allowedTeams: string[] = []): Re
 
 export const TESTER_ROLE_LABEL = "Alpha Tester (Log Bug + Bug Desk chat only)";
 export const OWNER_ROLE_LABEL = "Owner (full access)";
+
+/** Pair-start link fields the phone sheet reads (server/auth.mjs handlePairStart). */
+export type PairLinkFields = {
+  pairUrl?: string | null;
+  pairIpUrl?: string | null;
+  lanPairUrl?: string | null;
+  qrSvg?: string | null;
+  qrSvgIp?: string | null;
+  lanQrSvg?: string | null;
+};
+
+/**
+ * idea-69: the phone sheet's link + QR prefer the Meshnet IP (`pairIpUrl` / `qrSvgIp`): its CA survives LAN-IP changes, so a
+ * phone paired that way never has to re-pair. Falls back to `pairUrl` / `qrSvg`, then the Home LAN pair.
+ */
+export function phonePairLinkAndQr(pair: PairLinkFields | null | undefined): { link: string; qr: string } {
+  return {
+    link: pair?.pairIpUrl || pair?.pairUrl || pair?.lanPairUrl || "",
+    qr: pair?.qrSvgIp || pair?.qrSvg || pair?.lanQrSvg || "",
+  };
+}

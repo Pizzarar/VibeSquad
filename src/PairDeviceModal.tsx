@@ -89,6 +89,14 @@ type DevicesResponse = {
  */
 export const httpsArtifactUrl = (u?: string | null) => (u ? u.trim().replace(/^http:\/\//i, "https://") : "");
 
+/**
+ * idea-69: Meshnet-IP-first default. Its CA survives LAN-IP changes, so pairing over it never forces a re-pair; Home LAN is
+ * the default only when no Meshnet IP is available. The user can still pick Home LAN explicitly.
+ */
+export function defaultPairNetworkMode(meshnetIp?: string | null, lanIp?: string | null): "lan" | "meshnet" {
+  return !(meshnetIp ?? "").trim() && (lanIp ?? "").trim() ? "lan" : "meshnet";
+}
+
 export function resolvePairModalUrls({
   pair,
   meta,
@@ -202,11 +210,14 @@ export function PairDeviceModal({
   onClose,
   initialPair = null,
   initialRole = "owner",
+  initialNetworkMode,
 }: {
   onClose: () => void;
   initialPair?: PairStartResponse | null;
   /** Test seam: renders the modal pre-selected to a role. Production callers omit it (defaults to "owner"). */
   initialRole?: DeviceRole;
+  /** Test seam: renders the modal as if the user had tapped Home LAN / Meshnet. Production callers omit it (idea-69 default). */
+  initialNetworkMode?: "lan" | "meshnet";
 }) {
   const [pair, setPair] = useState<PairStartResponse | null>(initialPair);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
@@ -225,10 +236,21 @@ export function PairDeviceModal({
     desktopInstallerSha256: Fingerprint | null;
     androidApkSha256: Fingerprint | null;
   } | null>(null);
-  const [networkMode, setNetworkMode] = useState<"lan" | "meshnet">(() =>
-    initialPair && !initialPair.lanIp ? "meshnet" : "lan",
+  const [networkMode, setNetworkModeState] = useState<"lan" | "meshnet">(
+    () => initialNetworkMode ?? defaultPairNetworkMode(initialPair?.meshnetIp, initialPair?.lanIp),
   );
-  const [useIpMode, setUseIpMode] = useState(false);
+  // An explicit Home LAN / Meshnet tap wins over later auto-defaults (a re-mint on role switch must not undo it).
+  const modePickedRef = useRef(Boolean(initialNetworkMode));
+  const pickNetworkMode = useCallback((mode: "lan" | "meshnet") => {
+    modePickedRef.current = true;
+    setNetworkModeState(mode);
+  }, []);
+  const applyDefaultNetworkMode = useCallback((meshnetIp?: string | null, lanIp?: string | null) => {
+    if (!lanIp) setNetworkModeState("meshnet");
+    else if (!modePickedRef.current) setNetworkModeState(defaultPairNetworkMode(meshnetIp, lanIp));
+  }, []);
+  // idea-69: Meshnet pairs by IP (pairIpUrl / qrSvgIp) by default, not by host name.
+  const [useIpMode, setUseIpMode] = useState(true);
   const [showFullFp, setShowFullFp] = useState(true);
   const [showWinHelp, setShowWinHelp] = useState(false);
   const [showAndroidHelp, setShowAndroidHelp] = useState(false);
@@ -262,11 +284,9 @@ export function PairDeviceModal({
         desktopInstallerSha256: data.desktopInstallerSha256 ?? null,
         androidApkSha256: data.androidApkSha256 ?? null,
       });
-      if (!data.lanIp) {
-        setNetworkMode("meshnet");
-      }
+      applyDefaultNetworkMode(data.meshnetIp, data.lanIp);
     } catch {}
-  }, []);
+  }, [applyDefaultNetworkMode]);
 
   // Monotonic mint id: a role switch / Squad toggle / newer mint invalidates any pair/start still in flight, so a stale
   // owner (or wrong-Squad) code can never land under the other role.
@@ -284,15 +304,13 @@ export function PairDeviceModal({
         return;
       }
       setPair(data);
-      if (!data.lanIp) {
-        setNetworkMode("meshnet");
-      }
+      applyDefaultNetworkMode(data.meshnetIp, data.lanIp);
     } catch (e) {
       if (seq === mintSeqRef.current) setErr(String(e));
     } finally {
       if (seq === mintSeqRef.current) setBusy(false);
     }
-  }, []);
+  }, [applyDefaultNetworkMode]);
 
   useEffect(() => {
     void loadDevices();
@@ -470,7 +488,7 @@ export function PairDeviceModal({
             <button
               type="button"
               className={isLan ? "on" : ""}
-              onClick={() => setNetworkMode("lan")}
+              onClick={() => pickNetworkMode("lan")}
               data-testid="mode-home-lan"
             >
               🏠 Home LAN ({lanIp}:{port})
@@ -478,7 +496,7 @@ export function PairDeviceModal({
             <button
               type="button"
               className={!isLan ? "on" : ""}
-              onClick={() => setNetworkMode("meshnet")}
+              onClick={() => pickNetworkMode("meshnet")}
               data-testid="mode-meshnet"
             >
               🌐 NordVPN Meshnet ({host}:{port})

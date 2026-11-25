@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-25T02:21:03.172Z",
+  "updatedAt": "2026-11-25T21:10:02.892Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -522,6 +522,23 @@
       "status": "done",
       "branch": "unit-and-restart-sync-894",
       "commit": "c6f33285"
+    },
+    {
+      "id": "unit-and-meshnet-ca-69",
+      "goal": "idea-69: Meshnet CA stable across LAN-IP change (exact /32 kept, leaf SAN gated to CA-permitted IPs) + Meshnet-IP-first pairing",
+      "files": [
+        "server/auth.mjs",
+        "src/phonePairLogic.ts",
+        "src/PhonePairSheet.tsx",
+        "src/PairDeviceModal.tsx",
+        "test/meshnet-ca-stability.test.mjs",
+        "test/pair-modal-apk.test.mjs",
+        "test/cli-devices.test.mjs"
+      ],
+      "doneCheck": "node --test test/meshnet-ca-stability.test.mjs test/tailscale-listener.test.mjs test/pair-modal-apk.test.mjs test/pair-artifact-https.test.mjs test/sec-tester-roles.test.mjs test/phone-cockpit.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-meshnet-ca-69",
+      "commit": "e61e08c2"
     }
   ]
 }
