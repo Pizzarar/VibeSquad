@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { describe, test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, test } from "node:test";
 import { registerHooks } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { transformSync } from "rolldown/utils";
 
 // MermaidView.tsx: load only the pure parser half (same trick as mermaid-view.test.mjs).
 registerHooks({
@@ -157,4 +160,246 @@ test("StorybookView probe notify path: subscribe/notify re-renders consumers whe
   assert.ok(s.includes('probe.get(projectId) === "present"'), "present hook reads present status");
   assert.ok(s.includes("probeSubs.add(cb)") && s.includes("probeSubs.delete(cb)"), "hooks subscribe via useSyncExternalStore");
   assert.ok(s.includes("useSyncExternalStore("), "uses useSyncExternalStore");
+});
+
+// ── idea-947: behavioural tests for Storybook probe re-probe on focus/visibilitychange after error ──
+describe("Storybook probe re-probe on focus / visibilitychange (idea-947)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-sb-probe-"));
+  const origWindow = globalThis.window;
+  const origDocument = globalThis.document;
+  const origFetch = globalThis.fetch;
+  const origDateNow = Date.now;
+
+  const winListeners = new Map();
+  const docListeners = new Map();
+  const addL = (map) => (ev, fn) => {
+    if (!map.has(ev)) map.set(ev, new Set());
+    map.get(ev).add(fn);
+  };
+  const remL = (map) => (ev, fn) => { map.get(ev)?.delete(fn); };
+  const fire = (map, ev) => { for (const fn of [...(map.get(ev) ?? [])]) fn(); };
+
+  let fakeNow = 10_000;
+  let visibilityState = "visible";
+  let fetchHandler = async () => ({ ok: false, status: 500 });
+  const fetchCalls = [];
+
+  globalThis.window = {
+    addEventListener: addL(winListeners),
+    removeEventListener: remL(winListeners),
+  };
+  globalThis.document = {
+    get visibilityState() { return visibilityState; },
+    addEventListener: addL(docListeners),
+    removeEventListener: remL(docListeners),
+  };
+  globalThis.fetch = (url, init) => {
+    fetchCalls.push({ url, init });
+    return fetchHandler(url, init);
+  };
+  Date.now = () => fakeNow;
+
+  after(() => {
+    globalThis.window = origWindow;
+    globalThis.document = origDocument;
+    globalThis.fetch = origFetch;
+    Date.now = origDateNow;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Minimal React hook runtime: supports mount, re-render, subscriber notifications, and unmount cleanup.
+  const runtime = { active: null };
+  globalThis.__sbProbeReact = {
+    useSyncExternalStore(sub, getSnap) {
+      const inst = runtime.active;
+      if (!inst.unsub) inst.unsub = sub(() => { inst.notifies++; });
+      return getSnap();
+    },
+    useEffect(fn, deps) {
+      const inst = runtime.active;
+      const same = inst.deps && deps && inst.deps.length === deps.length && inst.deps.every((d, i) => Object.is(d, deps[i]));
+      if (same) return;
+      if (typeof inst.cleanup === "function") inst.cleanup();
+      inst.deps = deps;
+      inst.cleanup = fn();
+    },
+  };
+
+  writeFileSync(
+    join(dir, "react.mjs"),
+    `export default { createElement() { return null; } };
+export const useSyncExternalStore = (...a) => globalThis.__sbProbeReact.useSyncExternalStore(...a);
+export const useEffect = (...a) => globalThis.__sbProbeReact.useEffect(...a);
+export const useCallback = (f) => f;
+export const useLayoutEffect = () => {};
+export const useMemo = (f) => f();
+export const useRef = (v) => ({ current: v });
+export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
+  );
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s;`);
+
+  const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
+    .code.replace(/^/, `import React from "./react.mjs";\n`)
+    .replace(/import "\.\/storybook\.css";\n?/, "")
+    .replace(/from "react"/g, `from "./react.mjs"`)
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs)"/g, `from "./stub.mjs"`);
+  writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
+
+  let mod;
+  const loadMod = async () => { if (!mod) mod = await import(pathToFileURL(join(dir, "StorybookView.mjs")).href); return mod; };
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  function mountHook(hook, projectId) {
+    const inst = { deps: null, cleanup: null, unsub: null, notifies: 0, value: false };
+    const render = (id = projectId) => {
+      projectId = id;
+      runtime.active = inst;
+      try { inst.value = hook(projectId); } finally { runtime.active = null; }
+      return inst.value;
+    };
+    const unmount = () => {
+      if (typeof inst.cleanup === "function") { inst.cleanup(); inst.cleanup = null; }
+      if (typeof inst.unsub === "function") { inst.unsub(); inst.unsub = null; }
+    };
+    render(projectId);
+    return { inst, render, unmount };
+  }
+
+  test("5xx / network error → window focus → re-probe → 200 flips useStorybookPresent to true", async () => {
+    const { useStorybookPresent } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 10_000;
+    fetchHandler = async () => ({ ok: false, status: 503 });
+
+    const h = mountHook(useStorybookPresent, "proj-focus-5xx");
+    assert.equal(h.inst.value, false);
+    assert.equal(fetchCalls.length, 1);
+    await flush();
+    assert.equal(h.render(), false);
+
+    // Server recovers; window focus triggers re-probe.
+    fetchHandler = async () => ({ ok: true, status: 200 });
+    fire(winListeners, "focus");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+    assert.equal(h.render(), true);
+    assert.ok(h.inst.notifies >= 2, "subscriber notified on resolution");
+    h.unmount();
+  });
+
+  test("network rejection → visibilitychange (only when visible) → re-probe → 404 flips useStorybookMissing to true", async () => {
+    const { useStorybookMissing } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 20_000;
+    fetchHandler = async () => { throw new Error("offline"); };
+
+    const h = mountHook(useStorybookMissing, "proj-vis-neterr");
+    assert.equal(fetchCalls.length, 1);
+    await flush();
+    assert.equal(h.render(), false);
+
+    // Hidden transition must not re-probe.
+    visibilityState = "hidden";
+    fire(docListeners, "visibilitychange");
+    assert.equal(fetchCalls.length, 1);
+
+    // Visible transition re-probes and caches definite 404.
+    visibilityState = "visible";
+    fetchHandler = async () => ({ ok: false, status: 404 });
+    fire(docListeners, "visibilitychange");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+    assert.equal(h.render(), true);
+    h.unmount();
+  });
+
+  test("throttle: at most once per 5s per project on repeated errors, independent across projects", async () => {
+    const { useStorybookPresent } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 30_000;
+    fetchHandler = async () => ({ ok: false, status: 502 });
+
+    const hA = mountHook(useStorybookPresent, "proj-throttle-a");
+    const hB = mountHook(useStorybookPresent, "proj-throttle-b");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+
+    // First focus re-probes both projects (both fail again).
+    fire(winListeners, "focus");
+    assert.equal(fetchCalls.length, 4);
+    await flush();
+
+    // Within 5s: focus and visibilitychange are both throttled (no spam).
+    fakeNow += 2_000;
+    fire(winListeners, "focus");
+    visibilityState = "visible";
+    fire(docListeners, "visibilitychange");
+    assert.equal(fetchCalls.length, 4);
+
+    // At +4999ms: still throttled.
+    fakeNow = 34_999;
+    fire(winListeners, "focus");
+    assert.equal(fetchCalls.length, 4);
+
+    // At +5000ms: allowed again.
+    fakeNow = 35_000;
+    fetchHandler = async (url) => (url.includes("proj-throttle-a") ? { ok: true, status: 200 } : { ok: false, status: 502 });
+    fire(winListeners, "focus");
+    assert.equal(fetchCalls.length, 6);
+    await flush();
+    assert.equal(hA.render(), true);
+    assert.equal(hB.render(), false);
+
+    hA.unmount();
+    hB.unmount();
+  });
+
+  test("no re-probe after a definite answer (200 or 404)", async () => {
+    const { useStorybookPresent, useStorybookMissing } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 50_000;
+
+    fetchHandler = async () => ({ ok: true, status: 200 });
+    const hPresent = mountHook(useStorybookPresent, "proj-def-200");
+    fetchHandler = async () => ({ ok: false, status: 404 });
+    const hMissing = mountHook(useStorybookMissing, "proj-def-404");
+    assert.equal(fetchCalls.length, 2);
+    await flush();
+    assert.equal(hPresent.render(), true);
+    assert.equal(hMissing.render(), true);
+
+    // Advance well past throttle window and fire both events: zero extra fetches.
+    fakeNow += 60_000;
+    fire(winListeners, "focus");
+    visibilityState = "visible";
+    fire(docListeners, "visibilitychange");
+    assert.equal(fetchCalls.length, 2);
+
+    hPresent.unmount();
+    hMissing.unmount();
+  });
+
+  test("unmount cleans up focus and visibilitychange listeners", async () => {
+    const { useStorybookPresent } = await loadMod();
+    fetchCalls.length = 0;
+    fakeNow = 120_000;
+    fetchHandler = async () => ({ ok: false, status: 500 });
+
+    const beforeWin = winListeners.get("focus")?.size ?? 0;
+    const beforeDoc = docListeners.get("visibilitychange")?.size ?? 0;
+    const h = mountHook(useStorybookPresent, "proj-unmount");
+    assert.equal(winListeners.get("focus")?.size ?? 0, beforeWin + 1);
+    assert.equal(docListeners.get("visibilitychange")?.size ?? 0, beforeDoc + 1);
+    await flush();
+
+    h.unmount();
+    assert.equal(winListeners.get("focus")?.size ?? 0, beforeWin);
+    assert.equal(docListeners.get("visibilitychange")?.size ?? 0, beforeDoc);
+
+    // Subsequent events must not re-probe the unmounted project.
+    fire(winListeners, "focus");
+    visibilityState = "visible";
+    fire(docListeners, "visibilitychange");
+    assert.equal(fetchCalls.length, 1);
+  });
 });
