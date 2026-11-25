@@ -651,6 +651,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
   const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
   useEffect(() => { if (rightCard && (!panes.split || panes.rightActiveId)) setRightCard(null); }, [rightCard, panes.split, panes.rightActiveId]);
+  useEffect(() => { setRightCard(null); }, [view?.team.id]);
   const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
   // idea-500: keep the selected row visible; only when the selection changes (never on re-render), nearest so it never fights user scrolling.
   useEffect(() => {
@@ -696,7 +697,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const startKey = startKeyFor(cPin, c.laneId);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
-      overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && (c.right ? void Promise.resolve(onSpinUpOverlord(view)).then((id) => id && openAgentInTab(id, "right")) : onSpinUpOverlord(view)), disabled: overlordBusy },
+      overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && (c.right ? void Promise.resolve(onSpinUpOverlord(view)).then((id) => id && getPanes().split && openAgentInTab(id, "right")).catch(() => {}) : onSpinUpOverlord(view)), disabled: overlordBusy },
       riffbot: { text: "RiffBot is sleeping.", cta: "Start RiffBot", run: () => hubPin && (c.right ? onSpinUpPin(hubPin, undefined, "right") : onSpinUpPin(hubPin)), disabled: !hubPin },
       brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => (cPin ? startBrainstorm(cPin, c) : startBugs(c)), disabled: (!cPin && !needsBugsLane) || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => (c.right ? switchRightToBrainstorm(c) : setSelectedRole("brainstorm")), disabled: false },
@@ -730,13 +731,24 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       const hub = Boolean(m.laneId) && m.laneId === hubPin?.lane.id;
       if (hub) return m.kind === "lead" ? "Overlord" : "RiffBot";
       const n = laneName(m.laneId);
-      return n === "Bugs" ? (m.kind === "lead" ? "Bugs · Lead" : "Bugs") : `${m.kind === "lead" ? "Lead" : "Buddy"} · ${n ?? "Lane"}`;
+      return n === "Bugs" ? (m.kind === "lead" ? "Bugs · Lead" : "Bugs") : n ? `${m.kind === "lead" ? "Lead" : "Buddy"} · ${n}` : (m.agent.title ?? (m.kind === "lead" ? "Lead" : "Buddy"));
     };
     const running = view.members.filter((m) => m.agent.status === "running" && !seen.has(m.agent.id) && !m.agent.archivedAt).map((m): StripItem => ({ id: m.agent.id, needs: false, sub: "Working", title: memberTitle(m) }));
     return [...rows.map((r): StripItem => ({ id: r.item.id, needs: true, err: r.item.kind === "error", title: r.who, sub: r.who.includes(r.lane) ? needsYouReason(r.item) : `${r.lane} · ${needsYouReason(r.item)}` })), ...running];
   };
-  // Every open action on the right card lands in the right pane (activePane is forced right first; openHere reads the live pane).
-  const rightHandlers: PickerHandlers = { ...pickerHandlers, openAgent: (id) => { setActivePane("right"); pickerHandlers.openAgent(id); } };
+  // Every open action on the right card lands in the right pane (live -> openAgentInTab("right"); dormant -> update rightCard, never fold split or clobber selectedLaneId).
+  const rightHandlers: PickerHandlers = {
+    glyphCls,
+    openAgent: (id) => { setActivePane("right"); pickerHandlers.openAgent(id); },
+    openCore: (laneId, id) => (id ? openAgentInTab(id, "right") : setRightCard({ key: laneId, pill: "open" })),
+    openBugs: () => (core.bugs.pin && core.bugs.agentId ? openAgentInTab(core.bugs.agentId, "right") : setRightCard({ key: "_bugs", pill: "open" })),
+    openRole: (laneId, role) => {
+      const c = conversations.find((x) => x.laneId === laneId);
+      const m = c && (role === "lead" ? c.pin.lead : c.pin.brainstorm);
+      if (m) openAgentInTab(m.agent.id, "right");
+      else setRightCard({ key: laneId, pill: role });
+    },
+  };
   /** Right-pane card target -> its own ctx (pane-local: clicking the left pane never rewrites it). */
   const rightCtx = (t: CardTarget): CardCtx => {
     if (t.key === "_overlord") return { laneId: t.key, kind: "overlord", pin: null, right: true };

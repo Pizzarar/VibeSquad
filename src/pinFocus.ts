@@ -29,6 +29,8 @@ export type PinFocus = {
   seq: number;
   /** Inline error when Spin Up fails, cleared when changing pins or starting a new Spin Up. */
   spinUpError?: string | null;
+  /** B17: target pane for a spin-up started from the split's right pane so reconcile follows into the right pane without folding the split. */
+  into?: "right";
 };
 
 export type PinFocusSnapshot = {
@@ -129,7 +131,7 @@ function reconcile() {
     else {
       // A closed Buddy is followed with the Spin Up picker still shown above its history.
       set({ focus: { ...f, agentId: d.agentId, gone: !liveId, held: null } });
-      if (d.open) show(d.agentId);
+      if (d.open || f.into === "right") show(d.agentId, f.into);
     }
   } finally {
     reconciling = false;
@@ -232,7 +234,7 @@ export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof op
   const mine = ++seq;
   const active = getPanes().leftActiveId;
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine, spinUpError: null },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine, spinUpError: null, ...(into ? { into } : {}) },
     home: false,
     homeActive: null,
     squadsHome: false,
@@ -244,7 +246,7 @@ export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof op
     const f = state.focus;
     if (f?.seq === mine && f.agentId !== id) {
       set({ focus: { ...f, agentId: id, gone: false, held: null, spinUpError: null }, spinUpError: null });
-      show(id, into);
+      show(id, f.into ?? into);
     }
     if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;

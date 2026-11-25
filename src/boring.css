@@ -1550,8 +1550,8 @@ html[data-vibe="boring"] .drawer:has(.boring-convo-col) { container-type: inline
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) { --ctx-w: 460px; }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-w: 36px; }
 html[data-vibe="boring"] .boring-empty-card { max-width: 720px; width: 100%; box-sizing: border-box; text-align: left; align-items: flex-start; }
-/* B17 r3 D2: at wide widths user bubbles right-align to the 960px prose measure (beside the replies), not the 1680px column edge. */
-html[data-vibe="boring"] .boring-drawer .tl-user, html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-right: max(0px, calc((100% - var(--measure-col)) / 2 + var(--measure-col) - var(--measure-prose))); }
+/* B17 r4 D2/N8: user bubbles right-align to the 960px prose edge (accounting for the 58px .tl-assistant avatar gutter). */
+html[data-vibe="boring"] .boring-drawer .tl-user, html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-right: calc(max(0px, (100% - var(--measure-col)) / 2) + max(0px, var(--measure-col) - var(--measure-prose) - 58px)); }
 html[data-vibe="boring"] .boring-empty-lane { margin: 0; font-size: var(--t-title); line-height: 1.3; font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-empty-card > p { margin: 0; color: var(--text-1); font-size: var(--t-body); }
 html[data-vibe="boring"] .boring-empty-jumps { display: flex; flex-direction: column; gap: 14px; width: 100%; padding-top: 12px; border-top: 1px solid var(--border); }

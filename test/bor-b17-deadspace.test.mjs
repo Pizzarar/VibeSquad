@@ -105,20 +105,27 @@ test("empty-lane quick-jumps: sibling role, live worker, other active lanes (nev
   for (const id of ["boring-empty-card", "boring-empty-cta"]) assert.ok(src.includes(`data-testid="${id}"`), id);
 });
 
-test("r3: Start Brainstorm from the right pane keeps the split; right card is pane-local; Esc returns focus to Split; labels", () => {
+test("r3/r4: Start Brainstorm from the right pane keeps the split; right card is pane-local; Esc returns focus to Split; labels", () => {
   const ade = read("src", "BoringAde.tsx"), pf = read("src", "pinFocus.ts"), pp = read("src", "BoringPanePicker.tsx");
-  // UX M4: spinUpPin(..., "right") -> show(id, "right") -> openAgentInTab(id, "right") instead of folding the split into the left pane
+  // UX M4: spinUpPin(..., "right") carries `into` on PinFocus so reconcile + post-resolve both call show(..., "right")
   assert.match(pf, /const show = \(id: string, into\?: "right"\) => \{\n  if \(into === "right" && getPanes\(\)\.split\) return openAgentInTab\(id, "right"\);/);
-  assert.match(pf, /show\(id, into\)/);
+  assert.match(pf, /into\?: "right"/);
+  assert.match(pf, /if \(d\.open \|\| f\.into === "right"\) show\(d\.agentId, f\.into\);/);
+  assert.match(pf, /show\(id, f\.into \?\? into\)/);
   assert.match(ade, /rightSpin = \(p: Pin\) => spinUpPin\(p, undefined, undefined, "right"\)/);
   assert.match(ade, /boringStartBrainstorm\(pin, c\.right \? rightSpin : undefined\)/);
   assert.match(ade, /boringStartBugs\(view\.team\.id, c\.right \? \{ spinUp: rightSpin \} : \{\}\)/);
-  // r3b: EVERY start/open action on the right card lands in the right pane (split stays on)
-  assert.match(ade, /c\.right \? void Promise\.resolve\(onSpinUpOverlord\(view\)\)\.then\(\(id\) => id && openAgentInTab\(id, "right"\)\)/); // Start Overlord
+  // Gemini M1: Start Overlord guards with getPanes().split and catches rejections
+  assert.match(ade, /c\.right \? void Promise\.resolve\(onSpinUpOverlord\(view\)\)\.then\(\(id\) => id && getPanes\(\)\.split && openAgentInTab\(id, "right"\)\)\.catch\(\(\) => \{\}\)/);
   assert.match(ade, /c\.right \? onSpinUpPin\(hubPin, undefined, "right"\) : onSpinUpPin\(hubPin\)/); // Start RiffBot
   assert.match(read("src", "App.tsx"), /\(pin: Pin, profile\?: string, into\?: "right"\) => void spinUpPin\(pin, profile, undefined, into\)/);
   assert.match(read("src", "App.tsx"), /return spinUpOverlord\(view, \{/);
-  assert.match(ade, /rightHandlers: PickerHandlers = \{ \.\.\.pickerHandlers, openAgent: \(id\) => \{ setActivePane\("right"\)/); // quick-jump opens
+  // Gemini M2: rightCard resets on project switch (view?.team.id)
+  assert.match(ade, /useEffect\(\(\) => \{ setRightCard\(null\); \}, \[view\?\.team\.id\]\);/);
+  // Gemini L1: rightHandlers wraps openAgent, openCore, openBugs, openRole (never folds split or clobbers selectedLaneId)
+  const rh = ade.slice(ade.indexOf("const rightHandlers:"), ade.indexOf("const rightCtx"));
+  for (const k of ["openAgent:", "openCore:", "openBugs:", "openRole:"]) assert.ok(rh.includes(k), `rightHandlers wraps ${k}`);
+  assert.doesNotMatch(rh, /pickCore|pickBugs|pickRoleIn/);
   assert.match(ade, /buildQuickJumps\(model, c\.laneId, c\.right \? rightHandlers : pickerHandlers\)/);
   // Gemini M2: the picker's card target is pane-local state, a dormant pill never selects the lane in the host
   assert.match(ade, /const \[rightCard, setRightCard\] = useState<CardTarget \| null>/);
@@ -128,14 +135,116 @@ test("r3: Start Brainstorm from the right pane keeps the split; right card is pa
   // N5 focus return, N2 lane name on the card + breadcrumb
   assert.match(ade, /closeSplitToButton/); assert.match(ade, /boring-split-toggle"\]'\)\?\.focus\(\)/);
   assert.match(ade, /data-testid="boring-empty-lane"/); assert.match(ade, /rightCard && panes\.activePane === "right" \? rightCardName\(rightCard\)/);
-  // Gemini L2 / N3: hub members are Overlord / RiffBot, Bugs is Bugs; error items get an error dot; no "· Desk" role labels
+  // Gemini L2 / N3 / N7: hub members are Overlord / RiffBot, Bugs is Bugs; lane-less lead never says "Lead · Lane"
   assert.match(ade, /return m\.kind === "lead" \? "Overlord" : "RiffBot"/); assert.match(ade, /err: r\.item\.kind === "error"/);
   assert.match(pp, /i\.err \? "error"/);
   assert.doesNotMatch(ade, /\?\? "Desk"\}`/);
-  // Gemini L1 / N6 + D2
+  assert.doesNotMatch(ade, /\?\? "Lane"\}`/);
+  // Gemini L1 / N6 + D2 / N8 (58px avatar gutter accounted for)
   const css = read("src", "boring.css");
   assert.doesNotMatch(css, /\.boring-pp-agent \{[^}]*max-width: min\(100%, 640px\)[^}]*max-width: 100%/);
-  assert.ok(css.includes("margin-right: max(0px, calc((100% - var(--measure-col)) / 2 + var(--measure-col) - var(--measure-prose)))"));
+  assert.ok(css.includes("margin-right: calc(max(0px, (100% - var(--measure-col)) / 2) + max(0px, var(--measure-col) - var(--measure-prose) - 58px))"));
+});
+
+test("r4 M4 behavioral: spinUpPin(..., 'right') keeps split when agent lands in store BEFORE promise resolves", async () => {
+  const pfDir = mkdtempSync(join(tmpdir(), "vs-b17-pf-"));
+  try {
+    const w = (name, code) => writeFileSync(join(pfDir, name), code);
+    const panes = { split: true, leftActiveId: "left-agent", rightActiveId: null, activePane: "right" };
+    const callsLog = [];
+    const paseoSubs = new Set();
+    const panesSubs = new Set();
+    let currentPin = { squad: { id: "sq1" }, lane: { id: "wiki" }, brainstorm: null, lead: { agent: { id: "wiki-lead", status: "idle" } }, workers: [], topicBrainstorms: [] };
+    globalThis.__b17pf = {
+      panes,
+      callsLog,
+      paseoSubs,
+      panesSubs,
+      getPin: () => currentPin,
+      setPin: (p) => { currentPin = p; },
+      firePaseo: () => { for (const f of paseoSubs) f(); },
+    };
+    w("panes.mjs", `
+      const g = globalThis.__b17pf;
+      export const getPanes = () => g.panes;
+      export const subscribePanes = (l) => (g.panesSubs.add(l), () => g.panesSubs.delete(l));
+      export const toggleSplit = () => { g.callsLog.push(["toggleSplit"]); g.panes.split = !g.panes.split; for (const f of g.panesSubs) f(); };
+      export const openAgent = (id) => { g.callsLog.push(["openAgent", id]); g.panes.leftActiveId = id; for (const f of g.panesSubs) f(); };
+      export const openAgentInTab = (id, side) => { g.callsLog.push(["openAgentInTab", id, side]); if (side === "right") { g.panes.split = true; g.panes.rightActiveId = id; g.panes.activePane = "right"; } else g.panes.leftActiveId = id; for (const f of g.panesSubs) f(); };
+      export const closeTab = () => {};
+    `);
+    w("paseo.mjs", `
+      const g = globalThis.__b17pf;
+      export const getPaseoState = () => ({ rosterLoaded: true, agents: new Map() });
+      export const subscribePaseo = (l) => (g.paseoSubs.add(l), () => g.paseoSubs.delete(l));
+    `);
+    w("pins.mjs", `
+      const g = globalThis.__b17pf;
+      export const liveBuddyId = (p) => p?.brainstorm?.agent?.status && p.brainstorm.agent.status !== "closed" ? p.brainstorm.agent.id : null;
+      export const dormantBuddyId = () => null;
+      export const hubPinForSquad = () => null;
+      export const isHubPin = () => false;
+      export const pinsForSquad = () => ({ pinned: [g.getPin()], done: [] });
+    `);
+    w("ui.mjs", `export const derived = () => ({ views: [{ team: { id: "sq1" } }] }); export const subscribeTree = () => () => {};`);
+    w("teams.mjs", `export const subscribeTeams = () => () => {};`);
+    w("PinGrid.mjs", `export const openPin = async () => null;`);
+    w("identity.mjs", `export const isRetiredAgent = () => false;`);
+    w("ctxMenuLogic.mjs", `export const focusDrawerOpen = () => false; export const hubOpenAgent = () => false;`);
+    w("prefs.mjs", `export const getPref = () => "boring"; export const getRestoreLastView = () => false;`);
+    w("pinFocusLogic.mjs", transformSync("pinFocusLogic.ts", read("src", "pinFocusLogic.ts"), { lang: "ts" }).code);
+    const pfCode = transformSync("pinFocus.ts", read("src", "pinFocus.ts"), { lang: "ts" }).code
+      .replace(/from "react"/, `from ${JSON.stringify(import.meta.resolve("react"))}`)
+      .replace(/from "\.\/([^"]+)"/g, (_, m) => `from "./${m}.mjs"`);
+    w("pinFocus.mjs", pfCode);
+    const { spinUpPin } = await import(pathToFileURL(join(pfDir, "pinFocus.mjs")).href);
+
+    // Case 1: unrelated agent on left; new Buddy enters store BEFORE openPinFn resolves
+    let resolveSpawn;
+    const p1 = spinUpPin(currentPin, undefined, () => new Promise((r) => { resolveSpawn = r; }), "right");
+    // Simulate quickStart upserting the new Buddy into the store before promise resolves
+    currentPin = { ...currentPin, brainstorm: { agent: { id: "new-bs-1", status: "running" } } };
+    globalThis.__b17pf.firePaseo();
+    assert.equal(panes.split, true, "split stays on during mid-flight reconcile");
+    assert.equal(panes.leftActiveId, "left-agent", "left pane untouched during mid-flight reconcile");
+    assert.equal(panes.rightActiveId, "new-bs-1", "new Buddy lands in right pane during mid-flight reconcile");
+    assert.ok(!callsLog.some((c) => c[0] === "toggleSplit"), "toggleSplit was never called");
+    resolveSpawn("new-bs-1");
+    await p1;
+    assert.equal(panes.split, true, "split stays on after resolve");
+    assert.equal(panes.rightActiveId, "new-bs-1");
+    assert.equal(panes.leftActiveId, "left-agent");
+
+    // Case 2: same-lane Lead on left; new Buddy enters store BEFORE promise resolves
+    callsLog.length = 0;
+    panes.split = true; panes.leftActiveId = "wiki-lead"; panes.rightActiveId = null;
+    currentPin = { ...currentPin, brainstorm: null };
+    let resolveSpawn2;
+    const p2 = spinUpPin(currentPin, undefined, () => new Promise((r) => { resolveSpawn2 = r; }), "right");
+    currentPin = { ...currentPin, brainstorm: { agent: { id: "new-bs-2", status: "running" } } };
+    globalThis.__b17pf.firePaseo();
+    assert.equal(panes.split, true, "split stays on when left pane holds same-lane Lead");
+    assert.equal(panes.leftActiveId, "wiki-lead", "same-lane Lead on left untouched");
+    assert.equal(panes.rightActiveId, "new-bs-2", "new Buddy still opens in right pane");
+    resolveSpawn2("new-bs-2");
+    await p2;
+
+    // Case 3: user closes split mid-spawn -> does NOT re-open split
+    callsLog.length = 0;
+    panes.split = true; panes.leftActiveId = "left-agent"; panes.rightActiveId = null;
+    currentPin = { ...currentPin, brainstorm: null };
+    let resolveSpawn3;
+    const p3 = spinUpPin(currentPin, undefined, () => new Promise((r) => { resolveSpawn3 = r; }), "right");
+    panes.split = false;
+    currentPin = { ...currentPin, brainstorm: { agent: { id: "new-bs-3", status: "running" } } };
+    globalThis.__b17pf.firePaseo();
+    resolveSpawn3("new-bs-3");
+    await p3;
+    assert.equal(panes.split, false, "closing split mid-spawn does not re-open it");
+  } finally {
+    delete globalThis.__b17pf;
+    rmSync(pfDir, { recursive: true, force: true });
+  }
 });
 
 test("CSS: fluid measure vars, B17 section scoped/single-line, Psycho + styles.css untouched", () => {
@@ -166,12 +275,12 @@ const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
 const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
 
 const init = (theme, vibe = "boring") => `try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"${vibe}","app.theme":"${theme}"}));}catch{}`;
-async function app(b, E, baseUrl, w, hh, dpr, theme) {
+async function app(b, E, baseUrl, w, hh, dpr, theme, qs = "?demo=1") {
   const ctx = await b.newContext({ viewport: { width: w, height: hh }, deviceScaleFactor: dpr, colorScheme: theme });
   await ctx.addInitScript(init(theme));
   await E.installRoutes(ctx);
   const page = await ctx.newPage();
-  await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}/${qs}`, { waitUntil: "domcontentloaded" });
   await page.locator('[data-testid="boring-worker-demo-aud"]').click({ timeout: 15000 });
   await page.locator('[data-testid="boring-chat-column"]').waitFor();
   await page.waitForTimeout(600);
@@ -196,6 +305,15 @@ test("browser: left/right edges of composer, perm card and pinned todo line up a
       assert.ok(ed.composer[0] >= ed.convo[0] && ed.composer[1] <= ed.convo[1], `inside the conversation column at ${w}`);
       if (w >= 2560) assert.ok(ed.composer[1] - ed.composer[0] <= 1681, "never wider than the 1680 cap");
       if (w === 3200) assert.ok(ed.composer[1] - ed.composer[0] >= 1500, `4K@120% uses the width: ${ed.composer[1] - ed.composer[0]}`);
+      // UX N8: user bubble right edge aligns with assistant prose right edge (within 1px) at wide widths
+      if (w >= 2560) {
+        const align = await page.evaluate(() => {
+          const u = [...document.querySelectorAll(".boring-drawer .tl-user")].find((x) => x.getBoundingClientRect().width > 0);
+          const p = [...document.querySelectorAll(".boring-drawer .tl-assistant .tl-body, .boring-drawer .tl-assistant p")].find((x) => x.getBoundingClientRect().width > 0);
+          return u && p ? { u: Math.round(u.getBoundingClientRect().right), p: Math.round(p.getBoundingClientRect().right) } : null;
+        });
+        assert.ok(align && Math.abs(align.u - align.p) <= 1, `N8 user/prose right edge at ${w}: ${JSON.stringify(align)}`);
+      }
       await ctx.close();
     }
   } finally { await b.close(); server.close(); }
@@ -271,10 +389,14 @@ test("browser: split picker in the real app: strip = sidebar Needs-you, names re
       await page.waitForTimeout(300);
       assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 0, "Esc closes the split");
       await ctx.close(); }
-    // r3 Gemini M2b: the right card is pane-local: clicking the left pane never rewrites it; it names its lane (UX N2) and the crumb follows.
-    { const { ctx, page } = await app(b, E, baseUrl, 1600, 900, 1, "dark");
+    // r3/r4: pane-local right card, UX N2, N7, Gemini L2 (non-vacuous Switch to Brainstorm), UX M4 (live Start Brainstorm + Start Bugs keep split)
+    { const { ctx, page } = await app(b, E, baseUrl, 1600, 900, 1, "dark", "?demo=1&riff=1");
       await page.locator('[data-testid="boring-split-toggle"]').click();
       await page.locator('[data-testid="boring-split-empty"]').waitFor();
+      // UX N7: no strip chip ever renders the placeholder "Lead · Lane" or "Buddy · Lane"
+      const stripTexts = await page.locator('[data-testid^="boring-pp-agent-"]').allInnerTexts();
+      assert.ok(stripTexts.length > 0, "strip has items");
+      for (const t of stripTexts) assert.doesNotMatch(t, /\b(Lead|Buddy) · Lane\b/, `N7 placeholder label in strip: ${t}`);
       await page.locator('[data-testid="boring-pp-open-wiki-brainstorm"]').click();
       const card = page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]');
       await card.waitFor({ timeout: 3000 });
@@ -285,21 +407,38 @@ test("browser: split picker in the real app: strip = sidebar Needs-you, names re
       await page.waitForTimeout(300);
       assert.equal(await card.innerText(), before, "left-pane click does not rewrite the right card");
       assert.doesNotMatch(await card.innerText(), /RiffBot is sleeping/);
-      // Gemini M2a: a dormant Lead pill's "Switch to Brainstorm" opens the live Brainstorm IN THE RIGHT PANE (split stays on)
+      // Gemini L2: non-vacuous "Switch to Brainstorm" on bug-chaser (live Brainstorm, dormant Lead in ?demo=1&riff=1)
       await page.locator('[data-testid="boring-pp-back"]').click();
-      const leadPill = page.locator('[data-testid^="boring-pp-open-"][data-testid$="-lead"]:not(.live)');
-      const n = await leadPill.count();
-      if (n) {
-        await leadPill.first().click();
-        const cta = page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-cta"]');
-        if (/Switch to Brainstorm/.test(await cta.innerText())) {
-          await cta.click();
-          await page.waitForTimeout(500);
-          assert.ok(await page.locator('[data-testid="boring-chat-split"]').count(), "split stays on");
-          assert.equal(await page.locator('[data-testid="boring-pane-right"] .drawer').count() > 0 || await page.locator('[data-testid="boring-pp-empty"]').count() > 0, true);
-        }
-      }
+      const bugLeadPill = page.locator('[data-testid="boring-pp-open-bug-chaser-lead"]:not(.live)');
+      assert.equal(await bugLeadPill.count(), 1, "bug-chaser has a dormant Lead pill in ?demo=1&riff=1");
+      await bugLeadPill.click();
+      const cta = page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-cta"]');
+      assert.match(await cta.innerText(), /Switch to Brainstorm/);
+      await cta.click();
+      await page.locator('[data-testid="boring-pane-right"] .drawer').waitFor({ timeout: 3000 });
+      assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 1, "split stays on after Switch to Brainstorm");
+      assert.equal(await page.locator('[data-testid="boring-pp-empty"]').count(), 0, "empty card replaced by Brainstorm drawer");
+      assert.equal(await page.locator('[data-testid="boring-pane-right"] .drawer').count(), 1, "Brainstorm drawer opened in right pane");
+      assert.equal(await page.locator('[data-testid="boring-pane-left"] .drawer').count(), 1, "left pane drawer kept");
+      assert.match(await page.locator('[data-testid="boring-breadcrumb"], .boring-breadcrumb').first().innerText(), /Bug Chaser/i);
       await ctx.close(); }
+    // r4 UX M4 live: Start Brainstorm on wiki card AND Start Brainstorm on Bugs card keep split and land in right pane
+    for (const [label, pillId] of [["wiki", "boring-pp-open-wiki-brainstorm"], ["bugs", "boring-pp-open-_bugs-open"]]) {
+      const { ctx, page } = await app(b, E, baseUrl, 1600, 900, 1, "dark", "?demo=1&riff=1");
+      const leftBefore = await page.locator('[data-testid="boring-agent-header"]').first().getAttribute("data-agent-id");
+      await page.locator('[data-testid="boring-split-toggle"]').click();
+      await page.locator('[data-testid="boring-split-empty"]').waitFor();
+      await page.locator(`[data-testid="${pillId}"]`).click();
+      await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]').waitFor({ timeout: 3000 });
+      await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-cta"]').click();
+      await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').waitFor({ timeout: 5000 });
+      await page.waitForTimeout(300);
+      assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 1, `M4 (${label}): split stays on after Start Brainstorm`);
+      assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftBefore, `M4 (${label}): left pane agent untouched`);
+      const rightId = await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id");
+      assert.ok(rightId && rightId !== leftBefore, `M4 (${label}): new Brainstorm opened in right pane (${rightId})`);
+      await ctx.close();
+    }
     // Psycho: no boring app
     const ctx = await b.newContext({ viewport: { width: 1280, height: 720 } });
     await ctx.addInitScript(init("dark", "fun"));
