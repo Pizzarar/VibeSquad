@@ -2331,7 +2331,7 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
   assert.match(drawer, /<div className="boring-convo-col">/);
-  assert.match(drawer, /boring-convo-col">[\s\S]*?<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>/);
+  assert.match(drawer, /<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>[\s\S]*?<div className="drawer-shell">/); // B15: full-width strip above the shell
   assert.match(drawer, /\{!boringChat && permCards\}/);
   assert.match(drawer, /const permCards = agent\.pendingPermissions\?\.map/);
   assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);

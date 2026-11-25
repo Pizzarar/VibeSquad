@@ -1414,6 +1414,34 @@ html[data-vibe="boring"] .perm-card .btn { border-radius: 9px; font-weight: 700;
 html[data-vibe="boring"] .perm-card .btn.perm-allow,
 html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--living-prime); border-color: var(--living-prime); color: var(--living-on-prime); }
 
+/* ---- B15 Working-now strip (idea-918): full-width segregated strip under the agent header, spanning chat + context panel. Normal only. ---- */
+html[data-vibe="boring"] .drawer > .boring-now { flex: none; display: flex; align-items: center; gap: 14px; margin: 0; width: auto; max-width: none; min-height: 46px; box-sizing: border-box; padding: 5px 20px; border-radius: 0; border: 0; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--surface-1) 78%, transparent); box-shadow: none; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="busy"] { border-color: var(--border); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--living-warm) 35%, transparent); }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="needs-you"] { border-color: var(--border); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--st-attn) 45%, transparent); }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-big { width: 36px; height: 36px; border-radius: 10px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-big .boring-bust-img { width: 36px; height: 36px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] { min-height: 62px; padding: 7px 20px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-big { width: 48px; height: 48px; border-radius: 12px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-big .boring-bust-img { width: 48px; height: 48px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="busy"] .boring-now-big { box-shadow: 0 0 0 2px var(--living-warm), 0 0 16px -3px color-mix(in srgb, var(--living-warm) 60%, transparent); }
+/* One line: micro-label, headline and meta share a baseline row and ellipsize; multi stacks label over headline. */
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-text { display: flex; align-items: baseline; gap: 4px 12px; min-width: 0; flex: 1 1 0; overflow: hidden; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-text { flex-wrap: wrap; row-gap: 0; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-t { flex: 0 0 100%; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-t { flex: none; font-size: 11px; line-height: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-h { flex: 0 1 auto; min-width: 0; margin: 0; font-size: 15px; line-height: 20px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-h { margin-top: 1px; font-size: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-s2 { flex: 0 100000 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 16px; }
+html[data-vibe="boring"] .drawer > .boring-now[data-state="idle"] .boring-now-t { color: var(--text-2); }
+/* Multi-agent: a row of clickable 30px busts with warm rings (right edge); +N past six. */
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chips { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; flex: none; max-width: 55%; padding: 6px; overflow: visible; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 2px var(--living-warm), 0 0 12px -2px color-mix(in srgb, var(--living-warm) 55%, transparent); overflow: hidden; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip img { width: 30px; height: 30px; border-radius: 50%; background: transparent; box-shadow: none; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-more { flex: none; display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 6px; box-sizing: border-box; border-radius: 15px; background: var(--surface-3); color: var(--text-1); font-size: 12px; font-weight: 700; }
+html[data-vibe="boring"] .drawer > .boring-now[data-has-perm] { display: none; }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .drawer > .boring-now, html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip { transition: none; } }
+
 /* ---- B14b Overview: Living Signature lane table (mockup 2-living). Quiet graphite/alabaster tone-stepped card,
    hairline borders, Plus Jakarta Sans + IBM Plex Mono, Art14 canon mini-busts on every row, calm segmented tabs
    that harmonize with the living sky via [data-squad-state]. Normal only; Psycho never matches. ---- */
