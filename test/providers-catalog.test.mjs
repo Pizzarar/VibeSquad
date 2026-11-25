@@ -1,6 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import './setup/hermetic.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -3030,6 +3031,23 @@ test('UX Reviewer profile classifies as reviewer regardless of title (not scout)
   const u = getUsage({ home, git: noGit });
   const rows = u.byProfile.filter((p) => p.model === 'claude-opus-5-5');
   assert.deepEqual(rows.map((p) => [p.jobKind, p.runs]), [['reviewer', 2]], 'both titles land in one reviewer row');
+});
+
+test('idea-677: a "review" word in the unit part of the title does not make an implementer a reviewer', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, title) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', title } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  mk('rn-impl', 'Per T2 review stdin · implement');
+  mk('rn-rev1', 'Per T2 review stdin · review');
+  mk('rn-rev2', 'Per T2 · re-review');
+  const u = getUsage({ home, git: noGit });
+  const runs = (kind) => u.byProfile.find((p) => p.jobKind === kind)?.runs;
+  assert.equal(runs('implementer'), 1, 'implementer role part stays an implementer');
+  assert.equal(runs('reviewer'), 2, 'real reviewer role parts still classify as reviewer');
 });
 
 test('usa-29: byProfile folds the effort suffix of a model', () => {
