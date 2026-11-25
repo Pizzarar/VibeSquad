@@ -1249,11 +1249,12 @@ html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #88
 
 /* Des8 B3 (idea-740 m3, docs/UX_REVIEW_R16.md:50): the Needs-you title elides first and the muted
    "Lane · Project" location stays. `who` is the flexible filler (zero flex-basis so line-breaking ignores
-   its content) with a readable floor; the location is bounded (lane elides first, the project keeps its
-   name, ellipsis only if the project alone exceeds the row). */
+   its content) with a readable floor; the location has flex-basis 100% so it is always its own muted line
+   under the title (3-line rows: title, location, reason); it is bounded (lane elides first, the project keeps
+   its name, ellipsis only if the project alone exceeds the row). */
 html[data-vibe="boring"] .boring-needs-main { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-who { flex: 1 1 0; min-width: min(20ch, 100%); max-width: none; }
-html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { display: flex; flex: 0 1 auto; max-width: 100%; min-width: 0; overflow: hidden; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { display: flex; flex: 0 0 100%; max-width: 100%; min-width: 0; overflow: hidden; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-lane { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
