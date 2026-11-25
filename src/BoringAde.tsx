@@ -751,12 +751,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const badge = (n: number, err = false) => (n > 0 ? <span className={`badge boring-badge${err ? " err" : ""}`}>{n}</span> : null);
   const memberAgent = (id: string | null) => (id ? agents.get(id) : undefined);
   const projectIsOpen = (id: string) => projectOpen[id] ?? (id === activeTeamId || id === sel.teamId);
-  const toggleProject = (id: string) => setProjectOpen((o) => ({ ...o, [id]: !projectIsOpen(id) }));
   /** Clicking a project's name opens its Overview (switching Squad if needed); only the chevron expands/collapses. */
   const openProject = (id: string) => {
     if (id !== activeTeamId) onSelectSquad(id);
     // Multiple projects can stay expanded: keep the one we leave open.
-    setProjectOpen((o) => ({ ...o, [activeTeamId]: o[activeTeamId] ?? true, [id]: true }));
+    setProjectOpen((o) => ({ ...o, [activeTeamId]: activeTeamId === mainV?.team.id ? o[activeTeamId] : o[activeTeamId] ?? true, [id]: true }));
     setMode("project");
   };
   const isOn = (v: TeamView, key: string) => sel.rowKey === `${v.team.id}|${key}`;
@@ -1001,7 +1000,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           {chevronCol(open, () => setProjectOpen((o) => ({ ...o, [v.team.id]: !open })), v.team.name, `boring-project-toggle-${v.team.id}`)}
           <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
             <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
-            {isMain && <img className="boring-bust-img boring-main-bust" src={bustUrl("riffbot", theme)} alt="" width={28} height={28} aria-hidden="true" />}
+            {isMain && <img className="boring-bust-img boring-main-bust" src={bustUrl("riffbot", theme)} alt="" width={24} height={24} aria-hidden="true" />}
             <span className="boring-project-name" title={v.team.name}>{v.team.name}</span>
             {!open && badge(m.totalNeedsYou, m.projectErr)}
           </button>

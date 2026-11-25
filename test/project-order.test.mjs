@@ -157,9 +157,14 @@ test("r1: the Main menu has no Move items; the drag cancels on Escape; the chevr
   assert.match(ade, /\[v\.team\.id\]: !open \}\)\), v\.team\.name/, "Main chevron negates the shown state, not projectIsOpen");
   assert.ok(!/className="boring-drag-grip" role=/.test(ade), "pointer-only grip is not a fake button");
   const css = src("boring.css"), block = css.slice(css.indexOf("PLAN_PROJECT_ORDER O2"), css.indexOf("end PLAN_PROJECT_ORDER O2"));
-  assert.match(block, /\.boring-main-pin \{ flex: 0 1 auto; min-height: 54px; overflow-y: auto;/, "sized by content, shrinks only to keep the footer");
+  assert.match(block, /\.boring-main-pin \{ flex: 0 0 auto; border: 1px solid var\(--accent\)/, "Main takes its room: never shrinks below its full header, no inner scroll");
+  assert.ok(!/\.boring-main-pin \{[^}]*(overflow|flex: 0 1|max-height)/.test(block));
   assert.ok(!/max-height: 40%/.test(block));
-  assert.match(block, /\.boring-drag-grip \{ position: absolute;/, "grip takes no row width");
+  assert.match(block, /\.boring-drag-grip \{ position: absolute; left: -8px;/, "grip sits in the row's left padding, clear of the 16px chevron");
+  assert.ok(!/boring-project-row\.on\) \.boring-drag-grip/.test(block), "not shown on the selected row without hover");
+  assert.ok(!/const toggleProject/.test(ade), "dead toggleProject removed");
+  assert.match(ade, /activeTeamId === mainV\?\.team\.id \? o\[activeTeamId\] : o\[activeTeamId\] \?\? true/, "leaving a collapsed Main does not expand it");
+  assert.match(ade, /boring-main-bust" src=\{bustUrl\("riffbot", theme\)\} alt="" width=\{24\} height=\{24\}/, "img attrs match the 24px CSS");
 });
 
 test("r1: phone project picker lists Main first, then teams.json order (no drag, no Move)", () => {
