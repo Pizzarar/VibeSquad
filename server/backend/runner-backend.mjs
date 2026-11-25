@@ -19,7 +19,9 @@ import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { indexedFold, indexedFoldSync } from "./roster-index.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
-import { normalizeProviderFamily, readLiveCapDoc, setProviderCapped, spawnFamily } from "../provider-failover.mjs";
+import { AGY_CLAUDE_FAILOVER_THRESHOLD, normalizeProviderFamily, readLiveCapDoc, setProviderCapped, spawnFamily } from "../provider-failover.mjs";
+import { AGY_CLAUDE_FAMILY } from "../model-ids.mjs";
+import { liveQuotaUsage } from "../limits-read.mjs";
 import { effectiveAgentRole } from "../identity.mjs";
 import { noteLaneSpawnOutcome } from "../spawn-streak.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
@@ -588,13 +590,37 @@ const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient bala
  * (resolveProfileWithFailover / resolveRoute) routes around it, and says so on stderr. A longer live cap (a manual `vs cap`) is never
  * shortened. Never throws. Returns the cap written or null.
  */
-export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes = balanceStrikes, cap = setProviderCapped, readCaps = cap === setProviderCapped ? () => readLiveCapDoc().capped : null, log = logRunnerMetric, now = Date.now(), exists = fs.existsSync } = {}) {
+/**
+ * R10 fu2: the agy Claude/GPT pool is polled at most every 30 min (runner/limits.mjs createAgyUsagePoller; it also waits while an
+ * agy agent is mid-turn), so a 10 min fault cap on agy-claude lapsed before the next pool reading and routing walked back onto an
+ * exhausted pool (the next spawn died again). agy-claude faults hold at least one poll interval plus a margin, and until the live
+ * pool row's resetsAt when that row is still at/over the failover threshold.
+ */
+export const AGY_CLAUDE_MIN_CAP_TTL_MS = 35 * 60 * 1000;
+
+/** ms until the agy-claude pool row resets while it reads at/over `threshold`, else 0. Never throws. */
+export function agyClaudePoolHoldMs(now, pool = () => liveQuotaUsage({ now }), threshold = AGY_CLAUDE_FAILOVER_THRESHOLD) {
+  try {
+    let hold = 0;
+    for (const entry of pool() ?? []) {
+      if (entry?.id !== AGY_CLAUDE_FAMILY) continue;
+      for (const w of entry.windows ?? []) {
+        const reset = Date.parse(w?.resetsAt ?? "");
+        if (Number(w?.usedPct) >= threshold && Number.isFinite(reset) && reset > now) hold = Math.max(hold, reset - now);
+      }
+    }
+    return hold;
+  } catch { return 0; }
+}
+
+export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes = balanceStrikes, pool, cap = setProviderCapped, readCaps = cap === setProviderCapped ? () => readLiveCapDoc().capped : null, log = logRunnerMetric, now = Date.now(), exists = fs.existsSync } = {}) {
   const fault = provider ? providerFaultOf(e, { cwd, exists }) : null;
   if (!fault) return null;
   const family = normalizeProviderFamily(provider);
   const at = Number.isFinite(e.ts) ? e.ts : now;
   const confirmed = fault.kind === "balance" ? noteBalanceStrike(strikes, family, agentId, at) : true;
-  const baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
+  let baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
+  if (family === AGY_CLAUDE_FAMILY) baseTtlMs = Math.max(baseTtlMs, AGY_CLAUDE_MIN_CAP_TTL_MS, agyClaudePoolHoldMs(now, pool));
   const ageMs = Math.max(0, now - at);
   const ttlMs = baseTtlMs - ageMs;
   if (ttlMs <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered

@@ -336,7 +336,9 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
   } else {
     provider = order.find((p) => !capped.has(p));
     if (!provider) {
-      provider = order[0];
+      // R10 fu2: agy-claude trips at 85% (and is first in the walk), so when every family is capped it is the likeliest to be
+      // dead; direct claude (95% / its own cap) is the likelier survivor, so keep that instead of agy-claude.
+      provider = order[0] === AGY_CLAUDE_FAMILY && order.includes("claude") ? "claude" : order[0];
       if (order.length) reasons.push("all-capped");
     } else {
       walked = true;

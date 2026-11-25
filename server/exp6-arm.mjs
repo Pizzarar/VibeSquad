@@ -96,7 +96,11 @@ export function armCapKey(wf, capped) {
   const keys = Array.isArray(capped) ? capped : Object.keys(capped ?? {});
   for (const k of keys) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
-    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) return fam;
+    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
+      // R10 fu2: the sonnet arm lands on agy-claude first and falls back to direct claude, so it is capped only when BOTH are.
+      if (wf === "sonnet" && !keys.some((x) => String(x ?? "").trim().toLowerCase().split("/")[0] === "agy-claude")) continue;
+      return fam;
+    }
   }
   return "";
 }
