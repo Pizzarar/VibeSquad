@@ -629,7 +629,11 @@ test(
         ),
         "forwarded to the live lead",
       );
-      assert.ok(sentTo("worker-1").includes("ord1 is retired; delivered to ord2"), "sender notified");
+      const notice = sentTo("worker-1").find((t) => t.includes("is retired; delivered to"));
+      assert.ok(notice, "sender notified");
+      // idea-768: names the real target (title and lane), not an ord label that reads as the sender's own ord
+      assert.match(notice!, /^ord1 \(lead-1\) is retired; delivered to ★ Fea2 \(.+ lead\)/);
+      assert.ok(!notice!.includes("delivered to ord2"));
 
       let misroute = readLogEntries(vsHome).filter((e) => e.type === "metric" && e.text.startsWith("misroute-old:")).length;
       assert.equal(misroute, 1, "misroute-old logged once");

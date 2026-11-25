@@ -592,6 +592,12 @@ export function isRetiredLeadSnap(
   return isRetiredRole(target.labels?.role);
 }
 
+/** idea-871: a handed-off lead that is still live: role former-lead (any retired role) or a title starting "(old)". */
+export function isFormerLeadSnap(target: { title?: string | null; labels?: Labels } | null | undefined): boolean {
+  if (!target) return false;
+  return isRetiredRole(target.labels?.role) || /^\s*\(old\)/i.test(String(target.title ?? ""));
+}
+
 /** The live role a retired agent used to hold: a former Buddy maps to brainstorm, every other retired role to lead. */
 export function retiredHolderRole(target: { labels?: Labels } | null | undefined): "lead" | "brainstorm" {
   return String(target?.labels?.role ?? "").trim().toLowerCase() === "former-brainstorm" ? "brainstorm" : "lead";
@@ -623,6 +629,21 @@ export function parseAgentMessageEnvelope(
     messageId: decode(attrs["message-id"] ?? ""),
     body: decode(m[2]!.trim()),
   };
+}
+
+/**
+ * idea-768: the sender's notice for a send redirected from a retired holder. Names the real target (its title and lane), not
+ * the ord label extractLeadShortName falls back to, which read as if the sender's own ord had been redirected.
+ */
+export function redirectNoticeText(
+  oldTarget: { id: string; title?: string | null; labels?: Labels },
+  current: { id: string; title?: string | null; labels?: Labels },
+  lane: string,
+  role: "lead" | "brainstorm" = "lead",
+): string {
+  const title = String(current.title ?? "").split(" · ")[0]!.trim() || extractLeadShortName(current);
+  const where = lane ? ` (${lane} ${role === "brainstorm" ? "Buddy" : "lead"})` : "";
+  return `${extractLeadShortName(oldTarget)} (${oldTarget.id.slice(0, 8)}) is retired; delivered to ${title}${where}. Send to ${current.id.slice(0, 8)} or \`vs who ${role === "brainstorm" ? "brainstorm" : "lead"}\` next time.`;
 }
 
 export function extractLeadShortName(target: { id: string; title?: string | null; labels?: Labels }): string {
@@ -3847,11 +3868,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     /** Where a set's ping goes: its owner while live, else the current live lead of the set's lane (the successor). */
     async function resolveWatchTarget(paseo: Paseo, set: WatchSet): Promise<AgentSnap | null> {
       const owner = await snap(paseo, set.owner);
-      if (owner && isLiveAgent(owner)) return owner;
+      const live = owner && isLiveAgent(owner) ? owner : null;
+      // idea-871: a live owner that handed off (former-lead / "(old)") is not the target while the lane has a current lead.
+      if (live && !isFormerLeadSnap(live)) return live;
       const lane = set.lane || owner?.labels?.lane || "";
       const team = set.team || owner?.labels?.team || "";
-      if (!team) return null;
-      return findLead(paseo, teamIdOf(team, currentTeams()), lane);
+      if (!team) return live;
+      return (await findLead(paseo, teamIdOf(team, currentTeams()), lane)) ?? live;
     }
 
     /**
@@ -4221,6 +4244,7 @@ ${detail}` : text, refs: [d.setId] };
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
         .filter((a) => isLiveAgent(a))
         .filter((a) => effectiveAgentRole(a) === role)
+        .filter((a) => !isFormerLeadSnap(a)) // idea-871: "(old)" is never the lane's lead, whatever its role label says
         .filter((a) => {
           const d = deriveTeamForSpawn(a.labels, a.cwd, currentTeams());
           const aTeam = teamIdOf(d.team || a.labels.team, currentTeams());
@@ -4229,6 +4253,16 @@ ${detail}` : text, refs: [d.setId] };
         });
       return resolveLeadWinner(leads).winner ?? null;
     }
+
+    /** idea-871: the current lead of a former lead's lane (other than itself), null when there is none. */
+    async function formerLeadSuccessor(paseo: Paseo, old: AgentSnap): Promise<AgentSnap | null> {
+      const where = teamOf(old.labels, old.cwd);
+      if (!where) return null;
+      const cur = await findLead(paseo, teamIdOf(where.team, currentTeams()), where.lane);
+      return cur && cur.id !== old.id ? cur : null;
+    }
+
+    const staleSendersLogged = new Set<string>();
 
     async function handleSendAgentPrompt(input: any, ctx?: { paseo?: Paseo }) {
       const paseo = ctx?.paseo ?? paseoApi;
@@ -4294,8 +4328,13 @@ ${detail}` : text, refs: [d.setId] };
         throw new Error(`${oldShort} is retired and no live ${role === "brainstorm" ? "Buddy" : "lead"} exists for ${team}/${lane}`);
       }
       const currentLead = current;
-      const newShort = extractLeadShortName(currentLead);
-      const notice = `${oldShort} is retired; delivered to ${newShort}`;
+      const notice = redirectNoticeText(target, currentLead, lane, role);
+      // idea-768: one log line per sender + stale id (not per message): which senders keep using a retired id.
+      const staleKey = `${senderId || "?"}->${target.id}`;
+      if (!staleSendersLogged.has(staleKey)) {
+        staleSendersLogged.add(staleKey);
+        log(`stale-id send: sender=${senderId || "?"} used retired ${oldShort} (${target.id}); redirected to ${currentLead.id}`);
+      }
       await paseo.agents.ref(currentLead.id).send(promptText);
       if (senderId) {
         await paseo.agents
@@ -4530,9 +4569,12 @@ ${detail}` : text, refs: [d.setId] };
         // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
         // through the normal queueWake/dispatchWakes path to the current lead.
         // Watch pings: a live non-lead owner (a Buddy) keeps its own; a retired one's are dropped and re-offered by the engine.
-        if (effectiveAgentRole(liveLead) !== "lead") {
+        // idea-871: a live "(old)"-titled agent still labelled lead is a handed-off lead too, once a successor exists.
+        const successor = isLiveAgent(liveLead) && isFormerLeadSnap(liveLead) ? await formerLeadSuccessor(paseo, liveLead) : null;
+        if (effectiveAgentRole(liveLead) !== "lead" || successor) {
           const entries = pendingWake.get(leadId) ?? [];
-          const keep = isLiveAgent(liveLead) ? entries.filter((e) => watchKeyOf.has(e)) : [];
+          // idea-871: a former-lead's pings are dropped (the engine re-offers them to the current lead) unless the lane has none.
+          const keep = isLiveAgent(liveLead) && !successor ? entries.filter((e) => watchKeyOf.has(e)) : [];
           const reroute = entries.filter((e) => !watchKeyOf.has(e));
           if (entries.length && !keep.length) {
             pendingWake.delete(leadId);

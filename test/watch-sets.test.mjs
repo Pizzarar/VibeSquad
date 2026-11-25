@@ -1340,6 +1340,54 @@ test(
 );
 
 test(
+  "plugin (idea-871): a live '(old)'-titled lead that armed the watch is skipped: the ping goes to the new lead, the old one gets nothing",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-old", { ...mk("lead-old", "lead"), title: "(old) Bug1" }],
+      ["lead-new", mk("lead-new", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0, JSON.stringify(h.sent));
+      const toNew = h.sent.filter((s) => s.to === "lead-new" && s.text.includes(`Watch ${id}`));
+      assert.equal(toNew.length, 1, JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-871): a former-lead owner gets nothing; a lone '(old)' lead with no successor keeps today's delivery",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-old", { ...mk("lead-old", "lead"), title: "(old) Bug1" }],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const toOld = h.sent.filter((s) => s.to === "lead-old" && s.text.includes(`Watch ${id}`));
+      assert.equal(toOld.length, 1, "no lead at all: the owner still gets its ping");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
   "plugin (idea-418): a stall ping for a retired owner re-owns the still-armed set, which the successor may then cancel",
   withPluginEnv(async (sb) => {
     const agents = new Map([
