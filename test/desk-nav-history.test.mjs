@@ -75,7 +75,9 @@ stub("usageHelpers.mjs", `export const OPEN_USAGE_EVENT = "vs:open-usage"; expor
 stub("useBotFace.mjs", `export const useTheme = () => "dark";`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
-stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
+stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; }; export const needsYouRows = () => globalThis.__needsYouRows ?? []; export const needsYouReason = (i) => i.reason ?? "";`);
+// B17: the real picker (pure builders + presentational component), transformed like BoringAde itself.
+writeFileSync(join(dir, "BoringPanePicker.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + transformSync("BoringPanePicker.tsx", readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace(/from "react"/, `from ${JSON.stringify(reactUrl)}`));
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 const adeCode = transformSync("BoringAde.tsx", src, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)

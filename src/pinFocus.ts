@@ -6,7 +6,7 @@
 // the pin focused with "Start fresh Brainstorm" (src/pinFocusLogic.ts has the rules).
 import { useSyncExternalStore } from "react";
 import { isRetiredAgent } from "./identity";
-import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
+import { closeTab, getPanes, openAgent, openAgentInTab, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { focusDrawerOpen, hubOpenAgent } from "./ctxMenuLogic";
@@ -29,6 +29,8 @@ export type PinFocus = {
   seq: number;
   /** Inline error when Spin Up fails, cleared when changing pins or starting a new Spin Up. */
   spinUpError?: string | null;
+  /** B17: target pane for a spin-up started from the split's right pane so reconcile follows into the right pane without folding the split. */
+  into?: "right";
 };
 
 export type PinFocusSnapshot = {
@@ -87,7 +89,8 @@ export const getPinsHome = () => state.home;
 export const getSquadsHome = () => state.home && !state.focus && state.squadsHome;
 export const useSquadsHome = () => useSyncExternalStore(subscribe, getSquadsHome);
 
-const show = (id: string) => {
+const show = (id: string, into?: "right") => {
+  if (into === "right" && getPanes().split) return openAgentInTab(id, "right"); // B17: a start from the split's right pane keeps the split
   if (getPanes().split) toggleSplit(); // one drawer on screen: fold the split, nothing remounts
   openAgent(id);
 };
@@ -128,7 +131,7 @@ function reconcile() {
     else {
       // A closed Buddy is followed with the Spin Up picker still shown above its history.
       set({ focus: { ...f, agentId: d.agentId, gone: !liveId, held: null } });
-      if (d.open) show(d.agentId);
+      if (d.open || f.into === "right") show(d.agentId, f.into);
     }
   } finally {
     reconciling = false;
@@ -227,11 +230,11 @@ export function openPinMember(pin: Pin, agentId: string) {
 }
 
 /** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */
-export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof openPin = openPin): Promise<string> {
+export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof openPin = openPin, into?: "right"): Promise<string> {
   const mine = ++seq;
   const active = getPanes().leftActiveId;
   set({
-    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine, spinUpError: null },
+    focus: { squadId: pin.squad.id, laneId: pin.lane.id, agentId: null, gone: false, held: active, seq: mine, spinUpError: null, ...(into ? { into } : {}) },
     home: false,
     homeActive: null,
     squadsHome: false,
@@ -243,7 +246,7 @@ export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof op
     const f = state.focus;
     if (f?.seq === mine && f.agentId !== id) {
       set({ focus: { ...f, agentId: id, gone: false, held: null, spinUpError: null }, spinUpError: null });
-      show(id);
+      show(id, f.into ?? into);
     }
     if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;
