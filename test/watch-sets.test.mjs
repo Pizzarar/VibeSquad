@@ -3064,3 +3064,29 @@ test(
     }
   }),
 );
+
+// ---- idea-897: a delivered report must not read as idle-no-report when the turn events were missed ----
+
+test("idea-897: an idle worker whose snapshot updatedAt is after the watch was armed counts its final message as the report (no turn events seen)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", updatedAt: new Date(clock.t - 60_000).toISOString() }; // last activity BEFORE arming
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => "PASS 0/0/0 abc1234 TOTAL 101 specs", deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 5 * 60_000;
+    snap.updatedAt = new Date(clock.t).toISOString(); // the re-task ran and reported; no turn_started/turn_ended reached the engine
+    clock.t += 61_000;
+    await eng.tick();
+    clock.t += 31 * 60_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.ok(!w.pings.some((p) => /idle-no-report/.test(p.text)), JSON.stringify(w.pings));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});

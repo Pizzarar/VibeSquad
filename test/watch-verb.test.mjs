@@ -37,6 +37,8 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   add("rn-old-lead", "former-lead", { ord: "2" });
   add("rn-closed-lead", "lead", { lane: "site-polish", ord: "9" }, { status: "closed" });
   add("rn-digest", "digest");
+  add("rn-a", "worker");
+  add("rn-b", "worker");
   const backend = {
     async fetchAgents() { return { entries: [...agents.values()].map((agent) => ({ agent })), pageInfo: { hasMore: false } }; },
     async fetchAgent(id) { return { agent: agents.get(id) ?? null }; },
@@ -317,5 +319,14 @@ test("F6: a worker cannot cancel a watch set", async () => {
   try {
     await assert.rejects(callTool(t.ctx, "watch", { action: "cancel", id: "w-1" }), /workers may not use the watch verb/);
     assert.equal(t.watchCalls.cancel.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("idea-742: watch add rejects an agent id with no runner record (literal rn-PLACEHOLDER) and arms nothing", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-PLACEHOLDER"] }), /unknown agent "rn-PLACEHOLDER"/);
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a", "rn-typo"] }), /unknown agent "rn-typo"/);
+    assert.equal(t.watchCalls.add.length, 0);
   } finally { t.cleanup(); }
 });

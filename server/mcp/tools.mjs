@@ -1045,6 +1045,8 @@ async function watchTool(ctx, args = {}) {
     if (!isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
     if (seen.has(ref)) continue;
     seen.add(ref);
+    // idea-742: an unknown id (a literal rn-PLACEHOLDER, a typo) would arm a watch that can only stall as "no-events" 15 min later.
+    if (!(await fetchAgent(ref))) throw new Error(`cannot watch unknown agent "${ref}" (no runner record; check the id with \`vs list\`)`);
     items.push({ kind: "agent", ref });
   }
   if (args.suite) items.push({ kind: "suite", ref: "" });
