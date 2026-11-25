@@ -1,6 +1,8 @@
 // SB2 structural checks: #1 dangling ids, #2 kill target spawns, #5 spawn window / reach caps, #7 collisions, #8 STORY-TODO leftovers.
 // Project-agnostic: everything project-specific comes from entity data/links and adapter hooks.
 
+import { KIND_TABLE } from "../../registry/index.mjs";
+
 const ref = (e) => ({ kind: e.kind, id: e.id });
 const F = (check, severity, e, msg, source = e?.source ?? null) => ({ check, severity, entityRef: e ? ref(e) : null, msg, source });
 const isTodoText = (s) => /^STORY-TODO:/.test(String(s ?? ""));
@@ -70,7 +72,7 @@ const ID_KINDS = ["trader", "squad", "enemy", "location", "room", "item", "skill
 const NAME_KINDS = ["trader", "squad", "enemy", "location", "room", "item"];
 // Kinds whose names read as people: a word shared between two of them is a real naming clash. A word shared with an
 // item/room is category overlap ("Scav" vs "Scav Boots", "Barrel" vs "Barrel Fire"), not an ambiguous person.
-const CHARACTER_KINDS = ["trader", "squad", "enemy"];
+export const CHARACTER_KINDS = KIND_TABLE.defs.filter((d) => d.character).map((d) => d.kind);
 const normName = (s) => String(s).trim().toLowerCase().replace(/\s+/g, " ").replace(/^(?:the|a|an) /, "");
 const tokens = (s) => normName(s).split(/[^a-z0-9']+/).filter(Boolean);
 const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0); // code-unit order: host-independent
@@ -103,13 +105,15 @@ function collisions({ registry }) {
     const same = new Set(es.map((e) => e.kind)).size === 1;
     out.push(F("#7", same ? "warn" : "info", es[0], `name "${n}" is shared by ${es.map((e) => `${e.kind} ${e.id} (${e.display})`).join(", ")}`));
   }
+  const characters = named.filter((e) => CHARACTER_KINDS.includes(e.kind));
   const single = new Map();
   for (const e of named) for (const n of names(e)) if (tokens(n).length === 1) { const w = tokens(n)[0]; (single.get(w) ?? single.set(w, []).get(w)).push(e); }
-  for (const [w, owners] of [...single].sort(([a], [b]) => cmpStr(a, b))) {
-    const hits = named.filter((e) => !owners.includes(e) && names(e).some((n) => tokens(n).length > 1 && tokens(n).includes(w)));
-    if (!hits.length || seen.has(w)) continue;
+  for (const [w, allOwners] of [...single].sort(([a], [b]) => cmpStr(a, b))) {
+    if (seen.has(w)) continue;
+    const owners = allOwners.filter((e) => CHARACTER_KINDS.includes(e.kind));
+    const hits = characters.filter((e) => !owners.includes(e) && names(e).some((n) => tokens(n).length > 1 && tokens(n).includes(w)));
+    if (!owners.length || !hits.length) continue;
     const all = [...owners, ...hits].sort(byRef);
-    if (!all.every((e) => CHARACTER_KINDS.includes(e.kind))) continue;
     out.push(F("#7", "info", all[0], `word "${w}" is a name and also part of another name: ${all.map((e) => `${e.kind} ${e.id} (${e.display})`).join(", ")}`));
   }
   return out;
