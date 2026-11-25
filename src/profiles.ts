@@ -105,6 +105,8 @@ export type ProfilesState = {
   ladderDefaults?: Ladder;
   /** Role keys the server hides from pickers (GET /__vibesquad/roles hiddenRoles); absent = the static fallback. */
   hiddenRoles?: string[];
+  /** R2: provider families currently capped (GET /__vibesquad/roles capped); New Agent shows where a spawn lands. */
+  capped?: string[];
   /** "v2" = stored roles, "v1" = built live from the legacy profiles (nothing saved yet), "default" = shipped table. */
   rolesSource?: string;
 };
@@ -700,6 +702,7 @@ function applyRolesBody(body: Record<string, unknown>): void {
     ladder: (body.ladder as Ladder) ?? state.ladder,
     ladderDefaults: (body.ladderDefaults as Ladder) ?? state.ladderDefaults,
     hiddenRoles: Array.isArray(body.hiddenRoles) ? (body.hiddenRoles as string[]) : state.hiddenRoles,
+    capped: Array.isArray(body.capped) ? (body.capped as string[]) : state.capped,
     rolesSource: String(body.source ?? state.rolesSource ?? ""),
   };
   notify();
@@ -710,7 +713,7 @@ function applyRolesBody(body: Record<string, unknown>): void {
 let rolesInflight: Promise<ProfilesState> | null = null;
 export function fetchRoles(): Promise<ProfilesState> {
   if (DEMO) {
-    if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2" });
+    if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2", capped: new URLSearchParams(location.search).get("demoCapped")?.split(",").filter(Boolean) ?? [] });
     return Promise.resolve(state);
   }
   rolesInflight ??= (async () => {
