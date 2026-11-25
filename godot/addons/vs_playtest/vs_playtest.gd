@@ -359,6 +359,7 @@ func _on_reply(text: String) -> void:
 ## Pair row state: hidden for a loopback server (local token), else Pair with VS / Unpair; a refused URL or path, or a
 ## device token without a pinned CA, says why.
 func _refresh_pairing() -> void:
+	_role_pending = false
 	if _dock == null:
 		return
 	if _transport.auth_mode() == Token.MODE_LOCAL:
@@ -446,6 +447,8 @@ func _on_ca_confirmed(matches: bool) -> void:
 	if bool(res.get("ok", false)):
 		_reset_thread()
 		_refresh_pairing()
+		if _dock.visible:
+			_ensure_role()  # a new pairing made in the open dock gets its role check now
 		_dock.set_status("Paired with VibeSquad (CA pinned).")
 		_poll()
 	else:
