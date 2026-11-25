@@ -189,3 +189,46 @@ None new. D2 as applied reads well (see above).
 
 ## Verdict
 N2, N5, N6 and the Gemini M2 pane-locality are fixed, and so is most of N3. Switch to Brainstorm and the quick-jumps now keep the split. **M4 is still open for every Start action:** live, Start Brainstorm on the wiki and Bugs cards folds the split within ~90ms and replaces the left agent, because pinFocus `reconcile` follows the new Buddy without the `"right"` target. Its test only regex-checks the source. **FAIL 0/1/4** (M4; N4, N7, N8, L4). The fix is S, in `pinFocus.ts`, plus one headless browser test.
+
+---
+
+# R34 r4: fix tip `b11a63cb`
+
+Scope: `git diff 42f27c7b..b11a63cb` (`pinFocus.ts`, `BoringAde.tsx`, `boring.css`, `test/bor-b17-deadspace.test.mjs`).
+
+Evidence: I rebuilt `dist` from `b11a63cb` and drove it with Playwright on Chromium at 1280x720, 2560x1440 and 3200x1800@1.2 (4K at 120%), dark and light. Each run used a fresh context. Two demo setups:
+- **Plain demo** (`?demo=1&riff=1&team=vibesquad&agent=demo-impl-1`, 3 projects). This is the r3 condition.
+- **Routed demo** (`installRoutes`, `?demo=1`). Here RiffBot and Overlord are dormant, so their Start buttons can be reached.
+
+A 10ms DOM poller records split, left id, right id, card and crumb for 2–2.5s after each click. Shots are in `artifacts/boring-b17/ux-r34r4/` (untracked, as before). `node --test test/bor-b17-deadspace.test.mjs` passes **9/9** (including the two browser tests and the new behavioural `spinUpPin` test). No page errors in any run.
+
+## Status vs R34 r3
+
+| r3 | Status | Evidence |
+|---|---|---|
+| **M4** Right-card Start folds the split | **Fixed** | **Start Brainstorm (wiki card): 18/18.** **Start Brainstorm (Bugs card): 18/18.** That is 3 runs at each of the 6 viewport/theme combos, in the plain demo. **Start RiffBot: 18/18 + 6** in the routed demo. In every run, the split stays on at every 10ms sample, the left pane stays `demo-impl-1` / `demo-aud` throughout, and the new agent lands in the right pane within ≤119ms. Example timeline: `[32ms s=1 L=demo-impl-1 R=null card=1 VibeSquad›wiki]`, then `[90ms s=1 L=demo-impl-1 R=demo-bs-wiki-… card=0 VibeSquad›wiki›Brainstorm]`. The crumbs are `VibeSquad›Bugs›Brainstorm` and `VibeSquad›Desk›RiffBot` (`m4-riffbot-light-3200x1800.png`, `m4-wiki-*`, `m4-bugs-*`). Cause fixed: `focus.into` is carried, and `reconcile` calls `show(id, f.into)` (`pinFocus.ts:134`). **Start Overlord** still cannot be verified live: the demo spawn never resolves, and the single-pane Start Overlord does nothing either, so this is a demo limit and not a regression. By code (`BoringAde.tsx:700`), it opens right only `if getPanes().split`. |
+| Close split while a start is in flight | **OK, it does not reopen** | Close in the same tick as Start, and 40ms after Start, at all 6 combos (12 runs): `split` never returns to true. See N9 for what the single pane shows afterwards. |
+| Right card resets on project switch | **Fixed** | Wiki card on the right, then a `Main Game Project` row: the right pane shows the **picker** (no card) and the crumb is `Main Game Project›Split · pick an agent`. Back on `VibeSquad`, the right pane is still the picker, not the stale wiki card (2560 dark, 4K light, 1280 light; `projswitch-efi-*`). `useEffect(…, [view?.team.id])` is at `BoringAde.tsx:654`. Ctrl+J did not open a switcher in the static demo, so I tested the sidebar path only. |
+| Quick-jumps on the right card open in the right pane | **Fixed** | The wiki card's `Lead` and `UI Bois · Lead idle` rows, and the Bugs card's first jump (`UI Bois`), give `split=true`, `L=demo-impl-1`, and `R=demo-lead-wiki` / `demo-lead-ui-bois` at all 6 combos (18/18). |
+| **N7** `Lead · Lane` placeholder chip | **Fixed** | No strip chip matches `· Lane` at any of the 6 combos, in either demo (17 and 14 chips). `demo-lead-vs` reads `Overlord · Working`. |
+| **N8** User bubble 58px short | **Fixed, 0px** | User bubble right edge vs prose right edge: 2560 ctx-open 1484/1484, ctx-collapsed 1630/1630. 4K ctx-open 1738/1738, ctx-collapsed 1950/1950. 1280: 1207/1207 and 796/796. Dark = light. The lane test now asserts ≤1px at ≥2560. |
+| N4 Strip scoped to the project | Skipped (lead decision) | — |
+| L4 Empty space below the grid | Skipped (lead decision) | — |
+
+## Regression pass (left pane / no split, and the items fixed in r3)
+- **No split:** wiki → `Brainstorm` → Start opens `demo-bs-wiki-*` in the single pane at 10–44ms, with `split=0`. `Bugs` → Start Brainstorm opens `demo-bs-bugs-*`. The RiffBot row opens live RiffBot. All 6 combos.
+- **Fixed in r3, still fixed:** the card names the lane (N2), the right card stays pane-local when you click the left pane (Gemini M2), Esc returns focus to `◫ Split` (N5), and Switch to Brainstorm keeps the split. All are asserted by browser test 9, which passes. Strip labels `Overlord` / `RiffBot` are still correct (N3). The CSS / Psycho-untouched test (7) passes.
+
+## New findings
+
+| # | Sev | Finding | Job hurt | Evidence | Fix | Files | Effort |
+|---|---|---|---|---|---|---|---|
+| N9 | Minor | **If you close the split while a right-pane start is in flight, the new Brainstorm replaces your single-pane agent.** The split stays closed, as it should, but `show(id, "right")` with no split falls through to `openAgent(id)`. So `demo-impl-1` is swapped for `demo-bs-wiki-*` 10–113ms later (12/12 runs). Start Overlord on the same card does the opposite (`getPanes().split && openAgentInTab`): nothing opens. The two right-card starts disagree. It is defensible either way (you did ask for that agent), but it is a surprise focus steal after an explicit "close". | Split: back out of a start | `closeinflight-*`; for example `[8ms s=0 1=demo-impl-1]`, then `[48ms s=0 1=demo-bs-wiki-…]` | Pick one rule for both. Recommended: when `into === "right"` and the split is gone, don't navigate; the new agent stays reachable from the sidebar row. That is one line in `show()` (`pinFocus.ts:92`). | `pinFocus.ts` | XS |
+
+**Pre-existing (not counted; queue for @bug):** split on, left pane active, sidebar `wiki`, then the top `Brainstorm` switch with a dormant Brainstorm. The crumb and switcher say `VibeSquad › wiki › Brainstorm`, but the left pane keeps showing the **wiki Lead** drawer, and no empty card or Start appears. This breaks the "breadcrumb = open agent" invariant (`split-left-start-dark-2560x1440.png`). It reproduces the same way on the merge-base `9f1f1f81` (a pre-B17 build), so B17 did not cause it.
+
+## Owner decisions
+None new.
+
+## Verdict
+M4 is fixed live: 54/54 right-pane starts (Brainstorm, Bugs, RiffBot), 3 per combo, across 1280/2560/4K in dark and light. Each one keeps the split, lands the agent on the right and leaves the left agent untouched. Closing the split mid-start does not reopen it. The right card resets on project switch, and the quick-jumps open on the right. N7 and N8 are fixed (0px at 2560 and 4K). No regressions in the no-split start paths or in the r3 fixes. Open: N9 (minor). N4 and L4 are skipped by lead decision. **PASS 0/0/1** (N9; N4 and L4 are deferred and not counted).
