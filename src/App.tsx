@@ -53,7 +53,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp, boringAgentLanding } from "./BoringAde";
-import { getBoringDecisionView, useBoringDecisionView } from "./BoringDecisionDesk";
+import { DECISION_DESK_DEFAULT_LANDING, getBoringDecisionView, useBoringDecisionView } from "./BoringDecisionDesk";
 import { urlSyncAgent, urlSyncDecision, urlSyncScreen } from "./urlSync";
 import { StorybookHost, closeStorybook, getStorybookTarget, probeStorybook, storybookBackInFlight, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
@@ -1890,6 +1890,9 @@ export function App() {
     closeStorybook("replace");
   }, [activeTeamId, sbNavAgent]);
   const boringDecisionView = useBoringDecisionView();
+  // D4 r2 (UX R37 m3): a bare load lands on the Decision Desk, so the first-project fallback must not write ?team= for the frame before
+  // BoringApp switches mode. Held only while the load's pop is still active (before any input), so it can never block a later navigation.
+  const deskLandingPending = useRef((() => { const u = parseUrlState(location.search); return DECISION_DESK_DEFAULT_LANDING && !u.team && !u.agent && u.view !== "decisions"; })());
   useEffect(() => {
     // U1 r2 (UX R33 M1): while the Storybook takeover is open its entry is openStorybook's ({sb} state, which Esc's history.back() relies
     // on). Nothing App derives can name a new screen then: BoringApp unmounting clears its published agent / screen keys, which is not a
@@ -1901,6 +1904,10 @@ export function App() {
     // has landed (boringLanded below re-runs this). Two pops before one render coalesce: BoringApp lands the latest URL, then this writes.
     const landed = getBoringLandedGen();
     if (vibe === "boring" && landed !== undefined && landed < popGen.current) return;
+    if (deskLandingPending.current) {
+      if (boringDecisionView || !popActive.current) deskLandingPending.current = false;
+      else if (vibe === "boring") return;
+    }
     // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
     // Only while that agent belongs to the team being written (a notification lands the agent a commit before its team: Gemini M1).
     const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`
@@ -1918,6 +1925,7 @@ export function App() {
     if (vibe !== "boring" || getStorybookTarget() || storybookBackInFlight()) return;
     const landed = getBoringLandedGen();
     if (landed !== undefined && landed < popGen.current) return;
+    if (deskLandingPending.current && !boringDecisionView && popActive.current) return; // m3: the Desk lands next; don't write the first project's ?team= for a frame
     const screenKeys = urlSyncScreen({ boring: true, live: getBoringScreenKeys(), rendered: boringScreen, team: activeTeamId || null, kept: parseUrlState(location.search) });
     const next = serializeUrlState({ team: activeTeamId || null, agent: getBoringShownAgent() ?? null, ...screenKeys, ...(boringDecisionView ? { view: "decisions" } : {}) }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });

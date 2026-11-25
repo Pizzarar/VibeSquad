@@ -159,7 +159,7 @@ export function BoringInbox({ views, onOpen, now, logs: injected, sidebarMenu = 
   return (
     <section className="boring-needs-you" data-testid="boring-needs-you" aria-label="Needs you">
       <div className="boring-section-label boring-needs-head">
-        <span>Needs you</span>
+        <span title="Permissions, errors and stalls. Decisions live in Decisions.">Needs you</span>
         {rows.length > 0 && <span className="badge boring-badge" data-testid="boring-needs-you-count">{rows.length}</span>}
         <kbd className="boring-kbd" title="Open the top NEEDS YOU agent">Ctrl+J</kbd>
       </div>

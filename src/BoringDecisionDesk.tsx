@@ -15,6 +15,31 @@ import { cleanTitle } from "./ui";
 /** Placement lean (PLAN_DESK_DECISION_DESK.md): flip to false to make Decision Desk sidebar-only. */
 export const DECISION_DESK_DEFAULT_LANDING = true;
 
+/**
+ * Lean policy (UX R37 M1). true = explicit opt-in: an unstaged lean renders as a dashed *suggestion* (aria-pressed=false) and only
+ * ships after the owner taps it or `Use all leans`. Flip to false for option (a): every lean is auto-staged when its card arrives.
+ */
+export const DECISION_LEANS_OPT_IN = true;
+
+/** Lanes idle with no event for this long fold into one `+N quiet` line per Squad (UX R37 M2). */
+export const QUIET_LANE_MS = 2 * 60 * 60_000;
+
+/** Wide layout (strip in a right rail beside the feed): a viewport this wide leaves the main area ~1600px (UX R37 M2). */
+export const DECISION_RAIL_QUERY = "(min-width: 1900px)";
+
+function useWideRail(): boolean {
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(DECISION_RAIL_QUERY).matches);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(DECISION_RAIL_QUERY);
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
 /** Undo window before batch answers are dispatched (ms). */
 export const DECISION_UNDO_MS = 5000;
 
@@ -81,6 +106,10 @@ export type StatusLaneLine = {
   lastEventType: "done" | "decision" | "";
   age: string;
   openAgentId: string | null;
+  /** Newest event/activity timestamp (ms); 0 when unknown. */
+  lastTs: number;
+  /** Open feed decisions waiting on the owner for this lane (UX R37 m1). */
+  openDecisions: number;
 };
 
 export type StatusSquadGroup = {
@@ -154,6 +183,39 @@ export function lastLaneLogEvent(entries: FeedEntry[], laneId: string, code: str
   return best ? { text: best.text, type: best.type, ts: best.ts } : null;
 }
 
+/** Does an open decision belong to this strip lane? Matches lane id or `@code`; the Desk line takes hub-level asks. */
+export function decisionMatchesLane(item: Pick<DecisionItem, "squad" | "lane">, squadId: string, laneId: string, code: string): boolean {
+  if (item.squad.toLowerCase() !== squadId.toLowerCase()) return false;
+  const l = String(item.lane ?? "").replace(/^@/, "").trim().toLowerCase();
+  if (laneId === "_desk") return l === "" || l === "desk" || l === "hub" || l === squadId.toLowerCase();
+  return l === laneId.toLowerCase() || (Boolean(code) && l === code.replace(/^@/, "").toLowerCase());
+}
+
+/** A lane is quiet when it has nothing for the owner: idle/no lead, no open decision, and no event within QUIET_LANE_MS. */
+export function isQuietLane(line: StatusLaneLine, now: number): boolean {
+  if (line.openDecisions > 0) return false;
+  if (line.leadState !== "idle" && line.leadState !== "none") return false;
+  return !line.lastTs || now - line.lastTs > QUIET_LANE_MS;
+}
+
+/** Split one Squad's lanes into the always-visible lines (Desk first, then lanes needing the owner, then the rest) and the quiet fold. */
+export function splitQuietLanes(lanes: StatusLaneLine[], now: number): { shown: StatusLaneLine[]; quiet: StatusLaneLine[] } {
+  const rank = (l: StatusLaneLine) => (l.openDecisions > 0 || l.leadState === "needs-you" || l.leadState === "error" ? 0 : 1);
+  const desk = lanes.filter((l) => l.laneId === "_desk");
+  const rest = lanes.filter((l) => l.laneId !== "_desk");
+  const quiet = rest.filter((l) => isQuietLane(l, now));
+  const live = rest.filter((l) => !isQuietLane(l, now));
+  const sorted = [...live.filter((l) => rank(l) === 0), ...live.filter((l) => rank(l) === 1)];
+  return { shown: [...desk, ...sorted], quiet };
+}
+
+/** Footer counts that explain each other: total = here (feed) + off-screen (UX R37 m2). */
+export function decisionSummary(items: Pick<DecisionItem, "kind" | "lean">[]): string {
+  if (items.length === 0) return "All clear across Squads";
+  const off = items.filter((i) => classifyDecisionRow(i) === "offscreen").length;
+  return `${items.length} open · ${items.length - off} here · ${off} off-screen`;
+}
+
 function leadStateOf(lead: { agent: { status?: string }; attention?: { tone?: string } | null } | null | undefined, needsYou: number): StatusLaneLine["leadState"] {
   if (!lead) return needsYou > 0 ? "needs-you" : "none";
   if (lead.agent.status === "error" || lead.attention?.tone === "error") return "error";
@@ -163,12 +225,14 @@ function leadStateOf(lead: { agent: { status?: string }; attention?: { tone?: st
 }
 
 /** Build the live status strip grouped by Squad: one compact line per lane (Desk, Bugs if present, and every pinned lane). */
-export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<string, FeedEntry[]>>, now = Date.now()): StatusSquadGroup[] {
+export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<string, FeedEntry[]>>, now = Date.now(), openItems: readonly DecisionItem[] = []): StatusSquadGroup[] {
   return views.map((view) => {
     const entries = logsByTeam[view.team.id] ?? [];
     const zones = skyZonesFor(view);
     const bugs = quickBugsChipState(view);
     const lanes: StatusLaneLine[] = [];
+    const openFor = (laneId: string, code: string) => openItems.filter((i) => decisionMatchesLane(i, view.team.id, laneId, code)).length;
+    const tsOf = (iso: string | undefined) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? t : 0; };
 
     // Hub / Desk line (Overlord)
     const hubEv = lastLaneLogEvent(entries, view.team.id, "") ?? lastLaneLogEvent(entries, "hub", "");
@@ -185,6 +249,8 @@ export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<
       lastEventType: hubEv?.type ?? "",
       age: hubEv ? formatAge(Date.parse(hubEv.ts), now) : ov?.agent.updatedAt ? formatAge(Date.parse(ov.agent.updatedAt), now) : "",
       openAgentId: zones.overlord.agentId ?? zones.riffbot.agentId ?? null,
+      lastTs: hubEv ? tsOf(hubEv.ts) : tsOf(ov?.agent.updatedAt),
+      openDecisions: openFor("_desk", ""),
     });
 
     // Bugs line if the Squad has a Bugs lane
@@ -201,6 +267,8 @@ export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<
         lastEventType: bEv?.type ?? "",
         age: bEv ? formatAge(Date.parse(bEv.ts), now) : "",
         openAgentId: (isLive(bugs.pin.lead) ? bugs.pin.lead?.agent.id : null) ?? liveBuddyId(bugs.pin) ?? null,
+        lastTs: bEv ? tsOf(bEv.ts) : 0,
+        openDecisions: openFor(bugs.pin.lane.id, "@bug") + (bugs.pin.lane.id.toLowerCase() === "bug" ? 0 : openFor("bug", "")),
       });
     }
 
@@ -224,6 +292,8 @@ export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<
         lastEventType: ev?.type ?? "",
         age: Number.isFinite(stamp) ? formatAge(stamp, now) : "",
         openAgentId,
+        lastTs: Number.isFinite(stamp) ? stamp : 0,
+        openDecisions: openFor(pin.lane.id, code),
       });
     }
 
@@ -397,6 +467,8 @@ export function BoringDecisionDesk({
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sending, setSending] = useState(false);
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const wide = useWideRail();
+  const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -440,7 +512,7 @@ export function BoringDecisionDesk({
     if (tickRef.current) clearInterval(tickRef.current);
   }, []);
 
-  const statusGroups = useMemo(() => buildStatusStrip(views, logsByTeam, now), [views, logsByTeam, now]);
+  const statusGroups = useMemo(() => buildStatusStrip(views, logsByTeam, now, store.items), [views, logsByTeam, now, store.items]);
   const offscreenItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) === "offscreen"), [store.items]);
   const feedItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) !== "offscreen"), [store.items]);
   const squadFeed = useMemo(() => groupFeedBySquad(feedItems), [feedItems]);
@@ -449,6 +521,20 @@ export function BoringDecisionDesk({
     () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !staged[i.id]).map((i) => i.id),
     [feedItems, staged],
   );
+
+  // Option (a) of UX R37 M1: auto-stage each lean once when its card first arrives (the owner can still toggle it off).
+  const autoLeaned = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (DECISION_LEANS_OPT_IN) return;
+    const fresh = feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !autoLeaned.current.has(i.id));
+    if (fresh.length === 0) return;
+    for (const i of fresh) autoLeaned.current.add(i.id);
+    setStaged((cur) => {
+      const next = { ...cur };
+      for (const i of fresh) if (!next[i.id]) next[i.id] = { choice: "lean" };
+      return next;
+    });
+  }, [feedItems]);
 
   const cancelPending = () => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
@@ -548,18 +634,27 @@ export function BoringDecisionDesk({
     if (v) onOpenAgent(v, item.asker.id);
   };
 
-  const leadStateLabel = (s: StatusLaneLine["leadState"]) =>
+  const jumpToOffscreen = () => document.querySelector('[data-testid="boring-decision-offscreen"]')?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  const offscreenCount = offscreenItems.length;
+  const leadStateLabel = (l: StatusLaneLine) => {
+    const s = l.leadState;
+    if (l.openDecisions > 0 && (s === "idle" || s === "none" || s === "running")) return `waiting · ${l.openDecisions}`;
+    return leadStateLabelRaw(s);
+  };
+  const leadStateLabelRaw = (s: StatusLaneLine["leadState"]) =>
     s === "running" ? "running" : s === "needs-you" ? "needs you" : s === "error" ? "error" : s === "idle" ? "idle" : "no lead";
 
   return (
-    <div className="boring-decision-desk" data-testid="boring-decision-desk">
+    <div className={`boring-decision-desk${wide ? " is-wide" : ""}`} data-testid="boring-decision-desk">
       <header className="boring-decision-head">
-        <div className="boring-decision-head-text">
-          <h1 className="boring-decision-title">Decision Desk</h1>
-          <span className="boring-decision-sub" data-testid="boring-decision-summary">
-            {store.items.length === 0 ? "All clear across Squads" : `${store.items.length} open across ${new Set(store.items.map((i) => i.squad)).size} Squads`}
-          </span>
-        </div>
+        <span className="boring-decision-sub" title="Open decisions = shown in the feed here + off-screen items below">
+          <span data-testid="boring-decision-summary">{decisionSummary(store.items)}</span>
+          {offscreenCount > 0 && (
+            <button type="button" className="boring-decision-offscreen-link" data-testid="boring-decision-offscreen-link" onClick={jumpToOffscreen}>
+              jump to off-screen
+            </button>
+          )}
+        </span>
         <button type="button" className="boring-decision-refresh" data-testid="boring-decision-refresh" disabled={store.loading} onClick={() => { void refreshDecisions(); setLogRev((n) => n + 1); }}>
           {store.loading ? "Refreshing…" : "Refresh"}
         </button>
@@ -584,31 +679,56 @@ export function BoringDecisionDesk({
                 {g.squadName}
               </button>
               <div className="boring-decision-strip-lanes">
-                {g.lanes.map((lane) => (
-                  <button
-                    key={lane.key}
-                    type="button"
-                    className="boring-decision-strip-line"
-                    data-testid={`boring-decision-strip-lane-${g.squadId}-${lane.laneId}`}
-                    onClick={() => (lane.openAgentId && onOpenAgent ? onOpenAgent(g.view, lane.openAgentId) : onOpenProject?.(g.squadId))}
-                  >
-                    <span className={`boring-decision-dot st-${lane.leadState}`} aria-hidden="true" />
-                    <span className="boring-decision-strip-lane-name">{lane.label}</span>
-                    <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code">{lane.code}</code> : null}</span>
-                    <span className={`boring-decision-strip-state st-${lane.leadState}`}>{leadStateLabel(lane.leadState)}</span>
-                    <span className="boring-decision-strip-event" title={lane.lastEvent || undefined}>
-                      {lane.lastEvent ? (
-                        <>
-                          {lane.lastEventType && <span className="boring-decision-ev-tag">{lane.lastEventType}</span>}
-                          <span>{lane.lastEvent}</span>
-                        </>
-                      ) : (
-                        <span className="boring-decision-muted">No recent done/decision</span>
+                {(() => {
+                  const { shown, quiet } = splitQuietLanes(g.lanes, now);
+                  const open = Boolean(quietOpen[g.squadId]);
+                  const lines = open ? [...shown, ...quiet] : shown;
+                  return (
+                    <>
+                      {lines.map((lane) => {
+                        const waiting = lane.openDecisions > 0 && (lane.leadState === "idle" || lane.leadState === "none" || lane.leadState === "running");
+                        const stClass = waiting ? "needs-you" : lane.leadState;
+                        return (
+                          <button
+                            key={lane.key}
+                            type="button"
+                            className="boring-decision-strip-line"
+                            data-testid={`boring-decision-strip-lane-${g.squadId}-${lane.laneId}`}
+                            onClick={() => (lane.openAgentId && onOpenAgent ? onOpenAgent(g.view, lane.openAgentId) : onOpenProject?.(g.squadId))}
+                          >
+                            <span className={`boring-decision-dot st-${stClass}`} aria-hidden="true" />
+                            <span className="boring-decision-strip-lane-name">{lane.label}</span>
+                            <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code">{lane.code}</code> : null}</span>
+                            <span className={`boring-decision-strip-state st-${stClass}`}>{leadStateLabel(lane)}</span>
+                            <span className="boring-decision-strip-event" title={lane.lastEvent || undefined}>
+                              {lane.lastEvent ? (
+                                <>
+                                  {lane.lastEventType && <span className="boring-decision-ev-tag">{lane.lastEventType}</span>}
+                                  <span>{lane.lastEvent}</span>
+                                </>
+                              ) : (
+                                <span className="boring-decision-muted">No recent done/decision</span>
+                              )}
+                            </span>
+                            {lane.age && <span className="boring-decision-age">{lane.age}</span>}
+                          </button>
+                        );
+                      })}
+                      {quiet.length > 0 && (
+                        <button
+                          type="button"
+                          className="boring-decision-quiet-btn"
+                          data-testid={`boring-decision-strip-quiet-${g.squadId}`}
+                          aria-expanded={open}
+                          title={open ? "Fold quiet lanes" : `${quiet.map((q) => q.label).join(", ")}: idle, no event in the last 2h`}
+                          onClick={() => setQuietOpen((cur) => ({ ...cur, [g.squadId]: !cur[g.squadId] }))}
+                        >
+                          {open ? `− hide ${quiet.length} quiet` : `+${quiet.length} quiet`}
+                        </button>
                       )}
-                    </span>
-                    {lane.age && <span className="boring-decision-age">{lane.age}</span>}
-                  </button>
-                ))}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           ))}
@@ -640,7 +760,7 @@ export function BoringDecisionDesk({
                 const age = formatAge(item.ts, now);
                 const askerLabel = item.asker?.title ? cleanTitle(item.asker.title) : item.askerId || "";
                 const groupCount = item.groupSize && item.groupSize > 1 ? item.groupSize : Array.isArray(item.sourceIds) && item.sourceIds.length > 1 ? item.sourceIds.length : 0;
-                const leanSelected = rowType === "yesno" && (!sel || sel.choice === "lean");
+                const leanStaged = sel?.choice === "lean";
                 return (
                   <article
                     key={item.id}
@@ -680,9 +800,9 @@ export function BoringDecisionDesk({
                         {item.lean && (
                           <button
                             type="button"
-                            className={`boring-decision-choice is-lean${leanSelected ? " selected" : ""}${sel?.choice === "lean" ? " staged" : ""}`}
+                            className={`boring-decision-choice is-lean${leanStaged ? " selected staged" : " suggested"}`}
                             data-testid={`boring-decision-lean-${item.id}`}
-                            aria-pressed={leanSelected}
+                            aria-pressed={leanStaged}
                             disabled={Boolean(pending) || sending}
                             onClick={() => toggleChoice(item.id, { choice: "lean" })}
                           >
@@ -827,8 +947,10 @@ export function BoringDecisionDesk({
           ) : (
             <span className="boring-decision-bar-hint">
               {batch.length > 0
-                ? `${batch.length} ready to send`
-                : "Flip a lean, pick an option, or type an answer to queue a batch."}
+                ? `${batch.length} ready to send${unstagedLeanIds.length > 0 ? ` · ${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included` : ""}`
+                : unstagedLeanIds.length > 0
+                  ? `${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included. Tap a lean, pick an option, or type an answer.`
+                  : "Pick an option or type an answer to queue a batch."}
             </span>
           )}
         </div>

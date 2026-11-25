@@ -70,6 +70,12 @@ const {
   lastLaneLogEvent,
   buildStatusStrip,
   demoDecisionItems,
+  DECISION_LEANS_OPT_IN,
+  QUIET_LANE_MS,
+  splitQuietLanes,
+  isQuietLane,
+  decisionSummary,
+  decisionMatchesLane,
 } = await import(pathToFileURL(join(dir, "BoringDecisionDesk.mjs")).href);
 
 // Also compile BoringAde.tsx with REAL BoringDecisionDesk.mjs (DECISION_DESK_DEFAULT_LANDING = true)
@@ -223,4 +229,20 @@ test("D4 BoringAde wiring: default landing is Decision Desk, sidebar entry switc
   assert.deepEqual(boringLandingFromUrl([v], "?view=decisions"), { mode: "decisions", teamId: null });
   assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "decisions", laneLabel: null, agentLabel: null }), [{ key: "project", label: "Decision Desk" }]);
   assert.equal(boringActiveSelection({ mode: "decisions", views: [v], teamId: "vs", agentId: null, laneId: null, role: "brainstorm", workerId: null }).rowKey, null);
+});
+
+test("D4 r2 (UX R37): lean opt-in constant, quiet-lane fold + sort, decision-aware lane match, and counts that add up", () => {
+  assert.equal(DECISION_LEANS_OPT_IN, true, "option (b): leans are explicit opt-in");
+  const now = Date.parse("2026-11-25T12:00:00Z");
+  const L = (laneId, over = {}) => ({ key: laneId, squadId: "vs", laneId, label: laneId, code: "", leadState: "idle", lastEvent: "", lastEventType: "", age: "", openAgentId: null, lastTs: now - QUIET_LANE_MS - 1, openDecisions: 0, ...over });
+  const lanes = [L("_desk", { lastTs: 0 }), L("old"), L("waiting", { openDecisions: 2 }), L("fresh", { lastTs: now - 60_000 }), L("err", { leadState: "error" }), L("blank", { lastTs: 0, leadState: "none" })];
+  assert.equal(isQuietLane(lanes[2], now), false, "open decisions are never quiet");
+  const { shown, quiet } = splitQuietLanes(lanes, now);
+  assert.deepEqual(quiet.map((l) => l.laneId), ["old", "blank"]);
+  assert.deepEqual(shown.map((l) => l.laneId), ["_desk", "waiting", "err", "fresh"], "Desk first, then lanes needing the owner, then the rest");
+  assert.equal(decisionMatchesLane({ squad: "VS", lane: "@waiting" }, "vs", "waiting", "@waiting"), true);
+  assert.equal(decisionMatchesLane({ squad: "efi", lane: "waiting" }, "vs", "waiting", ""), false);
+  assert.equal(decisionMatchesLane({ squad: "vs", lane: "" }, "vs", "_desk", ""), true);
+  assert.equal(decisionSummary([{ kind: "yesno" }, { kind: "answer" }, { kind: "offscreen" }]), "3 open · 2 here · 1 off-screen");
+  assert.equal(decisionSummary([]), "All clear across Squads");
 });

@@ -20,6 +20,11 @@ const HISTORY_WRAP = `(() => {
     history[k] = (...a) => { window.__h.push(k); return o(...a); };
   }
   addEventListener("popstate", () => window.__h.push("POP"));
+  window.__urls = [];
+  for (const k of ["pushState", "replaceState"]) {
+    const o = history[k];
+    history[k] = (...a) => { const r = o(...a); window.__urls.push(location.search); return r; };
+  }
 })()`;
 
 // Mutable per-run backend state for the 12-item 3-Squad demo (zero personal identifiers).
@@ -152,8 +157,9 @@ for (const cfg of [
     try {
       // 1. Default landing + sidebar badge + URL agreement
       assert.equal(await page.evaluate(() => new URLSearchParams(location.search).get("view")), "decisions", "default landing sets ?view=decisions");
+      assert.deepEqual(await page.evaluate(() => window.__urls.filter((u) => new URLSearchParams(u).get("team"))), [], "m3: landing never writes ?team= before the Desk");
       assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 12");
-      assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "12 open across 3 Squads");
+      assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "12 open · 9 here · 3 off-screen");
 
       // 2. Live status strip: every lane line visible without leaving the page
       const stripLines = await page.locator('[data-testid="boring-decision-strip"] .boring-decision-strip-line').count();
@@ -166,6 +172,20 @@ for (const cfg of [
       await page.screenshot({ path: path.join(SHOTS_DIR, `${cfg.name}.png`), fullPage: false });
 
       if (cfg.fullDrive) {
+        // 3a. M1 explicit opt-in: untouched leans are dashed suggestions, not pressed, and the bar says what is not included.
+        const lean1 = page.locator('[data-testid="boring-decision-lean-ny-00000000000000000001"]');
+        assert.equal(await lean1.getAttribute("aria-pressed"), "false", "unstaged lean is not pressed");
+        assert.ok(!(await lean1.getAttribute("class")).includes("selected"), "unstaged lean is not selected");
+        assert.equal(await lean1.evaluate((el) => getComputedStyle(el).borderTopStyle), "dashed", "unstaged lean has a dashed border");
+        assert.match(await lean1.textContent(), /Lean/, "LEAN tag stays");
+        assert.equal(await page.locator('[data-testid="boring-decision-send-btn"]').isDisabled(), true, "Send 0 answers while nothing is staged");
+        assert.match(await page.locator(".boring-decision-bar-status").textContent(), /6 leans not included/);
+        assert.equal(await page.locator('[data-testid="boring-decision-stage-leans"]').textContent(), "Use all leans (6)");
+        await lean1.click();
+        assert.equal(await lean1.getAttribute("aria-pressed"), "true", "tapped lean is pressed");
+        await lean1.click();
+        assert.equal(await lean1.getAttribute("aria-pressed"), "false", "tapping again unstages it");
+
         // 3. Flip 2 leans + answer 1 -> Send 3 answers
         await page.locator('[data-testid="boring-decision-not-ny-00000000000000000001"]').click();
         await page.locator('[data-testid="boring-decision-alt-ny-00000000000000000002-0"]').click();
@@ -173,6 +193,7 @@ for (const cfg of [
 
         const sendBtn = page.locator('[data-testid="boring-decision-send-btn"]');
         assert.equal(await sendBtn.textContent(), "Send 3 answers");
+        assert.match(await page.locator(".boring-decision-bar-status").textContent(), /3 ready to send · 4 leans not included/);
 
         // Verify 5s Undo cancels before dispatch
         await sendBtn.click();
@@ -197,7 +218,7 @@ for (const cfg of [
           ],
         );
         assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 9");
-        assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "9 open across 3 Squads");
+        assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "9 open · 6 here · 3 off-screen");
         const stripText = await page.locator('[data-testid="boring-decision-strip"]').textContent();
         assert.match(stripText, /Answered: alt:0/, "status strip updated with latest lane event");
 
@@ -241,3 +262,57 @@ for (const cfg of [
     }
   });
 }
+
+test("D4 UX R37 M2: with 20+ lanes the strip folds quiet lanes and a decision card stays above the fold at 1920x1080", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, colorScheme: "dark" });
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({...p,"app.theme":"dark"})); }catch{}`);
+  const page = await context.newPage();
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  try {
+    await page.goto(`${baseUrl}/?demo=&lanes=24`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="boring-decision-desk"]', { timeout: 20000 });
+    await page.waitForTimeout(800);
+    const quietBtn = page.locator('[data-testid^="boring-decision-strip-quiet-"]').first();
+    assert.ok(await quietBtn.count(), "a +N quiet fold exists");
+    const m = /^\+(\d+) quiet$/.exec((await quietBtn.textContent()).trim());
+    assert.ok(m && Number(m[1]) >= 20, `at least 20 idle lanes are folded (got ${m?.[0]})`);
+    const geo = await page.evaluate(() => {
+      const strip = document.querySelector('[data-testid="boring-decision-strip"]').getBoundingClientRect();
+      const bar = document.querySelector('[data-testid="boring-decision-bar"]').getBoundingClientRect();
+      const cards = [...document.querySelectorAll(".boring-decision-card")].map((c) => c.getBoundingClientRect());
+      return { stripBottom: strip.bottom, barTop: bar.top, innerHeight, above: cards.filter((r) => r.top >= 0 && r.bottom <= bar.top).length };
+    });
+    assert.ok(geo.stripBottom < geo.innerHeight, `strip bottom ${geo.stripBottom} is above innerHeight ${geo.innerHeight}`);
+    assert.ok(geo.above >= 1, `at least 1 decision card above the fold (got ${geo.above})`);
+    await page.screenshot({ path: path.join(SHOTS_DIR, "lanes-24-1920.png"), fullPage: false });
+    const before = await page.locator('[data-testid="boring-decision-strip"] .boring-decision-strip-line').count();
+    await quietBtn.click();
+    const after = await page.locator('[data-testid="boring-decision-strip"] .boring-decision-strip-line').count();
+    assert.ok(after >= before + 20, `expanding shows the folded lanes (${before} -> ${after})`);
+    assert.equal(await quietBtn.getAttribute("aria-expanded"), "true");
+    assert.deepEqual(errs, [], `zero pageerrors: ${errs.join("; ")}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test("D4 UX R37 M2: at 3200 wide the strip sits in a right rail beside the feed", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  const { context, page } = await openDesk({ theme: "dark", width: 3200, height: 1800, dpr: 1 });
+  try {
+    const g = await page.evaluate(() => {
+      const strip = document.querySelector('[data-testid="boring-decision-strip"]').getBoundingClientRect();
+      const feed = document.querySelector('[data-testid="boring-decision-feed"]').getBoundingClientRect();
+      const w = document.querySelector(".boring-decision-wrap"), d = document.querySelector(".boring-decision-desk");
+      return { stripLeft: strip.left, feedRight: feed.right, stripTop: strip.top, feedTop: feed.top, wrapW: w.clientWidth, cont: getComputedStyle(w).containerType, disp: getComputedStyle(d).display, deskW: d.clientWidth };
+    });
+    assert.ok(g.stripLeft >= g.feedRight, `strip is right of the feed ${JSON.stringify(g)}`);
+    assert.ok(Math.abs(g.stripTop - g.feedTop) < 40, "strip and feed start at the same height");
+  } finally {
+    await context.close();
+  }
+});
