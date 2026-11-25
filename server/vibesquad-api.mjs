@@ -697,14 +697,18 @@ function handleTeams(req, res, rootDir, opts = {}) {
         console.warn(`[vibesquad] hub brief seed failed after a teams write: ${e?.message ?? e}`); // the write landed
       }
       // C2: live wake on a per-Squad vibeMode flip. Fire-and-forget; a toggle failure never fails or delays the save.
-      const backend = opts.backend ?? sharedRunnerBackend();
-      createCrunchToggle({
-        rootDir,
-        listAgents: () => backend.listAgents(),
-        send: (id, text, o) => backend.sendAgentPrompt(id, text, o),
-      })
-        .onTeamsSave(result.prevTeams, result.body.teams)
-        .catch((e) => console.warn(`[vibesquad] crunch-toggle: ${e?.message ?? e}`));
+      try {
+        const backend = opts.backend ?? sharedRunnerBackend();
+        createCrunchToggle({
+          rootDir,
+          listAgents: () => backend.listAgents(),
+          send: (id, text, o) => backend.sendAgentPrompt(id, text, o),
+        })
+          .onTeamsSave(result.prevTeams, result.body.teams)
+          .catch((e) => console.warn(`[vibesquad] crunch-toggle: ${e?.message ?? e}`));
+      } catch (e) {
+        console.warn(`[vibesquad] crunch-toggle setup failed after a teams write: ${e?.message ?? e}`); // the write landed
+      }
     }
     sendJson(res, result.status, result.body);
   }, (e) => {

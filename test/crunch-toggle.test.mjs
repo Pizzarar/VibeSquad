@@ -106,3 +106,39 @@ test("CRUNCH_ON_MESSAGE contains the rule text plus the go line", () => {
   assert.match(CRUNCH_ON_MESSAGE, /Crunch skips asking, not checking/);
   assert.ok(CRUNCH_ON_MESSAGE.endsWith("Pick your lean and go"));
 });
+
+test("a send() that throws does not stop the remaining members or other Squads", async () => {
+  const sent = [];
+  const toggle = createCrunchToggle({
+    listAgents: async () => [ag("A", "lead", "vs", "x"), ag("B", "brainstorm", "vs", "x"), ag("C", "lead", "efi", "y")],
+    send: async (id) => {
+      sent.push(id);
+      if (id === "A") throw new Error("dead session");
+    },
+    asleepTeams: () => new Set(),
+    log: () => {},
+  });
+  await toggle.onTeamsSave([{ id: "vs" }, { id: "efi" }], [{ id: "vs", vibeMode: true }, { id: "efi", vibeMode: true }]);
+  assert.deepEqual(sent.sort(), ["A", "B", "C"]);
+});
+
+test("a listAgents() that throws does not reject onTeamsSave", async () => {
+  const toggle = createCrunchToggle({
+    listAgents: async () => { throw new Error("runner down"); },
+    asleepTeams: () => new Set(),
+    log: () => {},
+  });
+  await assert.doesNotReject(toggle.onTeamsSave([{ id: "vs" }], [{ id: "vs", vibeMode: true }]));
+});
+
+test("a dropped steer (delivered:false) falls back to a normal prompt", async () => {
+  const calls = [];
+  const toggle = createCrunchToggle({
+    listAgents: async () => [ag("A", "lead", "vs", "x", { status: "running" })],
+    send: async (id, text, o) => { calls.push(o?.steerOnly === true); return o?.steerOnly ? { delivered: false } : {}; },
+    asleepTeams: () => new Set(),
+    log: () => {},
+  });
+  await toggle.onTeamsSave([{ id: "vs" }], [{ id: "vs", vibeMode: true }]);
+  assert.deepEqual(calls, [true, false]);
+});

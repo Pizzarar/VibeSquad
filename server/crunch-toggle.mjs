@@ -60,12 +60,22 @@ export function createCrunchToggle({
         for (const m of members) {
           const busy = BUSY.has(String(m.agent.status ?? "").toLowerCase());
           const text = ch.to ? CRUNCH_ON_MESSAGE : CRUNCH_OFF_MESSAGE;
-          await send(m.agent.id, text, busy ? { steerOnly: true } : {});
-          log({
-            teamId: ch.teamId,
-            laneId: m.laneId,
-            text: `crunch-${ch.to ? "on" : "off"} team=${ch.teamId} lane=${m.laneId} agent=${m.agent.id} role=${m.role}${busy ? " steer" : ""}`,
-          });
+          try {
+            let how = busy ? " steer" : "";
+            const res = await send(m.agent.id, text, busy ? { steerOnly: true } : {});
+            if (busy && res?.delivered === false) {
+              // The turn ended between listAgents and send, so the steer was dropped: the agent is idle now, give it a normal prompt.
+              await send(m.agent.id, text, {});
+              how = " fallback";
+            }
+            log({
+              teamId: ch.teamId,
+              laneId: m.laneId,
+              text: `crunch-${ch.to ? "on" : "off"} team=${ch.teamId} lane=${m.laneId} agent=${m.agent.id} role=${m.role}${how}`,
+            });
+          } catch (e) {
+            console.warn(`[vibesquad] crunch-toggle: send to ${m.agent.id} failed: ${e?.message ?? e}`); // keep notifying the rest
+          }
         }
       }
     } catch (e) {
