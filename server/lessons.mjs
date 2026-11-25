@@ -98,6 +98,26 @@ export function appendLesson(entry, { storePath, rootDir } = {}) {
   return saved;
 }
 
+/**
+ * Retires a lesson (idea-991): appends a `{retire: <id>, reason, retiredAt}` record, so the original line stays as an
+ * audit trail. `key` is an id or an exact (case-insensitive) title; ambiguous or unknown keys throw.
+ */
+export function retireLesson(key, { reason = "", storePath, rootDir } = {}) {
+  const k = String(key ?? "").trim().toLowerCase();
+  if (!k) throw new Error("lesson retire needs a title or id");
+  const store = pickStore({ storePath, rootDir });
+  const live = readLessons({ limit: Number.MAX_SAFE_INTEGER, storePath: store });
+  const hits = live.filter((l) => String(l.id).toLowerCase() === k);
+  const matches = hits.length ? hits : live.filter((l) => String(l.title ?? "").trim().toLowerCase() === k);
+  if (!matches.length) throw new Error(`no active lesson matches "${key}" (already retired, or no such id/title)`);
+  if (matches.length > 1) throw new Error(`"${key}" matches ${matches.length} lessons; retire by id: ${matches.map((l) => l.id).join(", ")}`);
+  const target = matches[0];
+  const record = { retire: target.id, reason: String(reason ?? "").trim(), retiredAt: new Date().toISOString() };
+  mkdirSync(dirname(store), { recursive: true });
+  appendFileSync(store, JSON.stringify(record) + "\n", "utf8");
+  return { id: target.id, title: target.title, reason: record.reason, retiredAt: record.retiredAt };
+}
+
 function readRawLines(store) {
   if (!store || !existsSync(store)) return [];
   const raw = stripBom(readFileSync(store, "utf8"));
@@ -144,8 +164,9 @@ export function readLessons({ category, query, limit = 50, storePath, rootDir } 
     const entry = parseLessonLine(line);
     if (entry) parsed.push({ entry, index });
   }
+  const retired = new Set(parsed.filter((x) => x.entry && x.entry.retire != null).map((x) => String(x.entry.retire)));
   const filtered = parsed.filter(
-    (x) => matchesCategory(x.entry, category) && matchesQuery(x.entry, query),
+    (x) => x.entry.retire == null && !retired.has(String(x.entry.id)) && matchesCategory(x.entry, category) && matchesQuery(x.entry, query),
   );
   const cap = typeof limit === "number" && Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : 50;
   filtered.sort((a, b) => byTime(b) - byTime(a) || b.index - a.index);
