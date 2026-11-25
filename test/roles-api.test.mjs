@@ -326,7 +326,8 @@ test("C1: a saved role and ladder change the live spawn config; a v1 home routes
       }
     }
     const before = roleSpawnConfig("implement", { profiles: list, profilesPath: t.profiles });
-    assert.equal(before.spawnCfg.provider, "claude");
+    assert.equal(before.spawnCfg.provider, "antigravity-cli");
+    assert.equal(before.route.provider, "agy-claude");
     // Save: implement prefers opencode in plan mode with its own prompt + tools; opencode mid rung -> flash model.
     const role = loadRoles(t.profiles).roles.implement;
     saveRoles(
@@ -351,9 +352,16 @@ test("C1: a saved role and ladder change the live spawn config; a v1 home routes
     // The same through resolveRoute with the stored roles + effective ladder.
     const r = resolveRoute({ role: "implement", ladder: loadTierLadder(join(t.dir, "stakes-ladder.json")) }, { roles: loadRoles(t.profiles).roles });
     assert.deepEqual([r.provider, r.model, r.modeId, r.effort], ["opencode", "deepseek/deepseek-v4-flash", "plan", "low"]);
-    // Capped opencode walks to the next stored provider.
+    // Capped opencode walks to the next stored provider (agy-claude before direct claude under R10).
     const capped = roleSpawnConfig("implement", { profiles: list, profilesPath: t.profiles, usageList: [{ id: "opencode", status: "exhausted", usedPct: 100 }] });
-    assert.equal(capped.spawnCfg.provider, "claude");
+    assert.equal(capped.spawnCfg.provider, "antigravity-cli");
+    assert.equal(capped.route.provider, "agy-claude");
+    const cappedBoth = roleSpawnConfig("implement", {
+      profiles: list,
+      profilesPath: t.profiles,
+      usageList: [{ id: "opencode", status: "exhausted", usedPct: 100 }, { id: "agy-claude", status: "exhausted", usedPct: 100 }],
+    });
+    assert.equal(cappedBoth.spawnCfg.provider, "claude");
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;
