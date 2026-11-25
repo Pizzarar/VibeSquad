@@ -891,11 +891,13 @@ export class RunnerBackend {
   }
 
   /** Best-effort: enrich a runner rec with lastPromptAt/lastProgressAt from its log tail (absent on an unreadable log). */
-  progressFor(rec) {
+  progressFor(rec, { all = false } = {}) {
     if (!rec || !rec.id) return rec;
     // isStalePredecessor is the only consumer and returns false for every status but starting/queued; skip the log
     // scan for everything else so a running/idle turn never re-reads its log on every tick.
-    if (rec.status !== "starting" && rec.status !== "queued") return rec;
+    // `all` (single-agent reads only, fetchAgent) also covers idle/parked/running: the watch engine needs lastProgressAt (idea-897);
+    // progressCache keys on lastSeq so an unchanged idle log is not re-read.
+    if (!all && rec.status !== "starting" && rec.status !== "queued") return rec;
     const cached = this.progressCache.get(rec.id);
     if (cached && cached.lastSeq === rec.lastSeq) {
       // The log has not advanced since the last scan (same lastSeq): reuse it, so repeated ticks don't re-read.
@@ -914,7 +916,7 @@ export class RunnerBackend {
 
   async fetchAgent(id) {
     const rec = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}`);
-    return { agent: toAgent(this.progressFor(rec)), project: null };
+    return { agent: toAgent(this.progressFor(rec, { all: true })), project: null };
   }
 
   async getAgent(id) {

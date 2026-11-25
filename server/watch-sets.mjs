@@ -721,10 +721,8 @@ export function createWatchEngine({
     // next tick re-reads the timeline.
     const prog = Date.parse(String(a.lastProgressAt ?? ""));
     if (Number.isFinite(prog) && prog > (o.progressAtMs ?? -Infinity)) {
-      if (o.progressAtMs !== undefined) {
-        o.finalText = "";
-        o.finalChecked = 0;
-      }
+      o.finalText = "";
+      o.finalChecked = 0;
       o.progressAtMs = prog;
     }
     o.lost = a.lost === true;
