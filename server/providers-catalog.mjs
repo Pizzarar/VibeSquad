@@ -644,7 +644,20 @@ function foldIdentity(st, m) {
 const DIGEST_PROFILE_RE = /^Pre-check\b/i;
 const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit|UX Reviewer)\b/i;
 const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|Planner|Spec)\b/i;
-const JOBKIND_REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
+const REVIEWER_WORD_RE = /\b(?:re-?review|reviewer)\b/i;
+const REVIEW_ROLE_RE = /(?:^|[:\s])review(?:\s|$)/i;
+/**
+ * idea-677: a title is "<unit> · <role part>". A bare "review" only marks a reviewer in the role part (after the last "·"), so an
+ * implementer whose unit slug words contain "review" ("Per T2 review stdin · implement") stays an implementer. "reviewer" /
+ * "re-review" count anywhere; a title with no "·" is all role part.
+ */
+function isReviewerTitle(title) {
+  const t = String(title || "");
+  if (/\breview\s+fix/i.test(t)) return false;
+  if (REVIEWER_WORD_RE.test(t)) return true;
+  const i = t.lastIndexOf("·");
+  return REVIEW_ROLE_RE.test(i >= 0 ? t.slice(i + 1) : t);
+}
 
 /** usa-29: strip the trailing effort suffix so "gemini-4-neon-medium" and "gemini-4-neon" are one model row. */
 const baseModel = (m) => String(m || "unknown").replace(/-(?:low|medium|high|xhigh|max)$/i, "");
@@ -665,7 +678,7 @@ function classifyJobKind(st) {
   if (st.digest || role === "digest" || DIGEST_PROFILE_RE.test(profile)) return "digest";
   if (REVIEWER_PROFILE_RE.test(profile) || st.roleOnly) return "reviewer";
   const title = st.title || "";
-  if (JOBKIND_REVIEWER_TITLE_RE.test(title) && !/\breview\s+fix/i.test(title)) return "reviewer";
+  if (isReviewerTitle(title)) return "reviewer";
   if (SCOUT_PROFILE_RE.test(profile)) return "scout";
   return role === "worker" ? "implementer" : "scout";
 }
@@ -1548,7 +1561,6 @@ const unitNameOfCwd = (cwd) => {
 };
 
 const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|UX Reviewer|Planner|Spec)\b/i;
-const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
 
 /** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */
 function isImplementerWorker(a) {
@@ -1556,7 +1568,7 @@ function isImplementerWorker(a) {
   if (a.jobKind !== undefined && a.jobKind !== "implementer") return false;
   if (a.roleOnly) return false;
   if (NON_IMPLEMENTER_PROFILE_RE.test(a.profile || "")) return false;
-  if (REVIEWER_TITLE_RE.test(a.title || "") && !/\breview\s+fix/i.test(a.title || "")) return false;
+  if (isReviewerTitle(a.title)) return false;
   return true;
 }
 
