@@ -272,6 +272,24 @@ export function reownWatchesAsync(spec, { home, now = Date.now() } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * idea-942: the final message of a COMPLETED turn, from timeline entries ({item, turnEnd}). An archived worker may have been
+ * cancelled or killed mid-turn (an intermediate assistant message, a trailing tool call) or have crashed (error entry), so
+ * for those only text that a turn_done marker closed counts: the last assistant message must be followed by a turnEnd and
+ * by no tool call, error or user message.
+ */
+export function completedTurnText(entries) {
+  let text = "";
+  let ended = false;
+  for (const e of entries ?? []) {
+    const t = e?.item?.type;
+    if (t === "assistant_message" && String(e.item.text ?? "").trim()) { text = String(e.item.text).trim(); ended = Boolean(e.turnEnd); }
+    else if (t === "tool_call" || t === "error" || t === "user_message") { text = ""; ended = false; }
+    else if (e?.turnEnd && text) ended = true;
+  }
+  return ended ? text : "";
+}
+
+/**
  * Classify one non-done item. ctx: { now, startedAt, agents: Map<id, obs>, reports: Map<id, [{type, ts, text}]> (counted
  * entries only), suite: {result, lock}, restarts: [{name, rec}], alive(pid) }.
  * Returns { phase, phaseSince?, state: waiting | done | fail | stalled, reason?, report? }.
@@ -954,7 +972,7 @@ export function createWatchEngine({
         if (!o || !(o.status === "idle" || (o.archived && o.status === "closed")) || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
         o.finalChecked = t;
         try {
-          o.finalText = String((await lastMessage(ref)) ?? "").trim();
+          o.finalText = String((await lastMessage(ref, o.archived ? { completedOnly: true } : undefined)) ?? "").trim();
         } catch {
           /* no timeline: stays not-done */
         }

@@ -67,7 +67,7 @@ import {
 } from "../spawn-route.mjs";
 import { armProvider } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
-import { createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
+import { completedTurnText, createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent, VERDICT_PREFIX_SRC } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
@@ -3228,9 +3228,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     }
 
     // strict (watch sets): a user_message after the last assistant message means a newer turn began, so that text is stale -> "".
-    async function lastAssistantText(paseo: Paseo, id: string, strict = false): Promise<string> {
+    async function lastAssistantText(paseo: Paseo, id: string, strict = false, completedOnly = false): Promise<string> {
       try {
         const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 20 });
+        if (completedOnly) return completedTurnText(page.entries as any[]); // archived worker: only a turn_done-closed reply (idea-942)
         let last = "";
         let failure = "";
         let replied = false; // the current turn already produced a reply
@@ -3750,7 +3751,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           asleep: teamAsleep,
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
-          lastMessage: (id: string) => (paseoApi ? lastAssistantText(paseoApi, id, true) : Promise.resolve("")),
+          lastMessage: (id: string, o?: { completedOnly?: boolean }) => (paseoApi ? lastAssistantText(paseoApi, id, true, o?.completedOnly === true) : Promise.resolve("")),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
           spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
           nudge: (id: string, text: string) => nudgeIdleWorker(id, text),
