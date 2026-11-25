@@ -1,5 +1,5 @@
 import { clampCtxMenu, rootZoom } from "./pinMenuPlace";
-import { openStorybook, probeStorybook } from "./StorybookView";
+import { isStorybookMissing, openStorybook, useStorybookProbes } from "./StorybookView";
 import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
@@ -637,6 +637,8 @@ export function CommandPaletteHost(props: {
   const allRef = useRef(all);
   allRef.current = all;
 
+  const storybookProbeRev = useStorybookProbes(props.views.map((v) => v.team.id), mode === "palette");
+
   const items = useMemo<PaletteItem[]>(() => {
     const act = (id: string, label: string): PaletteItem => {
       const keys = bindingLabel(bindings, id);
@@ -657,8 +659,8 @@ export function CommandPaletteHost(props: {
       return m.agent.archivedAt ? [del] : [del, rel];
     });
     // T2: Storybook is reached via the Code | Storybook tabs (Normal) and this command (keyboard / Psycho); hidden once a project is known-missing.
-    // `mode` is a dep so the probe result is re-read each time the palette opens.
-    const storybooks = props.views.filter((v) => !probeStorybook(v.team.id)).map<PaletteItem>((v) => ({ id: `action:storybook:${v.team.id}`, kind: "action", label: `Open Storybook: ${v.team.name}`, hint: "storybook" }));
+    // Pure cache read (no fetch during render); useStorybookProbes triggers throttled probes in an effect and bumps storybookProbeRev on resolution.
+    const storybooks = props.views.filter((v) => !isStorybookMissing(v.team.id)).map<PaletteItem>((v) => ({ id: `action:storybook:${v.team.id}`, kind: "action", label: `Open Storybook: ${v.team.name}`, hint: "storybook" }));
     const crunches = crunchPaletteItems(props.views.filter((v) => getTeams().some((t) => t.id === v.team.id)).map((v) => ({ id: v.team.id, name: v.team.name, on: getTeams().find((t) => t.id === v.team.id)?.vibeMode === true })), getCurrentSquadId(), q);
     const stops = runningCwds(props.members.map((m) => m.agent)).map<PaletteItem>((c) => ({
       id: `action:stopcwd:${c.cwd}`,
@@ -684,7 +686,7 @@ export function CommandPaletteHost(props: {
       // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
       ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.members, props.views, bindings, mode, q]);
+  }, [all, props.members, props.views, bindings, mode, q, storybookProbeRev]);
 
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {

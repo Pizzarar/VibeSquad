@@ -39,3 +39,14 @@ test("usa-53: CSS rules exist; no opacity; detail dd resets nowrap", () => {
   assert.ok(!/opacity/.test(block));
   assert.match(block, /\.usage-plan-detail dd \{[^}]*white-space: normal/);
 });
+
+test("usa-62: phone <=600px stacks burst split cells with data-label, wraps Model x Stakes labels, and adds right-edge scroll hint", () => {
+  assert.match(src, /data-label=\{c\.label\}/);
+  const start = css.indexOf("/* usa-62:");
+  assert.ok(start > 0, "usa-62 CSS block present");
+  const block = css.slice(start);
+  assert.match(block, /@media \(max-width: 600px\)/);
+  assert.match(block, /\[data-testid="usage-burst-split-table"\] td\[data-label\]::before/);
+  assert.match(block, /\[data-testid="usage-workflow-table"\] td:first-child \{[^}]*overflow-wrap: anywhere/);
+  assert.match(block, /\.usage-table-wrap \{[^}]*linear-gradient\(to left,/);
+});

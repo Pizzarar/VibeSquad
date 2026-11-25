@@ -281,7 +281,7 @@ function BurstSplit({ cohorts }: { cohorts: BurstCohorts }) {
               <tr key={r.key} data-testid="usage-burst-split-row">
                 <td>{r.key} <span className="muted">({r.units})</span></td>
                 {r.buckets.map((c) => (
-                  <td key={c.key} className="num">{c.units === 0 ? "—" : c.insufficient ? `n<${cohorts.minN} (${c.units})` : `${c.units} · ${burstCellText(c, c.firstTryPassRate, pctText, cohorts.minN)} · ${burstCellText(c, c.costPerUnit, usdText, cohorts.minN)}`}</td>
+                  <td key={c.key} className="num" data-label={c.label}>{c.units === 0 ? "—" : c.insufficient ? `n<${cohorts.minN} (${c.units})` : `${c.units} · ${burstCellText(c, c.firstTryPassRate, pctText, cohorts.minN)} · ${burstCellText(c, c.costPerUnit, usdText, cohorts.minN)}`}</td>
                 ))}
               </tr>
             ))}
@@ -847,25 +847,27 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
             </div>
           )}
           {data.burstCohorts && (
-            <div className="usage-table-wrap" data-testid="usage-burst">
+            <div data-testid="usage-burst">
               <div className="usage-sub">Parallel burst size at dispatch → outcome (merged units)</div>
-              <table className="usage-table" data-testid="usage-burst-table">
-                <thead>
-                  <tr><th>Burst</th><th className="num">Units</th><th className="num">1st-try PASS %</th><th className="num">Avg rev rounds</th><th className="num">Fix rate</th><th className="num">Cost/unit</th></tr>
-                </thead>
-                <tbody>
-                  {data.burstCohorts.buckets.map((b) => (
-                    <tr key={b.key} data-testid="usage-burst-row" data-burst={b.key} className={b.insufficient ? "usage-burst-thin" : undefined}>
-                      <td>{b.label}</td>
-                      <td className="num">{b.units}</td>
-                      <td className="num">{burstCellText(b, b.firstTryPassRate, pctText, data.burstCohorts!.minN)}</td>
-                      <td className="num">{burstCellText(b, b.avgReviewRounds, (n) => n.toFixed(1), data.burstCohorts!.minN)}</td>
-                      <td className="num">{burstCellText(b, b.fixAfterMergeRate, pctText, data.burstCohorts!.minN)}</td>
-                      <td className="num">{burstCellText(b, b.costPerUnit, usdText, data.burstCohorts!.minN)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="usage-table-wrap">
+                <table className="usage-table" data-testid="usage-burst-table">
+                  <thead>
+                    <tr><th>Burst</th><th className="num">Units</th><th className="num">1st-try PASS %</th><th className="num">Avg rev rounds</th><th className="num">Fix rate</th><th className="num">Cost/unit</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.burstCohorts.buckets.map((b) => (
+                      <tr key={b.key} data-testid="usage-burst-row" data-burst={b.key} className={b.insufficient ? "usage-burst-thin" : undefined}>
+                        <td>{b.label}</td>
+                        <td className="num">{b.units}</td>
+                        <td className="num">{burstCellText(b, b.firstTryPassRate, pctText, data.burstCohorts!.minN)}</td>
+                        <td className="num">{burstCellText(b, b.avgReviewRounds, (n) => n.toFixed(1), data.burstCohorts!.minN)}</td>
+                        <td className="num">{burstCellText(b, b.fixAfterMergeRate, pctText, data.burstCohorts!.minN)}</td>
+                        <td className="num">{burstCellText(b, b.costPerUnit, usdText, data.burstCohorts!.minN)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <BurstSplit cohorts={data.burstCohorts} />
               <div className="small muted" data-testid="usage-burst-note">
                 n&lt;{data.burstCohorts.minN} = too few units to compare{data.burstCohorts.unjoined > 0 ? ` · unjoined ${data.burstCohorts.unjoined} (no dispatch burst recorded)` : ""}
