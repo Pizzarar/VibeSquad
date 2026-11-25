@@ -17,7 +17,8 @@ import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failov
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
 import { loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
 
-export { ROUTE_OVERRIDE_LABEL, parseRouteOverride, routeOverrideLabel } from "./route-override.mjs";
+import { isForeignModel } from "./route-override.mjs";
+export { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, isForeignModel, parseRouteOverride, routeOverrideLabel } from "./route-override.mjs";
 
 /** Labels every routed spawn is stamped with (plus `profile` = the role or old profile name, and `wf`). */
 export const ROUTE_STAMP_LABELS = Object.freeze(["provider", "model", "tier", "stakes"]);
@@ -85,7 +86,10 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  *   - the caller's provider is capped/over quota: failover still hops along the role's list (the caller's model is kept
  *     only when it belongs to the hop's family). `override.hopped` + `explicitCapped` report it. Every provider capped =
  *     the caller's provider is kept.
- *   Returned `override` = {provider, model, hopped} (null when no override applied): the hook stamps reason=override.
+ *   - provider + a model of ANOTHER family (provider=claude model=gemini-4-neon; isForeignModel): the model is dropped,
+ *     the provider is kept and its ladder rung applies, as the hook does for a caller model (r2, rn-a5cd265243b5 L1).
+ *   Returned `override` = {provider, model, hopped, modelDropped} (null when no override applied): the hook stamps
+ *   reason=override (+ `model-dropped=family`).
  * `explicitModel`: the caller's model, only to report `explicit-capped` (its family is capped) on a spawn WITHOUT an
  * override: for those the cap wins and the model is dropped when the family changes (P5a review M3).
  * `prefer` (R1, PLAN_PER_ROLES_LADDER_1125): a provider family the role tries first (the R0 implementer arm pick, read
@@ -108,7 +112,9 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   const rungs = ladder ?? loadTierLadder();
   const base = { role: found.key, stakes, caps, ladder: rungs };
   const ovProvider = String(override?.provider ?? "").trim();
-  const ovModel = String(override?.model ?? "").trim();
+  const ovModelRaw = String(override?.model ?? "").trim();
+  const modelDropped = Boolean(ovProvider && isForeignModel(ovProvider, ovModelRaw));
+  const ovModel = modelDropped ? "" : ovModelRaw;
   const ovModelFam = routeProviderFamily(ovModel);
   /** @type {{provider?: string, model?: string} | null} */
   let explicit = null;
@@ -119,7 +125,7 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   let explicitCapped = false;
   let applied = null;
   if (explicit) {
-    applied = { provider: ovProvider, model: ovModel, hopped: false };
+    applied = { provider: ovProvider, model: ovModel, hopped: false, modelDropped };
     if (route.reasons.includes("explicit-capped")) {
       // The caller's provider is capped: hop along the role's own list, as failover does for any spawn.
       const walk = resolveRoute(base, { roles: table });
@@ -225,15 +231,17 @@ export function routeRoleKeyOf(name) {
 /**
  * The `route:` metric body. Starts with today's fields (stakes/model/effort/reason, same order and values), then
  * `+legacy-name` on the reason when the caller named an old profile/alias (P5f watches it fall to 0), then tier + role,
- * `explicit-capped=dropped` when a caller model on a capped family was dropped, and `shadow=<diff>` when resolveRoute's
+ * `explicit-capped=dropped` when a caller model on a capped family was dropped, `model-dropped=family` when an override
+ * model of another family than the override provider was dropped (r2), and `shadow=<diff>` when resolveRoute's
  * replay of an old name disagrees with today's walk (legacyShadowMismatch).
  */
-export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, shadow = "" }) {
+export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, modelDropped = false, shadow = "" }) {
   const r = legacyName ? (reason === "default" ? "legacy-name" : `${reason}+legacy-name`) : reason;
   return (
     `stakes=${normalizeStakes(stakes)} model=${model || "-"} effort=${effort || "-"} reason=${r}` +
     ` tier=${tier || "-"} role=${role || "-"}` +
     (explicitCapped ? " explicit-capped=dropped" : "") +
+    (modelDropped ? " model-dropped=family" : "") +
     (shadow ? ` shadow=${shadow}` : "")
   );
 }

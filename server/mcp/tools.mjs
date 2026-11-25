@@ -16,7 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, readArmCaps } from "../exp6-arm.mjs";
-import { ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
+import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -530,7 +530,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     labels[ARM_REASON_LABEL] = ab.reason;
     if (model) labels[MODEL_LABEL] = model; // the spawn hook re-syncs it to the final model after failover / the stakes ladder
   }
-  const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
+  const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels[ROUTE_OVERRIDE_LABEL] ? { [ROUTE_OVERRIDE_ENV]: labels[ROUTE_OVERRIDE_LABEL] } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
       config: {

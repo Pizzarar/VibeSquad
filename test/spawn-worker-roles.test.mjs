@@ -131,6 +131,7 @@ test("H1: role spawn + caller provider/model stamps vs.route-override and pre-fi
     await spawn(ctx, { profile: "Review", provider: "claude", model: "claude-sonnet-5-5", stakes: "tierA-invariant" });
     const req = creates[0];
     assert.equal(req.labels["vs.route-override"], "provider=claude model=claude-sonnet-5-5");
+    assert.equal(req.env.VS_ROUTE_OVERRIDE, "provider=claude model=claude-sonnet-5-5"); // Paseo: the hook sees env only
     assert.deepEqual([req.config.provider, req.config.model, req.config.thinkingOptionId], ["claude", "claude-sonnet-5-5", "high"]);
     assert.equal(req.labels.profile, "Review");
   }
@@ -156,6 +157,7 @@ test("H1: no override = no label; a caller-forged vs.route-override is stripped;
     await spawn(ctx, { profile: "Review", labels: { "vs.route-override": "provider=claude" } });
     assert.equal(creates[0].labels["vs.route-override"], undefined);
     assert.equal(creates[0].config.provider, "antigravity-cli");
+    assert.equal(creates[0].env.VS_ROUTE_OVERRIDE, undefined);
   }
   {
     const { ctx, creates } = ctxFor();

@@ -50,9 +50,11 @@ import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import {
+  ROUTE_OVERRIDE_ENV,
   ROUTE_OVERRIDE_LABEL,
   ROUTE_STAMP_LABELS,
   cappedFamilies,
+  isForeignModel,
   legacyRouteMeta,
   legacyShadowMismatch,
   liveRoles,
@@ -171,6 +173,8 @@ const RESPAWN_SAFE_TOOL_KINDS = new Set(["read", "search", "think", "fetch"]);
 const RESPAWN_DROPPED_LABELS = new Set([
   "profile", "provider", "model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
   RESPAWNED_AS_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
+  // The respawn moves to the alternate provider on purpose: an inherited caller override would pin it back on the dead one.
+  ROUTE_OVERRIDE_LABEL,
 ]);
 
 /**
@@ -2124,12 +2128,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // H1 (idea-974): spawn_worker names the caller's own provider/model in ROUTE_OVERRIDE_LABEL (config alone can't
         // tell them from a filled-in default). A role route takes them as `explicit`: they win, stakes still pick that
         // provider's rung unless a model is given, a cap still hops (roleSpawnProfile). Old names/aliases ignore it.
-        const routeOverride = parseRouteOverride(reqLabels[ROUTE_OVERRIDE_LABEL]);
+        // Paseo never hands labels to this hook, so the env twin (VS_ROUTE_OVERRIDE, set next to VS_PROFILE) carries it too.
+        const routeOverride = parseRouteOverride(reqLabels[ROUTE_OVERRIDE_LABEL] || env?.[ROUTE_OVERRIDE_ENV]);
         let roleRoute: {
           profile: any;
           route: any;
           explicitCapped: boolean;
-          override: { provider: string; model: string; hopped: boolean } | null;
+          override: { provider: string; model: string; hopped: boolean; modelDropped: boolean } | null;
         } | null = null;
         if (requestedProfileName && !profileMatch?.explicit) {
           const roles = liveRoles(loadStoredProfiles());
@@ -2396,7 +2401,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const rawModel = rawCallerModel;
           const modelFamily = normalizeProviderFamily(rawModel);
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
-          const callerModel = modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily ? "" : rawModel;
+          // An override route also drops any other ladder family's model (deepseek on claude, r2 rn-a5cd265243b5 L1): the
+          // route already did, and the config's copy must not bring it back as an explicit caller model.
+          const callerModel =
+            (modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily) ||
+            (roleRoute?.override && isForeignModel(finalFamily, rawModel))
+              ? ""
+              : rawModel;
           const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
           // Role routes: the tier ladder applies at every stakes value (normal = the role's default tier), so an explicit
           // caller model/effort beats it at normal too (Decided "explicit beats everything", resolveRoute). A caller value
@@ -2502,6 +2513,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             tier: routeTier,
             role: routeRole,
             explicitCapped,
+            modelDropped: Boolean(roleRoute?.override?.modelDropped),
             shadow,
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
