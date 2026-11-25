@@ -39,9 +39,10 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   add("rn-digest", "digest");
   add("rn-a", "worker");
   add("rn-b", "worker");
+  const fetchErrors = new Map();
   const backend = {
     async fetchAgents() { return { entries: [...agents.values()].map((agent) => ({ agent })), pageInfo: { hasMore: false } }; },
-    async fetchAgent(id) { return { agent: agents.get(id) ?? null }; },
+    async fetchAgent(id) { if (fetchErrors.has(id)) throw fetchErrors.get(id); return { agent: agents.get(id) ?? null }; },
   };
   const watchCalls = { add: [], list: [], cancel: [] };
   const identity = { agentId: callerId, team, lane, role: callerRole };
@@ -52,7 +53,7 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
     async listWatches(opts) { watchCalls.list.push(opts); return [{ id: "w-1", owner: opts.owner ?? "", team: opts.team ?? "" }]; },
     async cancelWatch(id, caller) { watchCalls.cancel.push({ id, caller }); return { id, cancelled: true }; },
   };
-  return { ctx, verified, agents, watchCalls, dir, vsHome, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
+  return { ctx, verified, agents, fetchErrors, watchCalls, dir, vsHome, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("watch is a listed tool with the right schema", () => {
@@ -328,5 +329,19 @@ test("idea-742: watch add rejects an agent id with no runner record (literal rn-
     await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-PLACEHOLDER"] }), /unknown agent "rn-PLACEHOLDER"/);
     await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a", "rn-typo"] }), /unknown agent "rn-typo"/);
     assert.equal(t.watchCalls.add.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("idea-742 review H1: a thrown 404 rejects as unknown agent, but a runner outage/timeout fails open and arms the watch", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    t.fetchErrors.set("rn-gone", Object.assign(new Error("agent not found"), { status: 404 }));
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-gone"] }), /unknown agent "rn-gone"/);
+    assert.equal(t.watchCalls.add.length, 0);
+    t.fetchErrors.set("rn-a", new Error("runner request timed out after 5000ms"));
+    t.fetchErrors.set("rn-b", Object.assign(new Error("Bad Gateway"), { status: 502 }));
+    const r = await callTool(t.ctx, "watch", { action: "add", agents: ["rn-a", "rn-b"] });
+    assert.deepEqual(r, { id: "w-1" });
+    assert.equal(t.watchCalls.add.length, 1);
   } finally { t.cleanup(); }
 });
