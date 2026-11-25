@@ -237,7 +237,7 @@ test("Settings home: one entry point, all sections, rehoused Team/Runner/Profile
 });
 
 test("nit 1: every jumpable setting has a data-setting-id anchor in the component that renders it", () => {
-  const rendered = ["SettingsHome.tsx", "TeamSettingsModal.tsx", "RunnerSettingsSection.tsx"].map(src).join("\n");
+  const rendered = ["SettingsHome.tsx", "TeamSettingsModal.tsx", "RunnerSettingsSection.tsx", "RoleEditors.tsx"].map(src).join("\n");
   const anchors = new Set();
   for (const m of rendered.matchAll(/data-setting-id=(?:"([^"]+)"|\{([^}]*)\})/g)) {
     if (m[1]) anchors.add(m[1]);
