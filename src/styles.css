@@ -5927,6 +5927,23 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .pin-rail.compact .pin-rail-tile { justify-content: center; min-height: 0; padding-inline: 0; padding-bottom: 6px; }
 .pin-rail.compact .pin-rail-open { flex: none; flex-direction: column; gap: 2px; }
 
+/* usa-57: phone Usage view (<=600px): full-screen, one-column limit cards, tables scroll inside their own box, no page-level sideways scroll */
+.phone-usage-btn { min-height: 44px; width: 100%; }
+.phone-usage-view { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); min-width: 0; max-width: 100vw; overflow: hidden; }
+.phone-usage-bar { display: flex; align-items: center; gap: var(--sp-3, 12px); padding: calc(var(--sp-2, 8px) + var(--phone-safe-top, 0px)) var(--sp-3, 12px) var(--sp-2, 8px); border-bottom: 1px solid var(--line); flex: none; }
+.phone-usage-back { min-height: 44px; }
+.phone-usage-title { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-t); }
+.phone-usage-body { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-2, 8px) var(--sp-2, 8px) calc(var(--sp-2, 8px) + env(safe-area-inset-bottom, 0px)); }
+.phone-usage-body .usage-limits { grid-template-columns: minmax(0, 1fr); }
+.phone-usage-body .usage-table-wrap { overflow-x: auto; max-width: 100%; } /* the plans grid already scrolls in its own box (usa-56, <=640px) */
+.phone-usage-body .squads-dashboard { padding: var(--sp-3, 12px); }
+/* Order on phone: title/squad filter, limit cards, then the inbox (CRT) and collapsed sections. */
+.phone-usage-body .usage-title-row { order: -2; }
+.phone-usage-body .usage-limits { order: -1; }
+.phone-usage-body .usage-title-row > .usage-title { display: none; } /* the bar already says Usage */
+.phone-usage-body .usage-squad-filter { scrollbar-width: none; flex-wrap: nowrap; overflow-x: auto; max-width: 100%; padding-bottom: var(--sp-1, 4px); }
+.phone-usage-body .usage-squad-pill { flex: none; }
+
 /* U3e: chat text scrolling under the bar fades out over its first 4 kit px instead of being cut mid-glyph */
 
 /* ======================================================================
@@ -6589,23 +6606,6 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   .usage-plan-rows { overflow-x: auto; max-width: 100%; }
   .usage-plan-rows > * { min-width: 520px; }
 }
-
-/* usa-57: phone Usage view (<=600px): full-screen, one-column limit cards, tables scroll inside their own box, no page-level sideways scroll */
-.phone-usage-btn { min-height: 44px; width: 100%; }
-.phone-usage-view { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); min-width: 0; max-width: 100vw; overflow: hidden; }
-.phone-usage-bar { display: flex; align-items: center; gap: var(--sp-3, 12px); padding: calc(var(--sp-2, 8px) + var(--phone-safe-top, 0px)) var(--sp-3, 12px) var(--sp-2, 8px); border-bottom: 1px solid var(--line); flex: none; }
-.phone-usage-back { min-height: 44px; }
-.phone-usage-title { font-family: var(--arcade); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-t); }
-.phone-usage-body { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--sp-2, 8px) var(--sp-2, 8px) calc(var(--sp-2, 8px) + env(safe-area-inset-bottom, 0px)); }
-.phone-usage-body .usage-limits { grid-template-columns: minmax(0, 1fr); }
-.phone-usage-body .usage-table-wrap, .phone-usage-body .usage-plan-rows { overflow-x: auto; max-width: 100%; }
-.phone-usage-body .squads-dashboard { padding: var(--sp-3, 12px); }
-/* Order on phone: title/squad filter, limit cards, then the inbox (CRT) and collapsed sections. */
-.phone-usage-body .usage-title-row { order: -2; }
-.phone-usage-body .usage-limits { order: -1; }
-.phone-usage-body .usage-title-row > .usage-title { display: none; } /* the bar already says Usage */
-.phone-usage-body .usage-squad-filter { scrollbar-width: none; flex-wrap: nowrap; overflow-x: auto; max-width: 100%; padding-bottom: var(--sp-1, 4px); }
-.phone-usage-body .usage-squad-pill { flex: none; }
 
 /* ---- Desk Psycho U2: cross-squad Needs-you spine in the left sidebar (BoringInbox, src/BoringInbox.tsx) ------------------------
    PC-98 Hypnospace chrome: 1-2px bevels on panel/well fills. Dim text = var(--muted) colour, fully opaque; muted/panel is >= 4.5:1 in
