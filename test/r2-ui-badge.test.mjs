@@ -29,7 +29,7 @@ test("landingPick: the hook only skips CAPPED providers, so `installed` is ignor
 test("landingPick: an uncapped override wins", () => {
   const l = landingPick(role, ladder, "normal", { capped: [], override: { provider: "claude", model: "claude-opus-5-5" } });
   assert.deepEqual(l, { provider: "claude", model: "claude-opus-5-5", via: "override", allCapped: false });
-  assert.equal(landingPick(role, ladder, "normal", { capped: [], override: { provider: "antigravity-cli" } }).via, "override (provider rung)");
+  assert.equal(landingPick(role, ladder, "normal", { capped: [], override: { provider: "antigravity-cli" } }).via, "override (provider, ladder model)");
 });
 test("landingPick: a CAPPED override provider hops along the role's walk like roleSpawnProfile", () => {
   const l = landingPick(role, ladder, "normal", { capped: ["claude"], override: { provider: "claude", model: "claude-opus-5-5" } });
@@ -99,4 +99,40 @@ test("drawerSpawnWhy: reason from route, hidden while staged, override after a l
   assert.equal(drawerSpawnWhy(l, "m1", true), "");
   assert.equal(drawerSpawnWhy(l, "m2", false), "override");
   assert.equal(drawerSpawnWhy({}, "m2", false), "");
+});
+
+test("seam: landingPick lands on the same provider (and model) as the hook's roleSpawnProfile, capped overrides included", async () => {
+  const { roleSpawnProfile } = await import("../server/spawn-route.mjs");
+  const { ROLE_TABLE } = await import("../server/role-route.mjs");
+  const { DEFAULT_TIER_LADDER } = await import("../server/stakes-ladder.mjs");
+  const fams = ["claude", "antigravity-cli", "opencode"];
+  const capSets = [[], ["claude"], ["antigravity-cli"], ["claude", "antigravity-cli"], fams];
+  let n = 0;
+  for (const [key, def] of Object.entries(ROLE_TABLE)) {
+    const roleRow = { name: def.name ?? key, tier: def.tier, providers: [...(def.providers ?? [])] };
+    for (const stakes of ["normal", "tierA-invariant", "mechanical"]) {
+      for (const capped of capSets) {
+        for (const override of [null, ...roleRow.providers.map((provider) => ({ provider }))]) {
+          const srv = roleSpawnProfile(roleRow.name, { stakes, caps: capped, ladder: DEFAULT_TIER_LADDER, ...(override ? { override } : {}) });
+          if (!srv) continue;
+          const ui = landingPick(roleRow, DEFAULT_TIER_LADDER, stakes, { capped, override });
+          const at = `${roleRow.name} ${stakes} caps=[${capped}] ov=${override?.provider ?? "-"}`;
+          assert.equal(ui.provider, srv.route.provider, `${at}: provider`);
+          assert.equal(ui.model, String(srv.profile.model ?? ""), `${at}: model`);
+          n++;
+        }
+      }
+    }
+  }
+  assert.ok(n > 50, `compared ${n} cases`);
+});
+
+test("drawer chip: why=all-capped shows all-capped; an old why=rung shows ladder (with its gloss)", () => {
+  const all = drawerSpawnWhy({ "vs.model": "claude-sonnet-5-5", "vs.route": "stakes=normal reason=all-capped tier=mid role=implement why=all-capped" }, "claude-sonnet-5-5", false);
+  assert.equal(all, "all-capped");
+  assert.equal(spawnReasonLabel(all), "all-capped");
+  assert.match(spawnChipTitle({ model: "m", reason: all }), /All capped/);
+  const old = drawerSpawnWhy({ "vs.route": "reason=default tier=mid role=review why=rung" }, "m", false);
+  assert.equal(old, "ladder");
+  assert.match(spawnChipTitle({ model: "m", reason: "rung" }), /Ladder: picked/);
 });

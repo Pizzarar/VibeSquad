@@ -109,7 +109,7 @@ function roleBadges(roleDef: { name: string; tier: string; providers: string[] }
   return { badges: [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]], note: l.allCapped ? allCappedNote(l.provider) : "" };
 }
 
-/** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> rung" | "<provider> · <model>". */
+/** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> · ladder model" | "<provider> · <model>". */
 function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: string; tier: string; providers: string[] }; ladder: Parameters<typeof overrideGroups>[1]; value: string; onChange: (v: string) => void }) {
   return (
     <Field label="MODEL OVERRIDE (optional)">
@@ -117,7 +117,7 @@ function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: 
         <option value="">From ladder (stakes)</option>
         {overrideGroups(role, ladder).map((g) => (
           <optgroup key={g.provider} label={providerName(g.provider)}>
-            <option value={g.provider}>{providerName(g.provider)} · ladder rung</option>
+            <option value={g.provider}>{providerName(g.provider)} · ladder model</option>
             {g.models.map((m) => (
               <option key={m} value={`${g.provider}|${m}`}>
                 {shortModel(m)}
