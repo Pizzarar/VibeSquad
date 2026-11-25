@@ -52,7 +52,16 @@ export function deriveWfArm({ provider, model, profile } = {}) {
   return normalizeWfLabel(fam) || "unknown";
 }
 
-/** The `wf` label for a spawn: the caller's label, else its VS_WF env, else the derived arm. */
+// R0 (PLAN_PER_ROLES_LADDER_1125): an implementer arm picked by spawn_worker (`vs.arm` label) names its wf only when the
+// spawn really runs on that arm's family: the Neon arm on Gemini is wf=neon (Gemini reviewers/leads keep wf=gemini); a Neon
+// pick that failed over to Claude derives sonnet/opus like any other spawn.
+const ARM_WF_FROM = { neon: "gemini" };
+
+/** The `wf` label for a spawn: the caller's label, else its VS_WF env, else the derived arm (refined by a `vs.arm` pick). */
 export function resolveWfLabel({ labels, env, provider, model, profile } = {}) {
-  return normalizeWfLabel(labels?.[WF_LABEL]) || normalizeWfLabel(env?.[WF_ENV]) || deriveWfArm({ provider, model, profile });
+  const given = normalizeWfLabel(labels?.[WF_LABEL]) || normalizeWfLabel(env?.[WF_ENV]);
+  if (given) return given;
+  const derived = deriveWfArm({ provider, model, profile });
+  const arm = normalizeWfLabel(labels?.["vs.arm"]);
+  return arm && ARM_WF_FROM[arm] === derived ? arm : derived;
 }

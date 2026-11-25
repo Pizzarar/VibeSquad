@@ -1,3 +1,4 @@
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";

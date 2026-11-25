@@ -236,6 +236,20 @@ the 3 item-vs-room overlaps (`Barrel`/`Barrel Fire`, `Generator`/`Generator`, `I
 character-vs-item theme overlaps (`Scav`/`Scav Boots`, `Map`/`Map Room Guard`). No other check count changed; `#1`, `#2`,
 `#9`, `#10` remain 0.
 
+### SB6b minors re-run (character filter before the every() check)
+
+The word-subset clause now filters owners and hits to character kinds (registry `character: true`) before requiring two
+distinct entities, so an item sharing the word no longer silences a real character-vs-character clash. One group surfaces
+that the item had been hiding: the `scav` word, shared by three enemies (`Scav`, `Armored Scav`, `Depot Scav`; the item
+`Scav Boots` used to mask it). Same pinned sha:
+
+```
+[STORYBOOK] sha=fd4f8c37 #1=0 #2=0 #5=2 #7=5 #8=89 total=123
+[info]  enemy:armored_scav word "scav" is a name and also part of another name: enemy armored_scav (Armored Scav), enemy depot_scav (Depot Scav), enemy scav (Scav)
+```
+
+#7 is 5 (the 4 above + `scav`); the `scav` row is an enemy-variant chain, so triage it as a likely real-but-benign row.
+
 ## Public-release hygiene
 
 This file names the project "EFI" and uses repo-relative paths only; no absolute paths, IPs, or personal identifiers.

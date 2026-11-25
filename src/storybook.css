@@ -23,13 +23,18 @@
   background: linear-gradient(100deg, color-mix(in srgb, var(--sb-accent) 22%, var(--sb-panel)) 0%, var(--sb-panel) 45%, color-mix(in srgb, var(--living-warm, #ff9d5c) 18%, var(--sb-panel)) 100%);
   border-bottom: 2px solid var(--sb-line); box-shadow: inset 0 1px 0 #ffffff22;
 }
-.sb-title { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.sb-title { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; } /* UX R22 M1: pill follows the title, like the topbar breadcrumb */
 .sb-title h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--sb-text); overflow-wrap: anywhere; }
 .sb-proj { color: var(--sb-text2); font-weight: 500; }
 .sb-eye { font-size: 22px; color: var(--sb-accent-text); display: inline-block; animation: sb-drift 7s ease-in-out infinite alternate; }
 @keyframes sb-drift { from { transform: translateY(-2px) rotate(-6deg); } to { transform: translateY(3px) rotate(8deg); } }
 @media (prefers-reduced-motion: reduce) { .sb-eye { animation: none; } }
-.sb-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sb-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+/* Code | Storybook pill inside sb-head: base rules for Psycho (boring.css styles it in Normal and wins there by specificity). */
+.sb-head .project-tabs { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.sb-head .project-tabs .boring-switch-pill { min-height: 28px; padding: 4px 10px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 999px; white-space: nowrap; background: var(--sb-panel2); color: var(--sb-text2); border: 1px solid var(--sb-line); }
+.sb-head .project-tabs .boring-switch-pill:hover { border-color: var(--sb-accent); }
+.sb-head .project-tabs .boring-switch-pill.on { color: var(--sb-accent-text); border-color: var(--sb-accent); }
 .sb-mono { font-family: var(--mono, ui-monospace, "JetBrains Mono", monospace); font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
 .sb-sha { padding: 4px 8px; background: var(--sb-panel2); border: 1px solid var(--sb-line); color: var(--sb-text); }
 .sb-btn, .sb-tab, .sb-seg-btn, .sb-fbtn {
@@ -101,6 +106,10 @@
   .sb-tab { padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); }
   .sb-back { order: 0; }
   .sb-title { order: 1; flex: 1 1 0; }
+  .sb-head .project-tabs { order: 1; }
+  .sb-root .sb-head .project-tabs .boring-switch-pill { min-height: 40px; } /* (0,4,0) beats boring.css min-height 28 */
+  .sb-word { display: none; } /* UX R22 m2: the pill already says Storybook; keep the project name visible */
+  .sb-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
   .sb-head-right { order: 2; }
   .sb-head { padding: 8px 10px; }
   .sb-body { padding: 10px 10px 40px; }

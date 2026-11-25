@@ -127,6 +127,16 @@ test("tracker: armed -> compact; same stage again -> none; higher stage -> compa
   assert.deepEqual(t.decide(a, FLAG, [FLAG, AUTO]).count, 3);
 });
 
+test("K2b r1 (Review-Gemini note 2): the post-compact ESTIMATE never re-arms; the next real reading decides", () => {
+  const t = createCrossingTracker();
+  const est = { id: "x", labels: {}, lastUsage: { contextWindowUsedTokens: 4_000, compactEstimate: true } };
+  const p = t.decide(est, BUDDY_CAP + 1, [BUDDY_CAP]);
+  t.record("x", p.cap, p.count);
+  assert.equal(t.decide(est, 4_000, [BUDDY_CAP]).action, "none", "an estimate under the re-arm line does not re-arm");
+  const real = { id: "x", labels: {}, lastUsage: { contextWindowUsedTokens: 4_000 } };
+  assert.equal(t.decide(real, 4_000, [BUDDY_CAP]).action, "rearm", "a real reading under it does");
+});
+
 test("tracker: pre-K2c label (vs.compacted-at only) reads as one attempt at the lowest stage; life cap from the count label", () => {
   const t = createCrossingTracker();
   const legacy = { id: "x", labels: { [COMPACTED_AT]: "2026-11-20T00:00:00Z" } };
@@ -305,6 +315,45 @@ test("buddy: no re-arm inside the hysteresis band -> the next crossing restarts"
   await step(r, "rn-b", BUDDY_CAP + 2);
   assert.equal(compacts(r).length, 1);
   assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+// K2b r1: agy's meter after /compact is the adapter's estimate (the summary) until the next real turn. A compaction that did not
+// shrink the session must not re-arm on that estimate and compact again at the next turn: the real reading restarts instead.
+const estimate = (r, id, tokens) => {
+  const a = r.agents.get(id);
+  a.lastUsage = { contextWindowUsedTokens: tokens, inputTokens: tokens, compactEstimate: true };
+  r.emit({ kind: "agent", agent: { ...a, labels: { ...a.labels } } });
+};
+test("K2b r1: agy Buddy: the post-compact estimate does not re-arm; a still-over real reading restarts (no 2nd /compact)", async () => {
+  const { r, w, restarts } = setup("ok");
+  r.okAfter = 4_000;
+  r.agents.set("rn-b", { ...buddy("rn-b"), provider: "antigravity-cli" });
+  await step(r, "rn-b", BUDDY_CAP + 1, 250);
+  assert.equal(compacts(r).length, 1);
+  const writes = r.labelWrites.length;
+  estimate(r, "rn-b", 4_000);
+  await tick(100);
+  assert.equal(r.labelWrites.length, writes, "no re-arm write on the estimate");
+  assert.equal(r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL], String(BUDDY_CAP));
+  await step(r, "rn-b", BUDDY_CAP + 2);
+  assert.equal(compacts(r).length, 1, "this crossing was tried: no second /compact");
+  assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+test("K2b r1: agy lead: the post-compact estimate does not re-arm; a still-over real reading nudges (no 2nd /compact)", async () => {
+  const { r, w } = setup("ok");
+  r.okAfter = 4_000;
+  r.agents.set("rn-l", { ...lead("rn-l"), provider: "antigravity-cli" });
+  const AGY = 35_000; // lead-handoff PROVIDER_PREAMBLE_TOKENS: the agy lead ladder runs on working tokens
+  await step(r, "rn-l", FLAG + AGY + 5, 250);
+  assert.equal(compacts(r).length, 1);
+  estimate(r, "rn-l", 4_000);
+  await tick(100);
+  assert.equal(r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL], String(FLAG), "not re-armed on the estimate");
+  await step(r, "rn-l", FLAG + AGY + 7, 250);
+  assert.deepEqual(texts(r), ["/compact", "nudge"]);
   w.stop();
 });
 

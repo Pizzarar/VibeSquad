@@ -3,6 +3,7 @@
 //     `stale` (`staleLeads` / `· stale: ...`), not shown as CONFLICT, unless 2+ equally-new top leads are genuinely ambiguous.
 // (b) Retire path: retirePredecessors + lead-handoff + `vs lead retire [--lane <code>]` relabel stale/lost predecessors to
 //     `former-lead` using the existing retire title/label code.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

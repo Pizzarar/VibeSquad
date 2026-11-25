@@ -1,4 +1,5 @@
 // Bug-chaser batch 2, blocks 1-3: no lanes[0] guess, spawn-label drift, migrate dry-run counts, whoami JSON.
+import "./setup/hermetic.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
