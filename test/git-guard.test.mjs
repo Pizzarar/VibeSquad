@@ -211,6 +211,80 @@ test('review #5: git -c k=v does not hide the subcommand', () => {
   ok('git -c reset.hard=1 status');
 });
 
+// ---- review rn-dd5d02fc90ce (R2) regressions ----
+
+test('R2 #1: xargs is a wrapper (value flags skipped) and the operands it appends count as paths', () => {
+  for (const cmd of [
+    'echo . | xargs git checkout --', 'printf "" | xargs git reset --hard', 'echo src/a.ts | xargs -I{} git restore {}',
+    'echo src/a.ts | xargs -n 1 -P 4 git checkout --', 'ls | xargs -d "\\n" git checkout HEAD', 'xargs -a list.txt git stash',
+    'xargs --max-args=1 git clean -fd', 'xargs -0 git restore', 'find . -name "*.ts" | xargs git checkout -f',
+    'echo x | xargs -I{} sh -c "git reset --hard"', 'echo x | xargs env -C . git reset --hard',
+  ]) {
+    bad(cmd);
+    ok(cmd, WT);
+  }
+  ok('git branch --merged | xargs git branch -d');
+  ok('echo src/a.ts | xargs git log -1 --');
+  ok('echo feat | xargs git checkout -b');
+  ok('git ls-files | xargs -n 50 git diff --stat --');
+});
+
+test('R2 #2: GIT_DIR / GIT_WORK_TREE reach bash -c, eval, $(...) and xargs, and are read from the inherited env', () => {
+  const gd = `${MAIN}/.git`;
+  bad(`GIT_DIR=${gd} bash -c "git stash"`, WT);
+  bad(`export GIT_WORK_TREE=${MAIN}; bash -c "git reset --hard"`, WT);
+  bad(`export GIT_DIR=${gd}; echo $(git stash)`, WT);
+  bad(`GIT_DIR=${gd} eval "git stash"`, WT);
+  bad(`GIT_WORK_TREE=${MAIN} xargs git reset --hard`, WT);
+  bad(`export GIT_DIR=${gd}; sh -c 'bash -c "git clean -fd"'`, WT); // two levels down
+  // inherited from the agent's own env (the hook process env)
+  bad('git stash', WT, { ...env, GIT_DIR: gd });
+  bad('git reset --hard', WT, { ...env, GIT_WORK_TREE: MAIN });
+  bad('bash -c "git reset --hard"', WT, { ...env, GIT_DIR: gd });
+  // and dropped again
+  ok('unset GIT_DIR; git stash', WT, { ...env, GIT_DIR: gd });
+  ok('env -u GIT_DIR git stash', WT, { ...env, GIT_DIR: gd });
+  ok('env -i PATH=/usr/bin git stash', WT, { ...env, GIT_DIR: gd });
+  ok(`GIT_DIR=${gd} echo $(git stash)`, WT); // a prefix reaches echo, not the substitution
+  ok('git stash', WT, { ...env, GIT_DIR: `${WT}/.git` });
+  ok(`GIT_DIR=${WT}/.git bash -c "git reset --hard"`);
+});
+
+test('R2 #3: wrappers match by basename, quoted or not', () => {
+  for (const cmd of ['/usr/bin/env git reset --hard', '/usr/bin/timeout 10 git reset --hard', '"env" git reset --hard', "'nice' -n 5 git stash", '/usr/bin/xargs git restore', '/usr/bin/sudo -u x git clean -fd']) {
+    bad(cmd);
+    ok(cmd, WT);
+  }
+  bad(`/usr/bin/env -C ${MAIN} git reset --hard`, WT);
+  ok(`/usr/bin/env -C ${WT} git reset --hard`);
+  ok('"if" git reset --hard', WT); // a quoted keyword is a plain command name, not a keyword
+});
+
+test('R2 #4: bash -c -- / -o opt -c, eval --, and function f { } bodies are checked', () => {
+  for (const cmd of [
+    'bash -c -- "git reset --hard"', 'bash -o pipefail -c "git stash"', 'bash -ec "git clean -fd"', 'bash --norc -c "git restore ."',
+    'sh -x -c "git reset --hard"', 'eval -- "git reset --hard"', 'function f { git reset --hard; }; f', 'function f() { git stash; }',
+  ]) {
+    bad(cmd);
+    ok(cmd, WT);
+  }
+  ok('bash -c -- "git status"');
+  ok('bash script.sh -c "git reset --hard"'); // a script file, not -c: its args are data
+  ok('function f { git status; }; f');
+});
+
+test('R2 #5: a case pattern `)` does not close a subshell; bare pushd swaps the top two dirs', () => {
+  bad(`(cd ${MAIN}; case x in x) echo hi;; esac; git reset --hard)`, WT);
+  ok(`(cd ${WT}; case x in x) echo hi;; esac; git reset --hard)`);
+  bad(`(cd ${MAIN}; case x in (x) echo hi;; y) echo y;; esac; git stash)`, WT);
+  bad(`(cd ${WT}; case x in x) :;; esac); git reset --hard`); // the subshell's cd still ends with the subshell
+  bad(`pushd ${MAIN} && pushd ${WT} && pushd && git reset --hard`, WT);
+  ok(`pushd ${WT} && pushd ${MAIN} && pushd && git reset --hard`);
+  ok(`pushd ${WT} && pushd && pushd && git reset --hard`, MAIN, env); // swap twice: back in WT
+  ok(`pushd && git status`);
+  assert.equal(bad(`pushd ${WT} && pushd +1 && git reset --hard`).unresolved, true, 'stack rotation is unresolved');
+});
+
 test('tokenize: quotes, escapes, redirections and comments', () => {
   const words = (s) => tokenize(s, { env }).tokens.filter((t) => t.type === 'word').map((t) => t.text);
   assert.deepEqual(words(`git commit -m "a && b" 2>&1`), ['git', 'commit', '-m', 'a && b', '2>&1']);
@@ -240,7 +314,9 @@ test('gitGuardDecision: Bash and PowerShell only, refusal names vs worktree crea
 });
 
 // ---- the hook process and its install ----
-const runHook = (args, input) => spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, ...args], { input: JSON.stringify(input), encoding: 'utf8', timeout: 10_000, env: { ...process.env, HOME: root } });
+// The hook reads GIT_DIR / GIT_WORK_TREE from its own env (R2 #2): never leak the test runner's (e.g. run from a git hook).
+const hookEnv = (extra = {}) => { const e = { ...process.env, HOME: root, ...extra }; if (!('GIT_DIR' in extra)) delete e.GIT_DIR; if (!('GIT_WORK_TREE' in extra)) delete e.GIT_WORK_TREE; return e; };
+const runHook = (args, input, extra) => spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, ...args], { input: JSON.stringify(input), encoding: 'utf8', timeout: 10_000, env: hookEnv(extra) });
 const call = (cwd, command) => ({ tool_name: 'Bash', cwd, tool_input: { command } });
 
 test('drain-hook --git-guard: exit 2 + reason in the main checkout, 0 in a worktree; no flag = no guard', () => {
@@ -260,7 +336,10 @@ test('drain-hook --git-guard: exit 2 + reason in the main checkout, 0 in a workt
   assert.match(d.stderr, /draining/);
   assert.equal(runHook([drainFile, '--git-guard'], call(MAIN, 'git stash')).status, 2);
   rmSync(drainFile);
-  const bad = spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, '-', '--git-guard'], { input: 'not json', encoding: 'utf8', timeout: 10_000 });
+  // R2 #2: a GIT_DIR inherited by the agent (the hook's env) points git at the main checkout from anywhere
+  assert.equal(runHook(['-', '--git-guard'], call(WT, 'git stash'), { GIT_DIR: path.join(MAIN, '.git') }).status, 2);
+  assert.equal(runHook(['-', '--git-guard'], call(WT, 'git stash'), { GIT_DIR: path.join(WT, '.git') }).status, 0);
+  const bad = spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, '-', '--git-guard'], { input: 'not json', encoding: 'utf8', timeout: 10_000, env: hookEnv() });
   assert.equal(bad.status, 0, 'unparseable stdin fails open');
 });
 

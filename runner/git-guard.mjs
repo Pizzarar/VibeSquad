@@ -8,9 +8,11 @@
 // repo's MAIN checkout: the first `.git` found walking up from the target dir is a directory, not a gitfile. Inside a
 // linked worktree (`.git` is a file) or outside any repo it passes. The target dir follows the hook's cwd through
 // `cd`/`pushd`/Set-Location, `( )` subshells, `git -C` (cumulative), `--work-tree`/`--git-dir` (and GIT_WORK_TREE /
-// GIT_DIR prefixes or exports), `env -C`/`sudo -D`, `bash -c`/`sh -c`/eval/`env -S` bodies and $(...) substitutions
-// (checked in the dir the shell is in at that point). Compound-command keywords (if/then/do/while/{ ...) and wrappers
-// (env/sudo/nice/time/timeout/exec/command, with their option arguments) are stripped before the command is read. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
+// GIT_DIR prefixes, exports or the agent's inherited env, carried into every nested shell), `env -C`/`sudo -D`,
+// `bash -c`/`sh -c`/eval/`env -S` bodies and $(...) substitutions (checked in the dir the shell is in at that point),
+// case arms and pushd/popd stacks. Compound-command keywords (if/then/do/while/{/function ...) and wrappers
+// (env/sudo/nice/time/timeout/exec/command/xargs by basename, with their option arguments) are stripped first; operands
+// xargs appends count as paths. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
 // closed. Read-only git, `--help`, `checkout -b`/branch switches and `clean -n`/`stash list|show` always pass.
 // Known gaps: git aliases, scripts that run git themselves, and ACP providers (no PreToolUse hook: adapters/acp.mjs).
 import { statSync } from 'node:fs';
@@ -23,15 +25,18 @@ const OPS = ['&&', '||', ';;', ';', '|&', '|', '&', '\n', '(', ')'];
 const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'do', 'while', 'until', 'fi', 'done', 'esac', '{', '}', '!']);
 // Command wrappers: `short` = short flags that take a value, `long` = long options that take one (also `--x=v`),
 // `chdir` = flags that move the wrapped command's dir, `split` = flags whose value is itself a command line,
-// `positional` = leading operands before the command (timeout's DURATION).
+// `positional` = leading operands before the command (timeout's DURATION), `unset`/`clear` = env flags that drop variables,
+// `appends` = the wrapper adds operands to the end of the command. Matched by basename, quoted or not (`/usr/bin/env`, "env").
 const WRAPPERS = {
-  env: { short: 'uCS', long: ['unset', 'chdir', 'split-string'], chdir: ['-C', '--chdir'], split: ['-S', '--split-string'] },
+  env: { short: 'uCS', long: ['unset', 'chdir', 'split-string'], chdir: ['-C', '--chdir'], split: ['-S', '--split-string'], unset: ['-u', '--unset'], clear: ['-i', '--ignore-environment'] },
   sudo: { short: 'ugCDhprtUTR', long: ['user', 'group', 'close-from', 'chdir', 'host', 'prompt', 'role', 'type', 'other-user', 'command-timeout', 'chroot'], chdir: ['-D', '--chdir'] },
   nice: { short: 'n', long: ['adjustment'] },
   time: { short: 'fo', long: ['format', 'output'] },
   timeout: { short: 'sk', long: ['signal', 'kill-after'], positional: 1 },
   exec: { short: 'a', long: [] },
   nohup: {},
+  // xargs appends stdin words as operands (`echo . | xargs git checkout --`); optional-value flags (-i/-e/-l) only attach.
+  xargs: { short: 'ILnPdEsa', long: ['max-args', 'max-procs', 'delimiter', 'max-chars', 'arg-file', 'process-slot-var'], appends: true },
   command: {},
   builtin: {},
 };
@@ -197,9 +202,10 @@ const hasLong = (args, ...names) => args.some((a) => names.some((n) => a === n |
 
 /**
  * Is `git <sub> <args>` destructive to uncommitted work? Returns a short label or null. `dir` (or UNKNOWN) is used only
- * to tell a `checkout <path>` from a `checkout <branch>` when no `--` separates them.
+ * to tell a `checkout <path>` from a `checkout <branch>` when no `--` separates them. `appended`: a wrapper (xargs) adds
+ * more operands at the end.
  */
-export function destructiveGit(sub, args, dir) {
+export function destructiveGit(sub, args, dir, { appended = false } = {}) {
   if (hasLong(args, '--help') || args.includes('-h')) return null;
   switch (sub) {
     case 'reset':
@@ -207,7 +213,7 @@ export function destructiveGit(sub, args, dir) {
     case 'checkout': {
       if (hasLong(args, '--force') || hasShort(args, 'f')) return 'git checkout -f';
       const dd = args.indexOf('--');
-      if (dd >= 0 && dd < args.length - 1) return 'git checkout -- <paths>';
+      if (dd >= 0 && (dd < args.length - 1 || appended)) return 'git checkout -- <paths>'; // xargs supplies the paths
       if (hasLong(args, '--pathspec-from-file')) return 'git checkout --pathspec-from-file';
       const creates = hasShort(args, 'b') || hasShort(args, 'B') || hasLong(args, '--orphan');
       const pos = [];
@@ -219,7 +225,7 @@ export function destructiveGit(sub, args, dir) {
       }
       if (pos.some((p) => p === '.' || p.startsWith(':/') || p === '*' || p.endsWith('/'))) return 'git checkout .';
       if (creates) return null; // checkout -b <new> [<start-point>]
-      if (pos.length >= 2) return 'git checkout <tree-ish> <paths>'; // without -b, everything after the first is a path
+      if (pos.length >= 2 || (appended && pos.length === 1)) return 'git checkout <tree-ish> <paths>'; // without -b, everything after the first is a path
       // A lone argument: a branch switch, unless it names something on disk (then git restores that path).
       if (pos.length === 1 && dir !== UNKNOWN && exists(path.resolve(dir, pos[0]))) return 'git checkout <paths>';
       return null;
@@ -279,7 +285,12 @@ export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: 
  * Find the first destructive git command a worker would run in a main checkout. Returns null (allow) or
  * { label, dir, root, unresolved } for the refusal message.
  */
-export function findViolation(command, { cwd = process.cwd(), env = process.env, powershell = false, depth = 0 } = {}) {
+const GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE'];
+
+/** GIT_DIR / GIT_WORK_TREE of an env-like object (values: string or UNKNOWN). */
+const gitEnvOf = (e) => Object.fromEntries(GIT_ENV.filter((k) => e && Object.hasOwn(e, k) && e[k] !== undefined && e[k] !== '').map((k) => [k, e[k]]));
+
+export function findViolation(command, { cwd = process.cwd(), env = process.env, powershell = false, depth = 0, gitEnv = null } = {}) {
   const src = String(command ?? '');
   if (depth > 4 || !/git/i.test(src)) return null;
   // Pass 1 collects literal `NAME=value` assignment statements, so pass 2 can expand `D=/x; cd $D` (approximation: the
@@ -311,8 +322,11 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
     if (path.isAbsolute(w.text)) return path.resolve(w.text);
     return base === UNKNOWN ? UNKNOWN : path.resolve(base, w.text);
   };
-  const exported = {}; // `export GIT_DIR=...` reaches every later git in this command line
-  const scopes = [];
+  // GIT_DIR / GIT_WORK_TREE every git here sees: inherited from the agent's env (the hook's own env), or handed down by the
+  // caller (bash -c / eval / xargs / $(...) bodies get the env their shell had), then `export`/`unset` along the line.
+  const exported = gitEnv ? { ...gitEnv } : gitEnvOf(env);
+  const nested = (body, at, e) => findViolation(body, { cwd: at === UNKNOWN ? null : at, env, powershell, depth: depth + 1, gitEnv: gitEnvOf(e) });
+  const stack = []; // open `( ... )` subshells ({ kind: 'sub', dir }) and `case ... esac` ({ kind: 'case' }): a case pattern's `)` closes nothing
   const dirStack = [];
   let prevOp = null;
   for (const { words, op } of segs) {
@@ -321,12 +335,16 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
     // $(...) / `...` in any word run first, in the dir the shell is in now (before this segment's cd takes effect)
     for (const w of words) {
       for (const body of w.subs ?? []) {
-        const v = findViolation(body, { cwd: dir === UNKNOWN ? null : dir, env, powershell, depth: depth + 1 });
+        const v = nested(body, dir, exported);
         if (v) return v;
       }
     }
-    if (op === '(') scopes.push(dir);
+    const endSeg = () => {
+      if (op === '(') stack.push({ kind: 'sub', dir });
+      else if (op === ')' && stack.at(-1)?.kind === 'sub') dir = stack.pop().dir;
+    };
     let ws = words;
+    let appended = false;
     let segDir = dir; // env -C / sudo -D move only the wrapped command
     const segEnv = { ...exported };
     // Strip leading NAME=value prefixes, compound-command keywords and wrappers (with their option values), in any order.
@@ -338,12 +356,17 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         ws = ws.slice(1);
         continue;
       }
+      if (!w0.quoted && w0.text === 'function') { ws = ws.slice(2); continue; } // `function f { ...; }`: name, then the body
+      if (!w0.quoted && w0.text === 'esac') { if (stack.at(-1)?.kind === 'case') stack.pop(); ws = ws.slice(1); continue; }
       if (!w0.quoted && KEYWORDS.has(w0.text)) { ws = ws.slice(1); continue; }
-      const spec = !w0.quoted && Object.hasOwn(WRAPPERS, w0.text.toLowerCase()) ? WRAPPERS[w0.text.toLowerCase()] : null;
+      const wname = path.basename(w0.text).toLowerCase().replace(/\.exe$/, '');
+      const spec = Object.hasOwn(WRAPPERS, wname) ? WRAPPERS[wname] : null;
       if (!spec) break;
       ws = ws.slice(1);
+      if (spec.appends) appended = true;
       const apply = (flag, value) => {
         if (spec.chdir?.includes(flag)) segDir = resolveDir(segDir, value);
+        else if (spec.unset?.includes(flag) && value && value !== UNKNOWN) delete segEnv[value.text];
         else if (spec.split?.includes(flag) && value && value !== UNKNOWN) {
           ws = [...tokenize(value.text, { env, vars, powershell }).tokens.filter((t) => t.type === 'word'), ...ws];
         }
@@ -354,6 +377,10 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         if (!a.startsWith('-') || a === '-') break;
         const flagWord = ws[0];
         ws = ws.slice(1);
+        const iAt = /^-[A-Za-z]+$/.test(a) ? a.indexOf('i') : -1; // `-i` or a cluster with i before any value flag (`-iC dir`)
+        if (spec.clear?.includes(a) || (spec.clear && iAt > 0 && !/[uCS]/.test(a.slice(1, iAt)))) {
+          for (const k of GIT_ENV) delete segEnv[k]; // env -i: the command starts with an empty environment
+        }
         if (a.startsWith('--')) {
           const eq = a.indexOf('=');
           const name = eq < 0 ? a.slice(2) : a.slice(2, eq);
@@ -376,21 +403,30 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
       }
       ws = ws.slice(spec.positional ?? 0);
     }
-    if (!ws.length) {
-      if (op === ')' && scopes.length) dir = scopes.pop();
-      continue;
-    }
+    if (!ws.length) { endSeg(); continue; }
     const cmd = ws[0].text;
     const base = path.basename(cmd).toLowerCase().replace(/\.exe$/, '');
-    if (CD.has(cmd.toLowerCase())) {
+    if (!ws[0].quoted && cmd === 'case') {
+      stack.push({ kind: 'case' }); // `case WORD in PATTERN)`: that `)` (and later ones) are pattern ends until esac
+    } else if (CD.has(cmd.toLowerCase())) {
       const t = ws.slice(1).filter((w) => !/^-(L|P|e|@|Path|LiteralPath)$/i.test(w.text))[0];
-      const next = !t ? env?.HOME || os.homedir() : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
+      const push = cmd.toLowerCase() === 'pushd' || cmd.toLowerCase() === 'push-location';
       if (!piped) {
-        if (cmd.toLowerCase() === 'pushd' || cmd.toLowerCase() === 'push-location') dirStack.push(dir);
-        dir = next;
+        if (push && !t) {
+          // bare pushd swaps the current dir with the top of the stack (an error, no change, when the stack is empty)
+          if (dirStack.length) { const top = dirStack.pop(); dirStack.push(dir); dir = top; }
+        } else if (push && /^[+-]\d+$/.test(t.text)) {
+          dir = UNKNOWN; // stack rotation
+        } else {
+          const next = !t ? env?.HOME || os.homedir() : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
+          if (push) dirStack.push(dir);
+          dir = next;
+        }
       }
     } else if (base === 'popd' || base === 'pop-location') {
       if (!piped) dir = dirStack.length ? dirStack.pop() : UNKNOWN;
+    } else if (base === 'unset') {
+      if (!piped) for (const w of ws.slice(1)) delete exported[w.text];
     } else if (base === 'export') {
       for (const w of ws.slice(1)) {
         if (!ASSIGN.test(w.text)) continue;
@@ -398,20 +434,32 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         if (!piped) exported[w.text.slice(0, eq)] = w.dynamic ? UNKNOWN : w.text.slice(eq + 1);
       }
     } else if (SHELLS.has(base)) {
-      const ci = ws.findIndex((w, i) => i > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(w.text));
-      if (ci > 0 && ws[ci + 1]) {
-        const v = findViolation(ws[ci + 1].text, { cwd: segDir === UNKNOWN ? null : segDir, env, depth: depth + 1 });
+      // bash parses every option first (`-c -- 'x'`, `-o pipefail -c 'x'`, `-ec 'x'`); with -c the first operand is the script
+      let sawC = false;
+      let script = null;
+      for (let i = 1; i < ws.length; i++) {
+        const t = ws[i].text;
+        if (t === '--') { if (sawC) script = ws[i + 1] ?? null; break; }
+        if (/^[-+][oO]$/.test(t)) { i++; continue; }
+        if (/^[-+][A-Za-z]+$/.test(t)) { if (t[0] === '-' && t.includes('c')) sawC = true; continue; }
+        if (t.startsWith('--')) continue;
+        if (sawC) script = ws[i];
+        break;
+      }
+      if (script) {
+        const v = nested(script.text, segDir, segEnv);
         if (v) return v;
       }
     } else if (base === 'eval') {
-      const v = findViolation(ws.slice(1).map((w) => w.text).join(' '), { cwd: segDir === UNKNOWN ? null : segDir, env, powershell, depth: depth + 1 });
+      const rest = ws.slice(1);
+      const v = nested((rest[0]?.text === '--' ? rest.slice(1) : rest).map((w) => w.text).join(' '), segDir, segEnv);
       if (v) return v;
     } else if (base === 'git') {
       const g = parseGitArgv(ws.slice(1), segDir, {
         workTree: Object.hasOwn(segEnv, 'GIT_WORK_TREE') ? segEnv.GIT_WORK_TREE : null,
         gitDir: Object.hasOwn(segEnv, 'GIT_DIR') ? segEnv.GIT_DIR : null,
       });
-      const label = destructiveGit(g.sub, g.args, g.dir);
+      const label = destructiveGit(g.sub, g.args, g.dir, { appended });
       if (label) {
         if (g.forced) {
           if (g.forced.kind === 'main') return { label, dir: g.forced.root, root: g.forced.root, unresolved: false };
@@ -423,7 +471,7 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         }
       }
     }
-    if (op === ')' && scopes.length) dir = scopes.pop();
+    endSeg();
   }
   return null;
 }
