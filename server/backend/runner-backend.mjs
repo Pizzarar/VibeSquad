@@ -39,7 +39,7 @@ const STATUS = { starting: "initializing", queued: "initializing", running: "run
 // permission / session / resume_fallback). Everything else is setup, lifecycle or noise: meta / stderr / raw / limit
 // (the runner's NON_PROGRESS_EVENTS) plus the events the runner appends directly (created/input/status starting|queued|parked/
 // parked/error/exit/archive/unarchive/cancel). `lastProgressAt`/`lastPromptAt` are derived from this split for staleness.
-const NON_PROGRESS_LOG_EVENTS = new Set(["meta", "stderr", "raw", "limit", "archive", "unarchive", "cancel", "created", "input", "parked", "error", "exit", "park-held", "park-forced", "park-probe-error"]);
+const NON_PROGRESS_LOG_EVENTS = new Set(["meta", "stderr", "raw", "limit", "archive", "unarchive", "cancel", "created", "input", "parked", "error", "exit", "park-held", "park-forced", "park-probe-error", "inputs-consumed", "inputs-held"]); // inputs-*: the runner's queue bookkeeping (idea-869), never turn progress
 export function isTurnProgressEvent(e) {
   if (!e || typeof e !== "object") return false;
   if (e.type === "status") return e.status === "running" || e.status === "idle";

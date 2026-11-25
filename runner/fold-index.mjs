@@ -59,6 +59,17 @@ export function newFold() {
 //                is delivered by the next non-queued status (bar a queued park); one tagged `ownTurn` (or held by `inputs-held`) waits
 //                for a turn of its own and is delivered only by an `inputs-consumed` marker covering its seq (idea-869);
 //   seqMono    - every seq so far a safe integer above the one before: only then is a by-seq read of `park` that one event.
+//
+// INVARIANT (idea-869), when a pending input is consumed (leaves `pending`); nothing else ever removes one:
+//   - any input: at the first later `inputs-consumed` whose `upTo` is >= its seq (no `upTo`: every pending input);
+//   - untagged (every log older than idea-869, and an input that rides the next turn) also at the first later `status` that is
+//     not `queued` and not a park tagged `queued: true` (that park only freed a queued agent's process: nothing was delivered);
+//   - tagged `own` (input `ownTurn: true`, or named by a later `inputs-held`): ONLY by that marker; another turn's status never
+//     consumes it. The runner logs the marker when
+//     the job carrying the input is handed to the agent (_deliverJob), fails to start (_failJob), is dropped (archive), or when
+//     a restart left it behind a cut turn and the agent may no longer act on it (Runner._owedOwn / _dropOwed). A restart that
+//     finds own inputs no job carries re-queues them on the agent's next resume or send (_owedOwn), so each is delivered once
+//     and none is left to replay on a later queued restart (recoverQueued replays `pending` whole when the log ends queued).
 function newSpecFold() {
   return { seqMono: true, archived: false, park: null, refused: null, stopped: null, lastStatus: null, lastState: null, pending: [] };
 }
