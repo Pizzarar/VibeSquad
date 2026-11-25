@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, linkSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { isForbiddenRealHome } from "./test-guard.mjs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const PROTECTED_BRANCHES = new Set(["main", "master"]);
@@ -413,18 +414,25 @@ const readFetchState = (file) => {
 export function refreshOriginRefs(repoRoot, { git = defaultGit, now = Date.now(), minIntervalMs = FETCH_THROTTLE_MS } = {}) {
   const key = normPath(repoRoot) ?? lexKey(repoRoot);
   const file = fetchStateFile();
-  const state = readFetchState(file);
-  const stamps = [Number(state[key]), lastFetchMem.get(key)].filter((n) => Number.isFinite(n));
+  // Under a test runner the real ~/.vibesquad is off limits (test-guard): throttle in memory only, never touch the file.
+  const disk = !isForbiddenRealHome(dirname(file));
+  const memKey = `${file}\0${key}`; // a different VIBESQUAD_HOME in the same process must not inherit this one's stamp
+  const diskStamp = disk ? readFetchState(file)[key] : undefined;
+  const stamps = [typeof diskStamp === "number" ? diskStamp : undefined, lastFetchMem.get(memKey)].filter((n) => Number.isFinite(n));
   if (stamps.length && now - Math.max(...stamps) < minIntervalMs) return false;
-  lastFetchMem.set(key, now);
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    const next = { ...readFetchState(file), [key]: now };
-    const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
-    writeFileSync(tmp, JSON.stringify(next));
-    renameSync(tmp, file);
-  } catch {
-    /* unwritable state: the in-memory stamp still throttles this process */
+  lastFetchMem.set(memKey, now);
+  if (disk) {
+    let tmp = null;
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      const next = { ...readFetchState(file), [key]: now };
+      tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+      writeFileSync(tmp, JSON.stringify(next));
+      renameSync(tmp, file);
+    } catch {
+      /* unwritable state: the in-memory stamp still throttles this process */
+      if (tmp) try { unlinkSync(tmp); } catch { /* already gone */ }
+    }
   }
   return tryGit(git, ["fetch", "--quiet", "--no-tags", "origin"], repoRoot, { env: { GIT_TERMINAL_PROMPT: "0" } }) !== null;
 }
