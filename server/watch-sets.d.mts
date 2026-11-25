@@ -118,7 +118,7 @@ export interface WatchEngineOptions {
   /** idea-160: send the worker its one idle nudge (the caller re-checks it is idle and live) */
   nudge?: (agentId: string, text: string) => Promise<void> | void;
   /** idea-171: the agent's final assistant message text ("" when none), for the activeAt-floor done check */
-  lastMessage?: (id: string) => Promise<string> | string;
+  lastMessage?: (id: string, opts?: { completedOnly?: boolean }) => Promise<string> | string;
   log?: (msg: string) => void;
   retryMs?: number;
   /** B11a: true when the Squad is in an asleep folder; its pings and nudges wait (not marked attempted) until a wake. */
@@ -145,6 +145,7 @@ export interface WatchEngine {
   list(): WatchSet[];
 }
 
+export function completedTurnText(entries: Array<{ item?: any; turnEnd?: boolean }> | undefined): string;
 export function createWatchEngine(opts?: WatchEngineOptions): WatchEngine;
 /** idea-883: an agent item's code-read verdict tag (`PASS|FAIL H/M/L <hash>`), or null. */
 export function itemVerdict(item: WatchItem): string | null;

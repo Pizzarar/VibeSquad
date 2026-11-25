@@ -13,6 +13,9 @@ import { briefRootFor } from "./brief-path.mjs";
 import { getInboxPath } from "./inbox.mjs";
 import { appendVsLogEntry } from "./brainstorm.mjs";
 
+// C2 (PLAN_CRUNCH_MODE): re-exported for read-only reuse by crunch-toggle.mjs (liveness / role / busy predicates).
+export { effectiveAgentRole, isLiveAgent };
+
 export const IDLE_KICK_MIN = 10;
 export const IDLE_KICK_ESCALATE_MIN = 30;
 export const IDLE_KICK_TICK_MS = 60_000;
@@ -21,7 +24,7 @@ const OPEN_UNIT = new Set(["todo", "running", "ready", "open", "pending", "queue
 export const IDLE_KICK_WORK_TTL_MS = 5 * 60_000;
 const LOG_TAIL_BYTES = 256 * 1024;
 const NEEDS_YOU_MAX_AGE_MS = 7 * 24 * 3_600_000;
-const BUSY = new Set(["running", "queued", "initializing", "starting", "working"]);
+export const BUSY = new Set(["running", "queued", "initializing", "starting", "working"]);
 
 export const kickText = (item) => `You are idle with open work: ${item}. Pick the next and go (R13); if blocked, log needs-you.`;
 export const escalateText = (lane, item, mins) => `Lane ${lane} went idle again on "${item}" within ${mins} min of an idle-kick and has not moved. Unblock it or re-route it.`;
@@ -44,7 +47,12 @@ export async function openTaskUnits(tasksPath) {
 /** Plan blocks in the lane brief not PASS: list lines starting with a block id (K1, T2a ...) that say todo/open/pending/not started/running. */
 export function openPlanBlocks(briefText) {
   const out = [];
-  for (const line of String(briefText ?? "").split(/\r?\n/)) {
+  // idea-835: when the brief has an "## In flight" section, only block lines there count; a Decided line like
+  // "- O2 review FAIL ... row stays PENDING" is a row state, not a plan block. No such heading: scan the whole brief.
+  let text = String(briefText ?? "");
+  const fl = /^##[ \t]+In flight\b.*$/im.exec(text);
+  if (fl) text = text.slice(fl.index + fl[0].length).split(/^##[ \t]/m)[0];
+  for (const line of text.split(/\r?\n/)) {
     const m = /^\s*[-*]\s*\**([A-Z]{1,3}\d+[a-z]?)\b/.exec(line);
     if (!m || /\bPASS\b/.test(line) || !/\b(todo|open|pending|not started|queued|running|in progress)\b/i.test(line)) continue;
     out.push(`plan block ${m[1]}`);
@@ -119,7 +127,7 @@ export async function armedWatchOwners(baseHome) {
 /** idea-569: true when the plan the brief names is done: lane log has `done` + pass for it, or the plan file's status says COMPLETE. */
 export async function planIsComplete({ teamId, laneId, brief, root, baseHome, logText }) {
   // The ACTIVE plan is the LAST docs/PLAN_*.md the brief names (newer plans are appended); an older done plan must not hide a new open one.
-  const named = String(brief ?? "").match(/(?:^|[^\w./-])docs\/PLAN_[\w.-]+?\.md(?![\w-]|\.\w)/gi) ?? [];
+  const named = String(brief ?? "").match(/(?:^|[^\w./-])docs\/(?:PLAN_[\w.-]+?|plans\/[\w.-]+?)\.md(?![\w-]|\.\w)/gi) ?? [];
   const plan = named.length ? named[named.length - 1].replace(/^[^d]*/i, "") : "";
   if (!plan) return false;
   const text = logText ?? (await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`)));

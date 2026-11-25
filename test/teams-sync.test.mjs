@@ -1,3 +1,4 @@
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -70,7 +71,7 @@ function withTempHome(fn) {
 
 test(
   "CLI pin with current revision succeeds and bumps revision; stale revision after concurrent server write is refused and leaves teams.json unchanged",
-  withTempHome(({ home, root, teamsFile }) => {
+  withTempHome(async ({ home, root, teamsFile }) => {
     const initial = {
       teams: [
         {
@@ -88,7 +89,9 @@ test(
     const rev0 = teamsRevision(teamsFile);
     assert.match(rev0, /^[0-9a-f]{40}$/);
 
-    const env = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root, PASEO_AGENT_ID: "" };
+    // an owner shell (no agent id + the local token): pin merge is owner/Overlord/hub-Buddy only (idea-632)
+    writeFileSync(join(home, "local-token"), "a".repeat(64) + "\n");
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VS_|PASEO_)/.test(k))), VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root };
     const vs = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", ...args], { env, encoding: "utf8" });
 
     // 1. CLI pin new with the current revision succeeds and bumps revision.
@@ -151,7 +154,7 @@ test(
     assert.equal(teamsRevision(teamsFile), revBeforeMerge);
 
     let expectedAfterServerMerge;
-    const raceMerge = commandPinMerge({
+    const raceMerge = await commandPinMerge({
       _: ["audio", "crafting-tree"],
       note: "race merge",
       team: "efi",
@@ -162,7 +165,7 @@ test(
         assert.equal(r.status, 200);
         expectedAfterServerMerge = readFileSync(teamsFile, "utf8");
       },
-    });
+    }, { env: { VIBESQUAD_HOME: home } });
     assert.equal(raceMerge, 1, "merge refused when server wrote in between");
     assert.equal(readFileSync(teamsFile, "utf8"), expectedAfterServerMerge);
     const afterRaceMerge = JSON.parse(expectedAfterServerMerge);

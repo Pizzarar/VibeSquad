@@ -26,6 +26,8 @@ import {
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
 import { openStorybook, useStorybookMissing } from "./StorybookView";
+import { openPhoneUsage } from "./phoneUsageStore";
+import { PhoneUsageView } from "./PhoneUsageView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -317,6 +319,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
 
   return (
     <div className="phone-cockpit" data-testid="phone-cockpit" data-surface={shown} data-vibe={vibe} data-android={isAndroidUserAgent() ? "true" : undefined}>
+      <PhoneUsageView />
       <header className="phone-bar">
         <button
           type="button"
@@ -383,6 +386,17 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
               <span className="phone-storybook-name">{view.team.name}</span>
             </button>
           )}
+          <button
+            type="button"
+            className="btn ghost phone-usage-btn"
+            data-testid="phone-usage-btn"
+            onClick={() => {
+              setMenu(false);
+              openPhoneUsage();
+            }}
+          >
+            Usage · quota &amp; stats
+          </button>
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
             <span className="phone-lanes-head">PROVIDER</span>
             <div className="phone-seg-row">

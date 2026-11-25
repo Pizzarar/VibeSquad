@@ -1,5 +1,6 @@
 // idea-195: leads never hand-edit files under ~/.vibesquad. `vs handoff --judgment-file <f>` / `--judgment -` writes the Judgment;
 // an audit over every injected rule/steer source fails on any instruction to edit/fill/write a packet or ~/.vibesquad file.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, existsSync, readdirSync, rmSync } from "node:fs";

@@ -1,6 +1,7 @@
 // docs/PLAN_BUGS_BATCH2.md block 0: two live role=brainstorm Buddies in one lane. (a) a real Buddy spawn
 // retires every other Buddy in (team, lane, topic), (b) `vs who brainstorm` prints CONFLICT, (c) the pin's
 // "Keep this one" retires the others without archiving. Fake clients only, no live daemon.
+import "./setup/hermetic.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

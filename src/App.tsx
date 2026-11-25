@@ -50,9 +50,12 @@ import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
-import { BoringApp } from "./BoringAde";
+import { BoringApp, boringAgentLanding } from "./BoringAde";
+import { urlSyncAgent, urlSyncDecision } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
+import { isPhoneShell } from "./phoneCockpitLogic";
+import { openPhoneUsage } from "./phoneUsageStore";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { TesterCockpit } from "./TesterCockpit";
@@ -97,7 +100,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
 import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
@@ -130,6 +133,7 @@ import {
   useUiScale,
   useUiScaleHud,
 } from "./uiScale";
+import { etDateTime } from "./etTime";
 
 const COLLAPSED_TEAMS_KEY = "vibesquad.collapsedTeams";
 const DISMISSED_LAN_IPS_KEY = "vibesquad.dismissedLanIps";
@@ -472,7 +476,7 @@ const Sidebar = memo(function Sidebar(props: {
                 <div
                   key={`${u.provider}-${u.account ?? ""}`}
                   className={`quota-pill ${quotaTone(u.usedPct)}`}
-                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                  title={[u.account, u.resetAt && `resets ${etDateTime(u.resetAt)}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
                 >
                   <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
                   <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
@@ -1610,13 +1614,20 @@ export function App() {
   // Psycho: land on Squads Home (from any view) and scroll to the dashboard. No reload.
   useEffect(() => {
     const onOpenUsage = () => {
-      if (getPref("app.vibe") === "boring") return;
+      if (getPref("app.vibe") === "boring" || isPhoneShell(isAndroidUserAgent(), window.innerWidth)) return; // phone: PhoneUsageView opens itself
       enterSquadsHome();
       setTimeout(() => document.querySelector('[data-testid="squads-dashboard"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 400);
     };
     window.addEventListener(OPEN_USAGE_EVENT, onOpenUsage);
     return () => window.removeEventListener(OPEN_USAGE_EVENT, onOpenUsage);
   }, []);
+
+  // B1: App owns the pop alone. onPop sets popActive; while it is set every URL-sync write is replace-if-differs (never a pushState()).
+  // A pop ends only on the first capture-phase pointerdown / keydown (or a vs:select-agent notification click, via stopPop), or is
+  // retargeted by a newer pop; reaching the popped URL never ends it. Nothing depends on BoringApp being mounted (Storybook, phone, Psycho).
+  const popActive = useRef(false);
+  const popDisarm = useRef<(() => void) | null>(null);
+  const stopPop = useCallback(() => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; }, []);
 
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
@@ -1626,7 +1637,10 @@ export function App() {
     if (linkedAgent) {
       openAgent(linkedAgent);
     }
-    if (takeColdUsageFocus() && vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    if (takeColdUsageFocus()) {
+      if (isPhoneShell(isAndroidUserAgent(), window.innerWidth)) openPhoneUsage(); // quota-alert push (/?focus=usage) on the phone shell
+      else if (vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    }
     if (linkedFocus === "needs-you") {
       setFocus(true);
       setTimeout(() => {
@@ -1638,6 +1652,7 @@ export function App() {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "vs:select-agent") {
+        stopPop(); // a notification click is a new navigation: end any active pop so the URL sync pushes instead of overwriting the popped entry
         if (typeof data.agentId === "string" && data.agentId) {
           openAgent(data.agentId);
         }
@@ -1659,17 +1674,26 @@ export function App() {
 
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
+  // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
+  const [navGen, setNavGen] = useState(0);
   useEffect(() => {
     const onPop = () => {
+      popActive.current = true;
+      popDisarm.current?.(); // a second pop retargets: drop the previous input listeners, arm fresh ones
+      const end = stopPop;
+      window.addEventListener("pointerdown", end, { capture: true, once: true });
+      window.addEventListener("keydown", end, { capture: true, once: true });
+      popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       const act = popAction(location.search);
       if (act === "agent" && u.agent) openAgent(u.agent);
       else if (act === "squads-home") enterSquadsHome();
       else exitSquadsHome(); // Back from a chat lands on the squad page, so the URL effect doesn't re-push ?agent=
+      setNavGen((g) => g + 1);
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => { window.removeEventListener("popstate", onPop); popDisarm.current?.(); popDisarm.current = null; };
   }, []);
 
   // Stable callbacks so the memoized sidebar and team page skip renders they do not need.
@@ -1852,8 +1876,14 @@ export function App() {
     if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
-    const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    if (next !== (location.search || "")) history[takeStorybookReplace() ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+    // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
+    // Only while that agent belongs to the team being written (a notification lands the agent a commit before its team: Gemini M1).
+    const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`
+    const teamOf = (id: string) => boringAgentLanding(boringViews, id)?.view?.team.id ?? null;
+    const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId, team: activeTeamId || null, teamOf });
+    const next = serializeUrlState({ team: activeTeamId || null, agent, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
+    const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
+    if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
@@ -2024,7 +2054,7 @@ export function App() {
   if (phoneShell) {
     return (
       <>
-      <QuotaAlertBanner canOpenUsage={false} />
+      <QuotaAlertBanner canOpenUsage />
       <PhoneCockpit
         views={sidebarViews}
         view={view}
@@ -2176,6 +2206,7 @@ export function App() {
         onSettings={openSettings}
         onSuccessor={paneSuccessor}
         banners={topBanners}
+        navGen={navGen}
       >
         {overlays}
       </BoringApp>
@@ -2299,7 +2330,7 @@ export function App() {
           className="tchip"
           data-testid="psycho-focus-normal-btn"
           title="Switch to Normal mode"
-          style={{ position: "fixed", left: 8, bottom: 8, zIndex: 50, opacity: 0.8 }}
+          style={{ position: "fixed", zIndex: 50, opacity: 0.8 }}
           onClick={() => setPref("app.vibe", "boring")}
         >
           Normal mode

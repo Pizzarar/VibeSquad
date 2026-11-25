@@ -76,3 +76,14 @@ B2 consequence: no cell has n>=10 on both arms and a clear quality winner, so th
 
 ## 7. @usage ask (the one missing field)
 Per-unit review outcome for non-VibeSquad repos: first-try PASS cannot be read from `reviewRounds` there (parsed from "review rN" in merge subjects, which EFI/ForgeWirk/RedFrontier merges lack). Needed: round count or first-review verdict keyed by unit/sha from the review/verdict log. Secondary: a unit size field (LOC bucket is in U as `locAdded/locDeleted`, usable; not yet used here, a size-matched re-read of server normal is the cheap next step).
+
+## 8. R8 tier arm: Neon vs Gemini Flash (normal stakes)
+Owner: Per (lane perfection). Plan: `docs/PLAN_PER_ROLES_LADDER_1125.md` block R8 (amended 2026-11-25, Per3).
+
+- **Dropped arms**: **DSP vs DSF arms dropped** (owner 2026-11-25: DeepSeek turned off indefinitely; Claude + Gemini only).
+- **Hypothesis**: Gemini Flash (`antigravity-cli`, `cheap` ladder rung) can execute `stakes=normal` `Implement` units at equal first-try review PASS and fix-after-merge (fam) rate to Gemini Neon (`antigravity-cli`, `mid` ladder rung), at lower $/merged unit.
+- **Arms**:
+  - `neon` — Gemini `mid` rung (in the default `sonnet|neon` alternation).
+  - `flash` — Gemini `cheap` rung (**opt-in only** via `labels.ab="flash"` or `labels.wf="flash"` on role `Implement` spawns; stamped `vs.arm=flash`, `vs.arm-reason=opt-in`; does not join `IMPLEMENTER_ARMS` and respects `ARM_CAP_FAMILIES` fail-open/cap rules).
+- **Sample floor**: >= 10 merged units per arm (VibeSquad repo, where first-try PASS is measurable; EFI / ForgeWirk / RedFrontier remain gated on section 7).
+- **Yardstick**: best result per unit, $ tiebreak; cheap wins only at equal first-try + fam (no arm wins to save quota).

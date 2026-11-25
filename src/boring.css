@@ -1181,6 +1181,9 @@ html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: v
 /* U3 survivor: light-mode badge text is white; beats the styles.css `:is(.badge, ...)` on-pastel colour (boring-badge also carries .badge). */
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { color: #ffffff !important; }
 
+/* R1 UX R31 M1: styles.css `:is(.badge, .def-badge, ...)` forces the pastel ink (#07040f) on every .def-badge; on the dark Normal panel that is 1.4:1. */
+html[data-vibe="boring"] .def-badge.def-badge { color: var(--text-1) !important; } /* doubled class: beats the (0,3,0) :is/:not rule at styles.css:6163 */
+
 /* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
 html[data-vibe="boring"] .boring-needs-item { position: relative; }
 html[data-vibe="boring"] .boring-needs-item.attn-stalled { background: var(--st-attn-bg); border-left-color: var(--st-attn); }
@@ -1534,3 +1537,13 @@ html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; 
 html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
 /* Plan tab open: the in-timeline pinned todo bar duplicates it. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
+
+/* Code | Storybook tabs (PLAN_CODE_STORYBOOK_TABS T1): segmented pill right of the breadcrumb, same look as the switcher pills. */
+html[data-vibe="boring"] .boring-topbar-lead { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 0 1 auto; }
+html[data-vibe="boring"] .boring-topbar-lead .boring-topbar-title { flex: 0 1 auto; }
+html[data-vibe="boring"] .project-tabs { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+html[data-vibe="boring"] .project-tabs .boring-switch-pill { min-height: 28px; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+/* sb-head: pill wraps instead of clipping (phone ordering lives in storybook.css's 600px block). */
+html[data-vibe="boring"] .sb-head .project-tabs { flex-wrap: wrap; }
+/* UX R22 m1: active segment reads clearly in dark + light (existing --accent token, colour not opacity). */
+html[data-vibe="boring"] .project-tabs .boring-switch-pill.on { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }

@@ -263,18 +263,7 @@ export function RefLink({ token, agentId, entries, citing, hasMore }: RefLinkPro
   const openInbox = (cardId: string) => {
     closeReturnFocus();
     if (boringMode()) {
-      // R14-2: flip to the Overview without pushing a history entry — rewrite the chat's ?agent= URL
-      // (matching App's serializeUrlState) so Back never restores a chat URL over the Overview screen.
-      try {
-        const p = new URLSearchParams(location.search);
-        const team = p.get("team");
-        p.delete("team");
-        p.delete("agent");
-        p.delete("view");
-        if (team) p.set("team", team);
-        const s = p.toString();
-        history.replaceState(null, "", `${location.pathname}${s ? `?${s}` : ""}${location.hash}`);
-      } catch {}
+      // R14-2 (B1): flip to the Overview and let App's URL sync push ?team= as for any navigation, so Back returns to the chat.
       focusInboxCard(cardId);
     } else {
       openAndScrollToInbox();

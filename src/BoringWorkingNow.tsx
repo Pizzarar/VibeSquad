@@ -11,6 +11,7 @@ import { isHubLaneId } from "./teams";
 import { agentDisplayName } from "./identity";
 import { bustRoleForAgent, bustUrl } from "./boringBusts";
 import { useTheme } from "./useBotFace";
+import { etClock } from "./etTime";
 
 const MAX_CHIPS = 6;
 
@@ -31,7 +32,7 @@ export function idleActivity(a: Pick<PaseoAgent, "status" | "attentionReason" | 
 
 const hhmm = (iso: string | null | undefined): string => {
   const t = iso ? new Date(iso) : null;
-  return t && !Number.isNaN(t.getTime()) ? t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return t && !Number.isNaN(t.getTime()) ? etClock(t) : "";
 };
 
 const nameOf = (a: PaseoAgent): string => agentDisplayName(a, { isHubLaneId }) || a.title || a.id.slice(0, 8);

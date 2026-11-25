@@ -1,5 +1,6 @@
 // Block 3/4: runner auto mode + child env, VS MCP server (stdio round trip + Paseo-name aliases), vs spawn/send/status,
 // and rn- identity through the backend seam. Every filesystem touch is under a temp HOME/VIBESQUAD_HOME.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -756,4 +757,15 @@ test('idea-527: clipText names the real cap in the truncation marker', async () 
   assert.ok(clipText(long, 2000).endsWith('…[truncated at 2000 chars]'));
   assert.equal(clipText(long, 2000).length, 2000);
   assert.ok(clipText(long, 65536).endsWith('…[truncated at 64KB]'));
+});
+
+test('R1: spawn/handoff/restart tool descriptions say role name, stakes picks the model, provider/model to override', () => {
+  const sw = VS_TOOLS.spawn_worker.description;
+  assert.match(sw, /profile = a role name/);
+  assert.match(sw, /stakes picks the model/);
+  assert.match(sw, /provider\/model only to override/);
+  assert.doesNotMatch(sw, / - (Sonnet|Opus|Gemini|DSP|Claude)\b/, 'no old model-named profile in spawn_worker');
+  assert.match(VS_TOOLS.handoff_lead.description, /role name "lead"/);
+  assert.doesNotMatch(VS_TOOLS.handoff_lead.description, /Lead - Claude/);
+  assert.match(VS_TOOLS.restart_buddy.description, /role name "brainstorm"/);
 });

@@ -1,6 +1,7 @@
 // X1c (docs/PLAN_X1_IDENTITY.md): the VS server resolves one caller per request (owner | agent | unknown), the middleware
 // is default-deny for non-owner writes except AGENT_WRITE_ALLOWLIST, and every allow-listed handler re-checks the role.
 // A real Runner + runner HTTP server answers GET /verify-agent; the VS middleware runs on a temp VIBESQUAD_HOME.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -450,4 +451,46 @@ test("idea-137 (X1b): /inbox/triage checks the role before the body: a worker ge
   assert.equal((await call(ids.lead, "POST", "/__vibesquad/inbox/triage", {})).status, 400, "a lead reaches validation");
   assert.equal((await call(ids.lead, "POST", "/__vibesquad/inbox/triage", { action: "archive", cardId: "idea-nope" })).status, 404, "a lead reaches the card lookup");
   assert.equal((await call("header", "POST", "/__vibesquad/inbox/triage", {})).status, 400, "the owner reaches validation");
+});
+
+test("idea-629: a schedule-spawned worker (protected schedule label, runner-verified) may log needs-you as itself; plain, forged and digest workers stay refused", async () => {
+  const logLines = (team, lane) => {
+    const f = path.join(HOME, "logs", `${team}--${lane}.jsonl`);
+    return existsSync(f) ? readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)) : [];
+  };
+  // The VS server's schedule spawn is an admin create (server/schedules.mjs execute): no caller, labels.schedule set.
+  const sched = mk({ team: "sq", lane: "art", role: "worker", labels: { schedule: "sch-abc123", scheduleName: "nightly" } });
+  assert.equal(runner.verifyAgent(sched, runner.tokensById.get(sched))?.schedule, "sch-abc123", "verify-agent carries the schedule id");
+  assert.equal(runner.verifyAgent(ids.worker, runner.tokensById.get(ids.worker))?.schedule, null, "a plain worker has none");
+
+  const ok = await call(sched, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "needs-you", text: "n629-ok", refs: [ids.lead, "docs/PLAN_X.md", sched] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const row = logLines("sq", "art").find((l) => l.text === "n629-ok");
+  assert.ok(row, "written");
+  assert.equal(row.type, "needs-you");
+  assert.equal(row.agent, sched, "attributed to the verified schedule worker, not the body");
+  assert.deepEqual(row.refs, [sched, "docs/PLAN_X.md"], "itself first; another agent's id is dropped");
+  const spoofAgent = await call(sched, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "needs-you", text: "n629-agent", agent: ids.overlord });
+  assert.equal(spoofAgent.status, 200);
+  assert.equal(logLines("sq", "art").find((l) => l.text === "n629-agent")?.agent, sched, "a body agent never re-attributes");
+  // The grant is needs-you only: decision and you stay refused for the schedule worker.
+  assert.equal((await call(sched, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "decision", text: "n629-dec" })).status, 403);
+  assert.equal((await call(sched, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "you", text: "n629-you" })).status, 403);
+
+  // Negative: a plain worker and a digest are still refused (the body's schedule claim is ignored).
+  const plain = await call(ids.worker, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "needs-you", text: "n629-plain", schedule: "sch-abc123" });
+  assert.equal(plain.status, 403, JSON.stringify(plain.body));
+  assert.equal((await call(ids.digest, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "needs-you", text: "n629-dig" })).status, 403);
+  // Negative: an agent cannot mint a schedule worker. A lead's spawn with labels.schedule has it stripped by the runner.
+  const sp = await call(ids.lead, "POST", "/__vibesquad/runner/spawn", { config: { provider: "claude", cwd: ROOT, title: "forged" }, labels: { schedule: "sch-abc123", scheduleName: "x", role: "worker" } });
+  assert.equal(sp.status, 201, JSON.stringify(sp.body));
+  const forged = sp.body.agent.id;
+  assert.equal(runner.status(forged).meta.labels.schedule, undefined, "stripped at spawn");
+  assert.equal(runner.verifyAgent(forged, runner.tokensById.get(forged))?.schedule, null);
+  assert.equal((await call(forged, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "needs-you", text: "n629-forged" })).status, 403);
+  // Negative: nor can an agent label one afterwards (protected meta key), not even its lead on its own lane worker.
+  const patch = await call(ids.lead, "POST", `/__vibesquad/runner/agents/${ids.worker}/meta`, { labels: { schedule: "sch-abc123" } });
+  assert.equal(patch.status, 403, JSON.stringify(patch.body));
+  assert.equal(runner.status(ids.worker).meta.labels.schedule, undefined);
+  assert.equal(["n629-plain", "n629-dig", "n629-forged", "n629-dec", "n629-you"].some((t) => logLines("sq", "art").some((l) => l.text === t)), false, "no refused entry was written");
 });

@@ -142,7 +142,7 @@ test("X1a: GET /verify-agent: a parked agent (> park grace idle) verifies with i
     assert.equal(runner.live.has(ids.worker), false, "parked: no longer live");
     const r = await s.call(s.as(ids.worker), "GET", "/verify-agent");
     assert.equal(r.status, 200, r.text);
-    assert.deepEqual(r.body, { id: ids.worker, role: "worker", lane: "art", team: "sq", profile: null, digest: false, digestFor: null, status: "parked", overlord: false });
+    assert.deepEqual(r.body, { id: ids.worker, role: "worker", lane: "art", team: "sq", profile: null, digest: false, digestFor: null, status: "parked", overlord: false, schedule: null });
     const o = await s.call(s.as(ids.overlord), "GET", "/verify-agent");
     assert.equal(o.body.overlord, true, "a lead on the hub lane (lane id = team id) is the Overlord");
     assert.equal((await s.call(s.as(ids.lead), "GET", "/verify-agent")).body.overlord, false);

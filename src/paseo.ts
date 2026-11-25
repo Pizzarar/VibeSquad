@@ -2,6 +2,7 @@
 import type { ActiveTurnBehavior, PaseoAgent, PaseoWorkspace } from "./agentTypes";
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
+import { spawnEnvFor } from "./spawn-env";
 import { isRunnerId, runnerArchive, runnerCancel, runnerListArchived, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange, noteLocalUpsert, noteLocalRemove } from "./runnerBridge";
 export { setOptimisticConfig, clearOptimisticConfig } from "./runnerBridge";
 import { useSyncExternalStore } from "react";
@@ -357,7 +358,7 @@ export function usePaseo(): State {
 
 export type SpawnRequest = {
   provider: string; // "claude", "antigravity-cli", ...
-  model: string;
+  model?: string;
   modeId?: string;
   thinkingOptionId?: string;
   featureValues?: Record<string, unknown>;
@@ -439,6 +440,7 @@ export async function spawnTeamAgent(req: SpawnRequest): Promise<{ id: string; c
     config: { provider: req.provider, model: req.model, cwd: req.cwd, title: req.title, modeId: req.modeId, ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}) },
     initialPrompt: req.prompt || undefined,
     labels: req.labels,
+    env: spawnEnvFor(req.labels), // role/profile/stakes/route-override twins: the spawn hook may see only {config, env}
   });
   upsertLocalAgent(agent);
   await retirePredecessors(req, agent.id);

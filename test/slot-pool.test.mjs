@@ -1,6 +1,7 @@
 // idea-267: named machine-wide slot pools (`vs slot run --pool godot -- <cmd>`, cli/slot-pool.mjs). At most N runs at once,
 // FIFO waiters, dead and silent holders reclaimed, the child's exit code passed through, an interrupted waiter leaves no
 // queue entry. Every test uses its own VIBESQUAD_TEST_LOCK_DIR, never the real slots.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
