@@ -103,6 +103,8 @@ export type ProfilesState = {
   /** P5d: provider -> tier -> rung, the effective ladder (defaults + ~/.vibesquad/stakes-ladder.json). */
   ladder?: Ladder;
   ladderDefaults?: Ladder;
+  /** Role keys the server hides from pickers (GET /__vibesquad/roles hiddenRoles); absent = the static fallback. */
+  hiddenRoles?: string[];
   /** "v2" = stored roles, "v1" = built live from the legacy profiles (nothing saved yet), "default" = shipped table. */
   rolesSource?: string;
 };
@@ -697,6 +699,7 @@ function applyRolesBody(body: Record<string, unknown>): void {
     roles: (body.roles as RolesMap) ?? state.roles,
     ladder: (body.ladder as Ladder) ?? state.ladder,
     ladderDefaults: (body.ladderDefaults as Ladder) ?? state.ladderDefaults,
+    hiddenRoles: Array.isArray(body.hiddenRoles) ? (body.hiddenRoles as string[]) : state.hiddenRoles,
     rolesSource: String(body.source ?? state.rolesSource ?? ""),
   };
   notify();
@@ -768,7 +771,7 @@ export function roleNameFor(label: string | undefined | null, roles: RolesMap | 
 
 /** Role keys that still resolve (saved data, old spawns) but are not offered in role lists or pickers (R1). */
 export const HIDDEN_ROLE_KEYS: readonly string[] = ["work-order"];
-export const isHiddenRoleKey = (key: string) => HIDDEN_ROLE_KEYS.includes(key);
+export const isHiddenRoleKey = (key: string, hidden: readonly string[] = state.hiddenRoles ?? HIDDEN_ROLE_KEYS) => hidden.includes(key);
 
 /** Role keys to list: hidden aliases dropped. */
 export const visibleRoleKeys = (roles: RolesMap | undefined): string[] =>
@@ -778,8 +781,8 @@ export const visibleRoleKeys = (roles: RolesMap | undefined): string[] =>
 const LEGACY_HEAD_ROLE: Record<string, string> = {
   spec: "Planner",
   "work order": "Work Order",
-  mechanical: "Implement",
-  audit: "Implement",
+  mechanical: "Work Order",
+  audit: "Pre-check",
   "senior reasoning": "Implement",
   check: "Pre-check",
   scout: "Pre-check",
@@ -807,8 +810,48 @@ export function pickableProfiles(list: Profile[], keep?: string | null, roles?: 
   return list.filter((p) => {
     if (p.name === keep) return true;
     const role = profileRoleName(p.name, roles);
-    return !(role && HIDDEN_ROLE_KEYS.includes(role.toLowerCase().replace(/\s+/g, "-")));
+    return !(role && isHiddenRoleKey(role.toLowerCase().replace(/\s+/g, "-")));
   });
+}
+
+export type RolePick = { /** profile name the picker stores */ value: string; label: string; legacy: boolean };
+
+/**
+ * Picker rows by ROLE (R1: roles only, the model comes from the ladder). One row per visible role, backed by that role's
+ * main profile (head = role name first, then claude, then list order). A saved pick that is not a role's main profile
+ * (an old model-named one) is kept as "<Role> (legacy: <old name>)" so it still displays and works until changed.
+ */
+export function rolePickRows(list: Profile[], keep?: string | null, filter?: (p: Profile) => boolean, roles: RolesMap | undefined = state.roles ?? DEMO_ROLES): RolePick[] {
+  const pool = filter ? list.filter(filter) : list;
+  const rows: RolePick[] = [];
+  const seen = new Set<string>();
+  for (const key of visibleRoleKeys(roles)) {
+    const name = roles?.[key]?.name ?? key;
+    const cands = pool.filter((p) => profileRoleName(p.name, roles) === name);
+    if (!cands.length) continue;
+    const rank = (p: Profile) => (p.name.split(/\s+-\s+/)[0].trim().toLowerCase() === name.toLowerCase() ? 0 : 2) + (p.provider === "claude" ? 0 : 1);
+    const main = [...cands].sort((a, b) => rank(a) - rank(b))[0]!;
+    rows.push({ value: main.name, label: name, legacy: false });
+    seen.add(main.name);
+  }
+  const k = String(keep ?? "").trim();
+  if (k && !seen.has(k)) {
+    const role = profileRoleName(k, roles);
+    const known = list.some((p) => p.name === k);
+    rows.push({ value: k, label: role ? `${role} (legacy: ${k})` : `${k} (missing)`, legacy: known });
+  }
+  return rows;
+}
+
+/** Models the tier ladder names for one provider, de-duplicated, in top > mid > cheap order. */
+export function ladderModels(provider: string | undefined | null, ladder: Ladder | undefined = state.ladder ?? DEMO_LADDER): string[] {
+  const fam = ladder?.[String(provider ?? "")] ?? {};
+  const out: string[] = [];
+  for (const t of ["top", "mid", "cheap"] as Tier[]) {
+    const m = fam[t]?.model;
+    if (m && !out.includes(m)) out.push(m);
+  }
+  return out;
 }
 
 /** Model id trimmed for a header chip: provider prefix and date suffix off. */
