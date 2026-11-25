@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AGY_CLAUDE_MIN_CAP_TTL_MS, capProviderOnUpstreamExit } from "../server/backend/runner-backend.mjs";
-import { armCapped, armCapKey } from "../server/exp6-arm.mjs";
+import { armCapped, armCapKey, decideArm } from "../server/exp6-arm.mjs";
 import { ROUTE_LABEL, createPlugin } from "../server/hooks/agent-duties.ts";
-import { usageFromLimits } from "../server/limits-read.mjs";
+import { QUOTA_WINDOW_MS, usageFromLimits } from "../server/limits-read.mjs";
 import { AGY_CLAUDE_FAMILY } from "../server/model-ids.mjs";
 import { resolveRoute } from "../server/role-route.mjs";
 
@@ -39,13 +39,51 @@ test("fu2-1b: the cap holds to the pool row's resetsAt while the pool still read
   assert.equal(low.ttlMs, 35 * MIN);
 });
 
-// 2. The sonnet arm lands on agy-claude first, then direct claude: capped only when both are.
-test("fu2-2: sonnet arm is capped only when BOTH agy-claude and claude are capped", () => {
-  assert.equal(armCapped("sonnet", { claude: { reason: "x" } }), false, "direct claude alone leaves agy-claude");
-  assert.equal(armCapped("sonnet", { "agy-claude": { reason: "x" } }), false, "agy-claude alone leaves direct claude");
-  assert.equal(armCapped("sonnet", { claude: {}, "agy-claude": {} }), true);
-  assert.equal(armCapKey("sonnet", { claude: {}, "agy-claude": {} }), "claude");
+test("fu2-1c (M1): a far-future resetsAt is clamped to the quota window length (weekly max for unknown windows)", () => {
+  const cap = (p, v, o) => ({ [AGY_CLAUDE_FAMILY]: { reason: o.reason, resetsAt: o.now + o.ttlMs } });
+  const farFuture = new Date(NOW + 365 * 24 * 3600_000).toISOString();
+  for (const [window, expectedMax] of [["5h", QUOTA_WINDOW_MS["5h"]], ["weekly", QUOTA_WINDOW_MS.weekly], ["mystery", QUOTA_WINDOW_MS.weekly]]) {
+    const rows = [{ provider: "antigravity-cli/claude-gpt", window, usedPct: 97, resetsAt: farFuture, source: "provider", at: new Date(NOW - 5 * MIN).toISOString(), checkedAt: new Date(NOW - 5 * MIN).toISOString() }];
+    const out = capProviderOnUpstreamExit(AGY_CLAUDE_FAMILY, upstreamExit, { cap, readCaps: null, log() {}, now: NOW, pool: () => usageFromLimits(rows, { now: NOW }) });
+    assert.ok(out, `capped (${window})`);
+    assert.equal(out.ttlMs, expectedMax, `clamped to window (${window})`);
+  }
+});
+
+test("fu2-1d (L1): a replayed exit older than 35 min writes no cap even when the pool is >=85%", () => {
+  let capCalls = 0;
+  const cap = (p, v, o) => { capCalls++; return { [AGY_CLAUDE_FAMILY]: { reason: o.reason, resetsAt: o.now + o.ttlMs } }; };
+  const rows = [{ provider: "antigravity-cli/claude-gpt", window: "5h", usedPct: 95, resetsAt: new Date(NOW + 3 * 3600_000).toISOString(), source: "provider", at: new Date(NOW - 5 * MIN).toISOString(), checkedAt: new Date(NOW - 5 * MIN).toISOString() }];
+  const replayed = { ...upstreamExit, ts: NOW - 40 * MIN };
+  const out = capProviderOnUpstreamExit(AGY_CLAUDE_FAMILY, replayed, { cap, readCaps: null, log() {}, now: NOW, pool: () => usageFromLimits(rows, { now: NOW }) });
+  assert.equal(out, null, "old replayed exit must not write a cap");
+  assert.equal(capCalls, 0);
+  // A live exit (5 min old, within 35 min) still gets the full now-relative pool hold (not reduced by ageMs).
+  const live = { ...upstreamExit, ts: NOW - 5 * MIN };
+  const liveOut = capProviderOnUpstreamExit(AGY_CLAUDE_FAMILY, live, { cap, readCaps: null, log() {}, now: NOW, pool: () => usageFromLimits(rows, { now: NOW }) });
+  assert.equal(liveOut.ttlMs, 3 * 3600_000);
+});
+
+// 2. The two-family rule applies only to the role-spawn (`Implement`) path; legacy `Implement - Sonnet` does not walk agy-claude.
+test("fu2-2 (L3): role-spawn sonnet needs BOTH agy-claude and claude capped; legacy Implement - Sonnet caps on direct claude alone", async () => {
+  // Role-spawn (`Implement` role): two-family rule
+  assert.equal(armCapped("sonnet", { claude: { reason: "x" } }, { role: true }), false, "role: direct claude alone leaves agy-claude");
+  assert.equal(armCapped("sonnet", { "agy-claude": { reason: "x" } }, { role: true }), false, "role: agy-claude alone leaves direct claude");
+  assert.equal(armCapped("sonnet", { claude: {}, "agy-claude": {} }, { role: true }), true);
+  assert.equal(armCapKey("sonnet", { claude: {}, "agy-claude": {} }, { role: true }), "claude");
+  // Legacy `Implement - Sonnet`: direct claude alone caps it
+  assert.equal(armCapped("sonnet", { claude: { reason: "x" } }), true, "legacy: direct claude alone caps sonnet");
+  assert.equal(armCapKey("sonnet", { claude: { reason: "x" } }), "claude");
+  assert.equal(armCapped("sonnet", { "agy-claude": { reason: "x" } }), false, "legacy: agy-claude alone does not cap direct claude");
   assert.equal(armCapped("neon", { "antigravity-cli": {} }), true, "other arms unchanged");
+  // End-to-end decideArm for both paths with only direct claude capped
+  const base = { stakes: "normal", lane: "perfection", team: "vibesquad", listAgents: async () => [], capProbe: async () => ({ claude: { reason: "cap" } }) };
+  const rolePick = await decideArm({ ...base, profile: "Implement" });
+  assert.equal(rolePick.arm, "sonnet", "role-spawn Implement still picks sonnet when only direct claude is capped");
+  assert.equal(rolePick.reason, "alternation");
+  const legacyPick = await decideArm({ ...base, profile: "Implement - Sonnet" });
+  assert.equal(legacyPick.arm, "neon", "legacy Implement - Sonnet swaps to neon when direct claude is capped");
+  assert.equal(legacyPick.reason, "capped:claude");
 });
 
 // 3. All capped: direct claude, not agy-claude.

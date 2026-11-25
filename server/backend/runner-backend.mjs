@@ -21,7 +21,7 @@ import { indexedFold, indexedFoldSync } from "./roster-index.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 import { AGY_CLAUDE_FAILOVER_THRESHOLD, normalizeProviderFamily, readLiveCapDoc, setProviderCapped, spawnFamily } from "../provider-failover.mjs";
 import { AGY_CLAUDE_FAMILY } from "../model-ids.mjs";
-import { liveQuotaUsage } from "../limits-read.mjs";
+import { liveQuotaUsage, QUOTA_WINDOW_MS } from "../limits-read.mjs";
 import { effectiveAgentRole } from "../identity.mjs";
 import { noteLaneSpawnOutcome } from "../spawn-streak.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
@@ -598,7 +598,7 @@ const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient bala
  */
 export const AGY_CLAUDE_MIN_CAP_TTL_MS = 35 * 60 * 1000;
 
-/** ms until the agy-claude pool row resets while it reads at/over `threshold`, else 0. Never throws. */
+/** ms until the agy-claude pool row resets while it reads at/over `threshold`, clamped to the window length (weekly max for unknown windows), else 0. Never throws. */
 export function agyClaudePoolHoldMs(now, pool = () => liveQuotaUsage({ now }), threshold = AGY_CLAUDE_FAILOVER_THRESHOLD) {
   try {
     let hold = 0;
@@ -606,7 +606,11 @@ export function agyClaudePoolHoldMs(now, pool = () => liveQuotaUsage({ now }), t
       if (entry?.id !== AGY_CLAUDE_FAMILY) continue;
       for (const w of entry.windows ?? []) {
         const reset = Date.parse(w?.resetsAt ?? "");
-        if (Number(w?.usedPct) >= threshold && Number.isFinite(reset) && reset > now) hold = Math.max(hold, reset - now);
+        if (Number(w?.usedPct) >= threshold && Number.isFinite(reset) && reset > now) {
+          const win = String(w?.window ?? "");
+          const maxMs = Object.hasOwn(QUOTA_WINDOW_MS, win) ? QUOTA_WINDOW_MS[win] : QUOTA_WINDOW_MS.weekly;
+          hold = Math.max(hold, Math.min(reset - now, maxMs));
+        }
       }
     }
     return hold;
@@ -620,10 +624,11 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes =
   const at = Number.isFinite(e.ts) ? e.ts : now;
   const confirmed = fault.kind === "balance" ? noteBalanceStrike(strikes, family, agentId, at) : true;
   let baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
-  if (family === AGY_CLAUDE_FAMILY) baseTtlMs = Math.max(baseTtlMs, AGY_CLAUDE_MIN_CAP_TTL_MS, agyClaudePoolHoldMs(now, pool));
+  if (family === AGY_CLAUDE_FAMILY) baseTtlMs = Math.max(baseTtlMs, AGY_CLAUDE_MIN_CAP_TTL_MS);
   const ageMs = Math.max(0, now - at);
-  const ttlMs = baseTtlMs - ageMs;
-  if (ttlMs <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
+  const faultTtl = baseTtlMs - ageMs;
+  if (faultTtl <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
+  const ttlMs = family === AGY_CLAUDE_FAMILY ? Math.max(faultTtl, agyClaudePoolHoldMs(now, pool)) : faultTtl;
   const reason = `${FAULT_REASON[fault.kind]}${confirmed ? "" : " (unconfirmed)"}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
   try {
     // Fast path only (skips a lock round-trip); the authoritative keep-longer check is inside setProviderCapped's lock.

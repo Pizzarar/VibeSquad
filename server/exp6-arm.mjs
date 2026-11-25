@@ -91,14 +91,15 @@ export async function readArmCaps({ env = process.env } = {}) {
 }
 
 /** The capped family key of `wf`'s provider in the capped map/array, or "" (not capped). */
-export function armCapKey(wf, capped) {
+export function armCapKey(wf, capped, { role = false } = {}) {
   const fams = ARM_CAP_FAMILIES[wf] ?? [];
   const keys = Array.isArray(capped) ? capped : Object.keys(capped ?? {});
   for (const k of keys) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
     if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
-      // R10 fu2: the sonnet arm lands on agy-claude first and falls back to direct claude, so it is capped only when BOTH are.
-      if (wf === "sonnet" && !keys.some((x) => String(x ?? "").trim().toLowerCase().split("/")[0] === "agy-claude")) continue;
+      // R10 fu2/fu3: a role-spawn (`Implement`) sonnet arm lands on agy-claude first and falls back to direct claude, so it
+      // is capped only when BOTH are. Legacy `Implement - Sonnet` does not walk agy-claude, so direct claude alone caps it.
+      if (role && wf === "sonnet" && !keys.some((x) => String(x ?? "").trim().toLowerCase().split("/")[0] === "agy-claude")) continue;
       return fam;
     }
   }
@@ -106,8 +107,8 @@ export function armCapKey(wf, capped) {
 }
 
 /** True when any family of `wf` is in the capped map/array. */
-export function armCapped(wf, capped) {
-  return armCapKey(wf, capped) !== "";
+export function armCapped(wf, capped, opts) {
+  return armCapKey(wf, capped, opts) !== "";
 }
 
 /**
@@ -231,7 +232,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     let capKey = "";
     try {
       const caps = capProbe ? await capProbe() : {};
-      capKey = armCapKey(optInKey, caps);
+      capKey = armCapKey(optInKey, caps, { role: roleSpawn });
     } catch {
       return keep("fail-open"); // unreadable caps: never swap onto a possibly dead provider (idea-703)
     }
@@ -250,7 +251,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   let capped;
   try {
     const caps = capProbe ? await capProbe() : {};
-    capped = new Map(set.map((wf) => [wf, armCapKey(wf, caps)]).filter(([, k]) => k));
+    capped = new Map(set.map((wf) => [wf, armCapKey(wf, caps, { role: roleSpawn })]).filter(([, k]) => k));
   } catch {
     return keep("fail-open"); // unreadable caps: never swap onto a possibly dead provider (idea-703)
   }
