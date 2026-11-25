@@ -365,6 +365,19 @@ test('report writes as the caller; types are restricted', async () => {
   await assert.rejects(callTool(ctx, 'report', { type: 'metric', text: 'x' }), /type must be/);
 });
 
+test('report needs-you carries validated structured fields (D1); fields on other types are refused', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick a db', decides: 'storage engine', do: 'sqlite', alt: ['postgres', 'sqlite'], kind: 'answer' });
+  assert.equal(ctx.logs.length, 1);
+  assert.deepEqual({ ...ctx.logs[0] }, { type: 'needs-you', text: 'Pick a db', refs: undefined, summary: 'Pick a db', decides: 'storage engine', do: 'sqlite', alt: ['postgres'], kind: 'answer' });
+  await assert.rejects(callTool(ctx, 'report', { type: 'needs-you', text: 'x', decides: 'y', kind: 'maybe' }), /invalid kind/);
+  await assert.rejects(callTool(ctx, 'report', { type: 'needs-you', text: 'x', alt: ['1', '2', '3', '4', '5', '6', '7'] }), /max 6/);
+  await assert.rejects(callTool(ctx, 'report', { type: 'blocker', text: 'x', decides: 'y' }), /only apply to type needs-you/);
+  assert.equal(ctx.logs.length, 1, 'rejected calls write nothing');
+  await callTool(ctx, 'report', { type: 'needs-you', text: 'plain' });
+  assert.deepEqual({ ...ctx.logs[1] }, { type: 'needs-you', text: 'plain', refs: undefined }, 'no structured fields: free-text entry unchanged');
+});
+
 test('every Paseo-name alias maps to its VS tool and logs a metric with caller + lane', async () => {
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
