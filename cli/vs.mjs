@@ -2746,10 +2746,20 @@ function specLine(unit) {
 // wrote there while the agent (and git) looked at the worktree's own TASKS.json. When cwd is a linked worktree of
 // that same project, target the worktree itself.
 export function laneArtifactBase(identity, rootDir, cwd = process.cwd()) {
+  // idea-1056: resolve from the caller's cwd. A linked worktree of the lane's project (compared by realpath, so
+  // symlinks/case/trailing slashes don't defeat the match) or of an unresolvable registry project targets the worktree.
   try {
+    const real = (p) => {
+      try {
+        return fs.realpathSync(path.resolve(p));
+      } catch {
+        return path.resolve(p);
+      }
+    };
     const main = laneWorkingDir(identity.team.id, identity.lane, rootDir);
     const mainOfCwd = resolveWorktreeRootPath(cwd);
-    if (!main || !mainOfCwd || path.resolve(main) !== path.resolve(mainOfCwd)) return undefined;
+    if (!mainOfCwd) return undefined;
+    if (main && real(main) !== real(mainOfCwd)) return undefined;
     let dir = path.resolve(cwd);
     for (let i = 0; i < 12; i++) {
       try {
