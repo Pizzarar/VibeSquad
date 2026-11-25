@@ -42,7 +42,7 @@ const { parseUrlState, serializeUrlState } = await import(pathToFileURL(join(dir
 
 // Compile real urlSync.ts
 writeFileSync(join(dir, "urlSync.mjs"), transformSync("urlSync.ts", readFileSync(join(ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code);
-const { urlSyncScreen } = await import(pathToFileURL(join(dir, "urlSync.mjs")).href);
+const { urlSyncScreen, urlSyncDecision, deskLandingAtLoad, deskLandingGate } = await import(pathToFileURL(join(dir, "urlSync.mjs")).href);
 
 // Stubs for BoringDecisionDesk.tsx
 stub("demoFlag.mjs", "export const DEMO = false;");
@@ -76,6 +76,7 @@ const {
   isQuietLane,
   decisionSummary,
   decisionMatchesLane,
+  orderStripLikeFeed,
 } = await import(pathToFileURL(join(dir, "BoringDecisionDesk.mjs")).href);
 
 // Also compile BoringAde.tsx with REAL BoringDecisionDesk.mjs (DECISION_DESK_DEFAULT_LANDING = true)
@@ -245,4 +246,79 @@ test("D4 r2 (UX R37): lean opt-in constant, quiet-lane fold + sort, decision-awa
   assert.equal(decisionMatchesLane({ squad: "vs", lane: "" }, "vs", "_desk", ""), true);
   assert.equal(decisionSummary([{ kind: "yesno" }, { kind: "answer" }, { kind: "offscreen" }]), "3 open · 2 here · 1 off-screen");
   assert.equal(decisionSummary([]), "All clear across Squads");
+});
+
+test("D4 r3 (Review-Gemini MEDIUM): the Desk landing hold clears once the Desk lands, so a Back before any input is still canonicalized", () => {
+  // Load hold: bare and ?view=decisions both hold (R38 m1: no ?team= flash on a fresh ?view=decisions load); ?team= / ?agent= never do.
+  assert.equal(deskLandingAtLoad(parseUrlState("?demo="), true), true);
+  assert.equal(deskLandingAtLoad(parseUrlState("?demo=&view=decisions"), true), true, "R38 m1: a fresh ?view=decisions load holds too");
+  assert.equal(deskLandingAtLoad(parseUrlState("?team=vs"), true), false);
+  assert.equal(deskLandingAtLoad(parseUrlState("?agent=a"), true), false);
+  assert.equal(deskLandingAtLoad(parseUrlState(""), false), false);
+  // Script App's two URL-sync effects + onPop over: bare load -> Desk mounts -> Back to a non-canonical ?team= entry before any input.
+  const app = { pending: deskLandingAtLoad(parseUrlState("?demo="), true), popActive: true, search: "?demo=", writes: [] };
+  const run = (decisionView, next) => {
+    const g = deskLandingGate({ pending: app.pending, decisionView, popActive: app.popActive, boring: true });
+    app.pending = g.pending;
+    if (g.hold) return "held";
+    const d = urlSyncDecision({ next, current: app.search, popActive: app.popActive, storybookReplace: () => false });
+    if (d.write) { app.writes.push([d.replace ? "replace" : "push", next]); app.search = next; }
+    return d;
+  };
+  assert.equal(run(false, "?demo=&team=vs"), "held", "first frame: the first project's ?team= is not written before the Desk");
+  run(true, "?demo=&view=decisions"); // Effect 2: the Desk mounted
+  assert.equal(app.pending, false, "the landing is done: the hold is cleared");
+  assert.deepEqual(app.writes, [["replace", "?demo=&view=decisions"]], "the load's own entry is replaced, never pushed");
+  // Back to a pasted ?team=vs&tab=bogus entry before any pointerdown/keydown: onPop clears (already clear) and the heal still replaces.
+  app.search = "?demo=&team=vs&tab=bogus";
+  app.pending = false; // onPop
+  run(false, "?demo=&team=vs");
+  assert.deepEqual(app.writes.at(-1), ["replace", "?demo=&team=vs"], "popped ?team= entry canonicalized with replaceState");
+  // Even if a pop lands while the hold is still pending (Desk not mounted yet), onPop's clear lets the pop's write through.
+  assert.deepEqual(deskLandingGate({ pending: false, decisionView: false, popActive: true, boring: true }), { hold: false, pending: false });
+  assert.deepEqual(deskLandingGate({ pending: true, decisionView: false, popActive: true, boring: true }), { hold: true, pending: true });
+  assert.deepEqual(deskLandingGate({ pending: true, decisionView: false, popActive: false, boring: true }), { hold: false, pending: false }, "first input ends it");
+  assert.deepEqual(deskLandingGate({ pending: true, decisionView: false, popActive: true, boring: false }), { hold: false, pending: true }, "Psycho never holds");
+  // App wiring: both effects and onPop go through the gate; no u.view exclusion left.
+  const appSrc = readFileSync(join(ROOT, "src", "App.tsx"), "utf8");
+  assert.match(appSrc, /const deskLandingPending = useRef\(deskLandingAtLoad\(parseUrlState\(location\.search\), DECISION_DESK_DEFAULT_LANDING\)\);/);
+  assert.doesNotMatch(appSrc, /u\.view !== "decisions"/);
+  assert.match(appSrc, /armPop\(\); \/\/ a second pop retargets[^\n]*\n\s*deskLandingPending\.current = false;/, "onPop clears the hold");
+  assert.equal(appSrc.match(/deskLandingPending\.current = hold[12]\.pending;/g)?.length, 2, "both URL-sync effects store the gate's verdict");
+  assert.ok(appSrc.indexOf("const deskLandingPending") < appSrc.indexOf("const onPop = "), "declared before onPop uses it");
+});
+
+test("D4 r3: Bugs lane open decisions count @bug asks once (lane id \"bug-chaser\" and \"bug\")", () => {
+  const now = Date.parse("2026-11-25T12:00:00Z");
+  for (const laneId of ["bug-chaser", "bug"]) {
+    const v = squad();
+    v.bugs = { pin: { lane: { id: laneId, name: "Bugs" }, lead: null, brainstorm: null, workers: [] }, leadRunning: false, needsYou: 0 };
+    const items = [
+      { id: "a", squad: "vs", lane: "@bug", kind: "yesno", lean: "x", ts: 1 },
+      { id: "b", squad: "vs", lane: "bug", kind: "answer", lean: "", ts: 2 },
+      { id: "c", squad: "vs", lane: laneId, kind: "answer", lean: "", ts: 3 },
+    ];
+    const [g] = buildStatusStrip([v], {}, now, items);
+    const bugsLine = g.lanes.find((l) => l.label === "Bugs");
+    assert.equal(bugsLine.openDecisions, 3, `${laneId}: 3 asks, each counted once`);
+  }
+});
+
+test("D4 r3 (UX R38 m3): the status strip lists Squads in the feed's order; Squads without feed items keep their order after", () => {
+  const groups = [{ squadId: "vs" }, { squadId: "site" }, { squadId: "efi" }, { squadId: "quiet" }];
+  const feed = groupFeedBySquad([
+    { id: "1", squad: "EFI", squadName: "E", ts: 10 },
+    { id: "2", squad: "site", squadName: "S", ts: 20 },
+    { id: "3", squad: "vs", squadName: "V", ts: 30 },
+  ]);
+  assert.deepEqual(orderStripLikeFeed(groups, feed).map((g) => g.squadId), ["efi", "site", "vs", "quiet"]);
+  assert.deepEqual(orderStripLikeFeed(groups, []).map((g) => g.squadId), ["vs", "site", "efi", "quiet"], "empty feed keeps the views order");
+  const dd = readFileSync(join(ROOT, "src", "BoringDecisionDesk.tsx"), "utf8");
+  assert.match(dd, /\{stripGroups\.map\(\(g\) =>/, "the strip renders the feed-ordered groups");
+});
+
+test("D4 r3: no dead .boring-decision-dot.st-waiting rule (waiting lanes render st-needs-you)", () => {
+  const css = readFileSync(join(ROOT, "src", "boring.css"), "utf8");
+  assert.doesNotMatch(css, /\.boring-decision-dot\.st-waiting/);
+  assert.match(css, /\.boring-decision-dot\.st-needs-you \{ background: var\(--st-attn\); \}/);
 });

@@ -60,3 +60,17 @@ export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined
   const k = o.live.team === o.team ? o.live : o.rendered && o.rendered.team === o.team ? o.rendered : null;
   return k ? { slot: k.slot, tab: k.tab } : { slot: null, tab: null };
 }
+
+// D4 r2/r3 (UX R37 m3, R38 m1): a load with no ?team= / ?agent= lands on the Decision Desk (bare, or ?view=decisions itself), so the
+// first-project fallback must not write ?team= for the frame before BoringApp switches mode. The hold lasts only for that landing.
+/** Does this load start with the Decision Desk landing hold? `u` is parseUrlState(location.search) at load. */
+export function deskLandingAtLoad(u: { team?: string | null; agent?: string | null }, defaultLanding: boolean): boolean {
+  return defaultLanding && !u.team && !u.agent;
+}
+/** One URL-sync run against the landing hold. `hold`: skip this write (the Desk lands next). `pending`: the flag after this run. The hold
+ * ends for good once the Desk is on screen or the load's pop has ended (first input), so it never blocks a later navigation; onPop clears
+ * it too, so a Back/Forward before any input is canonicalized (replace-if-differs) like any other pop (Review-Gemini D4 r2 MEDIUM). */
+export function deskLandingGate(o: { pending: boolean; decisionView: boolean; popActive: boolean; boring: boolean }): { hold: boolean; pending: boolean } {
+  if (!o.pending || o.decisionView || !o.popActive) return { hold: false, pending: false };
+  return { hold: o.boring, pending: true };
+}

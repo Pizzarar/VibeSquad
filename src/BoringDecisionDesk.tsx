@@ -145,6 +145,13 @@ export function groupFeedBySquad(items: DecisionItem[]): { squad: string; squadN
   return [...bySquad.values()];
 }
 
+/** UX R38 m3: order the status strip's Squads like the feed (Squads with feed items first, in feed order); the rest keep their order. */
+export function orderStripLikeFeed<T extends { squadId: string }>(groups: readonly T[], feed: readonly { squad: string }[]): T[] {
+  const rank = new Map(feed.map((g, i) => [g.squad.toLowerCase(), i] as const));
+  const r = (g: T) => rank.get(g.squadId.toLowerCase()) ?? feed.length;
+  return groups.map((g, i) => ({ g, i })).sort((a, b) => r(a.g) - r(b.g) || a.i - b.i).map((x) => x.g);
+}
+
 /** Build the POST /__vibesquad/decisions/answer payload from staged selections, in feed order. */
 export function buildAnswerBatch(items: DecisionItem[], staged: Readonly<Record<string, StagedChoice>>): AnswerPayloadItem[] {
   const out: AnswerPayloadItem[] = [];
@@ -268,7 +275,7 @@ export function buildStatusStrip(views: TeamView[], logsByTeam: Readonly<Record<
         age: bEv ? formatAge(Date.parse(bEv.ts), now) : "",
         openAgentId: (isLive(bugs.pin.lead) ? bugs.pin.lead?.agent.id : null) ?? liveBuddyId(bugs.pin) ?? null,
         lastTs: bEv ? tsOf(bEv.ts) : 0,
-        openDecisions: openFor(bugs.pin.lane.id, "@bug") + (bugs.pin.lane.id.toLowerCase() === "bug" ? 0 : openFor("bug", "")),
+        openDecisions: openFor(bugs.pin.lane.id, "@bug"), // the @bug code already matches lane "bug" asks: count each once
       });
     }
 
@@ -516,6 +523,7 @@ export function BoringDecisionDesk({
   const offscreenItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) === "offscreen"), [store.items]);
   const feedItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) !== "offscreen"), [store.items]);
   const squadFeed = useMemo(() => groupFeedBySquad(feedItems), [feedItems]);
+  const stripGroups = useMemo(() => orderStripLikeFeed(statusGroups, squadFeed), [statusGroups, squadFeed]);
   const batch = useMemo(() => buildAnswerBatch(store.items, staged), [store.items, staged]);
   const unstagedLeanIds = useMemo(
     () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !staged[i.id]).map((i) => i.id),
@@ -673,7 +681,7 @@ export function BoringDecisionDesk({
           <span className="boring-decision-section-meta">{statusGroups.reduce((n, g) => n + g.lanes.length, 0)} lanes</span>
         </div>
         <div className="boring-decision-strip-groups">
-          {statusGroups.map((g) => (
+          {stripGroups.map((g) => (
             <div key={g.squadId} className="boring-decision-strip-squad" data-testid={`boring-decision-strip-squad-${g.squadId}`}>
               <button type="button" className="boring-decision-strip-squad-btn" onClick={() => onOpenProject?.(g.squadId)}>
                 {g.squadName}

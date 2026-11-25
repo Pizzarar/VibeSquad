@@ -316,3 +316,76 @@ test("D4 UX R37 M2: at 3200 wide the strip sits in a right rail beside the feed"
     await context.close();
   }
 });
+
+test("D4 r3 (R38 m1): a fresh ?view=decisions load never writes ?team= (no flash) and replaces, never pushes", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, colorScheme: "dark" });
+  await context.addInitScript(HISTORY_WRAP);
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+  const page = await context.newPage();
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  try {
+    await page.goto(`${baseUrl}/?demo=&view=decisions`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="boring-decision-desk"]', { timeout: 20000 });
+    await page.waitForTimeout(600);
+    const s = await page.evaluate(() => ({ url: location.search, urls: window.__urls, h: window.__h }));
+    assert.equal(new URLSearchParams(s.url).get("view"), "decisions");
+    assert.deepEqual(s.urls.filter((u) => new URLSearchParams(u).get("team")), [], `m1: no ?team= write on load :: ${s.urls.join(" | ")}`);
+    assert.equal(s.h.filter((k) => k === "pushState").length, 0, "load pushed nothing");
+    assert.deepEqual(errs, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test("D4 r3 (Review-Gemini MEDIUM): bare load, then Back to a non-canonical ?team= entry before any input is still canonicalized (replace)", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  const { context, page, errs } = await openDesk({ theme: "dark", width: 1920, height: 1080 });
+  try {
+    assert.equal(await page.evaluate(() => new URLSearchParams(location.search).get("view")), "decisions", "bare load landed on the Desk");
+    // No pointerdown/keydown anywhere: the load's landing (popActive) is still on. Build [?team=…&tab=bogus, ?view=decisions] and Back.
+    await page.evaluate(() => {
+      history.pushState(null, "", "?demo=&team=vibesquad&tab=bogus");
+      history.pushState(null, "", "?demo=&view=decisions");
+      window.__h.splice(0);
+      window.__urls.splice(0);
+    });
+    await page.evaluate(() => history.back());
+    await page.waitForSelector('[data-testid="boring-project-view"]', { timeout: 5000 });
+    await page.waitForTimeout(500);
+    const s = await page.evaluate(() => ({ url: location.search, h: window.__h, len: history.length }));
+    assert.equal(s.url, "?demo=&team=vibesquad", `popped ?team= entry canonicalized :: ${s.h.join(" | ")}`);
+    assert.ok(s.h.includes("replaceState"), `healed with replaceState :: ${s.h.join(" | ")}`);
+    assert.equal(s.h.filter((k) => k === "pushState").length, 0, `the pop pushed nothing :: ${s.h.join(" | ")}`);
+    // Forward still reaches the Desk entry (not wiped by a push).
+    await page.evaluate(() => history.forward());
+    await page.waitForSelector('[data-testid="boring-decision-desk"]', { timeout: 5000 });
+    assert.equal(await page.evaluate(() => new URLSearchParams(location.search).get("view")), "decisions");
+    assert.deepEqual(errs, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test("D4 r3 (R38 m3): the status strip lists Squads in the same order as the feed", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  // Make Site's ask the oldest so the feed order differs from the views order.
+  state.items = state.items.map((i) => (i.squad === "site" ? { ...i, ts: i.ts - 3 * 3600_000 } : i));
+  const { context, page, errs } = await openDesk({ theme: "dark", width: 1920, height: 1080 });
+  try {
+    const o = await page.evaluate(() => ({
+      strip: [...document.querySelectorAll('[data-testid^="boring-decision-strip-squad-"]')].map((e) => e.getAttribute("data-testid").replace("boring-decision-strip-squad-", "").toLowerCase()),
+      feed: [...document.querySelectorAll(".boring-decision-squad-group")].map((e) => e.getAttribute("data-testid").replace("boring-decision-squad-", "").toLowerCase()),
+    }));
+    assert.equal(o.feed[0], "site", `feed starts with the oldest ask's Squad :: ${o.feed.join(",")}`);
+    assert.deepEqual(o.strip.filter((s) => o.feed.includes(s)), o.feed, `strip order ${o.strip.join(",")} follows feed ${o.feed.join(",")}`);
+    assert.deepEqual(o.strip.slice(0, o.feed.length), o.feed, "feed Squads come first in the strip");
+    assert.deepEqual(errs, []);
+  } finally {
+    await context.close();
+  }
+});

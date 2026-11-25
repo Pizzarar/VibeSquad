@@ -2191,7 +2191,6 @@ html[data-vibe="boring"] .boring-decision-choice.is-lean.suggested:hover:not(:di
   border-style: solid;
   background: var(--surface-3);
 }
-html[data-vibe="boring"] .boring-decision-dot.st-waiting { background: var(--st-attn); }
 html[data-vibe="boring"] .boring-decision-quiet-btn {
   align-self: flex-start;
   margin: 2px 0 0 8px;
