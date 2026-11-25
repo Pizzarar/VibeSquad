@@ -12,7 +12,7 @@ import { pidAlive, readLock } from "../runner/lock.mjs";
 import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { killTree } from "./proc-tree.mjs";
-import { oncePerOwner, restartRunner as ownerRestart, restartRunnerNow, restartWhenIdle, runnerBusy } from "./runner-supervisor.mjs";
+import { oncePerOwner, restartIfStillIdle, restartRunner as ownerRestart, restartRunnerNow, restartWhenIdle, runnerBusy } from "./runner-supervisor.mjs";
 
 const NODE_IMAGE = /^node(\.exe)?$/i;
 // Command lines that are VS infrastructure or tools an agent depends on, never strays.
@@ -199,14 +199,17 @@ export async function unstick({
  *   - runner idle (runner-supervisor runnerBusy: no /health turn, no held background work, no running-ish agent): restart now;
  *   - runner busy or the busy count unknown: arm restartWhenIdle(); the supervisor restarts it on its first idle tick (RR1's gate);
  *   - runner down (neither /health nor the agent list answers): start a fresh one, as before (nothing it runs can answer).
- * Never archives or cancels anything. `cancelled` stays [] for the UI. Injectable for tests: `health`, `listAgents`,
- * `restartRunner`, `whenIdle`.
+ * Never archives or cancels anything. `cancelled` stays [] for the UI. idea-870: the idle restart goes through
+ * restartIfStillIdle (the runner re-checks idle while it closes its restart gate, so a turn that started after our check is
+ * never killed: that case arms restartWhenIdle like any busy runner). Injectable for tests: `health`, `listAgents`,
+ * `restartRunner` (the down-runner start), `restartIdle` (the gated idle restart), `whenIdle`.
  */
 export async function forceRestartRunner({
   backend,
   health,
   listAgents,
   restartRunner = (be) => restartRunnerNow(be),
+  restartIdle = (be) => restartIfStillIdle(be, { restart: restartRunner }),
   whenIdle = (be) => restartWhenIdle(be),
 } = {}) {
   const be = backend ?? sharedRunnerBackend();
@@ -225,6 +228,12 @@ export async function forceRestartRunner({
     const armed = whenIdle(be);
     return { ok: true, cancelled: [], restarted: false, deferred: true, alreadyArmed: !armed, busy: gate.ids, running: gate.running, held: gate.held, unknown: gate.unknown };
   }
-  await restartRunner(be);
+  const r = await restartIdle(be);
+  if (r?.restarted === false) {
+    // idea-870: a turn started between runnerBusy() and the kill; the runner's own check under its restart gate caught it.
+    const g = r.gate ?? {};
+    const armed = whenIdle(be);
+    return { ok: true, cancelled: [], restarted: false, deferred: true, alreadyArmed: !armed, raced: true, busy: g.ids ?? [], running: g.running ?? null, held: g.held ?? null, unknown: Boolean(g.unknown) };
+  }
   return { ok: true, cancelled: [], restarted: true };
 }

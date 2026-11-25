@@ -260,6 +260,7 @@ export function parseArgs(argv) {
     "brief",
     "timeout",
     "deadline",
+    "requester",
     "needs",
     "file",
     "goal",
@@ -559,7 +560,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
-  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"] | vs restart extend <min>   request/abort/extend: OWNER/Overlord only. extend (idea-673) pushes an open request's drain deadline out, or a vs restart still waiting for runner idle (its wait deadline and drain); abort while vs restart waits stops it before anything is stopped. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent> [--full]   status + last assistant message (compact head+tail by default; --full up to 64KB)
@@ -2880,21 +2881,61 @@ function ownerHubLane(teams) {
  * [--reason <why>]`. Request and abort are the owner's or the Overlord's (the vs restart gate); status is read-only. The server
  * loop (server/restart-request.mjs) sends the drain asks, collects 'drained restart <tip>', and fires vs restart once.
  */
-export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now } = {}) {
+export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now, alive, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), ackMs = 15_000 } = {}) {
   const sub = String(flags._[0] ?? "");
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
   const rr = await import("../server/restart-request.mjs");
   if (sub === "status") {
     if (flags._.length > 1) throw new Error("usage: vs restart status [--json]");
     const cur = rr.readRestartRequest(vsHome);
-    process.stdout.write((flags.json ? JSON.stringify(cur, null, 2) : rr.formatRequestStatus(cur, now())) + "\n");
+    // idea-653: a firing request shows what its vs restart script is doing (waiting for idle, its deadline, who holds it).
+    const progress = cur?.state === "firing" ? rr.readRestartProgress(vsHome, cur) : null;
+    process.stdout.write((flags.json ? JSON.stringify(progress ? { ...cur, progress } : cur, null, 2) : rr.formatRequestStatus(cur, now(), { progress })) + "\n");
     return 0;
   }
   const caller = await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   const by = caller?.owner === false ? caller.id : "owner";
+  // idea-673: a vs restart script still in its idle wait (a fired request's, or a direct run) is extended or aborted through
+  // its control file; the CLI waits (ackMs) for the script to read it, so the reply says what actually happened.
+  const scriptControl = async (opts) => {
+    const ctl = rr.controlWaitingScript(vsHome, { by, now: now(), ...(alive ? { alive } : {}), ...opts });
+    const end = now() + ackMs;
+    let ack = rr.controlAcked(vsHome, ctl, alive ? { alive } : {});
+    for (let i = 0; !ack.acked && now() < end && i < ackMs / 500; i++) { await sleep(500); ack = rr.controlAcked(vsHome, ctl, alive ? { alive } : {}); }
+    return { ctl, ack };
+  };
+  if (sub === "extend") {
+    if (flags._.length !== 2 || !/^\d+$/.test(String(flags._[1]))) throw new Error("usage: vs restart extend <min>");
+    const minutes = Number(flags._[1]);
+    let req;
+    try { req = rr.extendRestartRequest(vsHome, { by, minutes, now: now() }); } catch (e) {
+      if (e?.code !== "FIRING" && e?.code !== "NONE") throw e;
+      const fired = e.code === "FIRING" ? rr.readRestartRequest(vsHome) : null;
+      const { ctl, ack } = await scriptControl({ kind: "extend", minutes, req: fired });
+      const p = ack.progress;
+      process.stdout.write(ack.acked && p?.control?.nonce === ctl.nonce
+        ? `vs restart (pid ${ctl.pid}) now waits for runner idle until ${p.waitDeadline}${fired ? ` (${fired.id})` : ""}; the drain was refreshed to cover it.\n`
+        : ack.acked ? `vs restart (pid ${ctl.pid}) left its idle wait before reading the extend (${p?.phase ?? "exited"}); see vs restart status.\n`
+          : `extend to ${new Date(ctl.extendUntil).toISOString()} written for vs restart pid ${ctl.pid}; it reads it on its next 2 s poll (vs restart status shows the new wait deadline).\n`);
+      return 0;
+    }
+    process.stdout.write(req.state === "queued" ? `${req.id} (queued for ${req.windowAt}): the drain now runs ${req.deadlineMin} min after the window.\n` : `${req.id} (${req.state}): deadline now ${req.deadline}.\n`);
+    return 0;
+  }
   if (sub === "abort") {
     if (flags._.length > 1) throw new Error('usage: vs restart abort [--reason "<why>"]');
-    const req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() });
+    let req;
+    try { req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() }); } catch (e) {
+      if (e?.code !== "FIRING" && e?.code !== "NONE") throw e;
+      let res;
+      try { res = await scriptControl({ kind: "abort", reason: flags.reason ?? "", req: e.req ?? null }); } catch (e2) { throw e.code === "NONE" ? e : e2; } // no request and no waiting script: the old error
+      const p = res.ack.progress;
+      process.stdout.write(res.ack.acked && p?.control?.nonce === res.ctl.nonce
+        ? `vs restart (pid ${res.ctl.pid}) aborted in its idle wait: nothing was stopped${e.req ? `; ${e.req.id} ends as aborted on the server's next tick` : ""}.\n`
+        : res.ack.acked ? `vs restart (pid ${res.ctl.pid}) left its idle wait before reading the abort (${p?.phase ?? "exited"}); see vs restart status.\n`
+          : `abort written for vs restart pid ${res.ctl.pid}; it reads it on its next 2 s poll and stops nothing (vs restart status).\n`);
+      return 0;
+    }
     // idea-674: a request aborted while still queued never asked anyone, so nobody is messaged.
     process.stdout.write(Object.keys(req.asked ?? {}).length ? `${req.id} aborted; the server tells the asked leads to lift their hold.\n` : `${req.id} aborted; no lead had been asked yet, so none is messaged.\n`);
     return 0;
@@ -2926,8 +2967,13 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
 
 export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  const caller = flags.dryRun ? null : await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
+  // idea-695: the requester's own held background work (e.g. its vs restart status poll loop) never holds or defers its
+  // restart. An agent is always its own requester; the owner (and the server's restart-request fire) may name one.
+  if (flags.requester !== undefined && !/^[A-Za-z0-9][\w.-]{0,63}$/.test(String(flags.requester))) throw new Error("vs restart: --requester must be an agent id");
+  if (caller?.owner === false && flags.requester !== undefined && flags.requester !== caller.id) throw new Error(`vs restart: --requester is your own id (${caller.id}) when an agent runs it`);
+  const requester = caller?.owner === false ? caller.id : flags.requester !== undefined ? String(flags.requester) : null;
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   // idea-355: a detached launch (e.g. PowerShell Start-Process) may come without a usable cwd or home: say so, never vanish.
@@ -2973,6 +3019,7 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   if (flags.noForce) args.push("--no-force");
   if (flags.killBackground) args.push("--kill-background");
   if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
+  if (requester) args.push("--requester", requester);
   for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   if (flags.dryRun) {
@@ -3514,7 +3561,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
-    if (command === "restart") return ["request", "status", "abort"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
+    if (command === "restart") return ["request", "status", "abort", "extend"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
