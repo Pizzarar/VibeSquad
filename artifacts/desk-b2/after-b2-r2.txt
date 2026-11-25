@@ -1,0 +1,45 @@
+# B2 measure AFTER round 2 (live agent trusted only when it belongs to the team being written): node artifacts/desk-b2/drive/measure.mjs <theme>, Normal ?demo 1920x1080
+== AFTER round 2 dark
+a-ctrlk    start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+b-needs    start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-efi (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-efi] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+c-sidebar  start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+d-project  start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi (ov) dLen=+1 writes=[push ?demo=&team=efi] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad] dead=false
+e-notify   start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+f-notify-ov start=?demo=&team=vibesquad -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-lead-ui | replace ?demo=&team=vibesquad] deadBack=false backToStart=true pageerrors=0
+           Back#2 ->  (ov:) writes=[] dead=false
+g-notify-focus start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+== AFTER round 2 light
+a-ctrlk    start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+b-needs    start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-efi (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-efi] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+c-sidebar  start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+d-project  start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi (ov) dLen=+1 writes=[push ?demo=&team=efi] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad] dead=false
+e-notify   start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false
+f-notify-ov start=?demo=&team=vibesquad -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-lead-ui | replace ?demo=&team=vibesquad] deadBack=false backToStart=true pageerrors=0
+           Back#2 ->  (ov:) writes=[] dead=false
+g-notify-focus start=?demo=&team=vibesquad&agent=demo-aud -> final=?demo=&team=efi&agent=demo-lead-ui (chat) dLen=+1 writes=[push ?demo=&team=efi&agent=demo-lead-ui] mixed=[]
+           Back -> ?demo=&team=vibesquad&agent=demo-aud (chat:VibeSquad›Desk›Worker) writes=[POP ?demo=&team=vibesquad&agent=demo-aud] deadBack=false backToStart=true pageerrors=0
+           Back#2 -> ?demo=&team=vibesquad (ov:VibeSquad›Overview) writes=[POP ?demo=&team=vibesquad | replace ?demo=&team=vibesquad&agent=demo-aud | replace ?demo=&team=vibesquad] dead=false

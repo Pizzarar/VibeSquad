@@ -1,0 +1,10 @@
+import { open, state } from "./lib.mjs";
+const [port, theme, shot] = [+process.argv[2], process.argv[3], process.argv[4]];
+const { browser, page } = await open(port, { w: 1920, h: 1080, theme }, "?demo=&team=vibesquad");
+await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click(); await page.waitForTimeout(700); console.log(JSON.stringify(await state(page)));
+const tg = page.getByTestId("boring-project-toggle-efi"); await tg.click(); await page.waitForTimeout(400);
+console.log(await page.evaluate(() => [...document.querySelectorAll(".boring-sidebar .boring-mate-name")].filter(e=>e.offsetParent).map(e => e.closest("button,[role=button],div")?.outerHTML.slice(0,300)).join("\n---\n")));
+await page.locator(".boring-sidebar .boring-mate-name", { hasText: "Overlord" }).first().click(); await page.waitForTimeout(800);
+console.log(JSON.stringify(await state(page)));
+if (shot) await page.screenshot({ path: shot });
+await browser.close();
