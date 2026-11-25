@@ -1098,7 +1098,7 @@ const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
-    description: "Start a worker agent in your lane from a VS profile. Optional stakes (tierA-security | tierA-invariant | normal | mechanical) routes the model + effort by stakes (same as labels.stakes; labels.stakes wins if both). Returns {id, title}.",
+    description: "Start a worker agent in your lane. profile = a role name (Implement, Review, Planner, Pre-check, Art Director, Art Painter; see `vs profiles`). stakes picks the model + effort from the role's tier ladder (tierA-security | tierA-invariant | normal | mechanical; same as labels.stakes, labels.stakes wins if both); pass provider/model only to override. Returns {id, title}.",
     inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },
@@ -1115,12 +1115,12 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Optional profile (a role=lead profile name, e.g. \"Lead - Claude\"; see `vs profiles --role lead`) spawns the successor with that profile's provider/model/mode instead of inheriting the old lead's; unknown or non-lead profiles are refused. action=\"retire\" with force=true retires a LIVE lead too (the Squad's Overlord on another lane, or the owner; logged as a decision). Returns {id, title, oldLeadId}.",
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Optional profile: the role name \"lead\" (the tier ladder picks the model, skipping capped providers) instead of inheriting the old lead's profile; an old lead alias from `vs profiles --role lead` pins its provider/model. Unknown or non-lead profiles are refused. action=\"retire\" with force=true retires a LIVE lead too (the Squad's Overlord on another lane, or the owner; logged as a decision). Returns {id, title, oldLeadId}.",
     inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" }, profile: S }),
     run: handoffLead,
   },
   restart_buddy: {
-    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (a Brainstorm profile name) or provider (claude|gemini). Returns {id, oldBuddyId, lane, team, title, started?}.",
+    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (the role name \"brainstorm\"; the tier ladder picks the model) or provider (claude|gemini) to override. Returns {id, oldBuddyId, lane, team, title, started?}.",
     inputSchema: obj({ lane: S, reason: S, profile: S, provider: S }),
     run: restartBuddy,
   },
