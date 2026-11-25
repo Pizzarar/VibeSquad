@@ -25,6 +25,8 @@
 }
 .sb-title { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; } /* UX R22 M1: pill follows the title, like the topbar breadcrumb */
 .sb-title h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--sb-text); overflow-wrap: anywhere; }
+.sb-back-arrow { line-height: 1; }
+.sb-sep { color: var(--sb-text2); font-weight: 500; }
 .sb-proj { color: var(--sb-text2); font-weight: 500; }
 .sb-eye { font-size: 22px; color: var(--sb-accent-text); display: inline-block; animation: sb-drift 7s ease-in-out infinite alternate; }
 @keyframes sb-drift { from { transform: translateY(-2px) rotate(-6deg); } to { transform: translateY(3px) rotate(8deg); } }
@@ -102,20 +104,28 @@
   .sb-mono, .sb-win, .sb-rel-name, .sb-card-meta, .sb-tag, .sb-legend { font-size: 14px; }
 }
 @media (max-width: 600px) {
-  .sb-tabs { flex-wrap: wrap; }
-  .sb-tab { padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); }
-  .sb-back { order: 0; }
+  .sb-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .sb-tabs::-webkit-scrollbar { display: none; }
+  .sb-tab { flex: 0 0 auto; padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); }
+  .sb-head { flex-wrap: nowrap; gap: 8px; padding: 8px 10px; }
+  .sb-back { order: 0; flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .sb-back-text { display: none; }
   .sb-title { order: 1; flex: 1 1 0; }
-  .sb-head .project-tabs { order: 1; }
+  .sb-head .project-tabs { order: 2; }
   .sb-root .sb-head .project-tabs .boring-switch-pill { min-height: 40px; } /* (0,4,0) beats boring.css min-height 28 */
-  .sb-word { display: none; } /* UX R22 m2: the pill already says Storybook; keep the project name visible */
+  .sb-word, .sb-sep { display: none; } /* UX R22 m2 / R23 m2: the pill already says Storybook; no orphan '·' before the name */
   .sb-title h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
-  .sb-head-right { order: 2; }
-  .sb-head { padding: 8px 10px; }
+  .sb-head-right { order: 3; flex: 0 0 auto; width: auto; flex-wrap: nowrap; margin-left: 0; }
+  .sb-head-right > :not(.sb-needs) { display: none; } /* sha, "checked" note and Refresh stay on desktop; the one-row header keeps Back, title, pill */
+  .sb-head-right:not(:has(.sb-needs)) { display: none; }
+  .sb-head:has(.sb-needs) { flex-wrap: wrap; } /* needs-you present: it gets a slim second row instead of squeezing the title */
+  .sb-head:has(.sb-needs) .sb-head-right { width: 100%; }
+  .sb-head-right .sb-needs { flex: 1 1 auto; min-height: 40px; }
   .sb-body { padding: 10px 10px 40px; }
   .sb-tabs { padding: 8px 10px 0; }
   .sb-notice, .sb-warn { margin-left: 10px; margin-right: 10px; }
-  .sb-head-right { width: 100%; justify-content: space-between; }
+  .sb-graph .mermaid-diagram-container { overflow: auto; -webkit-overflow-scrolling: touch; }
+  .sb-graph .mermaid-diagram-container svg { max-width: none !important; } /* natural size, pan instead of shrink */
 }
 
 /* Entity-kind and finding-category accents (template classes sb-k-<kind>, sb-cat-<category>) and section/check hooks. */

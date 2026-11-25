@@ -474,10 +474,10 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   return (
     <div className="sb-root" data-testid="storybook-view">
       <header className="sb-head">
-        <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={() => onClose()}>← Back</button>
+        <button type="button" className="sb-btn sb-back" data-testid="sb-back" aria-label="Back" onClick={() => onClose()}><span className="sb-back-arrow" aria-hidden="true">←</span><span className="sb-back-text" aria-hidden="true"> Back</span></button>
         <div className="sb-title">
           <span className="sb-eye" aria-hidden="true">◉</span>
-          <h2><span className="sb-word">Storybook </span><span className="sb-proj">· {name}</span></h2>
+          <h2><span className="sb-word">Storybook </span><span className="sb-sep" aria-hidden="true">· </span><span className="sb-proj">{name}</span></h2>
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
