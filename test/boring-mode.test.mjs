@@ -904,6 +904,11 @@ const wk = (id, status = "idle", tone = null, title = id.toUpperCase()) => ({ ag
 test("D2 breadcrumb: Project › Lane › Agent from selection, never the 'Conversation' fallback", () => {
   assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "chat", laneLabel: "UI Lab", agentLabel: "Lead" }), [{ key: "project", label: "VibeSquad" }, { key: "lane", label: "UI Lab" }, { key: "agent", label: "Lead" }]);
   assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: "UI Lab", agentLabel: "Lead" }).map((c) => c.label), ["VibeSquad", "Overview"]);
+  // U1 r2 (UX R33 m1): the Overview page names the sub-tab on screen.
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "overview" }).map((c) => c.label), ["VibeSquad", "Overview"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "inbox" }).map((c) => c.label), ["VibeSquad", "Idea Inbox"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "feed" }).map((c) => c.label), ["VibeSquad", "Standup Feed"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "chat", laneLabel: "UI Lab", agentLabel: "Lead", tab: "inbox" }).map((c) => c.label), ["VibeSquad", "UI Lab", "Lead"], "the tab only names the Overview page");
   assert.deepEqual(boringBreadcrumb({ project: "", mode: "chat", laneLabel: null, agentLabel: null }).map((c) => c.label), ["No project"]);
   assert.ok(!readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8").includes('"Conversation"'));
 });

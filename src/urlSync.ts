@@ -6,10 +6,18 @@
 
 export type UrlWrite = { write: boolean; replace: boolean };
 
+/** U1 r2 (UX R33 M1): two query strings name the same screen when they hold the same key=value pairs, in any order. serializeUrlState
+ * re-appends team/agent/slot/tab after params other code set (?sb=), so a raw string compare saw a reorder as a new screen and pushed. */
+export function sameQuery(a: string, b: string): boolean {
+  if (a === b) return true;
+  const norm = (q: string) => [...new URLSearchParams(q)].map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).sort().join("&");
+  return norm(a) === norm(b);
+}
+
 /** Decide the history write for one run of the URL sync. `next` = URL derived from the screen; `current` = location.search. */
 export function urlSyncDecision(o: { next: string; current: string; popActive: boolean; storybookReplace: () => boolean }): UrlWrite {
   const { next, current } = o;
-  if (next === current) return { write: false, replace: o.popActive };
+  if (sameQuery(next, current)) return { write: false, replace: o.popActive };
   if (o.popActive) {
     o.storybookReplace(); // drain a stale Storybook one-shot so the next user nav can push
     return { write: true, replace: true };

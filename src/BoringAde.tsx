@@ -156,10 +156,12 @@ export function boringLaneTarget(pin: Pick<Pin, "brainstorm" | "lead" | "workers
 
 export type Crumb = { key: "project" | "lane" | "agent"; label: string };
 /** Project › Lane › Agent, derived from what is actually selected (S8: no generic fallback title). */
-export function boringBreadcrumb(o: { project: string; mode: Mode; laneLabel: string | null; agentLabel: string | null }): Crumb[] {
+/** U1 r2 (UX R33 m1): the Overview page names the sub-tab on screen (its pill label, without the count). */
+const TAB_CRUMB: Record<OverviewTab, string> = { overview: "Overview", inbox: "Idea Inbox", feed: "Standup Feed" };
+export function boringBreadcrumb(o: { project: string; mode: Mode; laneLabel: string | null; agentLabel: string | null; tab?: OverviewTab }): Crumb[] {
   const out: Crumb[] = [{ key: "project", label: o.project || "No project" }];
   if (o.mode === "usage") out.push({ key: "lane", label: "Usage & workflows" });
-  else if (o.mode === "project") out.push({ key: "lane", label: "Overview" });
+  else if (o.mode === "project") out.push({ key: "lane", label: TAB_CRUMB[o.tab ?? "overview"] });
   else {
     if (o.laneLabel) out.push({ key: "lane", label: o.laneLabel });
     if (o.agentLabel) out.push({ key: "agent", label: o.agentLabel });
@@ -418,7 +420,11 @@ type Props = {
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners, navGen = 0 }: Props) {
   // U1: a reload / shared link restores the screen its URL names: an empty Desk slot card (?slot=) or an Overview sub-tab (?tab=).
   const [url0] = useState(() => (typeof location === "undefined" ? null : parseUrlState(location.search)));
-  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : url0?.slot ? "chat" : "project"));
+  // U1 r2 (Review-Gemini Major 1/2): the URL's ?slot= / ?tab= name a screen of the URL's team only. Mounting on another view (a cold
+  // ?team=gone fallback, a Ctrl+K switch out of Storybook while the URL still names the old project) adopts nothing; a view that resolves
+  // after mount (registry / roster arrive late) adopts them when it becomes the URL's team (pendingUrl0 below).
+  const urlKeys0 = url0 && url0.team && url0.team === (view?.team.id ?? null) ? url0 : null;
+  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : urlKeys0?.slot ? "chat" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
   useEffect(() => {
@@ -426,7 +432,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     window.addEventListener(OPEN_USAGE_EVENT, open);
     return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
   }, []);
-  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (url0?.slot ? SLOT_LANE[url0.slot] : null));
+  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (urlKeys0?.slot ? SLOT_LANE[urlKeys0.slot] : null));
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
@@ -435,7 +441,18 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [detailsOpen, setDetailsOpen] = useState(false);
   // U1 (idea-895): the sub-tab is tagged with its project, so the commit that switches project already shows (and publishes) the new
   // one's Overview tab: no stray ?team=<new>&tab=<old> entry. Open-in-Inbox and a pop set the tab for their project.
-  const [tabFor, setTabFor] = useState<{ team: string | null; tab: OverviewTab }>(() => ({ team: view?.team.id ?? null, tab: (url0?.tab && TAB_FROM_URL[url0.tab]) || "overview" }));
+  const [tabFor, setTabFor] = useState<{ team: string | null; tab: OverviewTab }>(() => ({ team: view?.team.id ?? null, tab: (urlKeys0?.tab && TAB_FROM_URL[urlKeys0.tab]) || "overview" }));
+  // U1 r2 (Gemini Major 2): the URL's keys while its team's view has not resolved yet. Dropped by the first user input or pop (from
+  // then on the screen follows the user / the popped URL, never a stale cold-load key).
+  const pendingUrl0 = useRef(url0?.team && !urlKeys0 && (url0.slot || url0.tab) ? url0 : null);
+  useEffect(() => {
+    if (!pendingUrl0.current || typeof window === "undefined") return;
+    const drop = () => { pendingUrl0.current = null; off(); };
+    const off = () => { window.removeEventListener("pointerdown", drop, true); window.removeEventListener("keydown", drop, true); };
+    window.addEventListener("pointerdown", drop, true);
+    window.addEventListener("keydown", drop, true);
+    return off;
+  }, []);
   const overviewTab: OverviewTab = tabFor.team === (view?.team.id ?? null) ? tabFor.tab : "overview";
   const setOverviewTab = (tab: OverviewTab, team: string | null = view?.team.id ?? null) => setTabFor({ team, tab });
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
@@ -573,6 +590,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // B1: Back/Forward re-derive mode + selection from the URL, even when the active agent is unchanged (App's openAgent no-ops).
   useEffect(() => {
     if (!navGen || navGen === navGen0.current || typeof location === "undefined") return;
+    pendingUrl0.current = null; // U1 r2: a pop names its own screen
     const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
     if (!land) return;
     if (land.teamId && land.teamId !== view?.team.id) onSelectSquad(land.teamId);
@@ -663,7 +681,22 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // U1: a project switch resets the sub-tab for good (returning by its row shows the Overview tab); `overviewTab` already reads
   // "overview" for the new project in the switching commit, so this only drops the stale state. A pop sets the new project's tab first.
   // Functional: a cross-project pop sets the new project's tab in the navGen effect of this same commit, which must win.
-  useEffect(() => setTabFor((cur) => (cur.team === screenTeam ? cur : { team: screenTeam, tab: "overview" })), [screenTeam]);
+  // U1 r2 (Gemini Major 2): ...unless this is the URL's team resolving after mount: adopt its ?slot= / ?tab= instead (once).
+  useEffect(() => {
+    const p = pendingUrl0.current;
+    if (p && p.team === screenTeam) {
+      pendingUrl0.current = null;
+      if (p.slot) {
+        setSelectedLaneId(SLOT_LANE[p.slot]);
+        setSelectedRole("brainstorm");
+        setSelectedWorkerId(null);
+        setMode("chat");
+      }
+      setTabFor({ team: screenTeam, tab: (p.tab && TAB_FROM_URL[p.tab]) || "overview" });
+      return;
+    }
+    setTabFor((cur) => (cur.team === screenTeam ? cur : { team: screenTeam, tab: "overview" }));
+  }, [screenTeam]);
   useEffect(() => setBoringScreenKeys({ team: screenTeam, slot: urlSlot, tab: urlTab }), [screenTeam, urlSlot, urlTab]);
   useEffect(() => () => setBoringScreenKeys(undefined), []);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
@@ -685,8 +718,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
   // R7-1: a deep link waiting on the roster shows a bare breadcrumb + "Opening agent…", never the default project's Overview.
   const opening = boringDeepLinkPending({ rosterLoaded: !!rosterLoaded, activeAgentId });
-  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: splitEmptyActive ? "Split · pick an agent" : sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
+  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: splitEmptyActive ? "Split · pick an agent" : sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel, tab: overviewTab });
   const onCrumb = (key: Crumb["key"]) => {
+    if (key === "project" && mode === "project") setOverviewTab("overview"); // on a sub-tab, the project crumb is its Overview
     if (key === "project") setMode("project");
     else if (key === "lane" && mode === "chat") {
       if (currentConv && view) openLane(view, currentConv);

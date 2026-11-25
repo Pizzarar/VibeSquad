@@ -52,7 +52,7 @@ import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp, boringAgentLanding } from "./BoringAde";
 import { urlSyncAgent, urlSyncDecision, urlSyncScreen } from "./urlSync";
-import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
+import { StorybookHost, closeStorybook, getStorybookTarget, probeStorybook, storybookBackInFlight, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { isPhoneShell } from "./phoneCockpitLogic";
 import { openPhoneUsage } from "./phoneUsageStore";
@@ -1871,12 +1871,20 @@ export function App() {
   const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
   // Declared BEFORE the URL sync so the close (which strips ?sb= in place) happens first and the sync can replace that same entry.
-  const sbNav = useRef(`${activeTeamId}|${urlAgentId}`);
+  // U1 r2: in Normal the key is the active agent, not urlAgentId: BoringApp's unmount under the takeover clears its shown agent, which
+  // flips urlAgentId to the pane's agent without any navigation (it closed Storybook as soon as it opened over an Overview after a chat).
+  const sbNavAgent = vibe === "boring" ? activeAgentId : urlAgentId;
+  const sbNav = useRef(`${activeTeamId}|${sbNavAgent}`);
   useEffect(() => {
-    const k = `${activeTeamId}|${urlAgentId}`;
+    const k = `${activeTeamId}|${sbNavAgent}`;
     if (sbNav.current !== k) { sbNav.current = k; closeStorybook("replace"); }
-  }, [activeTeamId, urlAgentId]);
+  }, [activeTeamId, sbNavAgent]);
   useEffect(() => {
+    // U1 r2 (UX R33 M1): while the Storybook takeover is open its entry is openStorybook's ({sb} state, which Esc's history.back() relies
+    // on). Nothing App derives can name a new screen then: BoringApp unmounting clears its published agent / screen keys, which is not a
+    // navigation. Any real navigation closes Storybook first (sbNav above, or the palette/sidebar handler), so the live target is null here.
+    // Esc / Close (history.back()) likewise: until its pop lands the URL is still the Storybook entry (storybookBackInFlight).
+    if (getStorybookTarget() || storybookBackInFlight()) return;
     // B2: name the agent BoringApp published THIS commit (its effect ran first), not the render-time value: team + agent land as one push.
     // Only while that agent belongs to the team being written (a notification lands the agent a commit before its team: Gemini M1).
     const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`

@@ -47,8 +47,9 @@ const HISTORY_WRAP = `(() => {
   addEventListener("popstate", () => window.__h.push("POP"));
 })()`;
 
-async function openChat(theme) {
+async function openChat(theme, setup) {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: theme });
+  if (setup) await setup(context); // routes must exist before the first request (e.g. the Storybook HEAD probe)
   await context.addInitScript(HISTORY_WRAP);
   await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({...p,"app.theme":"${theme}"})); }catch{}`);
   const page = await context.newPage();
@@ -665,4 +666,195 @@ test("U1 e2e: ?sb= coexists with ?tab= / ?slot=: Storybook keeps the keys, closi
     assert.deepEqual(errs, [], "no page errors");
     await context.close();
   }
+});
+
+// ── U1 r2 (docs/UX_REVIEW_R33_desk-u1.md M1 + Review-Gemini Major 1/2 + UX m1) ──────────────────────────────────────────────────────
+// Storybook's HEAD probe answers 200 so its topbar button shows; GET stays 404 (the takeover shows its empty state).
+const withStorybook = (context) => context.route("**/api/storybook/**", (r) => (r.request().method() === "HEAD" ? r.fulfill({ status: 200, body: "" }) : r.fulfill({ status: 404, body: "nf" })));
+const crumbOf = (page) => page.evaluate(() => [...document.querySelectorAll(".boring-crumb-seg")].map((e) => (e.querySelector(".boring-crumb-cur, .boring-crumb-btn")?.textContent ?? "").trim()));
+const sortedQ = (u) => [...new URLSearchParams(u)].map((kv) => kv.join("=")).sort().join("&");
+
+// M1: the BoringApp unmount (screen keys cleared) must never write history; a key-order-only difference is the same URL.
+test("U1 r2 e2e (R33 M1): opening Storybook is +1 entry; Esc goes back to the screen before it; Back then leaves Storybook behind", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const tab of ["overview", "inbox"]) {
+    const { context, page, take } = await openChat("dark", withStorybook);
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    // A screen to go Back to first (Standup), then the screen Storybook opens over (Overview or Idea Inbox): each is one push.
+    await page.locator('[data-testid="boring-tab-feed"]').click();
+    await page.waitForTimeout(700);
+    await page.locator(`[data-testid="boring-tab-${tab}"]`).click();
+    await page.waitForTimeout(900);
+    const pre = await screenOf(page);
+    assert.deepEqual(pre, OV("vibesquad", tab), `${tab}: start`);
+    const s0 = await take();
+    await page.getByRole("button", { name: "Storybook" }).first().click();
+    await page.waitForTimeout(1200);
+    const s1 = await take();
+    assert.equal(await page.locator(".boring-sidebar").count(), 0, `${tab}: Storybook takeover shown`);
+    assert.equal(pushes(s1), 1, `${tab}: opening Storybook is one pushState (${JSON.stringify(s1.h)})`);
+    assert.equal(s1.hlen - s0.hlen, 1, `${tab}: opening Storybook is history.length +1`);
+    assert.equal(sortedQ(s1.url), sortedQ(`${pre.url}&sb=vibesquad`), `${tab}: the Storybook URL`);
+    await page.keyboard.press("Escape");
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const s2 = await take();
+    assert.ok(s2.h.includes("back"), `${tab}: Esc is history.back() (${JSON.stringify(s2.h)})`);
+    assert.equal(pushes(s2), 0, `${tab}: Esc writes no entry (${JSON.stringify(s2.h)})`);
+    assert.equal(s2.hlen, s1.hlen, `${tab}: Esc keeps history.length`);
+    assert.deepEqual(await screenOf(page), pre, `${tab}: Esc lands on the screen before Storybook`);
+    await page.goBack();
+    await page.waitForTimeout(900);
+    const s3 = await take();
+    assert.equal(pushes(s3), 0, `${tab}: Back writes no entry (${JSON.stringify(s3.h)})`);
+    assert.equal(await page.locator(".boring-sidebar").count(), 1, `${tab}: Back does not reopen Storybook`);
+    assert.deepEqual(await screenOf(page), OV("vibesquad", "feed"), `${tab}: Back lands on the entry before (Standup)`);
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  }
+});
+
+// Gemini Major 1: ?slot= / ?tab= of the URL BoringApp mounts on belong to that URL's team only.
+test("U1 r2 e2e (Gemini Major 1): a fallback view on cold load never adopts the unknown team's ?tab= / ?slot=", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
+  await context.addInitScript(HISTORY_WRAP);
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+  const page = await context.newPage();
+  for (const q of ["team=gone&tab=inbox", "team=gone&tab=standup", "team=gone&slot=overlord"]) {
+    await page.goto(`${baseUrl}/?demo=&${q}`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const sc = await screenOf(page);
+    assert.deepEqual({ card: sc.card, tab: sc.tab, chat: sc.chat }, { card: null, tab: "overview", chat: false }, `${q}: the fallback project's Overview tab`);
+    assert.doesNotMatch(sc.url, /[?&](tab|slot)=/, `${q}: no stale key in the URL (${sc.url})`);
+  }
+  await context.close();
+});
+
+test("U1 r2 e2e (Gemini Major 1): Storybook over a tab, then a Ctrl+K project switch lands on the new project's Overview tab", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const tab of ["inbox", "feed"]) {
+    const { context, page, take } = await openChat("dark", withStorybook);
+    await page.locator(`[data-testid="boring-tab-${tab}"]`).click();
+    await page.waitForTimeout(900);
+    await page.getByRole("button", { name: "Storybook" }).first().click();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator(".boring-sidebar").count(), 0, "Storybook takeover shown");
+    await take();
+    await page.keyboard.press("Control+k");
+    await page.waitForTimeout(400);
+    await page.keyboard.type("Main Game squad team"); // the team item (hint "squad team"), not "Open Storybook: Main Game Project"
+    await page.waitForTimeout(400);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("efi"), `${tab}: Ctrl+K to Main Game Project shows its Overview tab (no stale tab)`);
+    await context.close();
+  }
+});
+
+// Gemini Major 2: on a real server the URL's team can resolve after BoringApp mounted (registry / roster arrive late); its ?tab= must
+// survive that. /api/teams answers late with an extra project, so the first render shows a fallback view.
+test("U1 r2 e2e (Gemini Major 2): cold load of ?team=<late>&tab=inbox keeps the tab when the team's view resolves after mount", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { readFileSync } = await import("node:fs");
+  const reg = JSON.parse(readFileSync(path.join(REPO_ROOT, "teams.example.json"), "utf8"));
+  const late = { ...reg, teams: [...reg.teams, { id: "late", name: "Late Project", color: "#4a9", paths: ["late"], lanes: [{ id: "late", name: "Late", paths: ["late"] }] }] };
+  for (const [q, want] of [["tab=inbox", "inbox"], ["tab=standup", "feed"]]) {
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
+    await context.addInitScript(HISTORY_WRAP);
+    await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+    let served = 0;
+    await context.route("**/api/teams", async (r) => { if (r.request().method() !== "GET") return r.fulfill({ status: 404, body: "nf" }); served++; await new Promise((res) => setTimeout(res, 1500)); r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(late) }); });
+    const page = await context.newPage();
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.goto(`${baseUrl}/?demo=&team=late&${q}`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(300);
+    const early = await screenOf(page);
+    assert.equal(early.tab, "overview", `${q}: the fallback view (before /api/teams answers) shows its own Overview tab`);
+    await page.locator(".boring-sidebar .boring-project-row", { hasText: "Late Project" }).first().waitFor({ timeout: 10000 });
+    await page.waitForTimeout(1200);
+    assert.ok(served > 0, "the late registry was served");
+    const sc = await screenOf(page);
+    assert.deepEqual({ url: sc.url, card: sc.card, tab: sc.tab, chat: sc.chat }, OV("late", want), `${q}: the late project shows the URL's tab`);
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  }
+});
+
+// Same root, pre-existing since SB5/R5-4: over an Overview reached from a chat (the pane still holds that agent), BoringApp's unmount
+// cleared its shown agent, urlAgentId flipped to the pane's agent, and sbNav closed Storybook the moment it opened (landing in the chat).
+test("U1 r2 e2e (R33 M1): Storybook over an Overview reached from a chat stays open; Esc goes back to that Overview", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark", withStorybook);
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "VibeSquad" }).first().click();
+  await page.waitForTimeout(900);
+  assert.deepEqual(await screenOf(page), OV("vibesquad"), "start: the VibeSquad Overview after the Audit chat");
+  const s0 = await take();
+  await page.getByRole("button", { name: "Storybook" }).first().click();
+  await page.waitForTimeout(1200);
+  const s1 = await take();
+  assert.equal(await page.locator(".boring-sidebar").count(), 0, `Storybook stays open (${JSON.stringify(s1.h)} ${s1.url})`);
+  assert.equal(pushes(s1), 1, `one pushState (${JSON.stringify(s1.h)})`);
+  assert.equal(s1.hlen - s0.hlen, 1, "history.length +1");
+  assert.equal(sortedQ(s1.url), sortedQ("?demo=&team=vibesquad&sb=vibesquad"), "the Storybook URL names no agent");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+  await page.waitForTimeout(900);
+  const s2 = await take();
+  assert.ok(s2.h.includes("back"), `Esc is history.back() (${JSON.stringify(s2.h)})`);
+  assert.equal(pushes(s2), 0, `Esc writes no entry (${JSON.stringify(s2.h)})`);
+  assert.deepEqual(await screenOf(page), OV("vibesquad"), "Esc lands on the Overview, not the pane's chat");
+  await page.goBack();
+  await page.waitForTimeout(900);
+  const s3 = await take();
+  assert.equal(pushes(s3), 0, `Back writes no entry (${JSON.stringify(s3.h)})`);
+  const back = await screenOf(page);
+  assert.equal(back.url, "?demo=&team=vibesquad&agent=demo-aud", "Back lands on the Audit chat entry");
+  assert.equal(back.chat, true);
+  assert.deepEqual(errs, [], "no page errors");
+  await context.close();
+});
+
+// UX m1: the breadcrumb names the sub-tab on screen (SPEC R2 #4: breadcrumb derived from what's on screen).
+test("U1 r2 e2e (R33 m1): the breadcrumb names the Idea Inbox / Standup Feed tab, Overview otherwise", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page } = await openChat("dark");
+  assert.deepEqual(await crumbOf(page), ["VibeSquad", "Overview"]);
+  await page.locator('[data-testid="boring-tab-inbox"]').click();
+  await page.waitForTimeout(500);
+  assert.deepEqual(await crumbOf(page), ["VibeSquad", "Idea Inbox"]);
+  await page.locator('[data-testid="boring-tab-feed"]').click();
+  await page.waitForTimeout(500);
+  assert.deepEqual(await crumbOf(page), ["VibeSquad", "Standup Feed"]);
+  await page.locator('[data-testid="boring-crumb-project"]').click(); // the project crumb is the Overview
+  await page.waitForTimeout(500);
+  assert.deepEqual(await crumbOf(page), ["VibeSquad", "Overview"]);
+  assert.deepEqual(await screenOf(page), OV("vibesquad"));
+  await context.close();
+});
+
+// U1 r2 unit (R33 M1): the real urlSyncDecision: a key-order-only difference is the same URL (no write), any value change still writes.
+test("U1 r2: urlSyncDecision treats a reordered query as the same URL (Storybook ?sb= before team) and still writes real changes", async () => {
+  const { transformSync } = await import("rolldown/utils");
+  const { readFileSync } = await import("node:fs");
+  const code = transformSync("u.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code;
+  const { urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+  const D = (next, current, popActive = false) => urlSyncDecision({ next, current, popActive, storybookReplace: () => false });
+  assert.deepEqual(D("?demo=&sb=vibesquad&team=vibesquad", "?demo=&team=vibesquad&sb=vibesquad"), { write: false, replace: false }, "Storybook open: the sync's reorder is not a navigation");
+  assert.deepEqual(D("?demo=&sb=vibesquad&team=vibesquad&tab=inbox", "?demo=&team=vibesquad&tab=inbox&sb=vibesquad"), { write: false, replace: false });
+  assert.deepEqual(D("?team=a&agent=b", "?agent=b&team=a", true), { write: false, replace: true }, "pop: same URL, still no write");
+  assert.deepEqual(D("?demo=&team=efi&sb=vibesquad", "?demo=&team=vibesquad&sb=vibesquad"), { write: true, replace: false }, "a value change pushes");
+  assert.deepEqual(D("?team=a&tab=inbox", "?team=a"), { write: true, replace: false }, "an added key pushes");
+  assert.deepEqual(D("?team=a", "?team=a&tab=inbox"), { write: true, replace: false }, "a dropped key pushes");
+  assert.deepEqual(D("?team=a&x=1&x=2", "?team=a&x=2&x=1"), { write: false, replace: false }, "repeated keys compare as a multiset");
+  assert.deepEqual(D("", ""), { write: false, replace: false });
 });
