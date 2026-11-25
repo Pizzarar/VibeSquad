@@ -27,6 +27,7 @@ import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLast
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
+import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type PickerHandlers } from "./BoringPanePicker";
 import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
@@ -700,6 +701,14 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const desk = emptyKind === "overlord" || emptyKind === "riffbot";
     return { need: desk ? "a running Overlord or RiffBot" : "a running Lead or Brainstorm", label: spec.cta, disabled: spec.disabled, run: () => void spec.run() };
   };
+  // B17: open handlers for the split picker + the empty card's quick-jumps (data builders live in BoringPanePicker.tsx).
+  const pickerHandlers: PickerHandlers = {
+    glyphCls,
+    openAgent: (id) => view && openAgentIn(view, id),
+    openCore: (laneId, id) => pickCore(laneId, id),
+    openBugs: () => pickBugs(),
+    openRole: (laneId, role) => { const c = conversations.find((x) => x.laneId === laneId); if (c && view) pickRoleIn(view, c.pin, laneId, role); },
+  };
   const emptyCard = () => {
     const startKey = startKeyFor(currentPin);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
@@ -713,6 +722,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         {emptyKind === "brainstorm" && startFor?.error && (
           <p className="boring-empty-error" role="alert" data-testid="boring-start-error">Could not start Brainstorm: {startFor.error}</p>
         )}
+        <BoringEmptyJumps {...buildQuickJumps(model, selectedLaneId, pickerHandlers)} />
       </div>
     );
   };
@@ -738,9 +748,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <p>Click an agent in the sidebar or Needs you to open it here.</p>
-            <p className="boring-split-hint">Shift+click always opens on the right.</p>
-            <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={() => toggleSplit()}>Close split</button>
+            <BoringPanePicker data={buildPickerData(model, pickerHandlers)}>
+              <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={() => toggleSplit()}>Close split</button>
+            </BoringPanePicker>
+            <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>
           </div>
         )}
       </div>
