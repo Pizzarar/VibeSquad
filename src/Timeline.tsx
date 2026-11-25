@@ -37,6 +37,7 @@ import { LooksDoneCard } from "./PinDone";
 import { DecisionCard } from "./DecisionCard";
 import { decisionCardId, parseDecision } from "./decisionLogic";
 import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, sendToLegacyId, spinOffCardId } from "./pins";
+import { etClock } from "./etTime";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -1603,7 +1604,7 @@ export function Timeline({
               {prompts.length === 0 && <div className="tl-bar-msg">No prompts</div>}
               {prompts.map((p) => (
                 <button key={p.seq} className="tl-prompt-row" onClick={() => { jumpToSeq(p.seq); setPromptsOpen(false); }}>
-                  <span className="tl-prompt-ts">{p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : `#${p.seq}`}</span> {p.preview}
+                  <span className="tl-prompt-ts">{p.timestamp ? etClock(p.timestamp) : `#${p.seq}`}</span> {p.preview}
                 </button>
               ))}
             </div>

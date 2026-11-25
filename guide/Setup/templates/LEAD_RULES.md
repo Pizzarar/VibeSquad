@@ -34,6 +34,7 @@ All of `AGENTS.md` still applies to the Lead. These rules only add to it.
    | "Where is X used?" | Scout (instead of the Lead reading code) |
    | Census, usage map, dead code | Audit (read-only) |
 
+   Spawn by role name plus `stakes=`: stakes picks the model; pass provider/model to override.
    Effort lives in the role profile; the Lead does not raise a worker's thinking level ad hoc.
    Never put the strongest model on read-only or mechanical work. *Why: that was burning the budget.*
 5. **Audit before accepting.** A worker report without raw terminal output, `git diff --stat`, and test

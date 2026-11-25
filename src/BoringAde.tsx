@@ -6,7 +6,7 @@ import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
 import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
-import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, teamCtxItems } from "./CommandPalette";
+import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, parseUrlState, teamCtxItems } from "./CommandPalette";
 import { RemoveTeamDialog } from "./PinRemove";
 import { captureFocusReturn } from "./ctxMenuLogic";
 import { demoLog } from "./demo";
@@ -106,6 +106,22 @@ export function boringAgentLanding(views: TeamView[], agentId: string | null | u
     if (sel) return { view: v, sel, mode: "chat" };
   }
   return known(agentId) ? { view: null, sel: null, mode: "chat" } : null;
+}
+
+/** B1: what a URL (after Back/Forward) should show in Normal mode — an agent's chat, or a project's Overview. null = no URL routing to apply. */
+export function boringLandingFromUrl(
+  views: TeamView[],
+  search: string,
+  known: (id: string) => boolean = () => true,
+): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "project"; teamId: string | null } | null {
+  const { team, agent } = parseUrlState(search);
+  if (agent) {
+    const land = boringAgentLanding(views, agent, known);
+    if (!land) return null;
+    return { mode: "chat", teamId: land.view?.team.id ?? team, view: land.view, sel: land.sel, agentId: agent };
+  }
+  if (team) return { mode: "project", teamId: team };
+  return null;
 }
 
 export { boringLaneLabel };
@@ -388,10 +404,12 @@ type Props = {
   children?: ReactNode;
   /** Top-level health/update banners, rendered above the topbar. */
   banners?: ReactNode;
+  /** App's URL routing generation: bumps on popstate so BoringAde re-derives mode + selection from the URL (B1). */
+  navGen?: number;
 };
 
 
-export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
+export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners, navGen = 0 }: Props) {
   const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
@@ -539,6 +557,29 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
+  const navGen0 = useRef(navGen); // B1: a remount starts with the current navGen; only a pop after mount re-lands
+  // B1: Back/Forward re-derive mode + selection from the URL, even when the active agent is unchanged (App's openAgent no-ops).
+  useEffect(() => {
+    if (!navGen || navGen === navGen0.current || typeof location === "undefined") return;
+    const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
+    if (!land) return;
+    if (land.teamId && land.teamId !== view?.team.id) onSelectSquad(land.teamId);
+    if (land.mode === "chat") {
+      if (land.sel) {
+        setSelectedLaneId(land.sel.laneId);
+        if (land.sel.role === "worker") setSelectedWorkerId(land.agentId);
+        else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
+        if (land.view) revealAgent(land.view, land.sel, land.agentId);
+      } else {
+        // A known-but-unpinned agent has no sidebar row: clear the stale lane/worker so the chat target falls back to the URL agent.
+        setSelectedLaneId(null);
+        setSelectedWorkerId(null);
+      }
+      setMode("chat");
+    } else {
+      setMode("project");
+    }
+  }, [navGen]);
   // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
   useEffect(() => {
     if (typeof window === "undefined") return;

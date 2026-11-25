@@ -4100,8 +4100,8 @@ html, body, #root { overflow-x: hidden; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
 .squad-home-tile.needs-you { border-color: var(--hot-pink); }
 .squad-home-tile.pin-plus { align-items: center; justify-content: center; min-height: 120px; }
-.squad-home-tile-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
-.squad-home-tile-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.squad-home-tile-head { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.squad-home-tile-name { flex: 1 0 auto; max-width: 100%; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .squad-home-huddle { display: flex; align-items: center; padding-left: 10px; min-height: 42px; }
 .squad-home-portrait { position: relative; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
 .squad-home-portrait:not(:first-child) { margin-left: -10px; }
@@ -5898,6 +5898,10 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .card, .idea-inbox, .team-head, .pin-tile, .handoff-panel, .pin-rail-active-buddy { background-clip: padding-box; background-origin: padding-box; }
 .sidebar-footer-row { padding-bottom: calc(var(--u3-px) * 3); flex-shrink: 0; }
 .sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
+/* The fixed bottom-left "Normal mode" chip (psycho focus/pin-focus) floats over the sidebar footer. It is a slim 10px chip tucked into the corner and the footer reserves its 18px so its buttons stay clickable; a taller reserve scrolled the pin rows out of reach at 720px (idea-734). In the 56px collapsed rail it stacks its words to fit inside the rail instead of covering the composer's left controls at 1280. */
+.app.focus .sidebar-footer-row, .app.pin-focus .sidebar-footer-row { margin-bottom: 18px; }
+[data-testid="psycho-focus-normal-btn"] { bottom: 3px; left: 6px; padding: 1px 6px; font-size: 10px; line-height: 1.2; min-height: 0; }
+.app.sidebar-collapsed [data-testid="psycho-focus-normal-btn"] { max-width: 44px; padding: 1px 3px; font-size: 9px; line-height: 1.1; white-space: normal; text-align: center; }
 .team-head .team-emblem { flex-shrink: 0; }
 /* ── Narrow-window rails (src/railCollapse.ts): under 1600 css px the sidebar (.sidebar-collapsed, existing 56px rail) and the right pin rail
    (.pin-rail-collapsed, 64px icon strip; it replaces the old max-width:900px forced strip) start collapsed so the hub floor gets the width. The toggle in each expands it for the session. ── */
@@ -6117,11 +6121,15 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .sidebar:not(.collapsed) .brand { flex-wrap: wrap; gap: var(--sp-1); }
 .sidebar:not(.collapsed) .brand .sidebar-collapse-btn { margin-left: auto; }
 .sidebar .pin-row { gap: var(--sp-1); }
+/* idea-734: trim right padding so short lane names ("Bug Chaser") are not ellipsized next to the @handle + badges. */
+.sidebar .pin-row { padding-right: 4px; }
 /* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
 .top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
 .top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: min(max-content, 12ch); } /* short lane names (BRAINSTORM) never ellipsize; long ones still do */
+/* In the pin-focus bar the crumb keeps its natural width (the flexible slot absorbs the squeeze); shrinking it let its segments overflow under the @handle (hit-mismatch). */
+.pin-focus-bar .top-breadcrumb { flex: none; }
 /* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
 .pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
 /* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
@@ -6444,10 +6452,11 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping. */
+  gap: 3px;
+  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping.
+     idea-734: tighter gap/padding so "Overlord" + its needs-you badge is not ellipsized at 390px. */
   min-width: 0;
-  padding: 0 4px;
+  padding: 0 2px;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -6627,6 +6636,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-open:hover .boring-needs-who { text-decoration: underline; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-main { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; } /* unstyled it kept its min-content width and pushed the age chip 35px past the button (idea-734) */
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
 :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

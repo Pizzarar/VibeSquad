@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { effectiveBindings, parseOverrides, serializeOverrides, type Bindings, type KeyOverrides } from "./keymap.ts";
 import { parseThemePref, parseVibePref, resolveTheme, type ThemePref, type VibePref } from "./theme.ts";
+import { etClock, etDate, etDateTime } from "./etTime.ts";
 
 // App-level preferences, per device. One typed registry (PREF_DEFS) drives the store, the Settings home,
 // search, the command palette, reset and import/export. Stored as one JSON blob under vs.prefs.v1.
@@ -160,7 +161,7 @@ export const PREF_DEFS: PrefDef[] = [
   { key: "notify.finished", section: "notifications", label: "Alert when an agent finishes", kind: "bool" },
   { key: "notify.errored", section: "notifications", label: "Alert when an agent errors", kind: "bool" },
   { key: "notify.push", section: "notifications", label: "Push notifications (lock screen / desktop)", kind: "bool", readonly: true, legacy: { key: "vs.push.enabled", read: bool01, write: (v) => (v ? "1" : "0") } },
-  { key: "newAgent.profile", section: "newAgent", label: "Default profile", hint: "Preselected in New Agent. Empty = built-in default.", kind: "text" },
+  { key: "newAgent.profile", section: "newAgent", label: "Default role", hint: "Preselected in New Agent. Empty = built-in default.", keywords: ["profile"], kind: "text" },
   { key: "newAgent.folder", section: "newAgent", label: "Default folder", hint: "Prefills the New Agent folder. Empty = the team's first folder.", kind: "text" },
   { key: "layout.rightDockOpen", section: "layout", label: "Right dock open", kind: "bool", hidden: true, legacy: { key: "vs.right-dock.open", read: boolTF, write: (v) => String(!!v) } },
   { key: "layout.rightDockTab", section: "layout", label: "Right dock tab", kind: "text", hidden: true, legacy: { key: "vs.right-dock.tab", read: (r) => r || undefined, write: String } },
@@ -598,10 +599,8 @@ export function formatTimestamp(iso: string | null | undefined, fmt: TimestampFo
   if (!Number.isFinite(t)) return "";
   const s = Math.max(0, Math.round((now - t) / 1000));
   const rel = s < 45 ? "just now" : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
-  const d = new Date(t);
-  const sameDay = new Date(now).toDateString() === d.toDateString();
-  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  const abs = sameDay ? hm : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+  const sameDay = etDate(now) === etDate(t);
+  const abs = sameDay ? etClock(t) : etDateTime(t); // R15: owner-facing stamps are US Eastern, labelled ET
   return fmt === "relative" ? rel : fmt === "absolute" ? abs : `${abs} · ${rel}`;
 }
 

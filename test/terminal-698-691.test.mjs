@@ -14,10 +14,14 @@ test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subs
     const t = await m.create({ cwd: "/tmp" });
     let got = 0;
     m.subscribe(t.id, { onData: (d) => { got += d.length; }, onExit: () => {} });
-    m.input(t.id, "yes 'long apt-like output line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -c 30000000; echo FLOOD_DONE\r");
+    m.input(t.id, "yes 'long apt-like output line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -c 30000000; echo FLOOD_$((40+2))\r");
     const end = Date.now() + 30000;
-    while (Date.now() < end && !m.output(t.id).includes("FLOOD_DONE")) await sleep(100);
-    assert.ok(m.output(t.id).includes("FLOOD_DONE"));
+    // idea-927: the pty echoes the typed command line, so a literal marker matches the echo at once, long before the
+    // flood ends. FLOOD_42 only exists once the shell has expanded it, i.e. after head finished.
+    while (Date.now() < end && !m.output(t.id).includes("FLOOD_42")) await sleep(100);
+    assert.ok(m.output(t.id).includes("FLOOD_42"));
+    // The marker can reach the ring before the last flood chunks reach this subscriber's onData: wait for the count.
+    while (Date.now() < end && got < 30_000_000) await sleep(20);
     assert.ok(got >= 30_000_000);
     assert.equal(m.get(t.id).exited, null);
     assert.ok(m.output(t.id).length <= 200_000);

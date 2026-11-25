@@ -1007,7 +1007,9 @@ export type BurstBucket = {
   key: string; label: string; units: number; insufficient: boolean;
   firstTryPassRate: number | null; avgReviewRounds: number | null; fixAfterMergeRate: number | null; costPerUnit: number | null;
 };
-export type BurstCohorts = { buckets: BurstBucket[]; unjoined: number; minN: number };
+/** usa-59: cross-split row (stakes label or lane) x the same three burst buckets. */
+export type BurstSplitRow = { key: string; units: number; buckets: BurstBucket[] };
+export type BurstCohorts = { buckets: BurstBucket[]; unjoined: number; minN: number; byStakes?: BurstSplitRow[]; byLane?: BurstSplitRow[] };
 
 /** Burst cell text: `n<5` for an insufficient bucket, `—` for a missing metric, else the formatted value. */
 export function burstCellText(b: Pick<BurstBucket, "insufficient">, v: number | null | undefined, fmt: (n: number) => string, minN = 5): string {

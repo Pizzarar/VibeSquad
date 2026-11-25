@@ -1,4 +1,5 @@
 // Block B4: spawning one half of the Art Painter + Art Director duet starts the other, linked by id.
+import './setup/hermetic.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callTool } from '../server/mcp/tools.mjs';

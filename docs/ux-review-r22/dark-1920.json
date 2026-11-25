@@ -1,0 +1,210 @@
+[
+ {
+  "name": "start",
+  "file": "dark-1920-01-start.png",
+  "url": "?demo=&team=vibesquad",
+  "screen": "ov:VibeSquad›Overview",
+  "on": [
+   "boring-project-row:VibeSquad"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 2,
+  "hist": ""
+ },
+ {
+  "name": "chat",
+  "file": "dark-1920-02-chat.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 3,
+  "hist": "pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f1-inbox",
+  "file": "dark-1920-03-f1-inbox.png",
+  "url": "?demo=&team=vibesquad",
+  "screen": "ov:VibeSquad›Overview",
+  "on": [
+   "boring-project-row:VibeSquad"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 3,
+  "hist": "replaceState ?demo=&team=vibesquad"
+ },
+ {
+  "name": "f1-back",
+  "file": "dark-1920-04-f1-back.png",
+  "url": "?demo=&team=vibesquad",
+  "screen": "ov:VibeSquad›Overview",
+  "on": [
+   "boring-project-row:VibeSquad"
+  ],
+  "ok": false,
+  "inv": true,
+  "hlen": 3,
+  "hist": "POP ?demo=&team=vibesquad"
+ },
+ {
+  "name": "f1-fwd",
+  "file": "dark-1920-05-f1-fwd.png",
+  "url": "?demo=&team=vibesquad",
+  "screen": "ov:VibeSquad›Overview",
+  "on": [
+   "boring-project-row:VibeSquad"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 3,
+  "hist": "POP ?demo=&team=vibesquad"
+ },
+ {
+  "name": "chat2",
+  "file": "dark-1920-06-chat2.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 4,
+  "hist": "pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f3-proj",
+  "file": "dark-1920-07-f3-proj.png",
+  "url": "?demo=&team=efi",
+  "screen": "ov:Main Game Project›Overview",
+  "on": [
+   "boring-project-row:Main Game Project"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 6,
+  "hist": "pushState ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=efi"
+ },
+ {
+  "name": "f3-back",
+  "file": "dark-1920-08-f3-back.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 7,
+  "hist": "POP ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=vibesquad | pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f3-fwd",
+  "file": "dark-1920-09-f3-fwd.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": false,
+  "inv": true,
+  "hlen": 7,
+  "hist": ""
+ },
+ {
+  "name": "chat3",
+  "file": "dark-1920-10-chat3.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 7,
+  "hist": ""
+ },
+ {
+  "name": "f2-pick",
+  "file": "dark-1920-11-f2-pick.png",
+  "url": "?demo=&team=efi&agent=demo-lead-ui",
+  "screen": "chat:Main Game Project›UI Lab›Lead",
+  "on": [
+   "boring-worker-row:Lead3m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 9,
+  "hist": "pushState ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=efi&agent=demo-lead-ui"
+ },
+ {
+  "name": "f2-back",
+  "file": "dark-1920-12-f2-back.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": true,
+  "inv": true,
+  "hlen": 9,
+  "hist": "POP ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f2-fwd",
+  "file": "dark-1920-13-f2-fwd.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": false,
+  "inv": true,
+  "hlen": 9,
+  "hist": ""
+ },
+ {
+  "name": "f2-back2",
+  "file": "dark-1920-14-f2-back2.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": null,
+  "inv": true,
+  "hlen": 9,
+  "hist": "POP ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f2-back3",
+  "file": "dark-1920-15-f2-back3.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": null,
+  "inv": true,
+  "hlen": 9,
+  "hist": "POP ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=vibesquad&agent=demo-aud"
+ },
+ {
+  "name": "f2-back4",
+  "file": "dark-1920-16-f2-back4.png",
+  "url": "?demo=&team=vibesquad&agent=demo-aud",
+  "screen": "chat:VibeSquad›Desk›Worker",
+  "on": [
+   "boring-worker-row:Audit - token scout5m ago"
+  ],
+  "ok": null,
+  "inv": true,
+  "hlen": 9,
+  "hist": "POP ?demo=&team=efi&agent=demo-aud | pushState ?demo=&team=vibesquad&agent=demo-aud"
+ }
+]

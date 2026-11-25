@@ -122,7 +122,7 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? []; export const useFocusedInboxCard = () => globalThis.__focusedInboxCard ?? null;`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
-stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
+stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); }; export const parseUrlState = (search) => { const p = new URLSearchParams(search); return { team: p.get("team") || null, agent: p.get("agent") || null }; };`);
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);
@@ -2273,6 +2273,7 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
     .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
     .replace(/from "\.\/boringBusts"/, 'from "./b13dBusts.mjs"')
     .replace(/import \{ useTheme \} from "\.\/useBotFace";/, 'const useTheme = () => "dark";')
+    .replace(/import \{ etClock \} from "\.\/etTime";/, "const etClock = () => \"\";")
     .replace(/^import type .*$/gm, "");
   const f = join(dir, "b13dWorkingNow.mjs");
   writeFileSync(f, `import React from ${JSON.stringify(reactUrl)};\n` + code);
