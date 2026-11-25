@@ -348,6 +348,16 @@ test('status / get_agent_status surface the queue position for a queued agent (i
   assert.deepEqual(st.queued, { ahead: 3 }, 'the Paseo-name alias carries it too');
 });
 
+test('status / get_agent_status read "archived" for an archived agent, never its parked "idle" (idea-783: status and send agree)', async () => {
+  let archivedAt = '2026-11-24T10:48:39.000Z';
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgent: async (id) => ({ agent: { id, status: 'idle', title: 'Art Director', archivedAt } }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1' })).status, 'archived', 'send answers "not running" for it: status must not say idle');
+  assert.equal((await callTool(ctx, 'get_agent_status', { agentId: 'rn-1' })).status, 'archived');
+  archivedAt = null; // a parked (unarchived) agent: send resumes it, so idle is the truth
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1' })).status, 'idle');
+});
+
 test('report writes as the caller; types are restricted', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'blocker', text: 'stuck' });

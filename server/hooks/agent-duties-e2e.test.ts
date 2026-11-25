@@ -1395,6 +1395,125 @@ test(
 );
 
 // ---------------------------------------------------------------------------
+// idea-783 — an Art Director is not auto-closed while its Painter is live
+// ---------------------------------------------------------------------------
+
+test(
+  "idea-783: a digest done on the Art Director never archives it while its Painter is live (grace and turn_ended paths, repeated cycles); it closes once the Painter is gone",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const job = "CB4 · 18 enemy sprites · paint";
+    const mk = (id: string, profile: string, extra: any = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile, job, "vs.parent": "lead-1", ...extra },
+    });
+    const director = mk("dir-1", "Art Director - Gemini");
+    const painter = mk("pnt-1", "Art Painter - Opus");
+    const otherJobPainter = mk("pnt-x", "Art Painter - Opus", { job: "another job" });
+    const agents = new Map<string, any>([["dir-1", director], ["pnt-1", painter], ["pnt-x", otherJobPainter]]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const digestDone = (text: string) => {
+        writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), agent: "digest-9", lane: "vibesquad", type: "done", text, refs: ["dir-1"] }) + "\n", { encoding: "utf8", flag: "a" });
+        h.scanLogs(false);
+      };
+      await h.onTurnEnded(painter); // hands the plugin its paseo handle
+      // The incident shape (rn-2ba8d3ca86fc): the digest's done lands after the Director's turn ended, the 3 s grace closes it.
+      digestDone("UNVERIFIED (digest logged nothing): Starting git state:");
+      await wait(3300);
+      assert.deepEqual(h.archivedIds, [], "grace path: the Director of a live Painter stays");
+      // Review rounds: each Director turn (parked in between: status idle) ends and gets another digest verdict.
+      for (const verdict of ["PASS: batch 1/6", "FAIL: batch 2/6 shift_marshal", "PASS: batch 3/6"]) {
+        await h.onTurnStarted(director);
+        digestDone(verdict);
+        await h.onTurnEnded(director);
+        assert.deepEqual(h.archivedIds, [], `turn_ended path (${verdict}): the Director of a live Painter stays`);
+      }
+      assert.equal(director.labels["vs.auto-archived"], undefined, "no auto-archive marker either");
+      assert.equal(director.archivedAt, undefined);
+
+      // The Painter is done (archived): the Director is an ordinary finished worker again and closes on its next done.
+      painter.archivedAt = new Date().toISOString();
+      digestDone("PASS: final round");
+      await h.onTurnEnded(director);
+      assert.deepEqual(h.archivedIds, ["dir-1"], "no live Painter (another job's Painter does not count): closed as before");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "idea-783: a closed Painter frees its Director, an unreadable roster keeps it, and a Painter's own done still closes the Painter",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, profile: string, status = "idle") => ({
+      id, title: id, cwd: CWD, status, provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile, job: "J" },
+    });
+    const director = mk("dir-2", "Art Director");
+    const painter = mk("pnt-2", "Art Painter");
+    const agents = new Map<string, any>([["dir-2", director], ["pnt-2", painter]]);
+    const h = harness(agents, { briefRoot });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const done = (id: string) => {
+        writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), agent: "digest-9", lane: "vibesquad", type: "done", text: "PASS", refs: [id] }) + "\n", { encoding: "utf8", flag: "a" });
+        h.scanLogs(false);
+      };
+      // Roster unreadable: never close on a guess.
+      const list = h.paseo.agents.list;
+      h.paseo.agents.list = async () => { throw new Error("runner hiccup"); };
+      done("dir-2");
+      await h.onTurnEnded(director);
+      assert.deepEqual(h.archivedIds, [], "list failed: the Director is kept");
+      h.paseo.agents.list = list;
+      // The Painter (the loop's driver) is never held by its Director: its own done closes it as before.
+      done("pnt-2");
+      await h.onTurnEnded(painter);
+      assert.deepEqual(h.archivedIds, ["pnt-2"], "the Painter closes on its own done");
+      // A closed (exited/lost) Painter is not live either.
+      painter.archivedAt = undefined;
+      painter.status = "closed";
+      done("dir-2");
+      await h.onTurnEnded(director);
+      assert.deepEqual(h.archivedIds, ["pnt-2", "dir-2"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "idea-783: the done sweep keeps an Art Director whose Painter is live (kept.duet-partner) and archives it once the Painter is gone",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, profile: string) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile, job: "J" },
+    });
+    const director = mk("dir-3", "Art Director - Gemini");
+    const painter = mk("pnt-3", "Art Painter - Opus");
+    const agents = new Map<string, any>([["dir-3", director], ["pnt-3", painter]]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "unit-ok", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const old = new Date(now - 45 * 60_000).toISOString();
+      await h.onTurnEnded(painter); // hands the plugin its paseo handle (no done for the Painter: nothing closes)
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), JSON.stringify({ ts: old, agent: "dir-3", lane: "vibesquad", type: "done", text: "PASS: all bands", refs: [] }) + "\n", "utf8");
+      const dry = await h.sweepDoneWorkersReport({ now });
+      assert.deepEqual(dry.kept["duet-partner"].map((i: any) => i.id), ["dir-3"]);
+      assert.deepEqual(await h.sweepDoneWorkers(now), [], "live Painter: the Director is kept");
+      painter.archivedAt = new Date().toISOString();
+      assert.deepEqual(await h.sweepDoneWorkers(now), ["dir-3"], "Painter archived: the Director is swept as before");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // B1 review R1 — default to keep
 // ---------------------------------------------------------------------------
 

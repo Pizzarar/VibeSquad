@@ -45,6 +45,7 @@ import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
+import { isDuetDirector, liveDuetPainterOf } from "../art-duet.mjs";
 import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
@@ -3722,6 +3723,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (status === "running" || status === "initializing") return;
       if (((fresh as any).pendingPermissions?.length ?? 0) > 0 || (fresh as any).requiresAttention) return;
       doneReported.delete(agentId);
+      // idea-783: an Art Director's every turn gets a digest `done`, but it is mid-duet while its Painter is live. Archived, it
+      // left `vs who` and its Painter's next send failed "not running" (a worker may not unarchive a peer it did not spawn).
+      // It stays parked instead; the Painter's send resumes it. Unknown (list failed) keeps it too: never close on a guess.
+      if (isDuetDirector(fresh.labels)) {
+        const painter = await liveDuetPainter(paseo, fresh);
+        if (painter !== null) {
+          log(`worker auto-close skipped: ${agentId} is the Art Director of live Painter ${painter || "(roster unreadable)"}`);
+          return;
+        }
+      }
       // Marker: only an auto-archived worker is revived by a later send (never a retired lead/Buddy) and is not a "retired holder".
       await deps.setLabels(agentId, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((e: unknown) => log(`auto-archive marker failed for ${agentId}: ${e}`));
       let archived = false;
@@ -3738,6 +3749,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!opts.turnEnded) inflightDigests.delete(agentId);
       }
       log(`worker auto-closed after done report: ${agentId}`);
+    }
+
+    /** idea-783: the live Painter id an Art Director serves, null when none, "" when the roster could not be read. */
+    async function liveDuetPainter(paseo: Paseo, director: AgentSnap): Promise<string | null> {
+      try {
+        const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        return liveDuetPainterOf(director, (res.entries as any[]).map((e) => e?.agent).filter(Boolean));
+      } catch {
+        return "";
+      }
     }
 
     function noteWorkerDone(entry: LogEntry) {
@@ -4729,12 +4750,12 @@ ${detail}` : text, refs: [d.setId] };
     /**
      * B1 (lean boot): archive finished WORKERS that the immediate close missed or that waited out their grace. Same archive
      * path as `vs archive` / closeFinishedWorker (deps.archiveAgent + the auto-archived marker, so a later send revives).
-     * Skips leads, Buddies, Overlord, digests (role must be worker), running/permission-blocked workers, a last report that says
+     * Skips leads, Buddies, Overlord, digests (role must be worker), an Art Director whose Painter is live (idea-783), running/permission-blocked workers, a last report that says
      * FAIL, and workers whose unit branch is not merged yet (fix rounds go to them). Returns the archived ids.
      * B3: `sweepDoneWorkersReport` is the same predicate with `apply: false` (dry run: no marker, no archive) and a per-Squad/lane
      * breakdown of what it would archive and why the rest is kept; `apply: true` archives through the identical path.
      */
-    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad";
+    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad" | "duet-partner";
     interface SweepItem { id: string; team: string; lane: string }
     interface SweepReport {
       dryRun: boolean;
@@ -4758,7 +4779,7 @@ ${detail}` : text, refs: [d.setId] };
         archive: [],
         count: 0,
         byLane: {},
-        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [] },
+        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [], "duet-partner": [] },
       };
       const paseo = paseoApi;
       if (!paseo) return report;
@@ -4793,6 +4814,10 @@ ${detail}` : text, refs: [d.setId] };
           const keep = (reason: SweepKeepReason) => void report.kept[reason].push(item);
           if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) {
             keep("not-worker");
+            continue;
+          }
+          if (liveDuetPainterOf(a, (res.entries as any[]).map((x) => x?.agent).filter(Boolean))) {
+            keep("duet-partner"); // idea-783: an Art Director stays while its Painter is live (same rule as closeFinishedWorker)
             continue;
           }
           if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) {

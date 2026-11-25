@@ -20,6 +20,7 @@ import { claimHoldNotice, holdText, laneSpawnHold, releaseHoldNotice, spawnStrea
 import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 import { lookupRole } from "../role-route.mjs";
 import { routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
+import { ART_DUET, ART_PAINTERS } from "../art-duet.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -353,7 +354,9 @@ async function snapshot(ctx, id, { full = false } = {}) {
     // A queued agent reads "initializing" (STATUS map, runner-backend.mjs) but is not stuck — it is waiting its turn. Surface
     // the queue position (same convention as `vs who` / the pin UI) so `vs status` / get_agent_status can say "queued(N ahead)"
     // instead of a bare "initializing" for a slow provider (agy) that sits in the queue for a while.
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE), ...(agent?.queued ? { queued: { ahead: agent.queued.ahead } } : {}) };
+    // idea-783: an archived agent reads "archived", never its last log status (a parked one read "idle" while send answered
+    // "not running"): status and send must agree. The runner refuses to resume an archived agent until it is unarchived.
+    return { id, status: agent?.archivedAt ? "archived" : agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE), ...(agent?.queued ? { queued: { ahead: agent.queued.ahead } } : {}) };
   });
 }
 
@@ -629,14 +632,7 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
 }
 
 // Art duet: spawning one half of Painter + Director starts the other (same job) unless that job already has a live partner.
-// Old names pair with old names; P5c role names ("Art Painter" / "Art Director") pair with role names.
-const ART_DUET = {
-  "Art Painter - Opus": "Art Director - Gemini",
-  "Art Director - Gemini": "Art Painter - Opus",
-  "Art Painter": "Art Director",
-  "Art Director": "Art Painter",
-};
-const ART_PAINTERS = new Set(["Art Painter - Opus", "Art Painter"]);
+// The profile pairs (ART_DUET / ART_PAINTERS) live in server/art-duet.mjs, shared with the worker auto-close (idea-783).
 
 async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job, lane }) {
   const live = await ctx.withBackend({ lane, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {})).catch(() => null);
