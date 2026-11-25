@@ -1,4 +1,5 @@
 import { drawerSpawnWhy } from "./roleSpawn";
+import { RoleModelChip } from "./RoleModelChip";
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import { archiveAgent, markAgentRead, markAgentUnread, sendMessage, stopAgent } from "./paseo";
@@ -175,12 +176,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const running = agent.status === "running" && !agent.archivedAt;
   const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane) : ""].filter(Boolean).join(" · ");
   const { roles: storedRoles } = useProfiles();
-  const roleModelName = roleNameFor(labels.profile, storedRoles) ?? roleNameFor(labels.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
-  const roleModelModel = shortModel(cfg.staged?.model ?? agent.model);
-  const roleModel = [roleModelName && roleModelModel ? `${roleModelName} · ${roleModelModel}` : roleModelName || roleModelModel || "", drawerSpawnWhy(labels, agent.model, !!cfg.staged)].filter(Boolean).join(" · ");
-  // UX r2: the chip truncates in narrow headers, so the hover shows the full role and untruncated model id.
-  const roleModelFull = cfg.staged?.model ?? agent.model ?? "";
-  const roleModelTitle = `${roleModelName ? `${roleModelName} · ` : ""}${roleModelFull || roleModelModel}${cfg.staged ? " (staged switch)" : ""}${labels["vs.route"] ? ` (${labels["vs.route"]})` : ""}`;
+  // R2 fix r1: no role in the chip (the boring-agent-role span already shows it); the reason is its own non-shrinking span.
+  const chipReason = drawerSpawnWhy(labels, agent.model, !!cfg.staged);
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
   // R6-2: a closed/retired agent shows no Needs-you banner (it cannot be acted on).
@@ -201,7 +198,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
         <span className="boring-agent-role muted" data-testid="boring-agent-role" title={`${prov.name}${agent.model ? ` · ${agent.model}` : ""}`}>
           {roleLine}
         </span>
-        {roleModel && <span className="role-model-chip" data-testid="drawer-role-model" title={roleModelTitle}>{roleModel}</span>}
+        <RoleModelChip model={cfg.staged?.model ?? agent.model} reason={chipReason} staged={!!cfg.staged} provider={agent.provider} />
         {showMeter && (
           <span
             className={`boring-ctx-meter${ctxPct! >= 90 ? " crit" : ""}`}
