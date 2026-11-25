@@ -20,8 +20,8 @@ import { useDraft } from "./drafts";
 import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
-import { DEMO_LADDER, DEMO_ROLES, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
-import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, parseOverrideValue, providerName } from "./roleSpawn";
+import { DEMO_LADDER, DEMO_ROLES, fetchRoles, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
+import { STAKES_CHOICES, buildRoleSpawn, allCappedNote, landingPick, overrideGroups, parseOverrideValue, providerName, type Override } from "./roleSpawn";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -102,13 +102,14 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
   </label>
 );
 
-/** Which model a role row will run: the ladder's pick for these stakes, or the override ("via" says which). */
-function roleBadges(roleSpawn: { provider: string; model?: string }, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof ladderPick>[1], stakes: string, hasOverride: boolean): [string, string][] {
-  const picked = ladderPick({ ...roleDef, providers: [roleSpawn.provider] }, ladder, stakes).model;
-  return [["provider/model", `${providerName(roleSpawn.provider)}/${roleSpawn.model ?? picked}`], ["via", roleSpawn.model ? "override" : hasOverride ? "override (provider rung)" : "ladder"], ["stakes", stakes]];
+/** Which model a role row will run: the ladder's pick for these stakes (after capped failover), or the override.
+ *  `warn` = every provider is capped (Spawn stays enabled; the note says what happens). */
+function roleBadges(roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, capped: readonly string[]): { badges: [string, string][]; note: string } {
+  const l = landingPick(roleDef, ladder, stakes, { capped, override });
+  return { badges: [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]], note: l.allCapped ? allCappedNote(l.provider) : "" };
 }
 
-/** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> rung" | "<provider> · <model>". */
+/** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> · ladder model" | "<provider> · <model>". */
 function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: string; tier: string; providers: string[] }; ladder: Parameters<typeof overrideGroups>[1]; value: string; onChange: (v: string) => void }) {
   return (
     <Field label="MODEL OVERRIDE (optional)">
@@ -116,7 +117,7 @@ function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: 
         <option value="">From ladder (stakes)</option>
         {overrideGroups(role, ladder).map((g) => (
           <optgroup key={g.provider} label={providerName(g.provider)}>
-            <option value={g.provider}>{providerName(g.provider)} · ladder rung</option>
+            <option value={g.provider}>{providerName(g.provider)} · ladder model</option>
             {g.models.map((m) => (
               <option key={m} value={`${g.provider}|${m}`}>
                 {shortModel(m)}
@@ -131,7 +132,9 @@ function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: 
 
 export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; onClose: () => void; onCreated: (id: string) => void }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles, installedProviders, roles: rolesState, ladder: ladderState } = useProfiles();
+  const { profiles, installedProviders, roles: rolesState, ladder: ladderState, capped: cappedState } = useProfiles();
+  const capped = cappedState ?? [];
+  useEffect(() => void fetchRoles(), []); // R2: fresh caps each time the modal opens
   const roles = rolesState ?? DEMO_ROLES;
   const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
@@ -270,9 +273,8 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
   const isProviderInstalled = installedProviders.includes(spawnProvider);
-  const badges: [string, string][] = roleSpawn && roleDef
-    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!override)
-    : [["provider/model", `${profile.provider}/${profile.model}`]];
+  const landing = roleSpawn && roleDef ? roleBadges(roleDef, ladder, stakes, override, capped) : null;
+  const badges: [string, string][] = landing ? landing.badges : [["provider/model", `${profile.provider}/${profile.model}`]];
   if (modeId) badges.push(["modeId", modeId]);
   if (!roleSpawn && profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
   if (roleSpawn) {
@@ -416,12 +418,21 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             </div>
           )}
           <div className="spawn-defaults" title="Applied at spawn (A1/A6)">
-            {badges.map(([k, v]) => (
-              <span key={k} className="def-badge">
-                <b>{k}</b> {v}
-              </span>
-            ))}
+            {badges.map(([k, v]) => {
+              // R2 (UX m3): the landing badge reads as a warning when every provider is capped.
+              const warn = k === "via" && Boolean(landing?.note);
+              return (
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                  <b>{k}</b> {v}
+                </span>
+              );
+            })}
           </div>
+          {landing?.note && (
+            <div className="stat-alert small" data-testid="all-capped-note">
+              {landing.note}
+            </div>
+          )}
           <div className="row2">
             <Field label="SEAT">
               <select
@@ -683,7 +694,9 @@ export function AddBuddyModal({
   onOpenExisting?: (id: string) => void;
 }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles, roles: rolesState, ladder: ladderState } = useProfiles();
+  const { profiles, installedProviders, roles: rolesState, ladder: ladderState, capped: cappedState } = useProfiles();
+  const capped = cappedState ?? [];
+  useEffect(() => void fetchRoles(), []);
   const roles = rolesState ?? DEMO_ROLES;
   const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
@@ -778,9 +791,8 @@ export function AddBuddyModal({
   const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
-  const buddyBadges: [string, string][] = roleSpawn && roleDef
-    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!parseOverrideValue(ovValue))
-    : [["provider/model", `${profile.provider}/${profile.model}`]];
+  const buddyLanding = roleSpawn && roleDef ? roleBadges(roleDef, ladder, stakes, parseOverrideValue(ovValue), capped) : null;
+  const buddyBadges: [string, string][] = buddyLanding ? buddyLanding.badges : [["provider/model", `${profile.provider}/${profile.model}`]];
 
   const submit = async () => {
     if (!topic.trim()) return;
@@ -929,12 +941,20 @@ export function AddBuddyModal({
             </Field>
           </div>
           <div className="spawn-defaults" title="Which model this Buddy will run" data-testid="add-buddy-badges">
-            {buddyBadges.map(([k, v]) => (
-              <span key={k} className="def-badge">
-                <b>{k}</b> {v}
-              </span>
-            ))}
+            {buddyBadges.map(([k, v]) => {
+              const warn = k === "via" && Boolean(buddyLanding?.note);
+              return (
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                  <b>{k}</b> {v}
+                </span>
+              );
+            })}
           </div>
+          {buddyLanding?.note && (
+            <div className="stat-alert small" data-testid="all-capped-note">
+              {buddyLanding.note}
+            </div>
+          )}
           <div className="preview">
             <div className="field-label">TEAM</div>
             <div className="preview-title" data-testid="add-buddy-lane-preview">

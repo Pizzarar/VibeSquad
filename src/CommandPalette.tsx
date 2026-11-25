@@ -10,6 +10,8 @@ import { AGENT_TYPE_LABEL, getTeams, type FolderDef, type Member, type TeamView 
 import { setCrunchMode } from "./CrunchToggle";
 import { getCurrentSquadId } from "./currentSquad";
 import { crunchPaletteItems } from "./crunchMode";
+import { projectOrder, knownFolderNames } from "./projectOrderActions";
+import { canMove } from "./projectOrder";
 import { getLastFolder, patchTeamsFolder, setLastFolder } from "./boringFolders";
 import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
@@ -354,6 +356,15 @@ export function teamCtxItems(view: TeamView, opts?: { folders?: FolderDef[] }): 
         void patchTeamsFolder({ op: "createFolder", name }).then((r) => (r.ok ? patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: name }) : r)).then((r) => { if (r.ok) setLastFolder(view.team.id, null); fail(r); });
       },
     });
+    // PLAN_PROJECT_ORDER O1: Main flag + keyboard/phone reorder inside the folder/list (Normal sidebar only: Psycho passes no folders).
+    const known = knownFolderNames(opts.folders);
+    const order = getTeams();
+    const isMain = view.team.main === true;
+    items.push({ label: isMain ? "Unset main project" : "Make main project", separatorBefore: true, run: () => void projectOrder.setMain(view.team.id, !isMain) });
+    if (!isMain) {
+      items.push({ label: "Move up", disabled: !canMove(order, view.team.id, "up", known), run: () => void projectOrder.move(view.team.id, "up", known) });
+      items.push({ label: "Move down", disabled: !canMove(order, view.team.id, "down", known), run: () => void projectOrder.move(view.team.id, "down", known) });
+    }
     if (cur) items.push({ label: "Remove from folder", run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then((r) => { if (r.ok) setLastFolder(view.team.id, cur); fail(r); }) });
   }
   return items;
