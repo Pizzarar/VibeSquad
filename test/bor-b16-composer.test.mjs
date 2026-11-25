@@ -56,6 +56,62 @@ test("buttons call their handlers; running swaps Send for Queue and adds Stop + 
   assert.equal(byId(BoringComposerBar(base({ isBs: true, inboxParking: true })), "boring-composer-park-btn").props.disabled, true);
 });
 
+// ---- The REAL useAgentConfig, transformed with stubbed imports and a recording React shim (no mocks of its own output). ----
+const hookSrc = transformSync("useAgentConfig.tsx", read("src", "useAgentConfig.tsx"), { lang: "tsx", jsx: { runtime: "classic" } }).code
+  .replace(/^import type .*$/gm, "")
+  .replace(/^import \{[^}]*\} from "react";$/m, 'const { useState, useRef, useEffect } = globalThis.__shim;')
+  .replace(/^import \{[^\n]*\} from "\.\/DrawerHeader";$/m, "const { PROVIDER_OPTIONS, buildProviderModelOptions, configNote, modesFor, nextModeInCycle, normalizeProviderId, oppositeProviderTarget, providerModelsCache, resolveProviderSwitchTarget, setModeHelper, setModelHelper, setThinkingHelper, thinkingLevelsFor } = globalThis.__dh;")
+  .replace(/^import \{[^}]*\} from "\.\/(paseo|demoFlag|paseoProviders|runnerBridge|pixel|teams|panes|pinActions)";$/gm, (m, mod) => `const { ${m.match(/\{([^}]*)\}/)[1]} } = globalThis.__stubs.${mod};`);
+writeFileSync(join(dir, "Hook.mjs"), `import React from ${JSON.stringify(import.meta.resolve("react"))};\n` + hookSrc);
+const calls = { fetch: 0, listen: 0 };
+globalThis.__stubs = {
+  paseo: { updateAgent() {}, upsertLocalAgent() {} }, demoFlag: { DEMO: false },
+  paseoProviders: { listProviderModels: () => { calls.fetch++; return Promise.resolve({ models: [] }); } },
+  runnerBridge: { runnerSpawn() {} }, pixel: { providerSpec: () => ({ name: "Claude", color: "#fff" }) },
+  teams: { kindOf: () => "worker" }, panes: { openAgentInTab() {} }, pinActions: { setLastBrainstormProfile() {} },
+};
+globalThis.__dh = {
+  PROVIDER_OPTIONS: [{ id: "claude", label: "Claude" }, { id: "gemini", label: "Gemini" }], buildProviderModelOptions: () => ["m1"], configNote: () => "",
+  modesFor: () => [{ id: "auto", label: "Auto" }], nextModeInCycle: () => "auto", normalizeProviderId: (x) => x, oppositeProviderTarget: () => ({ provider: "gemini", label: "⇄ Switch to Gemini" }),
+  providerModelsCache: new Map(), resolveProviderSwitchTarget: () => null, setModeHelper() {}, setModelHelper() {}, setThinkingHelper() {}, thinkingLevelsFor: () => ["low", "high"],
+};
+globalThis.window = { addEventListener: () => { calls.listen++; }, removeEventListener() {} };
+const runHook = async (args) => {
+  const effects = [];
+  globalThis.__shim = { useState: (i) => [typeof i === "function" ? i() : i, () => {}], useRef: (v) => ({ current: v }), useEffect: (fn) => effects.push(fn) };
+  const { useAgentConfig } = await import(pathToFileURL(join(dir, "Hook.mjs")).href + "?" + Math.random());
+  calls.fetch = 0; calls.listen = 0;
+  const cfg = useAgentConfig({ agent: { id: "a", provider: "claude", model: "m1", currentModeId: "auto", labels: {} }, active: true, isBs: false, doRestart: async () => {}, ...args });
+  for (const fx of effects) fx();
+  return cfg;
+};
+const labelOf = (el) => el?.props?.["aria-label"];
+
+test("REAL useAgentConfig: Provider, Model, Thinking and Mode selects carry accessible names (aria-label + title)", async () => {
+  const cfg = await runHook({});
+  assert.equal(labelOf(cfg.providerSelect), "Provider");
+  assert.equal(labelOf(cfg.modelControl), "Model");
+  assert.equal(labelOf(cfg.thinkingSelect), "Thinking");
+  assert.equal(labelOf(cfg.modeSelect), "Mode");
+  for (const k of ["providerSelect", "modelControl", "thinkingSelect", "modeSelect"]) assert.ok(cfg[k].props.title, `${k} has a title`);
+  assert.ok(cfg.providerSwitchBtn, "one-click Switch to X is exposed for the bar");
+});
+
+test("REAL useAgentConfig: enabled=false is inert (no model-list fetch, no Shift+Tab listener); default stays live", async () => {
+  await runHook({ enabled: false });
+  assert.deepEqual(calls, { fetch: 0, listen: 0 });
+  await runHook({});
+  assert.deepEqual(calls, { fetch: 1, listen: 1 });
+});
+
+test("bar renders the switch button, visible Think/Mode hints and the staged hint", () => {
+  const html = renderToStaticMarkup(React.createElement(BoringComposerBar, base({ providerSwitchBtn: React.createElement("button", { "data-testid": "drawer-switch-provider-btn" }, "⇄ Switch to Gemini"), stagedHint: "Switching to Gemini on your next message" })));
+  assert.ok(html.includes("drawer-switch-provider-btn"));
+  assert.ok(html.includes(">Think<") && html.includes(">Mode<"));
+  assert.ok(html.includes('data-testid="boring-composer-staged"'));
+  assert.ok(!renderToStaticMarkup(React.createElement(BoringComposerBar, base())).includes("boring-composer-staged"));
+});
+
 const { chromium } = await (async () => {
   try {
     const d = process.env.PLAYWRIGHT_DIR;

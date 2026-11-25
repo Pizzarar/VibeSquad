@@ -38,9 +38,11 @@ export type UseAgentConfigArgs = {
   doRestart: (reason: string, pendingPrompt?: string, profileName?: string, model?: string, modeId?: string, thinkingOptionId?: string | null) => Promise<unknown>;
   stagedSwitch?: ProviderSwitchTarget | null;
   onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
+  /** Default true. false = fully inert: no model-list fetch and no Shift+Tab listener (a lifted instance that only serves one layout). */
+  enabled?: boolean;
 };
 
-export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch }: UseAgentConfigArgs) {
+export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch, enabled = true }: UseAgentConfigArgs) {
   const [modeBusy, setModeBusy] = useState(false);
   const [modelValue, setModelValue] = useState(agent.model ?? "");
   const [customModelMode, setCustomModelMode] = useState(false);
@@ -91,6 +93,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
   }, [agent.id]);
 
   useEffect(() => {
+    if (!enabled) return;
     const cacheKey = effectiveProvider;
     const cached = providerModelsCache.get(cacheKey);
     if (cached && cached.length > 0) {
@@ -115,7 +118,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
     return () => {
       cancelled = true;
     };
-  }, [effectiveProvider, agent.id]);
+  }, [effectiveProvider, agent.id, enabled]);
 
   const modelOptions = buildProviderModelOptions(
     effectiveProvider,
@@ -200,6 +203,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
       style={{ "--prov-color": effectiveProv.color } as React.CSSProperties}
       value={providerKnown ? normalizeProviderId(effectiveProvider) : effectiveProvider}
       disabled={switchBusy || !!agent.archivedAt}
+      aria-label="Provider"
       title={`Provider: ${effectiveProvider}`}
       onChange={(e) => {
         const val = e.target.value;
@@ -233,7 +237,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
   );
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !enabled) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.shiftKey && e.key === "Tab") {
         e.preventDefault();
@@ -252,7 +256,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [active, agent, modeBusy, staged]);
+  }, [active, enabled, agent, modeBusy, staged]);
 
   const modeSelect = (() => {
               const modes = modesFor(agent, DEMO || !!staged);
@@ -262,6 +266,8 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
                 <select
                   data-testid="drawer-mode-select"
                   className="drawer-mode-select drawer-cfg-ctl"
+                  aria-label="Mode"
+                  title="Mode (Shift+Tab cycles)"
                   value={stagedModeId}
                   disabled={modeBusy}
                   onChange={(e) => {
@@ -291,6 +297,8 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
             <select
               data-testid="drawer-thinking-select"
               className="drawer-thinking-select drawer-cfg-ctl"
+              aria-label="Thinking"
+              title="Thinking level"
               value={stagedThinking}
               disabled={thinkingBusy}
               onChange={(e) => {

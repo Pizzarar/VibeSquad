@@ -488,7 +488,7 @@ html[data-vibe="boring"] .angel-boring-bar { background: var(--panel); border-ra
 /* B5 polish: composer field, banners, timeline items, usage panels. */
 html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px; padding: 6px 8px 6px 14px; align-items: center; gap: 8px; }
 html[data-vibe="boring"] .composer textarea,
-html[data-vibe="boring"] .composer input:not([type="file"]) { background: transparent; border: 0; box-shadow: none; outline: none !important; /* U3 survivor: beats styles.css :is(...):focus-visible { outline: 2px solid var(--violet) } */ border-radius: 10px; }
+html[data-vibe="boring"] .composer input:not([type="file"]):not(.boring-composer-cfg input) { background: transparent; border: 0; box-shadow: none; outline: none !important; /* U3 survivor: beats styles.css :is(...):focus-visible { outline: 2px solid var(--violet) } */ border-radius: 10px; }
 html[data-vibe="boring"] .composer-more-tab { border: 0; border-radius: 10px; background: transparent; color: var(--muted); }
 html[data-vibe="boring"] .composer-more-tab:hover,
 html[data-vibe="boring"] .composer-more-tab:focus-visible,
@@ -1500,8 +1500,11 @@ html[data-vibe="boring"] .boring-composer-icon:hover:not(:disabled) { background
 html[data-vibe="boring"] .boring-composer-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 html[data-vibe="boring"] .boring-composer-icon:disabled { opacity: 0.5; cursor: default; }
 html[data-vibe="boring"] .boring-composer-cfg { display: flex; flex: 1 1 280px; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
-html[data-vibe="boring"] .boring-composer-mode { display: inline-flex; }
-html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { width: auto; max-width: 150px; min-width: 0; height: 32px; min-height: 32px; padding: 0 4px; font-size: 12px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: 8px; }
+html[data-vibe="boring"] .boring-composer-field { display: inline-flex; align-items: center; gap: 4px; }
+html[data-vibe="boring"] .boring-composer-field-label { font-size: 11px; color: var(--text-2); }
+html[data-vibe="boring"] .boring-composer-staged { flex: 1 1 100%; font-size: 12px; color: var(--st-attn); }
+html[data-vibe="boring"] .boring-composer-cfg .btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { width: auto; max-width: 240px; min-width: 0; height: 32px; min-height: 32px; padding: 0 4px; font-size: 12px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border-strong); border-radius: 8px; }
 html[data-vibe="boring"] .boring-composer-cfg select:focus-visible, html[data-vibe="boring"] .boring-composer-cfg input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 html[data-vibe="boring"] .boring-composer-send { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 html[data-vibe="boring"] .boring-composer-send .btn, html[data-vibe="boring"] .boring-composer-send .composer-interrupt-btn { min-height: 34px; }

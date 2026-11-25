@@ -702,6 +702,8 @@ export function Composer({
             modelControl={boringConfig.modelControl}
             thinkingSelect={boringConfig.thinkingSelect}
             modeSelect={boringConfig.modeSelect}
+            providerSwitchBtn={boringConfig.providerSwitchBtn}
+            stagedHint={boringConfig.staged ? `Switching to ${boringConfig.effectiveProv.name} on your next message` : null}
             isBs={isBs}
             inboxParking={inboxParking}
             running={agent.status === "running"}

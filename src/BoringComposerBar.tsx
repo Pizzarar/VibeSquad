@@ -10,6 +10,10 @@ export type BoringComposerBarProps = {
   modelControl?: ReactNode;
   thinkingSelect?: ReactNode;
   modeSelect?: ReactNode;
+  /** One-click "Switch to X" (shared hook) when the provider can be swapped. */
+  providerSwitchBtn?: ReactNode;
+  /** e.g. "Switching to Gemini on your next message" while a provider switch is staged. */
+  stagedHint?: string | null;
   isBs: boolean;
   inboxParking: boolean;
   running: boolean;
@@ -44,9 +48,11 @@ export function BoringComposerBar(p: BoringComposerBarProps) {
       <div className="boring-composer-cfg" data-testid="boring-composer-cfg" role="group" aria-label="Model and mode">
         {p.providerSelect}
         {p.modelControl}
-        {p.thinkingSelect}
-        {p.modeSelect && <span className="boring-composer-mode" title="Shift+Tab cycles mode">{p.modeSelect}</span>}
+        {p.thinkingSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Think</span>{p.thinkingSelect}</span>}
+        {p.modeSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Mode</span>{p.modeSelect}</span>}
+        {p.providerSwitchBtn}
       </div>
+      {p.stagedHint && <div className="boring-composer-staged" data-testid="boring-composer-staged" role="status">{p.stagedHint}</div>}
       <div className="boring-composer-send">
         {p.running && (
           <button type="button" className="btn ghost composer-stop-btn" title="Stop the current turn (keeps the agent)" aria-label="Stop" data-testid="composer-stop-btn" onClick={p.onStop}>

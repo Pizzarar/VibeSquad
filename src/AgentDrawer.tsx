@@ -328,7 +328,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   // B16: Normal mode owns one shared config instance for the header and the composer bar. `active` is gated so Psycho (whose
   // DrawerHeader has its own hook) never gets a second Shift+Tab listener from here.
-  const boringCfg = useAgentConfig({ agent, active: active && boringChat, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch: setStagedSwitch });
+  const boringCfg = useAgentConfig({ agent, active: active && boringChat, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch: setStagedSwitch, enabled: boringChat });
 
   const sendLock = useRef(createSendLock());
   const draftRef = useRef(draft);
