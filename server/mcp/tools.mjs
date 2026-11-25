@@ -17,6 +17,8 @@ import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, readArmCaps } from "../exp6-arm.mjs";
 import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
+import { lookupRole } from "../role-route.mjs";
+import { routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -528,8 +530,10 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     const opted = ["pin", "wf", "override"].includes(ab.reason);
     if (!opted && ab.arm) labels[ARM_LABEL] = ab.arm; // only alternation members count toward the next pick
     labels[ARM_REASON_LABEL] = ab.reason;
-    if (model) labels[MODEL_LABEL] = model; // the spawn hook re-syncs it to the final model after failover / the stakes ladder
   }
+  // R2: every spawn names its model (not only arm picks); the spawn hook re-syncs it to the final model after failover /
+  // the stakes ladder, or drops it when the provider's own default runs.
+  if (model) labels[MODEL_LABEL] = model;
   const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels[ROUTE_OVERRIDE_LABEL] ? { [ROUTE_OVERRIDE_ENV]: labels[ROUTE_OVERRIDE_LABEL] } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
@@ -549,20 +553,35 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   );
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
+  // R2 (PLAN_PER_ROLES_LADDER_1125): `Role · model · reason`, read back from the created agent (the runner returns it after
+  // the spawn hook ran), so the result names what actually runs: the agent's model, else the hook's `vs.model`, else this
+  // tool's pre-hook pick. The reason is the hook's `why=` on `vs.route`; a backend that returns no route works it out here.
+  const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || model || "";
+  const reasonShown =
+    routeWhy(agent?.labels?.["vs.route"]) ||
+    shownSpawnReason({
+      override: Boolean(given.provider || given.model),
+      arm: Boolean(labels[ARM_LABEL]),
+      legacyName: Boolean(lookupRole(profile?.name || profileName)?.legacy),
+      routed: Boolean(profile),
+    });
+  const roleName = lookupRole(profile?.name || profileName)?.role?.name || "";
+  result.spawned = spawnShownLine({ role: roleName, model: actualModel, reason: reasonShown });
   if (ab) {
     const shown = labels.profile ?? profileName;
     result.ab = {
-      arm: ab.arm, reason: ab.reason, model: model || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
+      arm: ab.arm, reason: ab.reason, model: actualModel || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
       ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: provider || null } : {}), ...(ab.capped ? { capped: true } : {}),
     };
     // One line a lead can read without digging: `arm=neon reason=alternation model=gemini-4-neon (Implement - Sonnet -> ...)`.
     // A role spawn keeps its name, so a swap shows the provider it moved to: `(Implement -> antigravity-cli)`.
     const moved = ab.role ? provider : shown;
-    result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"}${ab.swapped ? ` (${profileName} -> ${moved})` : ""}`;
+    result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${actualModel || "?"}${ab.swapped ? ` (${profileName} -> ${moved})` : ""}`;
     const counts = ab.counts ? ` counts=${Object.entries(ab.counts).map(([k, v]) => `${k}:${v}`).join(",")}` : "";
-    // Arm picks only: opt-outs (pin / wf / override) are visible in the result + labels and are not alternation data.
-    const metric = ["pin", "wf", "override"].includes(ab.reason) ? "" : `implementer-arm: ${profileName} -> ${ab.role ? `${shown}@${provider}` : shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"} lane=${labels.lane ?? ""}${counts}`;
-    if (metric) { try { await ctx.writeLog({ type: "metric", text: metric }); } catch { /* metrics are best effort: never fail the spawn */ } }
+    // idea-962: opt-outs (pin / wf / override) log too, so @per can count them; they never carry vs.arm, so they still
+    // are not alternation data (countArms reads vs.arm only). refs = the new agent, so the metric joins its outcome.
+    const metric = `implementer-arm: ${profileName} -> ${ab.role ? `${shown}@${provider}` : shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${actualModel || "?"} lane=${labels.lane ?? ""}${counts}`;
+    try { await ctx.writeLog({ type: "metric", text: metric, ...(result.id ? { refs: [result.id] } : {}) }); } catch { /* metrics are best effort: never fail the spawn */ }
   }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;

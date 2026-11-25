@@ -144,7 +144,7 @@ test(
         [impl.labels.provider, impl.labels.model, impl.labels.tier, impl.labels.stakes],
         [C, "claude-sonnet-5-5", "mid", "normal"],
       );
-      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement$/);
+      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement why=rung$/);
       assert.doesNotMatch(impl.labels[ROUTE_LABEL], /legacy-name/);
 
       const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "tierA-invariant" }) });
@@ -188,7 +188,7 @@ test(
       assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "high", modeId: "auto" });
       assert.equal(out.labels.profile, "Review");
       assert.deepEqual([out.labels.provider, out.labels.model, out.labels.tier], [C, "claude-sonnet-5-5", "top"]);
-      assert.match(out.labels[ROUTE_LABEL], /^stakes=tierA-invariant model=claude-sonnet-5-5 effort=high reason=override tier=top role=review$/);
+      assert.match(out.labels[ROUTE_LABEL], /^stakes=tierA-invariant model=claude-sonnet-5-5 effort=high reason=override tier=top role=review why=override$/);
     } finally {
       h.stop?.();
     }
@@ -220,7 +220,7 @@ test(
           { labels: LABELS("Review", { stakes: s, "vs.profile-derived": "thinking", ...OV("claude", "claude-sonnet-5-5") }) },
         );
         assert.deepEqual(landed(both), { provider: C, model: "claude-sonnet-5-5", effort, modeId: "auto" }, `provider+model ${s}`);
-        assert.match(both.labels[ROUTE_LABEL], /reason=override tier=\S+ role=review$/, `provider+model ${s}`);
+        assert.match(both.labels[ROUTE_LABEL], /reason=override tier=\S+ role=review why=override$/, `provider+model ${s}`);
 
         // Model only: the model's family is the provider.
         const m = await h.spawn({ provider: A, model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: s, ...OV("", "claude-sonnet-5-5") }) });
@@ -277,7 +277,7 @@ test(
         // The caller's model rides in the config too (not profile-derived): it must not come back as an explicit model.
         const out = await h.spawn({ provider: prov, model }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV(prov, model) }) });
         assert.deepEqual(landed(out), { provider: fam, model: top(fam).model, effort: top(fam).effort, modeId: mode }, at);
-        assert.match(out.labels[ROUTE_LABEL], /reason=override tier=top role=review model-dropped=family$/, at);
+        assert.match(out.labels[ROUTE_LABEL], /reason=override tier=top role=review model-dropped=family why=override$/, at);
       }
       // Same family, and opencode's own vendor/model ids, are kept (no model-dropped).
       const same = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) });
@@ -331,7 +331,7 @@ test(
         { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) },
       );
       assert.deepEqual([out.config.provider, out.config.model, out.config.thinkingOptionId], [A, "gemini-4-neon", "high"]);
-      assert.match(out.labels[ROUTE_LABEL], /reason=override\+failover tier=top role=review explicit-capped=dropped$/);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override\+failover tier=top role=review explicit-capped=dropped why=failover$/);
     } finally {
       h.stop?.();
     }
@@ -340,7 +340,7 @@ test(
     try {
       const out = await all.spawn({ provider: "claude" }, { labels: LABELS("Review", OV("claude")) });
       assert.equal(out.config.provider, C);
-      assert.match(out.labels[ROUTE_LABEL], /reason=override tier=mid role=review$/);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override tier=mid role=review why=override$/);
     } finally {
       all.stop?.();
     }
@@ -824,7 +824,7 @@ test(
         { labels: LABELS("Implement") },
       );
       assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
-      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement$/);
+      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement why=rung$/);
       assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
     } finally {
       h.stop?.();

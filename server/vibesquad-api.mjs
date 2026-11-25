@@ -497,8 +497,13 @@ export async function digestLogRecord(caller, type, text, backend) {
     const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
     const profile = String(worker?.labels?.profile ?? worker?.profile ?? "").trim() || null;
+    // R2 (PLAN_PER_ROLES_LADDER_1125): the stamp names the model that actually reviewed (`reviewer=Review · gemini-4-pro`), so a
+    // role-name reviewer is not ambiguous; it sits after the verdict prefix (the gate parser never reads it). The attested
+    // verdict below keeps the bare profile.
+    const actualModel = String(worker?.labels?.["vs.model"] ?? worker?.labels?.model ?? worker?.model ?? "").trim();
+    const stamp = profile && actualModel ? `${profile} · ${actualModel}` : profile;
     const workerText = lastAssistantText(tl, Infinity);
-    const out = digestVerdictText({ workerText, digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
+    const out = digestVerdictText({ workerText, digestText: text, reviewer: isReviewerAgent(worker), profile: stamp }).text;
     const verdict = attestedVerdict({ worker: { ...worker, id: worker?.id ?? id }, workerText });
     return { text: out, verdict };
   } catch {
