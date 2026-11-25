@@ -1,14 +1,14 @@
-# UX Review R30: R1 roles-only pickers, re-review after fix (@per)
+# UX Review PER_R1B: R1 roles-only pickers, re-review after fix (@per)
 
-- Code under review: `unit-per-r1-integ` @ `f4987476` (UI fix `be9dcd85`, server fix `bd049c12`). Previous round: `docs/UX_REVIEW_R29.md` (FAIL 0/2/3 on 3e93d2e6).
+- Code under review: `unit-per-r1-integ` @ `f4987476` (UI fix `be9dcd85`, server fix `bd049c12`). Previous round: `docs/UX_REVIEW_PER_R1A.md` (FAIL 0/2/3 on 3e93d2e6).
 - Lead decision applied (not re-litigated): pickers list roles plus an optional "Model override" that defaults to "From ladder (stakes)". A saved legacy pick shows as `<Role> (legacy: <old name>)`. The UX Reviewer role is deferred.
-- Run: `vite` on the integ worktree, `?demo=1`, 3200x1800 @ dsf 1.2 and 1920x1080, dark and light. Shots are in `docs/ux-r30/` (`d`/`l` = dark/light, then width; `saved-*` = a seeded `newAgent.profile`). Native `<select>` lists were expanded with `size=N` so the options show in a still image. No page errors in any run.
+- Run: `vite` on the integ worktree, `?demo=1`, 3200x1800 @ dsf 1.2 and 1920x1080, dark and light. Shots are in `docs/ux-per-r1b/` (`d`/`l` = dark/light, then width; `saved-*` = a seeded `newAgent.profile`). Native `<select>` lists were expanded with `size=N` so the options show in a still image. No page errors in any run.
 
 **Verdict: FAIL 0/2/3 on f4987476**
 
-## Status vs R29
+## Status vs PER_R1A
 
-| R29 finding | Status | Evidence |
+| PER_R1A finding | Status | Evidence |
 |---|---|---|
 | M1 pickers are relabeled legacy profiles | **Fixed (list)** | New Agent PROFILE has 8 rows: Lead, Brainstorm, Implement, Planner, Review, Pre-check, Art Director, Art Painter. There are no duplicates and no model names. The chip reads `profile=Implement` and the button reads `Reset to Implement template` (`d3200-newagent-list.png`, `l1920-newagent-list.png`). Settings > New Agent defaults has `Built-in default` plus the same 8 rows (`d3200-set-newagent.png`). **But** the ladder half of the fix does not hold: see new M1. |
 | M2 Audit labeled Implement, UX Reviewer hidden | **Fixed / deferred** | `Audit - DSF → Pre-check` (`l3200-set-legacy.png`). UX Reviewer is deferred by the lead. It still maps to Review and can't be reached from New Agent (see M2). |
@@ -24,7 +24,7 @@ Saved-pick states (New Agent and Settings, dark 3200):
 | `Audit - DSF` | `Pre-check (legacy: Audit - DSF)` | yes |
 | `Mechanical - DSF` | `Work Order (legacy: Mechanical - DSF)` | yes |
 | `Review - Gemini` | `Review (legacy: Review - Gemini)`, override lists gemini-4-neon / gemini-3.8-flash | yes |
-| `Old Custom - Turbo` (missing) | Settings: `Old Custom - Turbo (missing)`. New Agent: falls back to `Implement` without saying so | pre-existing (R29 out-of-scope note) |
+| `Old Custom - Turbo` (missing) | Settings: `Old Custom - Turbo (missing)`. New Agent: falls back to `Implement` without saying so | pre-existing (PER_R1A out-of-scope note) |
 
 Readability: all picker, override, chip and legacy-roster text is readable in dark and light at 3200x1800 and 1920x1080. No truncation of explanatory text.
 
@@ -59,7 +59,7 @@ Readability: all picker, override, chip and legacy-roster text is readable in da
 - **Fix:** Relabel PROFILE as ROLE, and the current ROLE as SEAT or KIND (lead / brainstorm / worker). Apply the same change in Settings > New Agent defaults ("Built-in default" + roles) and in Add Buddy. **Effort:** XS.
 
 ### m3 (minor, pre-existing): A missing saved default falls back silently in New Agent.
-- **Evidence:** With `newAgent.profile = "Old Custom - Turbo"`, Settings shows `Old Custom - Turbo (missing)`, but New Agent quietly preselects `Implement` (`saved-OldCustomTurbo-newagent.png`). This was noted in R29 and is unchanged. It is now the one picker state that doesn't explain itself.
+- **Evidence:** With `newAgent.profile = "Old Custom - Turbo"`, Settings shows `Old Custom - Turbo (missing)`, but New Agent quietly preselects `Implement` (`saved-OldCustomTurbo-newagent.png`). This was noted in PER_R1A and is unchanged. It is now the one picker state that doesn't explain itself.
 - **Fix:** Show a one-line note under the select: "Saved default 'Old Custom - Turbo' is missing; using Implement." **Effort:** XS.
 
 ## Checked and fine

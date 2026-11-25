@@ -1,8 +1,8 @@
-# UX Review R29: R1 roles-only pickers + role editor (@per)
+# UX Review PER_R1A: R1 roles-only pickers + role editor (@per)
 
 - Code under review: `unit-per-r1-integ` @ `3e93d2e6` (R1 46dc0a16 + R1b 9781133a), plan `docs/PLAN_PER_ROLES_LADDER_1125.md` R1 (line 32) + done-check (line 42).
 - Scope: `src/profiles.ts`, `src/TeamActions.tsx`, `src/TeamSettingsModal.tsx`, `src/SettingsHome.tsx`, `src/RoleEditors.tsx`.
-- Run: `vite` on the R1 worktree, `?demo=1`, 3200x1800 @ dsf 1.2 (4K at 120%) and 1920x1080, dark + light. Shots: `docs/ux-r29/` (`d`/`l` = dark/light, then width). Native `<select>` lists were expanded with `size=N` so the options show up in a still image.
+- Run: `vite` on the R1 worktree, `?demo=1`, 3200x1800 @ dsf 1.2 (4K at 120%) and 1920x1080, dark + light. Shots: `docs/ux-per-r1a/` (`d`/`l` = dark/light, then width). Native `<select>` lists were expanded with `size=N` so the options show up in a still image.
 
 **Verdict: FAIL 0/2/3 on 3e93d2e6**
 
