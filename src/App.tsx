@@ -1661,8 +1661,12 @@ export function App() {
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
   // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
   const [navGen, setNavGen] = useState(0);
+  // B1: while a pop is settling (onPop → BoringAde re-derives mode/selection → boringShown catches up), the URL-sync effect
+  // must never pushState — every transient derived URL would wipe the Forward stack and can trap Back. Rewrite in place instead.
+  const popReplaceUntil = useRef(0);
   useEffect(() => {
     const onPop = () => {
+      popReplaceUntil.current = Date.now() + 1000;
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       const act = popAction(location.search);
@@ -1856,7 +1860,11 @@ export function App() {
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    if (next !== (location.search || "")) history[takeStorybookReplace() ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+    if (next !== (location.search || "")) {
+      const storybookReplace = takeStorybookReplace();
+      const replace = Date.now() < popReplaceUntil.current || storybookReplace;
+      history[replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
+    }
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).

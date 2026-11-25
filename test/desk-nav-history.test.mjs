@@ -223,3 +223,40 @@ test("B1: navGen is inert on the initial mount (0) — no location read, no re-d
   const t = render(props(view)); // navGen defaults to 0
   assert.ok(byId(t, "boring-project-view"), "navGen=0 leaves the initial Overview in place");
 });
+
+test("B1: a pop to a known-but-unpinned agent clears the stale lane/worker selection (minor #3)", () => {
+  reset();
+  const view = squad();
+  globalThis.__agents.set("ade-bs", { id: "ade-bs" });
+  globalThis.__agents.set("rb", { id: "rb" });
+  // Land on a pinned lane's chat first (sets selectedLaneId to "ade").
+  globalThis.location = { search: "?team=vs&agent=ade-bs" };
+  render(props(view, { navGen: 1 }));
+  let t = render(props(view, { navGen: 1 }));
+  assert.equal(byType(t, "AgentDrawer").props.agent.id, "ade-bs");
+  // Now pop to a known-but-unpinned agent: the stale "ade" selection must be cleared (chat falls back to the hub, not the stale lane).
+  globalThis.__agents.set("floating", { id: "floating" });
+  globalThis.location = { search: "?team=vs&agent=floating" };
+  render(props(view, { navGen: 2 }));
+  t = render(props(view, { navGen: 2 }));
+  const drawer = byType(t, "AgentDrawer");
+  assert.ok(drawer, "chat still shows a drawer");
+  assert.notEqual(drawer.props.agent.id, "ade-bs", "the stale lane's agent is not shown");
+  assert.equal(drawer.props.agent.id, "rb", "falls back to the hub with no lane selected");
+});
+
+// ── B1 M1/M2 wiring (source assertions on the App + RefPopover hunks) ──────────
+test("B1 M1: App's URL-sync never pushStates while a pop is settling (popReplaceUntil guard)", () => {
+  const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.match(app, /popReplaceUntil\.current = Date\.now\(\) \+ 1000/, "onPop arms the pop-in-flight window");
+  assert.match(app, /Date\.now\(\) < popReplaceUntil\.current/, "URL-sync checks the pop window");
+  assert.match(app, /const storybookReplace = takeStorybookReplace\(\);/, "takeStorybookReplace stays consumed");
+  assert.match(app, /history\[replace \? "replaceState" : "pushState"\]/, "URL-sync picks replace vs push");
+});
+
+test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox", () => {
+  const rp = readFileSync(resolve(import.meta.dirname, "..", "src", "RefPopover.tsx"), "utf8");
+  const openInbox = rp.slice(rp.indexOf("const openInbox"), rp.indexOf("const onKeyDown"));
+  assert.doesNotMatch(openInbox, /history\.replaceState/, "the R14 replaceState workaround is deleted");
+  assert.match(openInbox, /focusInboxCard\(cardId\)/, "Normal branch just focuses the card; App's URL sync pushes ?team=");
+});

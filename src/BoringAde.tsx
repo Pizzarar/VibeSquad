@@ -565,6 +565,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         if (land.sel.role === "worker") setSelectedWorkerId(land.agentId);
         else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
         if (land.view) revealAgent(land.view, land.sel, land.agentId);
+      } else {
+        // A known-but-unpinned agent has no sidebar row: clear the stale lane/worker so the chat target falls back to the URL agent.
+        setSelectedLaneId(null);
+        setSelectedWorkerId(null);
       }
       setMode("chat");
     } else {
