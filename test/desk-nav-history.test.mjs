@@ -43,6 +43,7 @@ stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); exp
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false; export const closeStorybook = () => {}; export const openStorybook = () => {};`);
+stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const setCrunchMode = async () => true;`);
 writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);
 writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
 writeFileSync(join(dir, "boringLocation.mjs"), transformSync("boringLocation.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringLocation.ts"), "utf8"), { lang: "ts" }).code.replace("./teams.ts", "./teams.mjs"));

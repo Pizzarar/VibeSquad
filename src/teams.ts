@@ -67,7 +67,7 @@ export type TeamDef = {
   leadFlagTokens?: number;
   leadAutoHandoffTokens?: number;
   leadHardCapTokens?: number;
-  /** Per-Squad "Vibe mode": Buddy auto-dispatches routine work. Off when absent. */
+  /** Per-Squad "Crunch mode" (field kept as vibeMode): Buddies and Leads act on their leans. Off when absent. */
   vibeMode?: boolean;
   /** Per-Squad standing lane pointers for header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md). */
   quickLanes?: { bugs?: string; workflows?: string };

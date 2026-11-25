@@ -144,7 +144,7 @@ const NOTE_BODIES = {
     "Review: Review (Gemini). If Gemini is capped: Pre-check with provider=claude first, then Review with provider=claude only on a FAIL or doubt.",
   ].join("\n"),
   "Mechanical - DSF": [
-    "Primary low-judgment worker: renames, tests against an existing spec, data or config edits, behavior-neutral refactors, follow-up cleanups, one-file blocks, and scripted measurement runs under a read-only brief. Never touch Tier A areas; stop and report on any design decision.",
+    "Low-judgment DeepSeek worker, only when DeepSeek is asked for by name (mechanical work goes to Implement at stakes=mechanical: Gemini Flash, then Claude Haiku): renames, tests against an existing spec, data or config edits, behavior-neutral refactors, follow-up cleanups, one-file blocks, and scripted measurement runs under a read-only brief. Never touch Tier A areas; stop and report on any design decision.",
     "Review: same as a work order. If the result is procedurally fine but the reasoning is thin, the lead respawns it as Implement at normal stakes or higher.",
   ].join("\n"),
   "Audit - DSF":
@@ -188,7 +188,7 @@ const NOTE_BODIES = {
   "Art Painter - Opus": ART_PAINTER_NOTE_BODY,
   "UX Reviewer - Opus": UX_REVIEWER_NOTE_BODY,
   "Senior Reasoning - DSP":
-    'Escalation only. Use when DeepSeek Flash output passes procedural checks but fails on reasoning, trade-off judgment or long-horizon synthesis. Also for architectural "which variant ships and why" calls, genuine plan → act → verify loops, and second opinions on an audit the lead doubts. Not for routine inventory or summaries, anything Flash hasn\'t tried first, or high-frequency steps. Never a merge gate.',
+    'Escalation only. Use when cheap-tier (Gemini Flash / Claude Haiku) output passes procedural checks but fails on reasoning, trade-off judgment or long-horizon synthesis. Also for architectural "which variant ships and why" calls, genuine plan → act → verify loops, and second opinions on an audit the lead doubts. Not for routine inventory or summaries, anything Flash hasn\'t tried first, or high-frequency steps. Never a merge gate.',
 };
 
 export function buildDefaultPackNotesMap() {

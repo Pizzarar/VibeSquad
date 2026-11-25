@@ -493,7 +493,82 @@ export function mergedStatus(repoRoot, head, refs, { git = defaultGit, treeCache
     const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (lines.length && lines.every((l) => l.startsWith("- "))) return { merged: true, how: "cherry", ref };
   }
+  // idea-978: a squash merge whose base later moved on (tree differs) and whose commits were folded into one (cherry sees
+  // no equivalent per commit): compare the branch's combined fork-point diff with each base commit's patch-id. Offline.
+  for (const ref of refs) {
+    if (squashPatchMatch(repoRoot, head, ref, git, treeCache)) return { merged: true, how: "squash-patch", ref };
+  }
   return { merged: false, how: null, ref: null };
+}
+
+const SQUASH_SCAN_MAX = 1500;
+const SQUASH_CHUNK = 250;
+const firstWord = (line) => line.trim().split(/\s+/)[0] ?? "";
+const withNl = (t) => (t.endsWith("\n") ? t : t + "\n");
+/**
+ * The verbatim content of a diff: file headers, every added/removed line and the "\ No newline at end of file" markers. git
+ * patch-id ignores whitespace, CR and EOF newlines; this does not (split on \n only, so a CR stays part of its line).
+ */
+const diffBody = (t) =>
+  t
+    .split("\n")
+    .filter((l) => l.startsWith("diff --git ") || l.startsWith("\\ ") || ((l.startsWith("+") || l.startsWith("-")) && !l.startsWith("+++ ") && !l.startsWith("--- ")))
+    .join("\n");
+
+/** patch-id -> non-merge commits on `ref`, scanned once per sweep (kept in the shared `cache`, like the tree index). Null on a git error. */
+function basePatchIds(repoRoot, ref, git, cache) {
+  const key = `patch:${ref}`;
+  if (cache.has(key)) return cache.get(key);
+  // Chunked so no single git output nears defaultGit's buffer cap (a 1500-commit `log -p` is 66 MiB on a big repo); a git error
+  // in any chunk disables the ref (fail closed).
+  let map = new Map();
+  for (let skip = 0; skip < SQUASH_SCAN_MAX; skip += SQUASH_CHUNK) {
+    const log = tryGit(git, ["log", "-p", "--format=medium", "--no-ext-diff", "--no-merges", `--skip=${skip}`, `--max-count=${SQUASH_CHUNK}`, ref], repoRoot, { buffer: true });
+    if (log === null) {
+      map = null;
+      break;
+    }
+    if (!log.trim()) break; // history exhausted
+    const ids = tryGit(git, ["patch-id", "--stable"], repoRoot, { input: withNl(log) });
+    if (ids === null) {
+      map = null;
+      break;
+    }
+    let n = 0;
+    for (const line of ids.split(/\r?\n/)) {
+      const [pid, c] = line.trim().split(/\s+/);
+      if (pid && c) {
+        map.set(pid, [...(map.get(pid) ?? []), c]);
+        n++;
+      }
+    }
+    if (n < SQUASH_CHUNK) break; // a short chunk is the end of history (empty commits have no patch-id, so this can only stop early, never loop)
+  }
+  cache.set(key, map);
+  return map;
+}
+
+/**
+ * Does a non-merge commit on `ref` that head does not contain carry head's whole fork-point diff, both by patch-id and verbatim
+ * (patch-id ignores whitespace, so an unmerged indentation-only commit would otherwise read as merged)? Any git error = no.
+ */
+function squashPatchMatch(repoRoot, head, ref, git, cache) {
+  const mb = tryGit(git, ["merge-base", head, ref], repoRoot)?.trim();
+  if (!mb) return false;
+  const diff = tryGit(git, ["diff", "--no-ext-diff", mb, head], repoRoot, { buffer: true });
+  if (!diff || !diff.trim()) return false; // an empty combined diff merged nothing
+  const want = firstWord(tryGit(git, ["patch-id", "--stable"], repoRoot, { input: withNl(diff) }) ?? "");
+  if (!want) return false;
+  const cands = basePatchIds(repoRoot, ref, git, cache)?.get(want);
+  if (!cands) return false;
+  const mine = diffBody(diff);
+  for (const c of cands.slice(0, 8)) {
+    const m2 = tryGit(git, ["merge-base", c, head], repoRoot)?.trim();
+    if (!m2 || m2 === c) continue; // head already contains it: not a squash of head's work
+    const shown = tryGit(git, ["show", "--format=", "--no-ext-diff", c], repoRoot, { buffer: true });
+    if (shown && diffBody(shown) === mine) return true;
+  }
+  return false;
 }
 
 /**

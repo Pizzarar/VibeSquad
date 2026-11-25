@@ -22,6 +22,14 @@ export const ROLE_PROVIDER_CHAINS = Object.freeze({
   "art-painter": Object.freeze(["claude", "antigravity-cli", "opencode"]),
 });
 
+// Tier walk orders (A2 idea-986, PLAN_PER_ROLES_LADDER_1125 Amend 11-25 Per3): a tier listed here re-orders every role's
+// chain above when stakes force that tier. stakes=mechanical (tier cheap) tries Gemini Flash, then Claude Haiku, and
+// DeepSeek last, so opencode only runs when both others are capped. Only the role's own families are walked (a stored
+// role without opencode stays without it). Tiers not listed (top, mid) keep the role's order. Old names: unaffected.
+export const TIER_PROVIDER_CHAINS = Object.freeze({
+  cheap: Object.freeze(["antigravity-cli", "claude", "opencode"]),
+});
+
 // Legacy failover tables (COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS): read-only for old profile names until P5f
 // (now R5); they route exactly as before. Role names fail over along ROLE_PROVIDER_CHAINS above instead (P5c, R1).
 export const COUNTERPART_PROFILES = {

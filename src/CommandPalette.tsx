@@ -6,7 +6,10 @@ import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
-import { AGENT_TYPE_LABEL, type FolderDef, type Member, type TeamView } from "./teams";
+import { AGENT_TYPE_LABEL, getTeams, type FolderDef, type Member, type TeamView } from "./teams";
+import { setCrunchMode } from "./CrunchToggle";
+import { getCurrentSquadId } from "./currentSquad";
+import { crunchPaletteItems } from "./crunchMode";
 import { getLastFolder, patchTeamsFolder, setLastFolder } from "./boringFolders";
 import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
@@ -645,6 +648,7 @@ export function CommandPaletteHost(props: {
     // T2: Storybook is reached via the Code | Storybook tabs (Normal) and this command (keyboard / Psycho); hidden once a project is known-missing.
     // `mode` is a dep so the probe result is re-read each time the palette opens.
     const storybooks = props.views.filter((v) => !probeStorybook(v.team.id)).map<PaletteItem>((v) => ({ id: `action:storybook:${v.team.id}`, kind: "action", label: `Open Storybook: ${v.team.name}`, hint: "storybook" }));
+    const crunches = crunchPaletteItems(props.views.filter((v) => getTeams().some((t) => t.id === v.team.id)).map((v) => ({ id: v.team.id, name: v.team.name, on: getTeams().find((t) => t.id === v.team.id)?.vibeMode === true })), getCurrentSquadId(), q);
     const stops = runningCwds(props.members.map((m) => m.agent)).map<PaletteItem>((c) => ({
       id: `action:stopcwd:${c.cwd}`,
       kind: "action",
@@ -662,13 +666,14 @@ export function CommandPaletteHost(props: {
       act("reopen", "Reopen Closed Tab"),
       ...stops,
       ...storybooks,
+      ...crunches,
       ...teams,
       ...agents,
       ...ops,
       // Last so an empty query still lists agents first; typing "settings" or a setting name finds them.
       ...settingsPaletteItems().map<PaletteItem>((s) => ({ id: `action:${s.id}`, kind: "action", label: s.label, hint: "settings" })),
     ];
-  }, [all, props.members, props.views, bindings, mode]);
+  }, [all, props.members, props.views, bindings, mode, q]);
 
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {
@@ -705,6 +710,9 @@ export function CommandPaletteHost(props: {
       if (!target) return;
       if (id.startsWith("delete:")) requestAgentOp({ kind: "delete", agent: target.agent });
       else void reloadAgent(target.agent.id).catch((e) => alert(`Could not reload: ${e}`));
+    } else if (id.startsWith("crunch:")) {
+      const tid = id.slice("crunch:".length);
+      void setCrunchMode(tid, !(getTeams().find((t) => t.id === tid)?.vibeMode === true));
     } else if (id.startsWith("storybook:")) {
       const v = props.views.find((x) => x.team.id === id.slice("storybook:".length));
       if (v) openStorybook(v.team.id, v.team.name);

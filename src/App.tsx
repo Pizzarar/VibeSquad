@@ -43,6 +43,8 @@ import {
   type TeamView,
 } from "./teams";
 import { getFolders, isHubLaneId, titleFor } from "./teams";
+import { CrunchToggle } from "./CrunchToggle";
+import { resolveCurrentSquad, setCurrentSquadId } from "./currentSquad";
 import { filterAwakeViews } from "./boringFolders";
 import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
@@ -1287,7 +1289,6 @@ const Toolbar = memo(function Toolbar(props: {
   const uiScalePct = Math.round(uiScale * 100);
   const full = useFullView();
   useTeams();
-  const vibeOn = getTeams().find((t) => t.id === props.squadId)?.vibeMode === true;
   return (
     <div className="toolbar">
       <div className="seg">
@@ -1338,16 +1339,7 @@ const Toolbar = memo(function Toolbar(props: {
           <option value="older">Older</option>
         </select>
       )}
-      {vibeOn && (
-        <button
-          className="tchip on"
-          data-testid="vibe-mode-chip"
-          title={`Vibe mode is on for ${props.squadName || "this Squad"}. Click to turn it off.`}
-          onClick={() => void saveTeams((cur) => cur.map((t) => (t.id === props.squadId ? { ...t, vibeMode: false } : t)))}
-        >
-          Vibe mode
-        </button>
-      )}
+      <CrunchToggle key={props.squadId} teamId={props.squadId} variant="psycho" />
       <button
         className="tchip"
         data-testid="toolbar-vibe-toggle"
@@ -1543,7 +1535,8 @@ export function App() {
   );
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [screen, setScreen] = useState<"teams">("teams");
-  const storybookOpen = useStorybookTarget() != null;
+  const sbTarget = useStorybookTarget();
+  const storybookOpen = sbTarget != null;
   const [query, setQuery] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
@@ -1670,6 +1663,7 @@ export function App() {
   }, []);
 
   const view = sidebarViews.find((v) => v.team.id === teamId) ?? sidebarViews[0] ?? views[0];
+  setCurrentSquadId(resolveCurrentSquad(view?.team.id, sbTarget?.projectId, deviceRole));
   const activeTeamId = view?.team.id ?? teamId;
 
   // URL routing: ?team=&agent= mirrors the selection; Back/Forward restore it.
