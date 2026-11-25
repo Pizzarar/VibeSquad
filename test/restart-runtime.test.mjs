@@ -2756,3 +2756,51 @@ test("idea-695: vs restart names its agent caller as --requester; the owner may 
   assert.deepEqual(fireArgs({ requestedBy: "rn-abc" }), ["--requester", "rn-abc"]);
   assert.deepEqual(fireArgs({ requestedBy: "bad id;x" }), []);
 });
+
+// idea-673: vs restart extend / abort reach a script still in its idle wait through vs-restart-control.json (this pid only).
+test("idea-673: a control abort ends the idle wait at once: nothing stopped, no deferral, the reason recorded", async () => {
+  const { CONTROL_FILE } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, nonce: "n1", by: "owner", abort: { reason: "wrong tip" } }));
+    const t0 = Date.now();
+    const r = await w.run({ waitTimeoutSec: 30 });
+    assert.ok(Date.now() - t0 < 10_000, "did not wait out the 30 s timeout");
+    assert.equal(r.ok, false);
+    assert.equal(r.controlAbort?.by, "owner");
+    assert.equal(r.controlAbort?.reason, "wrong tip");
+    assert.equal(r.deferred, undefined);
+    assert.match(r.errors[0], /^aborted by owner while waiting for runner idle: wrong tip; nothing was stopped/);
+    assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
+    assert.deepEqual(w.spawned, [], "nothing started");
+    assert.equal(existsSync(path.join(w.outDir, CONTROL_FILE)), false, "consumed");
+    assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker cleared");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-673: a control extend pushes the wait deadline out and refreshes the drain; another pid's control is ignored", async () => {
+  const { CONTROL_FILE } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, nonce: "n2", by: "rn-ove", extendUntil: Date.now() + 400 }));
+    const t0 = Date.now();
+    const r = await w.run({ waitTimeoutSec: 0.05 });
+    assert.ok(Date.now() - t0 >= 350, `waited to the extended deadline (${Date.now() - t0} ms)`);
+    assert.equal(r.waitExtended?.length, 1, JSON.stringify(r.waitExtended));
+    assert.equal(r.waitExtended[0].by, "rn-ove");
+    assert.equal(r.waitExtended[0].nonce, "n2");
+    assert.ok(r.deferred, "still held past the extended deadline: defers as before");
+    assert.ok(w.drainCalls.filter((c) => c.method === "POST").length >= 2, `drain refreshed: ${JSON.stringify(w.drainCalls)}`);
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w2.outDir, { recursive: true });
+    writeFileSync(path.join(w2.outDir, CONTROL_FILE), JSON.stringify({ pid: 1, nonce: "n3", abort: {} }));
+    const r = await w2.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.controlAbort, undefined);
+    assert.ok(r.deferred);
+    assert.equal(existsSync(path.join(w2.outDir, CONTROL_FILE)), true, "another run's control is left alone");
+  } finally { await w2.cleanup(); }
+});

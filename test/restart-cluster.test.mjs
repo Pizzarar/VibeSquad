@@ -322,3 +322,113 @@ test('idea-653: vs restart status shows the firing script\'s phase, wait deadlin
   assert.match(formatRequestStatus(req, now, { progress: { ...p, alive: false, phase: 'restarting' } }), /pid 4242 \(EXITED\): restarting/);
   assert.doesNotMatch(formatRequestStatus({ ...req, state: 'done' }, now), /progress/, 'only while firing');
 });
+
+// ---- idea-673: vs restart extend; abort reaches a waiting script; the drain hook stops lagging an abort ----
+const OWNER = { hasOwnerProof: () => true, teams: [{ id: 'vibesquad', name: 'VibeSquad', hub: 'vibesquad', lanes: [{ id: 'vibesquad' }] }] };
+async function vsRestart(home, args, opts = {}) {
+  const { commandRestartRequest } = await import('../cli/vs.mjs');
+  const out = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (c) => { out.push(String(c)); return true; };
+  try { await commandRestartRequest({ _: args, ...(opts.flags ?? {}) }, { env: { VIBESQUAD_HOME: home }, ...OWNER, now: () => FIRED + 60_000, ackMs: 0, ...opts }); return out.join(''); } finally { process.stdout.write = orig; }
+}
+const setState = (home, patch) => { const f = path.join(home, 'restart-request.json'); const doc = JSON.parse(readFileSync(f, 'utf8')); Object.assign(doc.current, patch); writeFileSync(f, JSON.stringify(doc)); };
+const CONTROL = 'vs-restart-control.json';
+const readControl = (home) => JSON.parse(readFileSync(path.join(home, CONTROL), 'utf8'));
+
+test('idea-673: extendRestartRequest pushes a draining deadline out (capped), lengthens a queued drain, refuses ready/firing/none', async () => {
+  const { extendRestartRequest, MAX_DEADLINE_MIN } = await import('../server/restart-request.mjs');
+  const home = firingHome();
+  setState(home, { state: 'draining' });
+  const before = Date.parse(readRestartRequest(home).deadline);
+  const r = extendRestartRequest(home, { by: 'rn-ove', minutes: 20, now: FIRED });
+  assert.equal(Date.parse(r.deadline), before + 20 * 60_000);
+  assert.match(readRestartRequest(home).events.at(-1).text, /deadline extended by rn-ove/);
+  const capped = extendRestartRequest(home, { minutes: MAX_DEADLINE_MIN, now: FIRED });
+  assert.equal(Date.parse(capped.deadline), FIRED + MAX_DEADLINE_MIN * 60_000, 'never past the cap from now');
+  assert.throws(() => extendRestartRequest(home, { minutes: 5, now: FIRED }), /already at the 240 min cap/);
+  setState(home, { state: 'requested', deadline: new Date(FIRED - 60_000).toISOString() });
+  assert.equal(Date.parse(extendRestartRequest(home, { minutes: 10, now: FIRED }).deadline), FIRED + 10 * 60_000, 'a passed deadline extends from now');
+  setState(home, { state: 'queued', windowAt: new Date(FIRED + 3600_000).toISOString(), deadlineMin: 30 });
+  const q = extendRestartRequest(home, { minutes: 15, now: FIRED });
+  assert.equal(q.deadlineMin, 45);
+  assert.equal(Date.parse(q.deadline), FIRED + 3600_000 + 45 * 60_000);
+  for (const [state, code] of [['ready', 'READY'], ['firing', 'FIRING'], ['aborted', 'NONE']]) {
+    setState(home, { state });
+    assert.throws(() => extendRestartRequest(home, { minutes: 5, now: FIRED }), (e) => e.code === code, state);
+  }
+  for (const bad of [0, -1, 1.5, MAX_DEADLINE_MIN + 1, 'x']) assert.throws(() => extendRestartRequest(home, { minutes: bad }), /whole minutes/, String(bad));
+});
+
+test('idea-673: vs restart extend / abort on a firing request write the control for its waiting script; past the wait they refuse', async () => {
+  const home = firingHome();
+  const waitDeadline = new Date(FIRED + 600_000).toISOString();
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', waitDeadline });
+  const out = await vsRestart(home, ['extend', '20']);
+  const c = readControl(home);
+  assert.equal(c.pid, process.pid);
+  assert.equal(c.by, 'owner');
+  assert.equal(c.extendUntil, FIRED + 600_000 + 20 * 60_000, 'from the script\'s own wait deadline');
+  assert.match(out, /extend to .* written for vs restart pid/);
+  // acknowledged: the script read it (its nonce in progress) and the CLI says the new deadline
+  const acked = await vsRestart(home, ['extend', '5'], { ackMs: 2000, sleep: async () => { const n = readControl(home).nonce; writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting', waitDeadline: '2026-11-23T16:40:05.000Z', control: { nonce: n } }); } });
+  assert.match(acked, /now waits for runner idle until 2026-11-23T16:40:05.000Z \(rr-test-0001\)/);
+  const ab = await vsRestart(home, ['abort'], { flags: { reason: 'wrong tip' } });
+  assert.deepEqual(readControl(home).abort, { reason: 'wrong tip' });
+  assert.match(ab, /abort written for vs restart pid/);
+  assert.equal(readRestartRequest(home).state, 'firing', 'the request ends when the script\'s result lands, not before');
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED + 3000).toISOString(), phase: 'restarting' });
+  await assert.rejects(vsRestart(home, ['abort']), /past its idle wait \(restarting\); a stop or relaunch is never cut halfway/);
+  await assert.rejects(vsRestart(home, ['extend', '5']), /past its idle wait/);
+  writeProgressFile(home, { pid: deadPid(), startedAt: new Date(FIRED + 3000).toISOString(), phase: 'waiting' });
+  await assert.rejects(vsRestart(home, ['abort']), /has exited/);
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED - 3600_000).toISOString(), phase: 'waiting' });
+  await assert.rejects(vsRestart(home, ['abort']), /no running vs restart for rr-test-0001/, 'an earlier run\'s script is not this fire\'s');
+  await assert.rejects(vsRestart(home, ['extend', 'x']), /usage: vs restart extend <min>/);
+});
+
+test('idea-673: with no open request, abort/extend reach a direct vs restart still waiting; with none waiting the old error stands', async () => {
+  const home = tmp('vs-rc-home-');
+  await assert.rejects(vsRestart(home, ['abort']), /no open restart request/);
+  writeProgressFile(home, { pid: process.pid, startedAt: new Date(FIRED).toISOString(), phase: 'waiting', waitDeadline: new Date(FIRED + 600_000).toISOString() });
+  await vsRestart(home, ['abort']);
+  assert.ok(readControl(home).abort);
+  await vsRestart(home, ['extend', '10']);
+  assert.equal(readControl(home).extendUntil, FIRED + 1200_000);
+});
+
+test('idea-673: a fired script aborted in its wait ends the request with that reason, leads told', async () => {
+  const home = firingHome({ asked: { 'rn-ui': { team: 'vibesquad', lane: 'ui', title: 'ui lead', sentAt: new Date(FIRED - 30_000).toISOString() } } });
+  writeResultFile(home, FIRED + 3000, { ok: false, controlAbort: { by: 'owner', reason: 'wrong tip' }, errors: ['aborted by owner while waiting for runner idle: wrong tip; nothing was stopped'] });
+  const { loop, calls } = requestLoop(home);
+  assert.equal((await loop.tick()).state, 'aborted');
+  assert.equal(readRestartRequest(home).abortReason, 'vs restart abort by owner while the restart waited for runner idle: wrong tip; nothing was stopped');
+  assert.ok(calls.some((c) => c[0] === 'send' && c[1] === 'rn-ui' && /was aborted/.test(c[2])), JSON.stringify(calls));
+});
+
+test('idea-673: the drain hook lifts a request drain at once when its request is finished or no longer current', async () => {
+  const { requestDrainLifted, requestFileFor } = await import('../runner/drain-hook.mjs');
+  const drain = { kind: 'request', since: Date.now(), until: Date.now() + 60_000, request: { id: 'rr-1', tip: 'abc' } };
+  const doc = (cur) => ({ version: 1, current: cur, history: [] });
+  assert.equal(requestDrainLifted(drain, null), false, 'no request file: keep refusing');
+  assert.equal(requestDrainLifted(drain, {}), false, 'not a request doc');
+  for (const st of ['requested', 'draining', 'ready']) assert.equal(requestDrainLifted(drain, doc({ id: 'rr-1', state: st })), false, st);
+  assert.equal(requestDrainLifted(drain, doc({ id: 'rr-1', state: 'firing' })), false, 'fired, not launched yet');
+  for (const st of ['aborted', 'done', 'queued']) assert.equal(requestDrainLifted(drain, doc({ id: 'rr-1', state: st })), true, st);
+  assert.equal(requestDrainLifted(drain, doc({ id: 'rr-1', state: 'firing', launch: { ok: true } })), true, 'launched: the script drains itself');
+  assert.equal(requestDrainLifted(drain, doc({ id: 'rr-2', state: 'draining' })), true, 'another request');
+  assert.equal(requestDrainLifted(drain, doc(null)), true, 'no current request');
+  assert.equal(requestDrainLifted({ ...drain, kind: 'restart' }, doc({ id: 'rr-1', state: 'aborted' })), false, 'vs restart\'s own drain is never lifted here');
+  // end to end: the hook process, drain.json in <vs home>/runner
+  const vsHome = tmp('vs-rc-hook-');
+  mkdirSync(path.join(vsHome, 'runner'));
+  const drainFile = path.join(vsHome, 'runner', 'drain.json');
+  assert.equal(requestFileFor(drainFile), path.join(vsHome, 'restart-request.json'));
+  writeFileSync(drainFile, JSON.stringify(drain));
+  const hook = () => spawnSync(process.execPath, [path.join(import.meta.dirname, '..', 'runner', 'drain-hook.mjs'), drainFile], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm test', run_in_background: true } }), encoding: 'utf8', timeout: 10_000 }).status;
+  assert.equal(hook(), 2, 'no request file: refused as before');
+  writeFileSync(path.join(vsHome, 'restart-request.json'), JSON.stringify(doc({ id: 'rr-1', state: 'draining' })));
+  assert.equal(hook(), 2, 'request still draining');
+  writeFileSync(path.join(vsHome, 'restart-request.json'), JSON.stringify(doc({ id: 'rr-1', state: 'aborted' })));
+  assert.equal(hook(), 0, 'aborted: allowed before the server clears the drain');
+});

@@ -64,6 +64,20 @@ export function writeProgress(outDir, rec) {
   const tmp = `${file}.${process.pid}.tmp`;
   try { writeFileSync(tmp, JSON.stringify(rec)); renameSync(tmp, file); return true; } catch { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } return false; }
 }
+// idea-673: `vs restart extend <min>` / `vs restart abort` reach a script that is still waiting for runner idle through this
+// file: { pid, nonce, by, at, extendUntil (ms) | abort: { reason } }. Read (and consumed) on each 2 s poll of the wait, for
+// this pid only; past the wait (phase 'restarting') nothing reads it, so an abort never cuts a stop or relaunch halfway.
+export const CONTROL_FILE = 'vs-restart-control.json';
+/** The longest a wait may be pushed out to, from now (the runner's drain ceiling). */
+export const EXTEND_MAX_MS = 2 * 60 * 60 * 1000;
+export function takeControl(outDir, pid = process.pid) {
+  const file = path.join(outDir, CONTROL_FILE);
+  let c;
+  try { c = JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+  if (!c || typeof c !== 'object' || c.pid !== pid) return null; // another (or an earlier) run's: left alone
+  try { rmSync(file, { force: true }); } catch { /* read once: the nonce dedupes a repeat */ }
+  return c;
+}
 export function drainTtlMs(opts) {
   const sec = (Number(opts.waitTimeoutSec) || 0) + (Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC;
   return Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, Math.round(sec * 1000)));
@@ -862,7 +876,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           step('drain set', { ttlSec: Math.round(ttlMs / 1000), until: r.body?.drain?.until ? new Date(r.body.drain.until).toISOString() : null });
         } else step('drain not set', { status: r.status, error: r.status === 404 ? 'runner predates /drain' : String(r.body?.error ?? '') });
       } catch (e) { step('drain not set', { error: e.message }); }
-      const deadline = d.now() + opts.waitTimeoutSec * 1000;
+      let deadline = d.now() + opts.waitTimeoutSec * 1000; // idea-673: vs restart extend pushes it out
       // idea-695: the requester's own held work is recorded, never waited on or deferred for.
       const mine = (h) => {
         const { health, excluded } = withoutRequester(h, opts.requester);
@@ -877,7 +891,36 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
       let lastHealth = health0;
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec, ...(opts.requester ? { requester: opts.requester } : {}) });
-      const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20) });
+      let lastControl = null; // idea-673: the last control read (its nonce is the CLI's acknowledgement)
+      const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20), ...(lastControl ? { control: lastControl } : {}) });
+      // idea-673: extend or abort the wait (vs restart extend / abort). An extend refreshes the drain to cover the new deadline.
+      const applyControl = async () => {
+        const c = takeControl(outDir);
+        if (!c || (lastControl && c.nonce && c.nonce === lastControl.nonce)) return;
+        const by = String(c.by ?? 'owner').slice(0, 64);
+        if (c.abort) {
+          const reason = String(c.abort.reason ?? '').replace(/[\r\n]+/g, ' ').slice(0, 200);
+          result.controlAbort = { by, reason, at: new Date(d.now()).toISOString() };
+          lastControl = { nonce: c.nonce ?? null, kind: 'abort', by, at: result.controlAbort.at };
+          step('aborted while waiting', result.controlAbort);
+          result.errors.unshift(`aborted by ${by} while waiting for runner idle${reason ? `: ${reason}` : ''}; nothing was stopped`);
+          progress('aborted', { control: lastControl });
+          throw new Error('abort');
+        }
+        const until = Number(c.extendUntil);
+        if (!Number.isFinite(until)) return;
+        const to = Math.min(until, d.now() + EXTEND_MAX_MS);
+        if (to > deadline) {
+          deadline = to;
+          if (drainOn) {
+            const ttlMs = Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, deadline - d.now() + ((Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC) * 1000));
+            try { await runnerCall(det, d, 'POST', '/drain', 5000, { ttlMs, reason: `vs restart pid ${process.pid}` }); } catch (e) { result.errors.push(`extend: drain refresh failed (${e.message}); the drain may lapse before the new deadline`); }
+          }
+        }
+        lastControl = { nonce: c.nonce ?? null, kind: 'extend', by, at: new Date(d.now()).toISOString(), waitDeadline: new Date(deadline).toISOString() };
+        result.waitExtended = [...(result.waitExtended ?? []), lastControl];
+        step('wait extended', lastControl);
+      };
       waitProgress();
       let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
       const fetchHealth = async () => mine((await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {});
@@ -890,6 +933,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       };
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
+        await applyControl();
         try { applyHealth(await fetchHealth()); } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
         waitProgress();
       }

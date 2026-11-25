@@ -302,11 +302,87 @@ function foldInto(cur, { tip, by, team, needs, scope, at }) {
 export function abortRestartRequest(home, { by = "owner", reason = "", now = Date.now() } = {}) {
   return mutateSync(home, (doc) => {
     const cur = doc.current;
-    if (!cur || TERMINAL.has(cur.state)) throw new Error("vs restart abort: no open restart request.");
-    if (cur.state === "firing") throw new Error(`vs restart abort: ${cur.id} already fired vs restart at ${cur.firedAt}; it cannot be called back.`);
+    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart abort: no open restart request."), { code: "NONE" });
+    // idea-673: the CLI then aborts the fired script if it is still in its idle wait (controlWaitingScript).
+    if (cur.state === "firing") throw Object.assign(new Error(`vs restart abort: ${cur.id} already fired vs restart at ${cur.firedAt}; it cannot be called back.`), { code: "FIRING", req: cur });
     abort(cur, iso(now), `aborted by ${by}${reason ? `: ${clean(reason, 200)}` : ""}`);
     return cur;
   });
+}
+
+/**
+ * idea-673: `vs restart extend <min>` on an open request that has not fired: requested/draining push `deadline` out (from
+ * the later of it and now, capped at MAX_DEADLINE_MIN from now); queued lengthens the drain that starts at its window.
+ * Ready/firing/none: throws with `code` 'FIRING' / 'READY' / 'NONE' (the CLI then extends the waiting script, if any).
+ */
+export function extendRestartRequest(home, { by = "owner", minutes, now = Date.now() } = {}) {
+  const min = Number(minutes);
+  if (!Number.isInteger(min) || min < 1 || min > MAX_DEADLINE_MIN) throw new Error(`vs restart extend: <min> must be whole minutes, 1-${MAX_DEADLINE_MIN}`);
+  return mutateSync(home, (doc) => {
+    const cur = doc.current;
+    const at = iso(now);
+    if (!cur || TERMINAL.has(cur.state)) throw Object.assign(new Error("vs restart extend: no open restart request."), { code: "NONE" });
+    if (cur.state === "firing") throw Object.assign(new Error(`vs restart extend: ${cur.id} already fired vs restart at ${cur.firedAt}.`), { code: "FIRING" });
+    if (cur.state === "ready") throw Object.assign(new Error(`vs restart extend: ${cur.id} is ready and fires on the next tick; nothing to extend.`), { code: "READY" });
+    if (cur.state === "queued") {
+      const before = Number(cur.deadlineMin) || DEFAULT_DEADLINE_MIN;
+      cur.deadlineMin = Math.min(MAX_DEADLINE_MIN, before + min);
+      cur.deadline = iso(Date.parse(cur.windowAt) + cur.deadlineMin * 60_000);
+      event(cur, at, `drain deadline extended by ${by}: ${before} -> ${cur.deadlineMin} min after the window`);
+      return cur;
+    }
+    const before = cur.deadline;
+    const to = Math.min(Math.max(Date.parse(before) || now, now) + min * 60_000, now + MAX_DEADLINE_MIN * 60_000);
+    if (!(to > (Date.parse(before) || 0))) throw new Error(`vs restart extend: ${cur.id}'s deadline ${before} is already at the ${MAX_DEADLINE_MIN} min cap.`);
+    cur.deadline = iso(to);
+    event(cur, at, `deadline extended by ${by}: ${before} -> ${cur.deadline}`);
+    return cur;
+  });
+}
+
+/** idea-673: the running vs restart script's progress, any run (a request's fire or a direct vs restart), or null. */
+export function readScriptProgress(home, { alive = pidAlive } = {}) {
+  let p;
+  try { p = JSON.parse(fs.readFileSync(path.join(vsHomeOf(home), PROGRESS_FILE), "utf8")); } catch { return null; }
+  if (!p || typeof p !== "object" || !Number.isInteger(p.pid) || p.pid <= 0) return null;
+  let up = false;
+  try { up = Boolean(alive(p.pid)); } catch { up = true; } // unknown: never read as dead
+  return { ...p, alive: up };
+}
+
+/** scripts/restart-runtime.mjs CONTROL_FILE: read on each poll of its idle wait, for its own pid only. */
+export const CONTROL_FILE = "vs-restart-control.json";
+/** scripts/restart-runtime.mjs EXTEND_MAX_MS: how far out (from now) a script's wait may be pushed. */
+export const SCRIPT_EXTEND_MAX_MS = 2 * 3600_000;
+
+/**
+ * idea-673: extend or abort a vs restart script still in its idle wait (`kind` 'extend' with `minutes`, or 'abort' with
+ * `reason`). Refused unless its progress says waiting and its pid is alive: past the wait it is stopping and relaunching,
+ * which is never cut halfway. With `req` (a firing request) the script must be that fire's. -> { pid, nonce, extendUntil? }.
+ */
+export function controlWaitingScript(home, { kind, by = "owner", minutes, reason = "", req = null, now = Date.now(), alive = pidAlive } = {}) {
+  const p = req ? readRestartProgress(home, req, { alive }) : readScriptProgress(home, { alive });
+  const verb = kind === "abort" ? "abort" : "extend";
+  if (!p) throw new Error(`vs restart ${verb}: no running vs restart${req ? ` for ${req.id}` : ""} reports its progress; nothing to ${verb}.`);
+  if (!p.alive) throw new Error(`vs restart ${verb}: the vs restart script (pid ${p.pid}) has exited (last phase ${p.phase ?? "?"}).`);
+  if (p.phase !== "waiting") throw new Error(`vs restart ${verb}: the vs restart script (pid ${p.pid}) is past its idle wait (${p.phase ?? "?"}); a stop or relaunch is never cut halfway.`);
+  const nonce = randomBytes(6).toString("hex");
+  const rec = { pid: p.pid, nonce, by, at: iso(now) };
+  if (kind === "abort") rec.abort = { reason: clean(reason, 200) };
+  else {
+    const min = Number(minutes);
+    if (!Number.isInteger(min) || min < 1 || min > SCRIPT_EXTEND_MAX_MS / 60_000) throw new Error(`vs restart extend: while vs restart waits, <min> must be whole minutes, 1-${SCRIPT_EXTEND_MAX_MS / 60_000}`);
+    rec.extendUntil = Math.min(Math.max(Date.parse(p.waitDeadline ?? "") || now, now) + min * 60_000, now + SCRIPT_EXTEND_MAX_MS);
+  }
+  writeFileAtomic(path.join(vsHomeOf(home), CONTROL_FILE), JSON.stringify(rec));
+  return { pid: p.pid, nonce, ...(rec.extendUntil ? { extendUntil: rec.extendUntil } : {}) };
+}
+
+/** idea-673: whether the script read a control (its nonce in progress), moved past the wait, or exited. */
+export function controlAcked(home, ctl, { alive = pidAlive } = {}) {
+  const p = readScriptProgress(home, { alive });
+  if (!p || p.pid !== ctl.pid) return { acked: true, progress: p };
+  return { acked: p.control?.nonce === ctl.nonce || !p.alive || p.phase !== "waiting", progress: p };
 }
 
 // ---- inputs ---------------------------------------------------------------------------------------------------------
@@ -467,14 +543,10 @@ export function restartResults(home, max = 8) {
 export const PROGRESS_FILE = "vs-restart-progress.json";
 export function readRestartProgress(home, req, { alive = pidAlive } = {}) {
   if (!req?.firedAt) return null;
-  let p;
-  try { p = JSON.parse(fs.readFileSync(path.join(vsHomeOf(home), PROGRESS_FILE), "utf8")); } catch { return null; }
-  if (!p || typeof p !== "object" || !Number.isInteger(p.pid) || p.pid <= 0) return null;
+  const p = readScriptProgress(home, { alive });
+  if (!p) return null;
   const fired = Date.parse(req.firedAt);
-  if (!((Date.parse(p.startedAt ?? "") || 0) >= fired - RESULT_SLACK_MS)) return null;
-  let up = false;
-  try { up = Boolean(alive(p.pid)); } catch { up = true; } // unknown: never read as dead
-  return { ...p, alive: up };
+  return (Date.parse(p.startedAt ?? "") || 0) >= fired - RESULT_SLACK_MS ? p : null;
 }
 
 /** idea-653: one status line for a firing request's script progress. */
@@ -686,7 +758,8 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
         event(req, at, `restart done (${r.file ? path.basename(r.file) : "result"})`);
       } else if (r) {
         req.result = { file: r.file ?? null, ok: false, finishedAt: r.finishedAt ?? null };
-        abort(req, at, r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(redactHostPathTokens(r.errors?.[0] ?? "no error recorded"), 300)}`);
+        abort(req, at, r.controlAbort ? `vs restart abort by ${clean(r.controlAbort.by, 64)} while the restart waited for runner idle${r.controlAbort.reason ? `: ${clean(r.controlAbort.reason, 200)}` : ""}; nothing was stopped`
+          : r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(redactHostPathTokens(r.errors?.[0] ?? "no error recorded"), 300)}`);
       } else if (progress && progress.alive === false) {
         // idea-653: the script that ran this fire has exited and left no result (a crash, a kill): nothing will finish it.
         abort(req, at, `the vs restart script (pid ${progress.pid}) exited without a result (last phase: ${progress.phase ?? "?"} at ${progress.at ?? "?"}); nothing was restarted after that point. See its log in ~/.vibesquad/logs, then request again`);
