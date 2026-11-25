@@ -30,6 +30,8 @@ const OPEN_STATUSES = new Set(['parked', 'accepted']);
 const JUDGED_STATUSES = new Set(['archived', 'rejected']);
 /** A key on a card archived/rejected within this window is a judged finding: not re-filed. */
 export const JUDGED_WINDOW_MS = 14 * 24 * 3600 * 1000;
+export const NEW_MODEL_KEY_PREFIX = 'new-model:';
+const isPermanentJudgedKey = (key) => Boolean(key && key.startsWith(NEW_MODEL_KEY_PREFIX));
 const KEY_RE = /\(audit-key: ([^)]+)\)/;
 
 /** The one place the audit lane id is chosen. A1's findAuditLane replaces this body. */
@@ -53,7 +55,17 @@ export function fileFindings(findings, { baseHome, dryRun = false, needsYou = ()
   const auditCards = readInboxCards(baseHome).filter((c) => c.source === AUDIT_SOURCE);
   const openCards = auditCards.filter((c) => OPEN_STATUSES.has(c.status));
   const open = new Set(openCards.map((c) => keyOf(c.text)).filter(Boolean));
-  const judged = new Set(auditCards.filter((c) => JUDGED_STATUSES.has(c.status) && now - Date.parse(c.updatedAt || c.createdAt) < JUDGED_WINDOW_MS).map((c) => keyOf(c.text)).filter(Boolean));
+  const judged = new Set(
+    auditCards
+      .filter((c) => {
+        if (!JUDGED_STATUSES.has(c.status)) return false;
+        const k = keyOf(c.text);
+        if (!k) return false;
+        return isPermanentJudgedKey(k) || now - Date.parse(c.updatedAt || c.createdAt) < JUDGED_WINDOW_MS;
+      })
+      .map((c) => keyOf(c.text))
+      .filter(Boolean),
+  );
   const filed = [];
   const updated = [];
   const skipped = [];
@@ -92,6 +104,18 @@ export function staleUsageReviewFindings({ baseHome, now = Date.now() } = {}) {
 }
 
 const EFFORT_SUFFIX_RE = /-(?:minimal|low|medium|high|xhigh|max)$/i;
+const IGNORED_CATALOG_MODEL_RE = /^gemini-pro-orchestrator(?:-|$)/i;
+const MODEL_OWNER_RE = [
+  [/^(?:anthropic\/)?claude(?:-|$)/i, 'claude'],
+  [/^(?:google\/)?gemini(?:-|$)/i, 'antigravity-cli'],
+  [/^(?:openai\/)?(?:gpt|o[134]|codex)(?:-|$)/i, 'codex'],
+  [/^(?:deepseek\/)?deepseek(?:-|$)/i, 'opencode'],
+];
+
+function modelOwnerProvider(modelId) {
+  for (const [re, fam] of MODEL_OWNER_RE) if (re.test(modelId)) return fam;
+  return null;
+}
 
 /** Normalize a model id for ladder comparison: migrate retired ids and strip trailing effort suffixes. */
 export function normalizeLadderModelId(model) {
@@ -100,22 +124,27 @@ export function normalizeLadderModelId(model) {
   return migrated.replace(EFFORT_SUFFIX_RE, '').trim();
 }
 
-async function defaultReadCatalog({ home } = {}) {
-  await probeModelLists();
-  return buildCatalog({ home });
+async function defaultReadCatalog({ home, probeLists = probeModelLists, loadCatalog = buildCatalog, warn = (msg) => console.error(msg) } = {}) {
+  const lists = await probeLists();
+  for (const [prov, res] of Object.entries(lists ?? {})) {
+    if (res?.error) warn(`audit-perfection: live model probe failed for ${prov} (falling back to ${res.source || 'static'}): ${res.error}`);
+  }
+  return loadCatalog({ home });
 }
 
 /**
  * Diff each provider's model catalog against the models named on the ladder (defaults + stored overrides).
  * Effort variants (e.g. gemini-4-neon-high -> gemini-4-neon) and retired aliases are normalized before comparing.
- * If the catalog cannot be read (provider offline / error), returns [] without throwing.
+ * Cross-provider model entries (e.g. claude-* or gpt-* served through antigravity-cli) and orchestrator wrappers are skipped.
+ * If the catalog cannot be read (provider offline / error), logs a warning and returns [] without throwing.
  */
-export async function newModelFindings({ baseHome, catalog, readCatalog = defaultReadCatalog, ladder } = {}) {
+export async function newModelFindings({ baseHome, catalog, readCatalog = defaultReadCatalog, ladder, probeLists, loadCatalog, warn = (msg) => console.error(msg) } = {}) {
   let cat = catalog;
   if (cat === undefined) {
     try {
-      cat = await readCatalog({ home: baseHome });
-    } catch {
+      cat = await readCatalog({ home: baseHome, ...(probeLists ? { probeLists } : {}), ...(loadCatalog ? { loadCatalog } : {}), warn });
+    } catch (err) {
+      warn(`audit-perfection: catalog read failed: ${err?.message ?? err}`);
       return [];
     }
   }
@@ -156,6 +185,9 @@ export async function newModelFindings({ baseHome, catalog, readCatalog = defaul
       const rawId = typeof item === 'string' ? item : item?.id;
       const norm = normalizeLadderModelId(rawId);
       if (!norm) continue;
+      if (IGNORED_CATALOG_MODEL_RE.test(norm)) continue;
+      const owner = modelOwnerProvider(norm);
+      if (owner && owner !== fam) continue;
       const normLower = norm.toLowerCase();
       if (onLadder.has(normLower)) continue;
       const dedupeKey = `${fam}/${normLower}`;
@@ -163,7 +195,7 @@ export async function newModelFindings({ baseHome, catalog, readCatalog = defaul
       seen.add(dedupeKey);
       const source = typeof item === 'object' && item?.source ? item.source : 'catalog';
       findings.push({
-        key: `new-model:${fam}/${normLower}`,
+        key: `${NEW_MODEL_KEY_PREFIX}${fam}/${normLower}`,
         text: `${fam}/${norm} seen in catalog, not on ladder: trial it as an arm?`,
         evidence: `providers-catalog ${fam} (${rawId}, ${source}) not on stakes-ladder`,
       });

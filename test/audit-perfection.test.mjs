@@ -196,15 +196,100 @@ test('newModelFindings respects stored ladder overrides in baseHome', async () =
 
 test('newModelFindings returns no findings and does not throw when catalog read fails', async () => {
   const ladder = { claude: { top: { model: 'claude-opus-5-5' } } };
+  const warnings = [];
   const asyncFail = await newModelFindings({
     readCatalog: async () => { throw new Error('provider offline'); },
     ladder,
+    warn: (m) => warnings.push(m),
   });
   assert.deepEqual(asyncFail, []);
 
   const syncFail = await newModelFindings({
     readCatalog: () => { throw new Error('ENOENT'); },
     ladder,
+    warn: (m) => warnings.push(m),
   });
   assert.deepEqual(syncFail, []);
+  assert.equal(warnings.length, 2);
+});
+
+test('newModelFindings skips cross-provider models and orchestrator wrappers while keeping same-family models', async () => {
+  const ladder = {
+    claude: { top: { model: 'claude-opus-5-5' }, mid: { model: 'claude-sonnet-5-5' } },
+    'antigravity-cli': { top: { model: 'gemini-4-neon' }, cheap: { model: 'gemini-3.8-flash' } },
+  };
+  const catalog = {
+    claude: {
+      provider: 'claude',
+      models: [
+        { id: 'claude-opus-5-5', source: 'built-in' },
+        { id: 'claude-sonnet-5-5', source: 'built-in' },
+        { id: 'claude-haiku-5-5', source: 'built-in' },
+        { id: 'claude-fable-5-1', source: 'built-in' },
+      ],
+    },
+    'antigravity-cli': {
+      provider: 'antigravity-cli',
+      models: [
+        { id: 'gemini-4-neon-high', source: 'cli probe' },
+        { id: 'gemini-4-carbon-medium', source: 'cli probe' },
+        { id: 'gemini-4-hydrogen-high', source: 'cli probe' },
+        { id: 'gemini-pro-orchestrator', source: 'cli probe' },
+        { id: 'gemini-pro-orchestrator-neon', source: 'cli probe' },
+        { id: 'gemini-pro-orchestrator-argon', source: 'cli probe' },
+        { id: 'claude-opus-5-5-low', source: 'cli probe' },
+        { id: 'claude-sonnet-5-5-low', source: 'cli probe' },
+        { id: 'gpt-oss-120b-medium', source: 'cli probe' },
+      ],
+    },
+  };
+  const findings = await newModelFindings({ catalog, ladder });
+  assert.deepEqual(
+    findings.map((x) => x.key),
+    [
+      'new-model:claude/claude-haiku-5-5',
+      'new-model:claude/claude-fable-5-1',
+      'new-model:antigravity-cli/gemini-4-carbon',
+      'new-model:antigravity-cli/gemini-4-hydrogen',
+    ],
+  );
+});
+
+for (const status of ['archived', 'rejected']) {
+  test(`a ${status} new-model: key never re-files even past the 14-day judged window`, () => {
+    const baseHome = tmp();
+    const finding = {
+      key: 'new-model:antigravity-cli/gemini-4-hydrogen',
+      text: 'antigravity-cli/gemini-4-hydrogen seen in catalog, not on ladder: trial it as an arm?',
+      evidence: 'providers-catalog antigravity-cli (gemini-4-hydrogen, cli probe) not on stakes-ladder',
+    };
+    assert.equal(fileFindings([finding], { baseHome }).filed.length, 1);
+    const file = path.join(baseHome, 'inbox.json');
+    const cards = JSON.parse(fs.readFileSync(file, 'utf8'));
+    cards[0].status = status;
+    cards[0].updatedAt = new Date().toISOString();
+    fs.writeFileSync(file, JSON.stringify(cards));
+    const wayLater = Date.now() + 90 * 24 * 3600 * 1000;
+    const r = fileFindings([finding], { baseHome, now: wayLater });
+    assert.equal(r.filed.length, 0);
+    assert.deepEqual(r.skipped, ['new-model:antigravity-cli/gemini-4-hydrogen']);
+  });
+}
+
+test('newModelFindings logs a warning when live probe fails and falls back to static catalog', async () => {
+  const warnings = [];
+  const ladder = { 'antigravity-cli': { top: { model: 'gemini-4-neon' } } };
+  const findings = await newModelFindings({
+    ladder,
+    probeLists: async () => ({
+      'antigravity-cli': { models: [], source: 'static', at: null, error: 'timed out after 15000ms' },
+    }),
+    loadCatalog: () => ({ 'antigravity-cli': { provider: 'antigravity-cli', models: [] } }),
+    warn: (m) => warnings.push(m),
+  });
+  assert.deepEqual(findings, []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /antigravity-cli/);
+  assert.match(warnings[0], /static/);
+  assert.match(warnings[0], /timed out/);
 });
