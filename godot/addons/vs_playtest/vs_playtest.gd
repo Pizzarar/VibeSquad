@@ -36,6 +36,7 @@ var _layer: CanvasLayer
 var _layer_overlay: CanvasLayer
 var _timer: Timer
 var _team_id := ""
+var _role_pending := false
 var _hotkey_dock: Key = KEY_F4
 var _hotkey_bug: Key = KEY_F3
 var _cursor := ""
@@ -156,6 +157,7 @@ func unpair() -> bool:
 func open_dock() -> void:
 	if not enabled or _dock == null:
 		return
+	_ensure_role()
 	_dock.visible = true
 	_relayout()
 	_dock.focus_input()
@@ -190,6 +192,7 @@ func set_ui_scale(s: float) -> void:
 func start_capture() -> void:
 	if not enabled or _capturing:
 		return
+	_ensure_role()
 	_capturing = true
 	await _capture_flow()
 	_overlay.hide_all()
@@ -356,6 +359,7 @@ func _on_reply(text: String) -> void:
 ## Pair row state: hidden for a loopback server (local token), else Pair with VS / Unpair; a refused URL or path, or a
 ## device token without a pinned CA, says why.
 func _refresh_pairing() -> void:
+	_role_pending = false
 	if _dock == null:
 		return
 	if _transport.auth_mode() == Token.MODE_LOCAL:
@@ -374,7 +378,7 @@ func _refresh_pairing() -> void:
 	var paired: bool = _transport.is_paired()
 	_dock.set_pairing(Dock.PAIR_PAIRED if paired else Dock.PAIR_UNPAIRED)
 	if paired:
-		_check_role()
+		_role_pending = true  # deferred: no network call until the dock first opens or the first capture
 		return
 	if Token.read_device_token(_transport.resolved_device_token_path()) != "":
 		_dock.set_status("No pinned VibeSquad CA, so the device token is not sent. Pair with VS again: it fetches the CA and asks you to confirm its fingerprint.")
@@ -382,9 +386,16 @@ func _refresh_pairing() -> void:
 		_dock.set_status("Not paired with VibeSquad. Mint a Playtest code in VibeSquad (Pair Device dialog), type the 6 digits and press Pair with VS; you then confirm the VS CA fingerprint.")
 
 
+## Runs the deferred role check at most once per pairing state (re-armed by _refresh_pairing).
+func _ensure_role() -> void:
+	if _role_pending and _dock != null and _dock.pair_state == Dock.PAIR_PAIRED:
+		_check_role()
+
+
 ## Asks the server which role this device token has; a full-owner token gets a one-line dock warning. Quiet on any
 ## failure (offline, old server): no warning is better than a wrong one.
 func _check_role() -> void:
+	_role_pending = false
 	var role: String = await _transport.fetch_role()
 	if _dock != null:
 		_dock.set_owner_warning(role == Transport.ROLE_OWNER and _dock.pair_state == Dock.PAIR_PAIRED)
@@ -436,6 +447,8 @@ func _on_ca_confirmed(matches: bool) -> void:
 	if bool(res.get("ok", false)):
 		_reset_thread()
 		_refresh_pairing()
+		if _dock.visible:
+			_ensure_role()  # a new pairing made in the open dock gets its role check now
 		_dock.set_status("Paired with VibeSquad (CA pinned).")
 		_poll()
 	else:
