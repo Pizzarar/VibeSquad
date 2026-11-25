@@ -43,6 +43,7 @@ import {
   type TeamView,
 } from "./teams";
 import { getFolders, isHubLaneId, titleFor } from "./teams";
+import { CrunchToggle } from "./CrunchToggle";
 import { filterAwakeViews } from "./boringFolders";
 import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
@@ -1285,7 +1286,6 @@ const Toolbar = memo(function Toolbar(props: {
   const uiScalePct = Math.round(uiScale * 100);
   const full = useFullView();
   useTeams();
-  const vibeOn = getTeams().find((t) => t.id === props.squadId)?.vibeMode === true;
   return (
     <div className="toolbar">
       <div className="seg">
@@ -1336,16 +1336,7 @@ const Toolbar = memo(function Toolbar(props: {
           <option value="older">Older</option>
         </select>
       )}
-      {vibeOn && (
-        <button
-          className="tchip on"
-          data-testid="vibe-mode-chip"
-          title={`Vibe mode is on for ${props.squadName || "this Squad"}. Click to turn it off.`}
-          onClick={() => void saveTeams((cur) => cur.map((t) => (t.id === props.squadId ? { ...t, vibeMode: false } : t)))}
-        >
-          Vibe mode
-        </button>
-      )}
+      <CrunchToggle teamId={props.squadId} variant="psycho" />
       <button
         className="tchip"
         data-testid="toolbar-vibe-toggle"

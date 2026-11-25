@@ -1448,3 +1448,7 @@ html[data-vibe="boring"] .project-tabs .boring-switch-pill { min-height: 28px; p
 html[data-vibe="boring"] .sb-head .project-tabs { flex-wrap: wrap; }
 /* UX R22 m1: active segment reads clearly in dark + light (existing --accent token, colour not opacity). */
 html[data-vibe="boring"] .project-tabs .boring-switch-pill.on { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+/* UX R23 N1: light mode lilac active segment: label in --text (accent on lilac was 3.48:1), ring keeps the accent. */
+html[data-vibe="boring"][data-theme="light"] .project-tabs .boring-switch-pill.on { color: var(--text); }
+/* C3 Crunch pill (topbar right): same active cue as the project tabs; the label stays --text so it reads on both themes. */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="true"].on { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: inset 0 0 0 1px var(--accent); }

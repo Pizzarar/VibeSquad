@@ -30,11 +30,13 @@
 @keyframes sb-drift { from { transform: translateY(-2px) rotate(-6deg); } to { transform: translateY(3px) rotate(8deg); } }
 @media (prefers-reduced-motion: reduce) { .sb-eye { animation: none; } }
 .sb-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
-/* Code | Storybook pill inside sb-head: base rules for Psycho (boring.css styles it in Normal and wins there by specificity). */
+/* Code | Storybook pill inside sb-head. Layout is shared; the colour/border chrome below is Psycho-only
+   (html:not([data-vibe="boring"])) so in Normal the pill takes boring.css's topbar look instead of these (0,4,x) rules. */
 .sb-head .project-tabs { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.sb-head .project-tabs .boring-switch-pill { min-height: 28px; padding: 4px 10px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 999px; white-space: nowrap; background: var(--sb-panel2); color: var(--sb-text2); border: 1px solid var(--sb-line); }
-.sb-head .project-tabs .boring-switch-pill:hover { border-color: var(--sb-accent); }
-.sb-head .project-tabs .boring-switch-pill.on { color: var(--sb-accent-text); border-color: var(--sb-accent); }
+.sb-head .project-tabs .boring-switch-pill { min-height: 28px; padding: 4px 10px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 999px; white-space: nowrap; }
+html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill { background: var(--sb-panel2); color: var(--sb-text2); border: 1px solid var(--sb-line); }
+html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill:hover { border-color: var(--sb-accent); }
+html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill.on { color: var(--sb-accent-text); border-color: var(--sb-accent); }
 .sb-mono { font-family: var(--mono, ui-monospace, "JetBrains Mono", monospace); font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
 .sb-sha { padding: 4px 8px; background: var(--sb-panel2); border: 1px solid var(--sb-line); color: var(--sb-text); }
 .sb-btn, .sb-tab, .sb-seg-btn, .sb-fbtn {

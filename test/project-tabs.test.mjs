@@ -103,7 +103,9 @@ test("fix round (UX R22 M1/m1/m2/m3 + review M1): sb-head pill placement, active
   const css = src("storybook.css"), b = src("boring.css"), s = src("StorybookView.tsx");
   assert.match(css, /\.sb-title \{[^}]*flex: 0 1 auto/, "title no longer grows, so the pill follows it");
   assert.match(css, /\.sb-head-right \{[^}]*margin-left: auto/, "right cluster pushed to the end");
-  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped (Psycho) pill base rule");
+  assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped layout rule");
+  assert.match(css, /\nhtml:not\(\[data-vibe="boring"\]\) \.sb-head \.project-tabs \.boring-switch-pill\.on \{/, "Psycho-only colour chrome (L1: Normal takes boring.css)");
+  assert.ok(!/\n\.sb-head \.project-tabs \.boring-switch-pill(:hover|\.on)? \{[^}]*(border-color|background: var\(--sb)/.test(css), "no unscoped sb-head colour rules out-specifying boring.css");
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-root \.sb-head \.project-tabs \.boring-switch-pill \{ min-height: 40px; \}/, "phone 40px segments");
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-word \{ display: none; \}/, "phone keeps the project name, drops the Storybook word");
   assert.ok(s.includes('<span className="sb-word">Storybook </span>'), "sb-word wrapper");
