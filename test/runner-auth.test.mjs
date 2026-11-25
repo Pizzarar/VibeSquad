@@ -234,13 +234,15 @@ test("X1a: POST /agents from an agent: lead spawns need a Buddy (own lane) or th
       assert.equal((await spawn(who, { profile: "Pre-check - Flash", labels: { digestFor: ids.worker } })).status, 403, "Pre-check profile");
     }
     runner.updateMeta(ids.lead, { role: "former-lead" }); // the lane is now leadless
-    const b = await spawn(ids.buddy, { role: "lead", lane: "art", team: "other-squad", labels: { ord: "9", digestFor: "x", "vs.parent": ids.foreign, "vs.handoff-from": "y", "vs.auto-archived": "1", job: "ship" } });
+    // idea-1046: a digest label is refused (403, never a silent strip); the other server-stamped labels are stripped.
+    assert.equal((await spawn(ids.buddy, { role: "lead", lane: "art", labels: { digestFor: "x" } })).status, 403, "digestFor from an agent");
+    const b = await spawn(ids.buddy, { role: "lead", lane: "art", team: "other-squad", labels: { ord: "9", "vs.parent": ids.foreign, "vs.handoff-from": "y", "vs.auto-archived": "1", job: "ship" } });
     assert.equal(b.status, 201, b.text);
     const newLead = runner.status(b.body.id).meta;
     assert.equal(newLead.role, "lead");
     assert.equal(newLead.lane, "art");
     assert.equal(newLead.team, "sq", "team is the caller's, never the body's");
-    assert.deepEqual(newLead.labels, { role: "lead", lane: "art", team: "sq", "vs.parent": ids.buddy, job: "ship" }, "ord/digestFor/handoff/auto-archived stripped, parent = Buddy");
+    assert.deepEqual(newLead.labels, { role: "lead", lane: "art", team: "sq", "vs.parent": ids.buddy, job: "ship" }, "ord/handoff/auto-archived stripped, parent = Buddy");
     assert.equal(newLead.ord, undefined);
     assert.equal((await spawn(ids.buddy, { role: "lead", lane: "art" })).status, 403, "the lane has a live lead again");
     runner.updateMeta(ids.other, { role: "former-lead" });
