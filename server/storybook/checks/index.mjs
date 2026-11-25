@@ -5,8 +5,9 @@
 import { makeRegistry, validateFinding } from "../schema.mjs";
 import * as structural from "./structural.mjs";
 import * as text from "./text.mjs";
+import * as lore from "./lore.mjs";
 
-export const CHECK_MODULES = [structural, text];
+export const CHECK_MODULES = [structural, text, lore];
 
 const num = (id) => Number(String(id).slice(1));
 const refKey = (f) => (f.entityRef ? `${f.entityRef.kind}:${f.entityRef.id}` : "");
