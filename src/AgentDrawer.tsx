@@ -684,10 +684,10 @@ ${draft}`);
       {!boringChat && permCards}
 
       {pinDecisions && <DecisionPin agentId={agent.id} entries={entries} />}
+      {boringChat && <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />}
       <div className="drawer-shell">
         {boringChat ? (
           <div className="boring-convo-col">
-            <BoringWorkingNow agent={agent} members={working} subs={extraSubs} attention={att} />
             {permCards?.length ? <div className="boring-perm-stack">{permCards}</div> : null}
             {timelineEl}
           </div>

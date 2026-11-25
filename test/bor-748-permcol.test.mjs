@@ -13,13 +13,13 @@ const read = (...p) => fs.readFileSync(path.join(root, ...p), "utf8");
 const drawer = read("src", "AgentDrawer.tsx");
 const css = read("src", "boring.css");
 
-test("Bor19 n6: boring mode wraps strip + perm stack + timeline in .boring-convo-col; psycho keeps cards above the shell", () => {
+test("Bor19 n6: boring mode wraps perm stack + timeline (B15: the strip moved out to a full-width sibling above the shell) in .boring-convo-col; psycho keeps cards above the shell", () => {
   assert.match(drawer, /\{boringChat \? \(\s*<div className="boring-convo-col">/);
   // The strip, perm-card stack and timeline live inside the column, in that order. <BoringWorkingNow>'s props are
   // intentionally not pinned to an order (a prop reorder must not break this test).
   assert.match(
     drawer,
-    /<div className="boring-convo-col">[\s\S]*?<BoringWorkingNow[^>]*\/>[\s\S]*?boring-perm-stack[\s\S]*?\{timelineEl\}[\s\S]*?<\/div>[\s\S]*?\) : \(\s*timelineEl/,
+    /<div className="boring-convo-col">[\s\S]*?boring-perm-stack[\s\S]*?\{timelineEl\}[\s\S]*?<\/div>[\s\S]*?\) : \(\s*timelineEl/,
   );
   assert.match(drawer, /\{!boringChat && permCards\}/);
   assert.match(drawer, /const timelineEl = \(\s*<TimelineErrorBoundary fallbackLabel="timeline">/);
