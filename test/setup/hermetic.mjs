@@ -11,10 +11,19 @@
 // Tests that need their own home still set VIBESQUAD_HOME; process.env is per test file (one process each). Spawned children inherit.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { hermeticizeEnv } from "../../scripts/test-child-env.mjs";
+import { basename, join } from "node:path";
+import { hermeticizeEnv, TEST_SCRATCH_PREFIX } from "../../scripts/test-child-env.mjs";
 
 hermeticizeEnv(process.env);
+// idea-977: one scratch dir per test process; every mkdtemp(os.tmpdir()) in a test (and in its children) lands inside it and the
+// exit hook below removes the lot. Killed processes leave theirs for scripts/run-tests.mjs (sweepTestScratch) to age out.
+// A child that inherits its parent's scratch (TMPDIR already a vs-t- dir) reuses it: the parent owns and removes it.
+const inherited = basename(tmpdir()).startsWith(TEST_SCRATCH_PREFIX);
+const scratch = inherited ? null : mkdtempSync(join(tmpdir(), TEST_SCRATCH_PREFIX));
+if (scratch) {
+  if (process.platform === "win32") process.env.TMP = process.env.TEMP = scratch;
+  else process.env.TMPDIR = scratch;
+}
 const home = mkdtempSync(join(tmpdir(), "vs-test-home-"));
 writeFileSync(join(home, "teams.json"), JSON.stringify({ teams: [] }));
 process.env.VIBESQUAD_HOME = home;
@@ -22,7 +31,10 @@ const runtimeDirTmp = mkdtempSync(join(tmpdir(), "vs-test-runtime-"));
 process.env.VIBESQUAD_RUNTIME_DIR = runtimeDirTmp;
 process.on("exit", () => {
   try {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(runtimeDirTmp, { recursive: true, force: true });
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    else {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(runtimeDirTmp, { recursive: true, force: true });
+    }
   } catch {}
 });
