@@ -1,5 +1,5 @@
 // Normal implementer arm pick (PLAN_PER_ROLES_LADDER_1125 R0; grew out of the EXP6 pick, idea-440). The server alternates
-// stakes=normal implementer spawns per lane between the Claude Sonnet arm (`Implement - Sonnet`, wf=sonnet) and the Gemini
+// (weighted 2:1 Neon:Sonnet, ARM_WEIGHTS, @per G1) stakes=normal implementer spawns per lane between the Claude Sonnet arm (`Implement - Sonnet`, wf=sonnet) and the Gemini
 // Neon arm (`Implement - Gemini (trial)`, wf=neon), so the alternation survives lead handoffs and feeds EXP10/EXP11.
 // DSP (`Work Order - DSP`) is never an arm: it runs only when asked for by name or reached by provider failover.
 // Every pick is visible: decideArm returns { arm, reason, swapped, profile } and spawn_worker prints/stamps it (no silent swap).
@@ -28,6 +28,12 @@ export const ARMS = {
 };
 /** The live arm set for stakes=normal implementer spawns (order = tie-break order). [] turns the alternation off. */
 export const IMPLEMENTER_ARMS = ["sonnet", "neon"];
+/** Alternation weights (@per G1): picks go to the uncapped arm with the lowest picks/weight, so Neon gets 2 of every 3. */
+export const ARM_WEIGHTS = { sonnet: 1, neon: 2 };
+const weightOf = (weights, wf) => {
+  const w = weights?.[wf];
+  return typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1;
+};
 /** Label stamped on every picked spawn: the arm it was picked for (countArms counts these, so both arms start at 0). */
 export const ARM_LABEL = "vs.arm";
 /** Label carrying the pick reason (alternation | capped:<family> | pin | wf | override | fail-open). */
@@ -164,12 +170,12 @@ export function countArms(agents, { lane, team = "", arms = IMPLEMENTER_ARMS } =
   return counts;
 }
 
-/** The uncapped arm with the fewest picks; a tie keeps the requested arm, else the first in `arms` order. */
-export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = new Set() } = {}) {
+/** The uncapped arm with the lowest picks/weight; a tie keeps the requested arm, else the first in `arms` order. */
+export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = new Set(), weights = ARM_WEIGHTS } = {}) {
   let best = null;
   for (const wf of arms) {
     if (capped.has(wf)) continue;
-    const n = counts?.[wf] ?? 0;
+    const n = (counts?.[wf] ?? 0) / weightOf(weights, wf);
     if (!best || n < best.n || (n === best.n && wf === requested.wf)) best = { wf, n };
   }
   return best ? ARMS[best.wf] : null;
@@ -182,7 +188,7 @@ export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = n
  * "capped:<family>" (a capped arm was skipped; both capped -> requested kept), "fail-open" (agent list or cap probe threw:
  * requested kept). `capProbe` -> capped map/array (readArmCaps). Never throws.
  */
-export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, capProbe, arms = IMPLEMENTER_ARMS }) {
+export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, capProbe, arms = IMPLEMENTER_ARMS, weights = ARM_WEIGHTS }) {
   if (asLead || !norm(lane)) return null;
   if ((norm(stakes) || "normal") !== "normal") return null;
   const requested = armOfProfile(profile);
@@ -228,10 +234,10 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   } catch {
     return keep("fail-open");
   }
-  const arm = pickArm(requested, counts, { arms: set, capped: new Set(capped.keys()) });
+  const arm = pickArm(requested, counts, { arms: set, capped: new Set(capped.keys()), weights });
   if (!arm) return keep(`capped:${[...capped.values()].join("+")}`, { counts, capped: true }); // every arm capped
   // The reason names a cap only when it changed the outcome (the uncapped pick was a capped arm).
-  const free = pickArm(requested, counts, { arms: set });
+  const free = pickArm(requested, counts, { arms: set, weights });
   const reason = free.wf !== arm.wf ? `capped:${capped.get(free.wf)}` : "alternation";
   const swapped = arm.wf !== requested.wf;
   // A role spawn keeps its role name: the arm only picks the provider (`provider`), the ladder picks the model.

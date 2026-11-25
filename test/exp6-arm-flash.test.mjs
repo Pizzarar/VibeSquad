@@ -139,7 +139,7 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.equal(fl.route, "arm=flash reason=opt-in model=gemini-3.8-flash (Implement -> antigravity-cli)");
   assert.deepEqual(countArms(agents, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0 }, "flash does not skew sonnet/neon counts");
 
-  // Default normal Implement spawns still alternate strictly sonnet -> neon -> sonnet (never flash).
+  // Default normal Implement spawns still alternate sonnet, neon, neon (2:1 Neon:Sonnet, @per G1; never flash).
   const seq = [];
   for (let i = 0; i < 4; i++) {
     const r = await go(ctx, { profile: "Implement", stakes: "normal" });
@@ -148,8 +148,8 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.deepEqual(seq, [
     ["sonnet", "claude-sonnet-5-5"],
     ["neon", "gemini-4-neon"],
-    ["sonnet", "claude-sonnet-5-5"],
     ["neon", "gemini-4-neon"],
+    ["sonnet", "claude-sonnet-5-5"],
   ]);
 
   // Capped antigravity falls back to Claude Sonnet with reason capped:antigravity-cli.
