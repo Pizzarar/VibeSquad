@@ -8,6 +8,7 @@ export type CreditRow = {
   currency: string | null;
   checkedAt: string | null;
   status: string;
+  capped?: boolean;
 };
 
 export type LimitRow = {

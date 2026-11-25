@@ -177,20 +177,22 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
 
 function CreditCard({ c, thresholdUsd, now }: { c: CreditRow; thresholdUsd: number; now: number }) {
   const ok = c.status === "ok" && typeof c.balance === "number" && Number.isFinite(c.balance);
+  const capped = Boolean(c.capped);
   const low = ok && (c.balance as number) < thresholdUsd;
-  const level = !ok ? "warn" : low ? "hot" : "ok";
+  const level = capped ? "ok" : !ok ? "warn" : low ? "hot" : "ok";
   const cur = (c.currency ?? "USD").toUpperCase();
   const sym = cur === "USD" ? "$" : `${cur} `;
   const sampled = limitSampledText(c.checkedAt, now);
   return (
-    <div className={`usage-limit usage-${level}`} data-testid="usage-credit-card" data-provider={c.provider} data-low={low ? "true" : undefined}>
+    <div className={`usage-limit usage-${level}${capped ? " usage-limit-stale" : ""}`} data-testid="usage-credit-card" data-provider={c.provider} data-low={low ? "true" : undefined} data-capped={capped ? "true" : undefined}>
       <div className="usage-limit-head">
         <span className="usage-limit-name">{providerLabel(c.provider)}</span>
         <span className="usage-limit-win">credit</span>
+        {capped && <span className="usage-stale-tag" title="Provider is capped; low-credit alerts paused">capped</span>}
       </div>
       <div className="usage-limit-pct">
         {ok ? `${sym}${(c.balance as number).toFixed(2)}` : c.status}
-        <small>{ok ? (low ? `below $${thresholdUsd} threshold` : `${cur} balance`) : "balance check failed"}</small>
+        <small>{ok ? (capped ? "capped (alerts paused)" : low ? `below $${thresholdUsd} threshold` : `${cur} balance`) : "balance check failed"}</small>
       </div>
       {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-credit-sampled" title={c.checkedAt ? etDateTime(c.checkedAt) || undefined : undefined}>{sampled}</div>}
     </div>

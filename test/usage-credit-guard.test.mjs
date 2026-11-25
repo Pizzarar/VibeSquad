@@ -21,9 +21,12 @@ import {
   DEFAULT_CREDIT_THRESHOLD_USD,
   evaluateCreditAlerts,
   formatCreditAlertMessage,
+  isDeliberateCap,
+  isProviderDeliberatelyCapped,
   readCreditAlertState,
   startCreditGuardWatcher,
 } from "../server/credit-guard.mjs";
+import { setProviderCapped } from "../server/provider-failover.mjs";
 import {
   clearUsageCache,
   getUsage,
@@ -463,4 +466,137 @@ test("merged unit rows carry implementerArm and implementerArmReason from vs.arm
   assert.equal(byUnit2["unit-usa-arm2"].fromLedger, true);
   assert.equal(byUnit2["unit-usa-arm2"].implementerArm, "sonnet");
   assert.equal(byUnit2["unit-usa-arm2"].implementerArmReason, "capped:antigravity-cli");
+});
+
+test("usa-67: deliberate cap classification distinguishes manual/cli caps from auto balance/fault caps", () => {
+  // Deliberate owner/manual/cli caps
+  assert.equal(isDeliberateCap({ reason: "cli cap", updatedAt: "2026-11-25T12:00:00Z" }), true);
+  assert.equal(isDeliberateCap({ reason: "manual cap", updatedAt: "2026-11-25T12:00:00Z" }), true);
+  assert.equal(isDeliberateCap({ reason: "owner paused", updatedAt: "2026-11-25T12:00:00Z" }), true);
+  assert.equal(isDeliberateCap({ source: "cli", reason: "paused" }), true);
+
+  // Auto circuit-breaker caps (idea-826 capProviderOnUpstreamExit) -> NOT deliberate
+  assert.equal(isDeliberateCap({ reason: "insufficient balance: Internal error: Insufficient Balance", resetsAt: Date.now() + 3600_000 }), false);
+  assert.equal(isDeliberateCap({ reason: "insufficient balance (unconfirmed): 402 Payment Required", resetsAt: Date.now() + 600_000 }), false);
+  assert.equal(isDeliberateCap({ reason: "upstream failure: Internal service failure", resetsAt: Date.now() + 600_000 }), false);
+  assert.equal(isDeliberateCap({ reason: "binary missing: opencode binary not found", resetsAt: Date.now() + 600_000 }), false);
+  assert.equal(isDeliberateCap({ reason: "credit balance is too low" }), false);
+
+  // Ambiguous / unknown entries -> fail-open (NOT deliberate) so top-up alerts are never silently lost
+  assert.equal(isDeliberateCap({ reason: "something unknown" }), false);
+  assert.equal(isDeliberateCap({}), false);
+  assert.equal(isDeliberateCap(true), false);
+
+  // Family/kin matching: opencode <-> deepseek
+  assert.equal(isProviderDeliberatelyCapped("deepseek", { opencode: { reason: "cli cap" } }), true);
+  assert.equal(isProviderDeliberatelyCapped("deepseek", { deepseek: { reason: "cli cap" } }), true);
+  assert.equal(isProviderDeliberatelyCapped("deepseek", { claude: { reason: "cli cap" } }), false);
+  assert.equal(isProviderDeliberatelyCapped("deepseek", { opencode: { reason: "insufficient balance: x" } }), false);
+});
+
+test("usa-67: manual cap skips alert without persisting state; lifting cap fires once; balance-fault auto cap still fires; no caps unchanged", async () => {
+  const home = makeHome();
+  const capFile = path.join(home, "capped-providers.json");
+  let t = Date.parse("2026-11-25T12:00:00Z");
+  const logs = [];
+  const log = async (entry) => { logs.push(entry); };
+  const lowReading = () => [{ provider: "deepseek", balance: -0.06, currency: "USD", checkedAt: new Date(t).toISOString(), status: "ok" }];
+
+  // 1. Manual CLI cap on `opencode` (capKin of deepseek): skips alert AND persists NO alert state
+  setProviderCapped("opencode", true, { reason: "cli cap", cappedProvidersPath: capFile, normalizeKey: false, now: t });
+  let fired = await evaluateCreditAlerts({ credits: lowReading(), home, thresholdUsd: 10, now: () => t, log });
+  assert.equal(fired.length, 0);
+  assert.equal(logs.length, 0);
+  assert.equal(existsSync(path.join(home, "runner", "credit-alerts.json")), false, "must not persist alerted state while skipped");
+  assert.deepEqual(readCreditAlertState(home), { providers: {} });
+
+  // Watcher still polls balance & writes credits.json while skipping alert, and getUsage marks credit row capped: true
+  let fetchCalls = 0;
+  const watcher = startCreditGuardWatcher({
+    home,
+    intervalMs: 60_000,
+    resolveKey: async () => FAKE_KEY,
+    fetchImpl: async () => {
+      fetchCalls++;
+      return { ok: true, json: async () => ({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "-0.06" }] }) };
+    },
+    log,
+    now: () => t,
+    setIntervalFn: () => 1,
+    clearIntervalFn: () => {},
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  watcher.stop();
+  assert.equal(fetchCalls, 1, "balance poll must keep running while capped");
+  assert.equal(logs.length, 0, "watcher must not fire alert while deliberately capped");
+  assert.equal(existsSync(path.join(home, "runner", "credit-alerts.json")), false);
+  assert.equal(readCredits(home)[0].balance, -0.06);
+
+  clearUsageCache();
+  const usageCapped = getUsage({ home, git: () => "", now: () => t });
+  assert.equal(usageCapped.credits[0].provider, "deepseek");
+  assert.equal(usageCapped.credits[0].balance, -0.06);
+  assert.equal(usageCapped.credits[0].capped, true);
+
+  // 2. Lift the manual cap -> next poll fires ONCE and persists alerted: true
+  t += 30 * 60_000;
+  setProviderCapped("opencode", false, { cappedProvidersPath: capFile, normalizeKey: false, now: t });
+  clearUsageCache();
+  const usageUncapped = getUsage({ home, git: () => "", now: () => t });
+  assert.equal(usageUncapped.credits[0].capped, undefined);
+
+  fired = await evaluateCreditAlerts({ credits: lowReading(), home, thresholdUsd: 10, now: () => t, log });
+  assert.equal(fired.length, 1);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].text, "DeepSeek credit $-0.06 < $10 threshold: top up");
+  assert.equal(readCreditAlertState(home).providers.deepseek.alerted, true);
+
+  // Second poll after firing stays deduped
+  t += 30 * 60_000;
+  fired = await evaluateCreditAlerts({ credits: lowReading(), home, thresholdUsd: 10, now: () => t, log });
+  assert.equal(fired.length, 0);
+  assert.equal(logs.length, 1);
+
+  // 3. Auto balance-fault cap (idea-826 capProviderOnUpstreamExit) MUST still fire!
+  const homeAuto = makeHome();
+  const capFileAuto = path.join(homeAuto, "capped-providers.json");
+  setProviderCapped("opencode", true, {
+    reason: "insufficient balance: Internal error: Insufficient Balance",
+    ttlMs: 60 * 60_000,
+    cappedProvidersPath: capFileAuto,
+    now: t,
+  });
+  const logsAuto = [];
+  fired = await evaluateCreditAlerts({
+    credits: lowReading(),
+    home: homeAuto,
+    thresholdUsd: 10,
+    now: () => t,
+    log: async (e) => { logsAuto.push(e); },
+  });
+  assert.equal(fired.length, 1, "balance-fault auto cap must not suppress top-up alert");
+  assert.equal(logsAuto.length, 1);
+  assert.equal(readCreditAlertState(homeAuto).providers.deepseek.alerted, true);
+
+  // 4. No caps at all -> unchanged behavior (fires once, then dedupes)
+  const homeNone = makeHome();
+  const logsNone = [];
+  fired = await evaluateCreditAlerts({
+    credits: lowReading(),
+    home: homeNone,
+    thresholdUsd: 10,
+    now: () => t,
+    log: async (e) => { logsNone.push(e); },
+  });
+  assert.equal(fired.length, 1);
+  assert.equal(logsNone.length, 1);
+  fired = await evaluateCreditAlerts({
+    credits: lowReading(),
+    home: homeNone,
+    thresholdUsd: 10,
+    now: () => t,
+    log: async (e) => { logsNone.push(e); },
+  });
+  assert.equal(fired.length, 0);
+  assert.equal(logsNone.length, 1);
 });
