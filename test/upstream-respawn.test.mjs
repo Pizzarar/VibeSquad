@@ -230,7 +230,8 @@ test("upstreamRespawnPlan / respawnLabels (pure)", () => {
   assert.deepEqual(upstreamRespawnPlan([{ item: { type: "user_message", text: "  " } }], {}, w), { skip: "no-prompt" });
   assert.deepEqual(upstreamRespawnPlan(tl, { digestFor: "rn-x" }, w), { skip: "role-worker" }, "a digest agent is not a task");
   assert.deepEqual(upstreamRespawnPlan(tl, {}, { role: "worker", ageMs: Number.NaN }), { skip: "stale-exit" });
-  const l = respawnLabels({ team: "t", job: "j", ord: "2", stakes: "high", wf: "dsf", tier: "cheap", [RESPAWNED_AS_LABEL]: "rn-z", digestTurn: "9" }, "Implement - Sonnet", "rn-d");
+  const l = respawnLabels({ team: "t", job: "j", ord: "2", stakes: "high", wf: "dsf", tier: "cheap", [RESPAWNED_AS_LABEL]: "rn-z", digestTurn: "9", "vs.route-override": "provider=claude" }, "Implement - Sonnet", "rn-d");
+  // vs.route-override is dropped too (R1 fix r2): the respawn moves to the alternate provider on purpose.
   assert.deepEqual(l, { team: "t", job: "j", ord: "2", stakes: "high", profile: "Implement - Sonnet", [RESPAWN_OF_LABEL]: "rn-d" });
 });
 

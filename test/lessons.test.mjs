@@ -257,3 +257,13 @@ it("sanctuaryRuleDir keeps the %LOCALAPPDATA% token on win32 (R11)", { skip: pro
   const rule = STANDING_RULES.find((r) => r.startsWith("Run unit work in"));
   if (process.platform === "win32") assert.ok(rule.startsWith(String.raw`Run unit work in \`%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>\`; never`.replaceAll("\\`", "`")));
 });
+
+it("R1: the routing standing rule names roles, not model-named profiles, and the best-use yardstick", () => {
+  const rule = STANDING_RULES.find((r) => r.startsWith("Route by role name"));
+  assert.ok(rule, "routing rule present");
+  assert.match(rule, /stakes picks the model/);
+  assert.match(rule, /provider\/model only to override/);
+  assert.match(rule, /first-try PASS, then fix-after-merge, then fit; \$ only breaks ties/);
+  assert.doesNotMatch(rule, / - (Sonnet|Opus|Gemini|DSP|DSF|Flash|Haiku|Claude)\b/);
+  assert.ok(rule.length <= 400, `${rule.length} chars`);
+});

@@ -585,7 +585,7 @@ test("UX Reviewer - Opus: profile wired (vision+code+playwright, no edit-source)
   assert.ok(UX_REVIEWER_NOTE_BODY.includes("Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots"));
   assert.ok(UX_REVIEWER_NOTE_BODY.includes("PASS only if no critical or major finding is open"));
   assert.equal(new Set(DEFAULT_PACK_PROFILES.map((p) => p.id)).size, DEFAULT_PACK_PROFILES.length, "profile ids unique");
-  assert.ok(LEAD_NOTE_BODY.includes("Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other). Normal-mode UI phases"));
+  assert.ok(LEAD_NOTE_BODY.includes("Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases"));
   assert.ok(LEAD_NOTE_BODY.includes("also go to UX Reviewer - Opus"));
   assert.ok(ART_DIRECTOR_NOTE_BODY.startsWith("Art Director in the standard Painter + Director artwork loop"));
   assert.ok(!ART_DIRECTOR_NOTE_BODY.includes("UX"));

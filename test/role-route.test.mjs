@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES } from "../server/profiles.mjs";
+import { COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS, ROLE_PROVIDER_CHAINS } from "../server/provider-failover.mjs";
 import { LEGACY_HOP_PROFILES, LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
 import {
   DEFAULT_TIER_LADDER,
@@ -198,6 +199,7 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
   assert.deepEqual(tiers, {
     lead: "top",
     brainstorm: "top",
+    planner: "mid",
     implement: "mid",
     "work-order": "mid",
     review: "mid",
@@ -235,8 +237,8 @@ test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles);
   assert.deepEqual([legacy.provider, legacy.model], [O, "deepseek/deepseek-flash"]);
 });
 
-test("role table: 8 roles, every preferred provider has a ladder and a mode; lookup order", () => {
-  assert.equal(Object.keys(ROLE_TABLE).length, 8);
+test("role table: 9 roles, every preferred provider has a ladder and a mode; lookup order", () => {
+  assert.equal(Object.keys(ROLE_TABLE).length, 9);
   for (const [k, r] of Object.entries(ROLE_TABLE)) {
     assert.ok(TIERS.includes(r.tier), k);
     for (const p of r.providers) {
@@ -251,6 +253,19 @@ test("role table: 8 roles, every preferred provider has a ladder and a mode; loo
   assert.equal(lookupRole("Lead")?.legacy?.name, "Lead - Claude");
   assert.equal(lookupRole("Reviewer")?.legacy?.name, "Review - Gemini");
   assert.equal(lookupRole("lead")?.legacy, null);
+});
+
+test("R1: ROLE_TABLE.providers reads the role-keyed failover chains; old-name chains stay as they were", () => {
+  assert.deepEqual(Object.keys(ROLE_PROVIDER_CHAINS).sort(), Object.keys(ROLE_TABLE).sort());
+  for (const [k, r] of Object.entries(ROLE_TABLE)) {
+    assert.deepEqual(r.providers, [...ROLE_PROVIDER_CHAINS[k]], k);
+    assert.notEqual(r.providers, ROLE_PROVIDER_CHAINS[k], `${k}: a copy, not the shared array`);
+    assert.ok(Object.isFrozen(ROLE_PROVIDER_CHAINS[k]), k);
+  }
+  assert.deepEqual(ROLE_PROVIDER_CHAINS["work-order"], [O, C, A]);
+  // Old names keep their own hop tables (read-only until R5): unchanged by the role table.
+  assert.equal(COUNTERPART_PROFILES["Work Order - DSP"], "Implement - Sonnet");
+  assert.deepEqual(ROLE_FAILOVER_CHAINS["Implement - Sonnet"], ["Lead - Gemini", "Work Order - DSP"]);
 });
 
 test("unknown role -> null; unknown role with an explicit provider still routes", () => {
@@ -329,4 +344,23 @@ test("a deepseek key in the ladder file maps to opencode", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("R1: planner role (mid, claude first) and work-order hidden from listings but still routing DSP-first", async () => {
+  const { isHiddenRole, listedRoleKeys } = await import("../server/role-route.mjs");
+  assert.deepEqual([ROLE_TABLE.planner.tier, ROLE_TABLE.planner.providers], ["mid", [C, A, O]]);
+  for (const n of ["Planner", "planner", " PLANNER "]) assert.equal(lookupRole(n)?.key, "planner", n);
+  const r = resolveRoute({ role: "Planner" });
+  assert.deepEqual([r.provider, r.model, r.reason], [C, "claude-sonnet-5-5", "default"]);
+  assert.equal(resolveRoute({ role: "Planner", caps: [C] }).provider, A);
+  // old names keep their exact routing; only the role stamp moved implement -> planner
+  assert.equal(resolveRoute({ role: "Spec - Opus" }).role, "planner");
+  assert.equal(resolveRoute({ role: "Spec - Opus" }).model, "claude-opus-5-5");
+  assert.equal(resolveRoute({ role: "Planner - Sonnet", caps: [C] }).hop, "Lead - Gemini");
+  // work-order: still resolves opencode-first, but a listing leaves it out
+  assert.equal(resolveRoute({ role: "Work Order" }).provider, O);
+  assert.equal(isHiddenRole("work-order"), true);
+  assert.equal(isHiddenRole("implement"), false);
+  assert.deepEqual(listedRoleKeys(), Object.keys(ROLE_TABLE).filter((k) => k !== "work-order"));
+  assert.equal(isHiddenRole("work-order", { "work-order": { name: "Work Order" } }), true, "a stored role keeps the shipped flag");
 });
