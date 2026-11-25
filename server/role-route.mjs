@@ -7,7 +7,7 @@
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
 import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
 import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
-import { ROLE_PROVIDER_CHAINS } from "./provider-failover.mjs";
+import { ROLE_PROVIDER_CHAINS, TIER_PROVIDER_CHAINS } from "./provider-failover.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -304,6 +304,13 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
   const order = [];
   for (const p of legacy ? hops.map((h) => routeProviderFamily(h.provider)) : (roleDef?.providers ?? [])) {
     if (p && !order.includes(p)) order.push(p);
+  }
+  // A2 (idea-986): stakes that force a tier with its own walk order (mechanical -> cheap: Flash, Haiku, DeepSeek last)
+  // re-order the role's families; families the tier chain does not name keep their place after it. Role names only.
+  const tierChain = !legacy && forced ? TIER_PROVIDER_CHAINS[forced] : null;
+  if (tierChain) {
+    const rank = (p) => (tierChain.includes(p) ? tierChain.indexOf(p) : tierChain.length);
+    order.sort((a, b) => rank(a) - rank(b));
   }
 
   // Provider: explicit > (model's own family, when only a model is given) > walk skipping capped (all capped = first).

@@ -26,9 +26,23 @@ export function tierFor(role: RoleLike, stakes: string): string {
   return role.tier;
 }
 
-/** The provider + model the ladder would pick (the role's first provider x tier for these stakes). */
+/** Mirror of server/provider-failover.mjs TIER_PROVIDER_CHAINS (A2 idea-986; test/r1-fix-ui-r2-spawn.test.mjs pins parity):
+ *  stakes that force a tier with its own walk order re-order the role's providers (mechanical -> cheap: Gemini Flash,
+ *  Claude Haiku, opencode last). Families the chain does not name keep their place after it. */
+export const TIER_PROVIDER_ORDER: Readonly<Record<string, readonly string[]>> = { cheap: ["antigravity-cli", "claude", "opencode"] };
+
+/** The role's providers in the order the hook walks them for these stakes (server/role-route.mjs resolveRoute). */
+export function walkOrder(role: RoleLike, stakes: string): string[] {
+  const forced = stakes === "mechanical" ? "cheap" : stakes === "tierA-security" || stakes === "tierA-invariant" ? "top" : null;
+  const chain = forced ? TIER_PROVIDER_ORDER[forced] : undefined;
+  if (!chain) return [...role.providers];
+  const rank = (p: string) => (chain.includes(p) ? chain.indexOf(p) : chain.length);
+  return [...role.providers].sort((a, b) => rank(a) - rank(b));
+}
+
+/** The provider + model the ladder would pick (the first provider of the stakes' walk order x tier for these stakes). */
 export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stakes: string): { provider: string; model: string } {
-  const provider = role.providers[0] ?? "claude";
+  const provider = walkOrder(role, stakes)[0] ?? "claude";
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
 }
 

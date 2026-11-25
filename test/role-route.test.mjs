@@ -208,11 +208,14 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
     "art-painter": "top",
   });
   assert.equal(resolveRoute({ role: "Pre-check", stakes: "tierA-security" }).model, "gemini-4-neon");
+  // A2 (idea-986): mechanical walks the cheap order (Gemini Flash > Claude Haiku > opencode), also for a claude-first role.
   const lm = resolveRoute({ role: "lead", stakes: "mechanical" });
-  assert.deepEqual([lm.model, lm.effort, lm.tier], ["claude-sonnet-5-5", "low", "cheap"]);
+  assert.deepEqual([lm.provider, lm.model, lm.effort, lm.tier], [A, "gemini-3.8-flash", "medium", "cheap"]);
+  const lmA = resolveRoute({ role: "lead", stakes: "mechanical", caps: [A] });
+  assert.deepEqual([lmA.provider, lmA.model, lmA.effort, lmA.tier], [C, "claude-haiku-5-5", "low", "cheap"]);
 });
 
-test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles); top/mid stay v4-pro; claude/gemini rungs unchanged", () => {
+test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles); top/mid stay v4-pro; claude cheap = Haiku (A2); gemini rungs unchanged", () => {
   assert.deepEqual(DEFAULT_TIER_LADDER.opencode, {
     top: { model: "deepseek/deepseek-v4-pro", effort: "high" },
     mid: { model: "deepseek/deepseek-v4-pro" },
@@ -221,7 +224,7 @@ test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles);
   assert.deepEqual(DEFAULT_TIER_LADDER.claude, {
     top: { model: "claude-opus-5-5", effort: "high" },
     mid: { model: "claude-sonnet-5-5", effort: "medium" },
-    cheap: { model: "claude-sonnet-5-5", effort: "low" },
+    cheap: { model: "claude-haiku-5-5", effort: "low" }, // A2 idea-986: was sonnet/low
   });
   assert.deepEqual(DEFAULT_TIER_LADDER[A], {
     top: { model: "gemini-4-neon", effort: "high" },
@@ -229,7 +232,11 @@ test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles);
     cheap: { model: "gemini-3.8-flash" },
   });
   const wo = (stakes) => resolveRoute({ role: "work-order", stakes, caps: [] });
-  assert.deepEqual([wo("mechanical").provider, wo("mechanical").model, wo("mechanical").tier], [O, "deepseek/deepseek-flash", "cheap"]);
+  // A2 (idea-986): mechanical walks Gemini Flash > Claude Haiku > opencode, so the DeepSeek Flash rung is reached only
+  // when both others are capped (cheap tier never resolves to DeepSeek by default).
+  assert.deepEqual([wo("mechanical").provider, wo("mechanical").model, wo("mechanical").tier], [A, "gemini-3.8-flash", "cheap"]);
+  const woLast = resolveRoute({ role: "work-order", stakes: "mechanical", caps: [A, C] });
+  assert.deepEqual([woLast.provider, woLast.model, woLast.tier], [O, "deepseek/deepseek-flash", "cheap"]);
   assert.deepEqual([wo("normal").model, wo("normal").tier], ["deepseek/deepseek-v4-pro", "mid"]);
   assert.deepEqual([wo("tierA-invariant").model, wo("tierA-invariant").effort, wo("tierA-invariant").tier], ["deepseek/deepseek-v4-pro", "high", "top"]);
   // legacy name Work Order - DSP + mechanical lands on Flash too (the 38 mechanical DSP spawns in EXP6.md)
@@ -313,7 +320,7 @@ test("tier ladder override: old stakes keys migrate onto top/cheap, tier keys wi
     );
     const l = loadTierLadder(f);
     assert.deepEqual(l.claude.top, { model: "claude-b", effort: "high" }); // tierA-security beats tierA-invariant, effort kept
-    assert.deepEqual(l.claude.cheap, { model: "claude-sonnet-5-5", effort: "minimal" });
+    assert.deepEqual(l.claude.cheap, { model: "claude-haiku-5-5", effort: "minimal" }); // A2: default cheap model is Haiku
     assert.deepEqual(l.claude.mid, DEFAULT_TIER_LADDER.claude.mid);
     assert.deepEqual(l[A].top, { model: "gemini-z", effort: "max" });
     assert.deepEqual(l[A].cheap, DEFAULT_TIER_LADDER[A].cheap); // fable never a rung
