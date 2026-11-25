@@ -427,6 +427,8 @@ export class Runner {
     this._drainTimer = null;
     this._reqDrain = null; // { id, tip, since, until, reason } while a restart request is open (see setRequestDrain); memory only too
     this._reqDrainTimer = null;
+    this._restartGate = null; // idea-870: { until } while the VS server holds the restart gate (POST /restart-gate); new turns queue
+    this._restartGateTimer = null;
     this._removeDrainFile(); // a drain file a crashed runner left behind
     // Persisted boot fold (runner/fold-index.mjs): the real server passes <runner home>/fold-index.json; null (tests) = none.
     this.foldIndexFile = foldIndexFile;
@@ -445,6 +447,29 @@ export class Runner {
     this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
     this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
     this._resaveTimer = null;
+  }
+
+  // ---- Restart gate (idea-870) ----
+  // The VS server's owner/RR1 runner restart checks idle and then hard-kills the runner; a turn starting between the two was
+  // cut. runner/server.mjs POST /restart-gate checks idle and closes this gate in one synchronous step: from then on a job
+  // that needs a NEW turn queues (_fits), and recoverQueued replays it on the next runner. A turn already open is never
+  // touched. TTL-bound (a server that dies before its kill cannot leave the runner gated); DELETE /restart-gate reopens it.
+  setRestartGate(ttlMs) {
+    const ttl = Math.min(120_000, Math.max(1000, Number(ttlMs) || 30_000));
+    this._restartGate = { until: Date.now() + ttl };
+    clearTimeout(this._restartGateTimer);
+    this._restartGateTimer = setTimeout(() => this.clearRestartGate(), ttl);
+    this._restartGateTimer.unref?.();
+    return this._restartGate;
+  }
+
+  clearRestartGate() {
+    const was = this._restartGate !== null;
+    clearTimeout(this._restartGateTimer);
+    this._restartGateTimer = null;
+    this._restartGate = null;
+    if (was) this._pump();
+    return was;
   }
 
   // ---- Restart drain (ideas 198 + 186) ----
@@ -883,6 +908,7 @@ export class Runner {
 
   _fits(job) {
     const entry = this.live.get(job.id);
+    if (job.needsTurn && !(entry?.inflight > 0) && this._restartGate && Date.now() < this._restartGate.until) return false; // idea-870: gated for a restart
     if (job.needsTurn && !(entry?.inflight > 0)) {
       const cap = this.turnCaps[job.family] ?? this.turnCaps.other;
       const running = this._running(job.family);

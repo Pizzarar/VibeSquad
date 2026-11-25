@@ -193,6 +193,7 @@ const be786 = (agents) => {
     calls,
     backend: {
       listAgents: async () => agents,
+      rc: { request: async (method, route) => (route === '/restart-gate' ? { ok: true, gated: method === 'POST' } : {}) }, // idea-870: an idle runner closes its gate
       cancelAgent: async (id) => calls.cancelled.push(id),
       archiveAgent: async (id) => calls.archived.push(id),
     },

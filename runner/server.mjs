@@ -26,6 +26,8 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
 const SSE_SKIP = new Set(['stderr', 'raw']); // noisy, never rendered
 const SSE_HEARTBEAT_MS = 15000;
+// idea-870: live entry statuses POST /restart-gate counts as busy beside an open turn (the VS server's runnerBusy RUNNING set).
+const GATE_BUSY = new Set(['running', 'initializing', 'starting', 'working']);
 
 /**
  * Content hash of a runner's own *.mjs files, recursive (adapters/ etc.), one process = one set. The supervisor hashes
@@ -181,6 +183,26 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         }
         const drain = runner.setRequestDrain({ id: b.id, tip: typeof b.tip === 'string' ? b.tip : '', ttlMs: b.ttlMs, reason: typeof b.reason === 'string' ? b.reason : '' });
         return json(res, 200, { ok: true, drain });
+      }
+      if (parts[0] === 'restart-gate' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
+        // idea-870: the VS server's runner restart (owner "Restart runner", RR1) closes this gate right before its kill. POST
+        // { ttlMs } checks idle and closes the gate in one synchronous step (no await between them), so no turn can start
+        // between the idle check and the kill: a new turn queues instead (recoverQueued replays it on the next runner).
+        // Busy -> { gated: false, running, held, ids } and the gate stays open. DELETE reopens it. Admin only, as /drain.
+        if (isAgent) return forbid(res, 'restart-gate is admin only (the VS server restart)');
+        if (typeof runner.setRestartGate !== 'function') return json(res, 404, { error: 'not found' });
+        if (req.method === 'DELETE') return json(res, 200, { ok: true, cleared: runner.clearRestartGate() });
+        const b = await readBody(req);
+        // From here to setRestartGate: synchronous.
+        const ids = new Set();
+        let running = 0;
+        for (const [id, e] of runner.live) if (e.inflight > 0 || GATE_BUSY.has(e.status)) { running += 1; ids.add(id); }
+        const heldAgents = runner.heldIds?.() ?? [];
+        for (const id of heldAgents) ids.add(id);
+        if (running > 0 || heldAgents.length > 0) return json(res, 200, { ok: true, gated: false, running, held: heldAgents.length, ids: [...ids] });
+        const gate = runner.setRestartGate(b.ttlMs);
+        console.log(JSON.stringify({ restartGate: 'closed', until: gate.until }));
+        return json(res, 200, { ok: true, gated: true, until: gate.until, running: 0, held: 0, ids: [] });
       }
       if (req.method === 'GET' && parts[0] === 'verify-agent' && parts.length === 1) {
         // Who is calling, from runner memory: the VS server forwards an agent's headers here once per request (X1c).
