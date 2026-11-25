@@ -447,6 +447,10 @@ export function agentLogFields(caller, { type, refs }) {
   }
   if (type === "done" || type === "blocker") return { agent: caller.id, type, refs: [caller.id] };
   if (type === "metric") return { agent: caller.id, type, refs: list.filter((r) => !isRunnerId(r) || r === caller.id) };
+  // idea-629: a schedule-spawned worker has no lead to relay to, so it may raise needs-you itself. `caller.schedule` is the
+  // runner's verified record (protected `schedule` label, runner/runner.mjs scheduleOf), never the body or env. Attributed
+  // to the worker; refs keep itself first plus non-agent refs (files, plans), never another agent.
+  if (type === "needs-you" && caller.schedule) return { agent: caller.id, type, refs: [caller.id, ...list.filter((r) => !isRunnerId(r) && r !== caller.id)] };
   throw forbidden(`a worker may only log done, blocker or metric, not ${type}; put it in your final message for your lead`);
 }
 

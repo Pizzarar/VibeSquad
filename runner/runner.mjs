@@ -79,11 +79,12 @@ const ADMIN_ONLY_PROFILE_RE = /^(brainstorm|pre-check)\b/i;
 // Meta an agent caller may never set, on `meta.*` or `meta.labels.*` (every key server/identity.mjs, lead-handoff.mjs and
 // agent-duties.ts read for privilege: role, lane, team, ord, parent, digest, orphan, retirement markers).
 export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
-export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived'];
+// idea-629: `schedule` / `scheduleName` mark a schedule-spawned agent (server/schedules.mjs execute); only the VS server sets them.
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
 const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
 const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
 // Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.
-const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan']);
+const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan', 'schedule', 'scheduleName']);
 
 export function secretEquals(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
@@ -99,6 +100,16 @@ export function identityOf(meta = {}) {
   const rawRole = String(pick('role') ?? '').trim().toLowerCase();
   const role = rawRole === 'buddy' ? 'brainstorm' : rawRole;
   return { role, lane: pick('lane'), team: pick('team'), profile: pick('profile'), labels };
+}
+
+/**
+ * idea-629: the schedule id of a schedule-spawned agent, or null. Trusted because `schedule` is a protected label: an agent
+ * spawn has it stripped (STRIPPED_SPAWN_LABELS) and an agent meta patch setting it is a 403 (protectedMetaIn), so only the
+ * VS server's admin spawn (server/schedules.mjs execute) or the owner can put it on a record. Never read from the env.
+ */
+export function scheduleOf(meta = {}) {
+  const v = String(meta?.labels?.schedule ?? '').trim();
+  return /^sch-[A-Za-z0-9_-]{1,64}$/.test(v) ? v : null; // server/schedules.mjs ID_RE
 }
 
 // The protected part of a meta patch (what an agent caller is refused for), or null when the patch touches none of it.
@@ -648,7 +659,8 @@ export class Runner {
     const digestFor = labels.digestFor ? String(labels.digestFor) : null;
     const digest = profile === DIGEST_PROFILE && !!digestFor;
     const overlord = role === 'lead' && !!lane && !!team && this.hubLane(team) === lane;
-    return { id, role, lane, team, profile, digest, digestFor, status: s.status, overlord };
+    const schedule = scheduleOf(meta); // idea-629: a schedule-spawned agent (trusted label, see scheduleOf)
+    return { id, role, lane, team, profile, digest, digestFor, status: s.status, overlord, schedule };
   }
 
   // A lead that still counts for the lane: created, not exited, not archived, not retired, role lead, same team + lane.

@@ -98,7 +98,10 @@ test("vs pin new writes the lane and brief, refuses overlaps", () => {
     assert.match(readFileSync(join(root, "docs", "brainstorm", "fishing.md"), "utf8"), /## Open\n- again/);
 
     // vs pin merge folds source lane's Decided + Open into target lane, marks source removed, adds aliases, and logs decision
-    const vsMerge = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", "merge", ...args], { env, encoding: "utf8" });
+    // pin merge is owner/Overlord/hub-Buddy only: run it from an owner shell (no agent id + the local token)
+    writeFileSync(join(home, "local-token"), "a".repeat(64) + "\n");
+    const ownerEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VS_|PASEO_)/.test(k))), VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root };
+    const vsMerge = (...args) => spawnSync(process.execPath, ["cli/vs.mjs", "pin", "merge", ...args], { env: ownerEnv, encoding: "utf8" });
     const merged = vsMerge("sound-2", "crafting-tree", "--note", "unify crafting SFX with tier unlocks", "--team", "efi");
     assert.equal(merged.status, 0, merged.stderr);
     const mergedBrief = readFileSync(join(root, "docs", "brainstorm", "crafting-tree.md"), "utf8");
