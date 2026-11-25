@@ -3313,7 +3313,12 @@ export async function commandStorybook(flags, { out = (s) => process.stdout.writ
   const api = await import("../server/storybook/api.mjs");
   try {
     const snap = await (build ?? ((k) => api.buildSnapshot(k, { rootDir: LANE_SPEC_ROOT })))(project);
-    out(flags.json ? JSON.stringify(snap, null, 2) + "\n" : `${api.summaryLine(snap)}\n`);
+    if (flags.json) out(JSON.stringify(snap, null, 2) + "\n");
+    else {
+      out(`${api.summaryLine(snap)}\n`);
+      const al = api.auditLine(snap);
+      if (al) out(`${al}\n`);
+    }
   } catch (e) {
     err(`[STORYBOOK] ${project}: ${e?.message ?? e}\n`); // report-only: a failure is reported, never gated
   }

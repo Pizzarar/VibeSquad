@@ -10,6 +10,7 @@ import { efiAdapter } from "./adapters/efi.mjs";
 import { assertAdapter } from "./adapter.mjs";
 import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs";
 import { makeSnapshot } from "./schema.mjs";
+import { SIGNALS } from "../registry/audit.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -65,14 +66,18 @@ export async function resolveProject(projectKey, { rootDir, teams, adapters = AD
 }
 
 async function loadRunChecks(injected) {
-  if (injected) return { runChecks: injected, warning: null };
+  if (injected) return { runChecks: injected, runAudit: null, warning: null };
   try {
     const mod = await import("./checks/index.mjs");
-    if (typeof mod.runChecks === "function") return { runChecks: mod.runChecks, warning: null };
-    return { runChecks: null, warning: "checks module has no runChecks export; findings empty" };
+    if (typeof mod.runChecks === "function") return {
+      runChecks: mod.runChecks,
+      runAudit: typeof mod.runAudit === "function" ? mod.runAudit : null,
+      warning: null,
+    };
+    return { runChecks: null, runAudit: null, warning: "checks module has no runChecks export; findings empty" };
   } catch (e) {
-    if (e?.code === "ERR_MODULE_NOT_FOUND" && /checks[\\/]index\.mjs/.test(String(e.message))) return { runChecks: null, warning: "checks module not available; findings empty" };
-    return { runChecks: null, warning: `checks module failed to load (${String(e?.message ?? e).slice(0, 120)}); findings empty` };
+    if (e?.code === "ERR_MODULE_NOT_FOUND" && /checks[\\/]index\.mjs/.test(String(e.message))) return { runChecks: null, runAudit: null, warning: "checks module not available; findings empty" };
+    return { runChecks: null, runAudit: null, warning: `checks module failed to load (${String(e?.message ?? e).slice(0, 120)}); findings empty` };
   }
 }
 
@@ -99,7 +104,7 @@ async function buildOnce(project, { refresh, deps }) {
   const reader = makeReader(repoPath, sha);
   const { entities, warnings } = await adapter.load(reader, sha);
   const snap = makeSnapshot({ project: adapter.id, ref, sha, entities, warnings: [...warnings] });
-  const { runChecks, warning } = await loadRunChecks(deps.runChecks);
+  const { runChecks, runAudit, warning } = await loadRunChecks(deps.runChecks);
   if (warning) snap.warnings.push(warning);
   if (runChecks) {
     try {
@@ -109,6 +114,14 @@ async function buildOnce(project, { refresh, deps }) {
     } catch (e) {
       snap.findings = [];
       snap.warnings.push(`checks failed: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+  }
+  if (runAudit) {
+    try {
+      const audit = await runAudit(snap, adapter, { reader, findings: snap.findings });
+      snap.audit = Array.isArray(audit) ? audit : [];
+    } catch (e) {
+      snap.warnings.push(`audit failed: ${String(e?.message ?? e).slice(0, 200)}`);
     }
   }
   remember(project, sha, snap);
@@ -158,6 +171,15 @@ export function summaryLine(snap) {
   const ids = [...counts.keys()].sort((a, b) => Number(String(a).replace(/\D/g, "")) - Number(String(b).replace(/\D/g, "")));
   const parts = ids.map((id) => `${id}=${counts.get(id)}`);
   return `[STORYBOOK] sha=${String(snap.sha).slice(0, 8)} ${parts.length ? parts.join(" ") + " " : ""}total=${(snap.findings ?? []).length}`;
+}
+
+/** `[STORYBOOK] signals coverage=n integrity=n cohesion=n signoff=n`, or "" when the snapshot has no audit findings. */
+export function auditLine(snap) {
+  if (!Array.isArray(snap.audit)) return "";
+  const counts = {};
+  for (const s of SIGNALS) counts[s] = 0;
+  for (const f of snap.audit) if (Object.hasOwn(counts, f?.signal)) counts[f.signal]++;
+  return `[STORYBOOK] signals ${SIGNALS.map((s) => `${s}=${counts[s]}`).join(" ")}`;
 }
 
 const PROJECT_RE = /^\/api\/storybook\/([A-Za-z0-9._-]{1,64})(\/refresh)?\/?$/;
