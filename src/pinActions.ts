@@ -84,11 +84,23 @@ export function openPin(pin: Pin, depsOrProfile: OpenPinDeps | string = {}): Pro
   return run;
 }
 
+const START_FAIL_COOLDOWN_MS = 60_000;
+const lastStartFailLog = new Map<string, number>();
+
 /** Best-effort `vs log blocker` (via the server) saying a pinned lane's first Buddy did not start, and why. Never throws. */
+/** Test hook: forget the failed-start log cooldown. */
+export const resetPinStartFailLog = (): void => lastStartFailLog.clear();
+
 export async function logPinStartFailure(pin: Pin, err: unknown, fetchImpl?: typeof fetch): Promise<void> {
   const why = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").slice(0, 160);
   console.error(`pin ${pin.lane.id}: its Buddy did not start: ${why}`);
   if (DEMO) return;
+  // Per lane + reason, once a minute: a fast 429/503 clears inFlight, so repeated clicks must not each post a blocker.
+  const key = `${laneKey(pin.squad.id, pin.lane.id)}|${why}`;
+  const now = Date.now();
+  const last = lastStartFailLog.get(key);
+  if (last !== undefined && now - last < START_FAIL_COOLDOWN_MS) return;
+  lastStartFailLog.set(key, now);
   try {
     await (fetchImpl ?? fetch)("/__vibesquad/vs-log", {
       method: "POST",

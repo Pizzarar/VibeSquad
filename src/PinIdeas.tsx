@@ -112,9 +112,20 @@ export function SpinOffCard({ pin, offer, variant = "tile" }: { pin: Pin; offer:
   const n = teams.length;
   const go = async () => {
     const fellBack: string[] = [];
-    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, { onBriefFallback: (id) => fellBack.push(id), onBuddyStartFailed: (p, err) => showPinToast(`${p.lane.name} is pinned but its Buddy did not start: ${err instanceof Error ? err.message : err}. Click the pin to retry.`) }); // the full list: runSpinOffOnce skips the rows already created
+    // idea-816: a Buddy start can be refused before OR after the summary toast. Before: fold it into the summary. After: show it then, so the summary never overwrites it.
+    const startFailed: string[] = [];
+    let summaryShown = false;
+    const startFailMsg = (names: string[]) => `Buddy did not start for ${names.join(", ")}. Click the pin to retry.`;
+    const results = await createSpinOffPins(offer.id, pin.squad.id, offer.teams, {
+      onBriefFallback: (id) => fellBack.push(id),
+      onBuddyStartFailed: (p, err) => {
+        if (summaryShown) showPinToast(`${p.lane.name} is pinned but its Buddy did not start: ${err instanceof Error ? err.message : err}. Click the pin to retry.`);
+        else startFailed.push(p.lane.name);
+      },
+    }); // the full list: runSpinOffOnce skips the rows already created
     if (!results) return; // already running (double click, or the other card)
-    showPinToast(withBriefWarning(describeSpinOff(results), fellBack));
+    summaryShown = true;
+    showPinToast(withBriefWarning(describeSpinOff(results), fellBack) + (startFailed.length ? ` · ${startFailMsg(startFailed)}` : ""));
     if (results.every((r) => r.pin)) {
       dismissSpinOff(offer.id);
       setHidden(true);
