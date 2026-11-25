@@ -6,7 +6,7 @@
 //                   or is cut by an overflow ancestor; its own controls are hit-tested too.
 // Measures the built dist/ (vite build + static server), never the dev server.
 //
-//   node scripts/ui-clicks.mjs [--sizes 1080,4k,mobile,1280] [--vibe fun|boring] [--themes dark,light] [--surfaces a,b] [--out scratch/ui-clicks]
+//   node scripts/ui-clicks.mjs [--sizes 1080,4k,mobile,1280] [--vibe fun|boring] [--themes dark,light] [--surfaces a,b] [--jobs 4] [--out scratch/ui-clicks]
 //                              [--no-popovers] [--no-fail] [--rebuild]
 import fs from "node:fs";
 import path from "node:path";
@@ -289,10 +289,13 @@ export async function run() {
   const skip = (combo, surface, reason) => { if (/crash/i.test(reason)) { reason = `RENDERER CRASH (not a legitimate skip): ${reason}`; crashCount++; } skipped.push({ surface, combo, reason }); stats[combo].skipped++; process.stderr.write(`  SKIP ${surface} ${combo}: ${reason}\n`); };
 
   try {
-    for (const sid of sizeIds) {
+    // idea-967: size x theme combos are independent (own context, own stats key) and the run is dominated by fixed sleeps, so a serial
+    // run of all four sizes outlasts a ~10 min caller cap (which kills the browser mid-run: "browser has been closed"). Run them in a small pool.
+    const comboList = [];
+    for (const sid of sizeIds) { if (!SIZES[sid]) throw new Error(`unknown size ${sid}`); for (const theme of themes) comboList.push({ sid, theme }); }
+    const runCombo = async ({ sid, theme }) => {
       const size = SIZES[sid];
-      if (!size) throw new Error(`unknown size ${sid}`);
-      for (const theme of themes) {
+      {
         const combo = `${sid}/${theme}${vibe === "fun" ? "" : `/${vibe}`}`;
         stats[combo] = { controls: 0, popovers: 0, mismatch: new Set(), clipped: new Set(), skipped: 0, triggers: 0, triggersSkipped: 0, surfaces: 0 };
         const st = stats[combo];
@@ -373,7 +376,15 @@ export async function run() {
         }
         await ctx.close();
       }
-    }
+    };
+    const jobs = Math.max(1, Math.min(Number(arg("jobs", "4")), comboList.length));
+    let next = 0, failure = null;
+    await Promise.all(Array.from({ length: jobs }, async () => {
+      while (!failure && next < comboList.length) {
+        try { await runCombo(comboList[next++]); } catch (e) { failure ??= e; }
+      }
+    }));
+    if (failure) throw failure;
   } finally {
     await browser.close();
     server.close();
