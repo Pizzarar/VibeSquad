@@ -13,6 +13,8 @@ import {
   openBuddy,
   phoneBugsSurface,
   phoneLaneRows,
+  pickLiveRestart,
+  hostRestartKey,
   resetBuddyRequest,
   subscribeBuddyRequest,
 } from "../src/phoneCockpitLogic.ts";
@@ -325,4 +327,18 @@ test("H2: Restart Host (Server & Runner) — two-step confirm, coordinated route
   assert.match(t, /data-testid="phone-restart-host-abort"[^>]*onClick=\{\(\) => void host\("DELETE"\)\}/);
   assert.match(t, /const ABORTABLE = new Set\(\["queued", "requested", "draining", "ready"\]\)/, "no Abort once firing");
   assert.match(t, /<RestartHost hostRestart=\{host\?\.restartRequest \?\? null\} \/>/, "seeded from H1's host status");
+});
+
+test("idea-894 pickLiveRestart: local yields to a newer host prop", () => {
+  const k = (h) => hostRestartKey(h);
+  const oldDone = { id: "a", state: "done" };
+  const localDone = { req: { id: "a", state: "aborted" }, hostKey: k(oldDone) };
+  assert.deepEqual(pickLiveRestart(localDone, oldDone), { id: "a", state: "aborted" }, "same prop -> local");
+  assert.deepEqual(pickLiveRestart(localDone, { id: "b", state: "queued" }), { id: "b", state: "queued" }, "new id -> prop");
+  assert.equal(pickLiveRestart(localDone, null), null, "prop cleared -> null");
+  const localActive = { req: { id: "a", state: "draining" }, hostKey: k({ id: "a", state: "queued" }) };
+  assert.deepEqual(pickLiveRestart(localActive, { id: "a", state: "queued" }), { id: "a", state: "draining" }, "local active, same prop -> local");
+  assert.deepEqual(pickLiveRestart(localActive, { id: "a", state: "done" }), { id: "a", state: "done" }, "prop state moved -> prop");
+  assert.deepEqual(pickLiveRestart(undefined, { id: "c", state: "queued" }), { id: "c", state: "queued" }, "no local -> prop");
+  assert.equal(pickLiveRestart(undefined, undefined), null);
 });
