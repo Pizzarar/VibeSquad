@@ -6,7 +6,7 @@ import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
 import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
-import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, parseUrlState, teamCtxItems } from "./CommandPalette";
+import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, parseUrlState, teamCtxItems, type UrlSlot, type UrlTab } from "./CommandPalette";
 import { RemoveTeamDialog } from "./PinRemove";
 import { captureFocusReturn } from "./ctxMenuLogic";
 import { demoLog } from "./demo";
@@ -15,7 +15,7 @@ import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from
 import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { setBoringShownAgent, spinUpPin } from "./pinFocus";
+import { setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
 import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
@@ -42,6 +42,11 @@ export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirs
 type Role = "brainstorm" | "lead";
 type Mode = "chat" | "project" | "usage";
 type OverviewTab = "overview" | "inbox" | "feed";
+// U1 (idea-997/895): URL keys for the screens that have no agent. ?slot= names an empty Desk/Trinity card; ?tab= the Overview sub-tab.
+const SLOT_LANE: Record<UrlSlot, "_overlord" | "_riffbot" | "_bugs"> = { overlord: "_overlord", riffbot: "_riffbot", bugs: "_bugs" };
+const LANE_SLOT: Record<string, UrlSlot> = { _overlord: "overlord", _riffbot: "riffbot", _bugs: "bugs" };
+const TAB_FROM_URL: Record<UrlTab, OverviewTab> = { inbox: "inbox", standup: "feed" };
+const TAB_TO_URL: Record<OverviewTab, UrlTab | null> = { overview: null, inbox: "inbox", feed: "standup" };
 
 /** Relative age ("5m", "2h", "1d") of the newest agent update on a pin; "" when none has one. */
 export function boringConversationAge(pin: Pick<Pin, "brainstorm" | "lead" | "workers">, now = Date.now()): string {
@@ -112,14 +117,16 @@ export function boringLandingFromUrl(
   views: TeamView[],
   search: string,
   known: (id: string) => boolean = () => true,
-): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "project"; teamId: string | null } | null {
-  const { team, agent } = parseUrlState(search);
+): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "slot"; teamId: string; slot: UrlSlot } | { mode: "project"; teamId: string | null; tab: UrlTab | null } | null {
+  const { team, agent, slot, tab } = parseUrlState(search);
   if (agent) {
     const land = boringAgentLanding(views, agent, known);
     if (!land) return null;
     return { mode: "chat", teamId: land.view?.team.id ?? team, view: land.view, sel: land.sel, agentId: agent };
   }
-  if (team) return { mode: "project", teamId: team };
+  // U1: an empty Desk slot (?slot=) or an Overview sub-tab (?tab=). Unknown values parse to null: the plain Overview.
+  if (team && slot) return { mode: "slot", teamId: team, slot };
+  if (team) return { mode: "project", teamId: team, tab: tab ?? null };
   return null;
 }
 
@@ -409,7 +416,9 @@ type Props = {
 
 
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners, navGen = 0 }: Props) {
-  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : "project"));
+  // U1: a reload / shared link restores the screen its URL names: an empty Desk slot card (?slot=) or an Overview sub-tab (?tab=).
+  const [url0] = useState(() => (typeof location === "undefined" ? null : parseUrlState(location.search)));
+  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : url0?.slot ? "chat" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
   useEffect(() => {
@@ -417,14 +426,18 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     window.addEventListener(OPEN_USAGE_EVENT, open);
     return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
   }, []);
-  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
+  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (url0?.slot ? SLOT_LANE[url0.slot] : null));
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
   const [removingPin, setRemovingPin] = useState<{ pin: Pin; name: string; returnTo: unknown } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
+  // U1 (idea-895): the sub-tab is tagged with its project, so the commit that switches project already shows (and publishes) the new
+  // one's Overview tab: no stray ?team=<new>&tab=<old> entry. Open-in-Inbox and a pop set the tab for their project.
+  const [tabFor, setTabFor] = useState<{ team: string | null; tab: OverviewTab }>(() => ({ team: view?.team.id ?? null, tab: (url0?.tab && TAB_FROM_URL[url0.tab]) || "overview" }));
+  const overviewTab: OverviewTab = tabFor.team === (view?.team.id ?? null) ? tabFor.tab : "overview";
+  const setOverviewTab = (tab: OverviewTab, team: string | null = view?.team.id ?? null) => setTabFor({ team, tab });
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
   const inboxCount = useInboxCards().length;
   const storybookPresent = useStorybookPresent(view?.team.id ?? null);
@@ -575,7 +588,13 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         setSelectedWorkerId(null);
       }
       setMode("chat");
+    } else if (land.mode === "slot") {
+      setSelectedLaneId(SLOT_LANE[land.slot]);
+      setSelectedRole("brainstorm");
+      setSelectedWorkerId(null);
+      setMode("chat");
     } else {
+      setOverviewTab((land.tab && TAB_FROM_URL[land.tab]) || "overview", land.teamId ?? view?.team.id ?? null); // Back to ?team= alone = the Overview tab
       setMode("project");
     }
   }, [navGen]);
@@ -637,6 +656,16 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   });
   useEffect(() => setBoringShownAgent(urlAgent), [urlAgent]);
   useEffect(() => () => setBoringShownAgent(undefined), []);
+  // U1: the agent-less screen keys (App writes ?slot= / ?tab=; serializeUrlState drops them whenever an agent is named).
+  const urlSlot = mode === "chat" && !agent && selectedLaneId ? LANE_SLOT[selectedLaneId] ?? null : null;
+  const urlTab = mode === "project" ? TAB_TO_URL[overviewTab] : null;
+  const screenTeam = view?.team.id ?? null;
+  // U1: a project switch resets the sub-tab for good (returning by its row shows the Overview tab); `overviewTab` already reads
+  // "overview" for the new project in the switching commit, so this only drops the stale state. A pop sets the new project's tab first.
+  // Functional: a cross-project pop sets the new project's tab in the navGen effect of this same commit, which must win.
+  useEffect(() => setTabFor((cur) => (cur.team === screenTeam ? cur : { team: screenTeam, tab: "overview" })), [screenTeam]);
+  useEffect(() => setBoringScreenKeys({ team: screenTeam, slot: urlSlot, tab: urlTab }), [screenTeam, urlSlot, urlTab]);
+  useEffect(() => () => setBoringScreenKeys(undefined), []);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 

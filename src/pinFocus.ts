@@ -311,6 +311,24 @@ export const useBoringShownAgent = () => useSyncExternalStore(subscribeBoringSho
 /** B2: the live value, for App's URL sync effect (BoringApp publishes from a child effect, after App rendered this commit). */
 export const getBoringShownAgent = () => boringShown;
 
+// U1 (idea-997/895): the non-agent screen keys BoringApp has on screen (an empty Desk slot card, an Overview sub-tab), tagged with the
+// project they belong to; undefined while BoringApp is not mounted. App's URL sync writes them as ?slot= / ?tab= (urlSyncScreen).
+export type BoringScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
+let boringScreen: BoringScreenKeys | undefined;
+const boringScreenSubs = new Set<() => void>();
+export function setBoringScreenKeys(k: BoringScreenKeys | undefined) {
+  if (k === boringScreen || (k && boringScreen && k.team === boringScreen.team && k.slot === boringScreen.slot && k.tab === boringScreen.tab)) return;
+  boringScreen = k;
+  for (const f of boringScreenSubs) f();
+}
+const subscribeBoringScreen = (f: () => void) => {
+  boringScreenSubs.add(f);
+  return () => void boringScreenSubs.delete(f);
+};
+export const useBoringScreenKeys = () => useSyncExternalStore(subscribeBoringScreen, () => boringScreen, () => undefined);
+/** Live value for App's URL sync effect (published from BoringApp's child effect in the same commit, like getBoringShownAgent). */
+export const getBoringScreenKeys = () => boringScreen;
+
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
   if (state.focus || state.home) set({ focus: null, home: false, homeActive: null, squadsHome: false });

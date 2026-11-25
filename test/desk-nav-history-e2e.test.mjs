@@ -433,3 +433,236 @@ test("B2: urlSyncAgent reads the live shown agent in Normal only while it belong
     assert.deepEqual(run(start, commits, r1), [start, "?demo=&team=vibesquad&agent=demo-lead-ui", want], `86775348 (from ${start}): the mixed entry Gemini M1 found`);
   }
 });
+
+// ── U1 (docs/PLAN_DESK_URL_COMPLETE.md; idea-997 + idea-895): every Normal screen has one URL ─────────────────────────────────────
+// An empty Desk slot card (?slot=overlord) and the Overview sub-tab (?tab=inbox|standup) live in the URL: opening one pushes exactly
+// once, and Back, Forward and reload all show the screen the URL names.
+const screenOf = (page) => page.evaluate(() => {
+  const card = document.querySelector('[data-testid="boring-empty-card"]');
+  const ov = document.querySelector('[data-testid="boring-project-view"]');
+  const tab = ov ? ["overview", "inbox", "feed"].find((t) => document.querySelector(`[data-testid="boring-tab-${t}"]`)?.classList.contains("on")) ?? null : null;
+  return { url: location.search, card: card ? (card.querySelector('[data-testid="boring-empty-cta"]')?.textContent ?? "").trim() : null, tab, chat: !!document.querySelector(".boring-timeline, .timeline") };
+});
+async function u1Step(page, take, label, fn, want) {
+  const before = await take();
+  await fn();
+  await page.waitForTimeout(900);
+  const s = await take();
+  const sc = await screenOf(page);
+  assert.deepEqual({ url: sc.url, card: sc.card, tab: sc.tab, chat: sc.chat }, want, `${label}: screen`);
+  return { before, s, sc };
+}
+async function u1Reload(page, label, want) {
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+  await page.waitForTimeout(1200);
+  const sc = await screenOf(page);
+  const h = await page.evaluate(() => window.__h.splice(0));
+  assert.deepEqual({ url: sc.url, card: sc.card, tab: sc.tab, chat: sc.chat }, want, `${label}: reload shows the same screen`);
+  assert.equal(h.filter((k) => k === "pushState").length, 0, `${label}: reload writes no entry (${JSON.stringify(h)})`);
+}
+// Navigate (one push, +1 history.length), then Back, Forward and reload must each show the screen of their URL.
+async function u1Drive(page, take, { label, from, act, to }) {
+  const nav = await u1Step(page, take, `${label} nav`, act, to);
+  assert.equal(pushes(nav.s), 1, `${label}: exactly one pushState (${JSON.stringify(nav.s.h)})`);
+  assert.equal(nav.s.hlen - nav.before.hlen, 1, `${label}: history.length +1`);
+  const back = await u1Step(page, take, `${label} Back`, () => page.goBack(), from);
+  assert.equal(pushes(back.s), 0, `${label} Back: no pushState (${JSON.stringify(back.s.h)})`);
+  assert.equal(back.s.hlen, nav.s.hlen, `${label} Back: history.length unchanged`);
+  const fwd = await u1Step(page, take, `${label} Forward`, () => page.goForward(), to);
+  assert.equal(pushes(fwd.s), 0, `${label} Forward: no pushState (${JSON.stringify(fwd.s.h)})`);
+  assert.equal(fwd.s.hlen, nav.s.hlen, `${label} Forward: history.length unchanged`);
+  await u1Reload(page, label, to);
+}
+const OV = (team, tab = "overview") => ({ url: `?demo=&team=${team}${tab === "inbox" ? "&tab=inbox" : tab === "feed" ? "&tab=standup" : ""}`, card: null, tab, chat: false });
+const overlordTile = async (page, team) => {
+  const sel = `.boring-sidebar [data-testid="boring-core-overlord-${team}"], .boring-sidebar [data-testid="boring-core-overlord"]`;
+  return page.locator(sel).first().click();
+};
+
+test("U1 e2e (idea-997): the empty Start Overlord card has its own URL (?slot=overlord): one push; Back, Forward, reload restore it", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const theme of ["dark", "light"]) {
+    const { context, page, take } = await openChat(theme);
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    // Open a chat first so the persisted pane has an active agent: reload must still land on the card, not that chat.
+    await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+    await page.waitForTimeout(900);
+    await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click();
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("efi"), "start: the Main Game Project Overview");
+    await take();
+    await u1Drive(page, take, {
+      label: `Start Overlord card (${theme})`,
+      from: OV("efi"),
+      act: () => overlordTile(page, "efi"),
+      to: { url: "?demo=&team=efi&slot=overlord", card: "Start Overlord", tab: null, chat: false },
+    });
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  }
+});
+
+test("U1 e2e (idea-997): opening another project's empty Overlord card from a chat is one entry (team + slot land together)", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.evaluate(() => { window.__w = []; for (const k of ["pushState", "replaceState"]) { const o = history[k].bind(history); history[k] = (...a) => { window.__w.push([k, String(a[2]).replace(/^.*\?/, "?")]); return o(...a); }; } });
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  const chat = await screenOf(page);
+  assert.equal(chat.url, "?demo=&team=vibesquad&agent=demo-aud");
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).locator("xpath=..").locator(".boring-chevron-btn").first().click().catch(() => {});
+  await page.waitForTimeout(400);
+  await take();
+  await page.evaluate(() => { window.__w = []; });
+  const nav = await u1Step(page, take, "cross-project slot", () => overlordTile(page, "efi"), { url: "?demo=&team=efi&slot=overlord", card: "Start Overlord", tab: null, chat: false });
+  const writes = await page.evaluate(() => window.__w.splice(0));
+  assert.equal(pushes(nav.s), 1, `one pushState (${JSON.stringify(writes)})`);
+  assert.equal(nav.s.hlen - nav.before.hlen, 1, "history.length +1");
+  assert.deepEqual(writes.map(([, u]) => u).filter((u) => u !== nav.sc.url), [], `no interim URL (${JSON.stringify(writes)})`);
+  const back = await u1Step(page, take, "Back", () => page.goBack(), { url: chat.url, card: null, tab: null, chat: true });
+  assert.equal(pushes(back.s), 0);
+  await context.close();
+});
+
+for (const [tab, label] of [["inbox", "Idea Inbox"], ["feed", "Standup"]]) {
+  test(`U1 e2e (idea-895): the ${label} tab has its own URL: one push; Back, Forward, reload restore it`, async (t) => {
+    if (unavailable) return t.skip(unavailable);
+    for (const theme of ["dark", "light"]) {
+      const { context, page, take } = await openChat(theme);
+      const errs = [];
+      page.on("pageerror", (e) => errs.push(String(e)));
+      assert.deepEqual(await screenOf(page), OV("vibesquad"), "start: the VibeSquad Overview");
+      await take();
+      await u1Drive(page, take, { label: `${label} tab (${theme})`, from: OV("vibesquad"), act: () => page.locator(`[data-testid="boring-tab-${tab}"]`).click(), to: OV("vibesquad", tab) });
+      assert.deepEqual(errs, [], "no page errors");
+      await context.close();
+    }
+  });
+}
+
+test("U1 e2e (idea-895): the sub-tab resets on project change; Back restores the old project's tab, Forward and reload the new Overview", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const tab of ["inbox", "feed"]) {
+    const { context, page, take } = await openChat("dark");
+    await page.locator(`[data-testid="boring-tab-${tab}"]`).click();
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("vibesquad", tab));
+    await take();
+    await u1Drive(page, take, { label: `project switch from ${tab}`, from: OV("vibesquad", tab), act: () => page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(), to: OV("efi") });
+    // Without a reload in between: tab -> other project -> back by the first project's row shows its Overview tab (the reset sticks).
+    const row = (name) => page.locator(".boring-sidebar .boring-project-row", { hasText: name }).first().click();
+    await row("VibeSquad");
+    await page.waitForTimeout(900);
+    await page.locator(`[data-testid="boring-tab-${tab}"]`).click();
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("vibesquad", tab));
+    await row("Main Game Project");
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("efi"));
+    await row("VibeSquad");
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("vibesquad"), "returning to the first project by its row shows its Overview tab");
+    // ...while Back still walks the real entries: efi Overview, then VibeSquad on the tab (a cross-project pop lands on the URL's tab).
+    await page.goBack();
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("efi"));
+    await page.goBack();
+    await page.waitForTimeout(900);
+    assert.deepEqual(await screenOf(page), OV("vibesquad", tab), "cross-project Back restores the tab its entry names");
+    await context.close();
+  }
+});
+
+test("U1 e2e: unknown ?slot= / ?tab= values fall back to the Overview and are dropped from the URL", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
+  await context.addInitScript(HISTORY_WRAP);
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+  const page = await context.newPage();
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  for (const q of ["slot=nope", "tab=bogus", "slot=nope&tab=bogus", "tab=overview"]) {
+    await page.goto(`${baseUrl}/?demo=&team=vibesquad&${q}`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const sc = await screenOf(page);
+    assert.deepEqual({ card: sc.card, tab: sc.tab, chat: sc.chat }, { card: null, tab: "overview", chat: false }, `${q}: the Overview`);
+    assert.equal(sc.url, "?demo=&team=vibesquad", `${q}: the canonical Overview URL`);
+  }
+  assert.deepEqual(errs, [], "no page errors");
+  await context.close();
+});
+
+// U1 unit: the real serializeUrlState / parseUrlState (extracted from CommandPalette.tsx) + urlSyncScreen.
+test("U1: serializeUrlState/parseUrlState round-trip slot and tab with agent, view, sb and demo; one screen = one canonical URL", async () => {
+  const { transformSync } = await import("rolldown/utils");
+  const { readFileSync } = await import("node:fs");
+  const pal = readFileSync(path.join(REPO_ROOT, "src", "CommandPalette.tsx"), "utf8");
+  const fn = (name) => { const i = pal.indexOf(`export function ${name}`); const s = pal.slice(i, pal.indexOf("\n}\n", i) + 3); assert.match(s, new RegExp(`^export function ${name}[\\s\\S]*\\n\\}\\n$`)); return s; };
+  const code = transformSync("u1.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8") + "\n" + fn("parseUrlState") + fn("serializeUrlState"), { lang: "ts" }).code;
+  const { parseUrlState: parse, serializeUrlState: ser, urlSyncScreen } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+
+  // Round trips: serialize(parse(x)) is stable and keeps unrelated params (demo, sb, dock) in place.
+  const cases = [
+    [{ team: "efi", agent: null, slot: "overlord", tab: null }, "?demo=", "?demo=&team=efi&slot=overlord"],
+    [{ team: "efi", agent: null, slot: "riffbot", tab: null }, "", "?team=efi&slot=riffbot"],
+    [{ team: "efi", agent: null, slot: "bugs", tab: null }, "", "?team=efi&slot=bugs"],
+    [{ team: "vibesquad", agent: null, slot: null, tab: "inbox" }, "?demo=", "?demo=&team=vibesquad&tab=inbox"],
+    [{ team: "vibesquad", agent: null, slot: null, tab: "standup" }, "?demo=&sb=vibesquad", "?demo=&sb=vibesquad&team=vibesquad&tab=standup"],
+    [{ team: "vibesquad", agent: "a1", slot: null, tab: null }, "?dock=1", "?dock=1&team=vibesquad&agent=a1"],
+    [{ team: "vibesquad", agent: null, slot: null, tab: null }, "", "?team=vibesquad"],
+  ];
+  for (const [st, base, want] of cases) {
+    const url = ser(st, base);
+    assert.equal(url, want, JSON.stringify(st));
+    assert.deepEqual(parse(url), st, `parse(${url})`);
+    assert.equal(ser(parse(url), url), url, `stable: ${url}`);
+  }
+  // Precedence: an agent wins over a slot, a slot over a tab (in both directions), so a screen has exactly one URL.
+  assert.equal(ser({ team: "t", agent: "a", slot: "overlord", tab: "inbox" }), "?team=t&agent=a");
+  assert.equal(ser({ team: "t", agent: null, slot: "overlord", tab: "inbox" }), "?team=t&slot=overlord");
+  assert.deepEqual(parse("?team=t&agent=a&slot=overlord&tab=inbox"), { team: "t", agent: "a", slot: null, tab: null });
+  assert.deepEqual(parse("?team=t&slot=overlord&tab=inbox"), { team: "t", agent: null, slot: "overlord", tab: null });
+  // view=squads (Squads Home) coexists; stale slot/tab are replaced, not duplicated.
+  assert.equal(ser({ team: "t", agent: null, tab: "inbox", squadsHome: true }, "?view=squads&tab=standup&slot=bugs"), "?view=squads&team=t&tab=inbox");
+  assert.equal(ser({ team: "t", agent: null }, "?team=t&slot=overlord&tab=inbox"), "?team=t", "callers that pass no keys (Psycho) strip them");
+  // Unknown values fall back safely (null = the Overview); the internal "feed" key is never a URL value.
+  for (const q of ["?team=t&slot=nope", "?team=t&tab=bogus", "?team=t&tab=feed", "?team=t&tab=overview", "?team=t&slot=&tab="]) assert.deepEqual(parse(q), { team: "t", agent: null, slot: null, tab: null }, q);
+
+  // urlSyncScreen: trusted only for the team being written; BoringApp unmounted keeps the URL's own keys; Psycho writes none.
+  const K = (team, slot = null, tab = null) => ({ team, slot, tab });
+  const S = (o) => urlSyncScreen({ boring: true, live: undefined, rendered: undefined, team: "efi", kept: {}, ...o });
+  assert.deepEqual(S({ live: K("efi", "overlord") }), { slot: "overlord", tab: null }, "live keys of the team being written");
+  assert.deepEqual(S({ live: K("vibesquad", null, "inbox"), rendered: K("efi", null, "standup") }), { slot: null, tab: "standup" }, "live belongs to another project: the render value stands in");
+  assert.deepEqual(S({ live: K("vibesquad", null, "inbox"), rendered: K("vibesquad", null, "inbox") }), { slot: null, tab: null }, "neither belongs: the default Overview (no stray ?team=<new>&tab=<old>)");
+  assert.deepEqual(S({ live: undefined, kept: { slot: null, tab: "inbox" } }), { slot: null, tab: "inbox" }, "BoringApp not mounted (Storybook): keep the URL's keys");
+  assert.deepEqual(S({ boring: false, live: K("efi", "overlord"), kept: { tab: "inbox" } }), { slot: null, tab: null }, "Psycho / phone: none");
+});
+
+// U1 + Storybook (?sb=) coexistence: the takeover unmounts BoringApp; the entry keeps its ?tab= / ?slot=, and leaving Storybook
+// (Esc on a cold ?sb= link strips ?sb= in place) lands on the screen the URL names.
+test("U1 e2e: ?sb= coexists with ?tab= / ?slot=: Storybook keeps the keys, closing it lands on that tab / card", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const [q, want] of [["team=vibesquad&tab=inbox", OV("vibesquad", "inbox")], ["team=efi&slot=overlord", { url: "?demo=&team=efi&slot=overlord", card: "Start Overlord", tab: null, chat: false }]]) {
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
+    await context.addInitScript(HISTORY_WRAP);
+    await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+    const page = await context.newPage();
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.goto(`${baseUrl}/?demo=&${q}&sb=vibesquad`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    assert.equal(await page.locator(".boring-sidebar").count(), 0, `${q}: Storybook takeover (BoringApp unmounted)`);
+    const sorted = (u) => [...new URLSearchParams(u)].map((kv) => kv.join("=")).sort().join("&");
+    assert.equal(sorted(await page.evaluate(() => location.search)), sorted(`?demo=&${q}&sb=vibesquad`), `${q}: the Storybook entry keeps its screen keys`);
+    await page.keyboard.press("Escape");
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const sc = await screenOf(page);
+    assert.deepEqual({ url: sc.url, card: sc.card, tab: sc.tab, chat: sc.chat }, want, `${q}: closing Storybook lands on the URL's screen`);
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  }
+});

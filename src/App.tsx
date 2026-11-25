@@ -51,7 +51,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp, boringAgentLanding } from "./BoringAde";
-import { urlSyncAgent, urlSyncDecision } from "./urlSync";
+import { urlSyncAgent, urlSyncDecision, urlSyncScreen } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { isPhoneShell } from "./phoneCockpitLogic";
@@ -100,7 +100,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, getBoringShownAgent, useBoringScreenKeys, getBoringScreenKeys, usePinsHome, useSquadsHome } from "./pinFocus";
 import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
@@ -1867,6 +1867,7 @@ export function App() {
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
   // R5-4: Normal's ?agent= is the agent BoringApp has on screen (none on Overview / usage); the active tab only until it reports.
   const boringShown = useBoringShownAgent();
+  const boringScreen = useBoringScreenKeys(); // U1: ?slot= / ?tab= (render-time; the sync reads the live value)
   const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   // Storybook (SB5): any team/agent navigation (palette, Ctrl+J, sidebar) leaves the Storybook takeover so the screen matches the selection.
   // Declared BEFORE the URL sync so the close (which strips ?sb= in place) happens first and the sync can replace that same entry.
@@ -1881,10 +1882,12 @@ export function App() {
     const boringViews = sidebarViews.length > 0 ? sidebarViews : view ? [view] : []; // BoringApp's own `allViews`
     const teamOf = (id: string) => boringAgentLanding(boringViews, id)?.view?.team.id ?? null;
     const agent = urlSyncAgent({ boring: vibe === "boring", liveShown: getBoringShownAgent(), activeAgentId, rendered: urlAgentId, team: activeTeamId || null, teamOf });
-    const next = serializeUrlState({ team: activeTeamId || null, agent, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
+    // U1: the empty Desk slot / Overview sub-tab on screen, read live like the agent (one push with the team), only for the team being written.
+    const screenKeys = urlSyncScreen({ boring: vibe === "boring", live: getBoringScreenKeys(), rendered: boringScreen, team: activeTeamId || null, kept: parseUrlState(location.search) });
+    const next = serializeUrlState({ team: activeTeamId || null, agent, ...screenKeys, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     const d = urlSyncDecision({ next, current: location.search || "", popActive: popActive.current, storybookReplace: takeStorybookReplace });
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
-  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome]);
+  }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen]);
   useEffect(() => { views.forEach((v) => probeStorybook(v.team.id)); }, [views.map((v) => v.team.id).join("\n")]); // menu hides "Open Storybook" correctly on first open (R19 m6)
   // Esc on the squad page goes up to Squads Home (chat's own Esc handler runs first and marks the event handled).
   useEffect(() => {
