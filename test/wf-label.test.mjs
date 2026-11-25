@@ -63,6 +63,14 @@ test("resolveWfLabel: caller label > VS_WF env > derived; caller values are norm
   assert.equal(resolveWfLabel({ ...base, env: { VS_WF: "dsp" } }), "dsp");
   assert.equal(resolveWfLabel({ ...base, labels: { wf: "Gemini-Full" }, env: { VS_WF: "dsp" } }), "gemini-full");
   assert.equal(resolveWfLabel({ ...base, labels: { wf: "  " } }), "sonnet");
+  // R0: a Neon arm pick is wf=neon only when it runs on Gemini (non-flash); reviewers keep gemini; failover derives as usual.
+  const neon = { provider: "antigravity-cli", model: "gemini-4-neon" };
+  assert.equal(resolveWfLabel({ ...neon, labels: { "vs.arm": "neon" } }), "neon");
+  assert.equal(resolveWfLabel(neon), "gemini");
+  assert.equal(resolveWfLabel({ provider: "antigravity-cli", model: "gemini-3.8-flash", labels: { "vs.arm": "neon" } }), "flash");
+  assert.equal(resolveWfLabel({ ...base, labels: { "vs.arm": "neon" } }), "sonnet");
+  assert.equal(resolveWfLabel({ ...base, labels: { "vs.arm": "sonnet" } }), "sonnet");
+  assert.equal(resolveWfLabel({ ...neon, labels: { "vs.arm": "neon", wf: "custom" } }), "custom");
   assert.equal(normalizeWfLabel("[wf:sonnet+gemini-review]"), "sonnet+gemini-review");
   assert.equal(normalizeWfLabel("a b/c"), "a-b-c");
   assert.equal(normalizeWfLabel("x".repeat(80)).length, 40);
@@ -146,6 +154,12 @@ test(
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS() });
       assert.equal(out.config.provider, "antigravity-cli");
       assert.equal(out.labels.wf, "flash");
+      // R0: spawn_worker's vs.model follows the model actually run (re-synced after failover); absent stays absent.
+      const armed = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS({ "vs.arm": "sonnet", "vs.model": "claude-sonnet-5-5" }) });
+      assert.equal(armed.labels["vs.model"], armed.config.model);
+      assert.equal(armed.labels.model, armed.config.model);
+      assert.notEqual(armed.labels["vs.model"], "claude-sonnet-5-5");
+      assert.equal(out.labels["vs.model"], undefined);
     } finally {
       h.stop?.();
     }

@@ -2509,6 +2509,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             const v = stampVals[k];
             if (v && (nextReqLabels ?? reqLabels)[k] !== v) stamp[k] = v;
           }
+          // R0: spawn_worker's `vs.model` (arm picks) names the model actually run, so re-sync it after failover / the ladder.
+          if ((nextReqLabels ?? reqLabels)["vs.model"] && stampVals.model && (nextReqLabels ?? reqLabels)["vs.model"] !== stampVals.model) stamp["vs.model"] = stampVals.model;
           if (Object.keys(stamp).length) {
             nextReqLabels = { ...(nextReqLabels ?? reqLabels), ...stamp };
             changed = true;
