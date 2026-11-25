@@ -211,3 +211,14 @@ test("Paseo shape (config + env only, no labels): role, role+stakes, role+overri
     h.stop?.();
   }
 }));
+
+test("R31 round 3 wiring: search keyword, badge ink, Add Buddy badges, New Agent labels preview, provider display names", () => {
+  const rd = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
+  assert.match(rd("prefs.ts"), /key: "newAgent\.profile"[^\n]*keywords: \["profile"\]/);
+  assert.match(rd("boring.css"), /html\[data-vibe="boring"\] \.def-badge\.def-badge \{ color: var\(--text-1\) !important; \}/);
+  const ta = rd("TeamActions.tsx");
+  assert.ok(ta.includes('data-testid="add-buddy-badges"'));
+  assert.ok(ta.includes("labels = roleSpawn ? { ...baseLabels, ...roleSpawn.labels } : baseLabels"));
+  assert.ok(ta.includes("label={providerName(g.provider)}") && ta.includes("{providerName(g.provider)} · ladder rung"));
+  assert.ok(ta.includes("<option value={g.provider}>") && ta.includes("`${g.provider}|${m}`"));
+});

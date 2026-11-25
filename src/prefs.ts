@@ -160,7 +160,7 @@ export const PREF_DEFS: PrefDef[] = [
   { key: "notify.finished", section: "notifications", label: "Alert when an agent finishes", kind: "bool" },
   { key: "notify.errored", section: "notifications", label: "Alert when an agent errors", kind: "bool" },
   { key: "notify.push", section: "notifications", label: "Push notifications (lock screen / desktop)", kind: "bool", readonly: true, legacy: { key: "vs.push.enabled", read: bool01, write: (v) => (v ? "1" : "0") } },
-  { key: "newAgent.profile", section: "newAgent", label: "Default role", hint: "Preselected in New Agent. Empty = built-in default.", kind: "text" },
+  { key: "newAgent.profile", section: "newAgent", label: "Default role", hint: "Preselected in New Agent. Empty = built-in default.", keywords: ["profile"], kind: "text" },
   { key: "newAgent.folder", section: "newAgent", label: "Default folder", hint: "Prefills the New Agent folder. Empty = the team's first folder.", kind: "text" },
   { key: "layout.rightDockOpen", section: "layout", label: "Right dock open", kind: "bool", hidden: true, legacy: { key: "vs.right-dock.open", read: boolTF, write: (v) => String(!!v) } },
   { key: "layout.rightDockTab", section: "layout", label: "Right dock tab", kind: "text", hidden: true, legacy: { key: "vs.right-dock.tab", read: (r) => r || undefined, write: String } },

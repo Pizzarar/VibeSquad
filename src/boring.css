@@ -1182,6 +1182,9 @@ html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: v
 /* U3 survivor: light-mode badge text is white; beats the styles.css `:is(.badge, ...)` on-pastel colour (boring-badge also carries .badge). */
 html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { color: #ffffff !important; }
 
+/* R1 UX R31 M1: styles.css `:is(.badge, .def-badge, ...)` forces the pastel ink (#07040f) on every .def-badge; on the dark Normal panel that is 1.4:1. */
+html[data-vibe="boring"] .def-badge.def-badge { color: var(--text-1) !important; } /* doubled class: beats the (0,3,0) :is/:not rule at styles.css:6163 */
+
 /* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
 html[data-vibe="boring"] .boring-needs-item { position: relative; }
 html[data-vibe="boring"] .boring-needs-item.attn-stalled { background: var(--st-attn-bg); border-left-color: var(--st-attn); }

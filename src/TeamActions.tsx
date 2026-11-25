@@ -21,7 +21,7 @@ import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
 import { DEMO_LADDER, DEMO_ROLES, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
-import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, parseOverrideValue } from "./roleSpawn";
+import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, parseOverrideValue, providerName } from "./roleSpawn";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -102,6 +102,12 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
   </label>
 );
 
+/** Which model a role row will run: the ladder's pick for these stakes, or the override ("via" says which). */
+function roleBadges(roleSpawn: { provider: string; model?: string }, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof ladderPick>[1], stakes: string, hasOverride: boolean): [string, string][] {
+  const picked = ladderPick({ ...roleDef, providers: [roleSpawn.provider] }, ladder, stakes).model;
+  return [["provider/model", `${providerName(roleSpawn.provider)}/${roleSpawn.model ?? picked}`], ["via", roleSpawn.model ? "override" : hasOverride ? "override (provider rung)" : "ladder"], ["stakes", stakes]];
+}
+
 /** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> rung" | "<provider> · <model>". */
 function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: string; tier: string; providers: string[] }; ladder: Parameters<typeof overrideGroups>[1]; value: string; onChange: (v: string) => void }) {
   return (
@@ -109,8 +115,8 @@ function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: 
       <select value={value} data-testid="model-override" onChange={(e) => onChange(e.target.value)}>
         <option value="">From ladder (stakes)</option>
         {overrideGroups(role, ladder).map((g) => (
-          <optgroup key={g.provider} label={g.provider}>
-            <option value={g.provider}>{g.provider} · ladder rung</option>
+          <optgroup key={g.provider} label={providerName(g.provider)}>
+            <option value={g.provider}>{providerName(g.provider)} · ladder rung</option>
             {g.models.map((m) => (
               <option key={m} value={`${g.provider}|${m}`}>
                 {shortModel(m)}
@@ -247,7 +253,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   // A worker is titled with its lane's live lead ord (the ORD field is lead-only).
   const liveLead = view.lanes.find((l) => l.lane.id === laneId)?.lead;
   const effectiveOrd = role === "lead" ? ord : liveLead ? String(ordOf(liveLead.agent)) : "";
-  const { title, labels } = buildName({
+  const { title, labels: baseLabels } = buildName({
     team: team.id,
     laneId,
     laneName: lane?.name ?? laneId,
@@ -259,12 +265,13 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     job,
   });
   const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
+  // What gets written: the preview shows it all (stakes, route override), same as Add Buddy.
+  const labels = roleSpawn ? { ...baseLabels, ...roleSpawn.labels } : baseLabels;
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
   const isProviderInstalled = installedProviders.includes(spawnProvider);
-  const ladderModel = roleDef ? (override?.provider && override.provider !== roleDef.providers[0] ? ladderPick({ ...roleDef, providers: [override.provider] }, ladder, stakes).model : ladderPick(roleDef, ladder, stakes).model) : "";
-  const badges: [string, string][] = roleSpawn
-    ? [["provider/model", `${spawnProvider}/${roleSpawn.model ?? ladderModel}`], ["via", roleSpawn.model ? "override" : override ? "override (provider rung)" : "ladder"], ["stakes", stakes]]
+  const badges: [string, string][] = roleSpawn && roleDef
+    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!override)
     : [["provider/model", `${profile.provider}/${profile.model}`]];
   if (modeId) badges.push(["modeId", modeId]);
   if (!roleSpawn && profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
@@ -318,7 +325,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
         sandbox: defaults.sandbox,
         shareMcp: defaults.shareMcp,
         title,
-        labels: roleSpawn ? { ...labels, ...roleSpawn.labels } : labels,
+        labels,
         prompt,
         cwd,
         worktree: newWt && branch ? { branch } : undefined,
@@ -771,6 +778,9 @@ export function AddBuddyModal({
   const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
   const defaults = defaultSpawnConfigFor(spawnProvider);
   const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
+  const buddyBadges: [string, string][] = roleSpawn && roleDef
+    ? roleBadges(roleSpawn, roleDef, ladder, stakes, !!parseOverrideValue(ovValue))
+    : [["provider/model", `${profile.provider}/${profile.model}`]];
 
   const submit = async () => {
     if (!topic.trim()) return;
@@ -917,6 +927,13 @@ export function AddBuddyModal({
                 ))}
               </select>
             </Field>
+          </div>
+          <div className="spawn-defaults" title="Which model this Buddy will run" data-testid="add-buddy-badges">
+            {buddyBadges.map(([k, v]) => (
+              <span key={k} className="def-badge">
+                <b>{k}</b> {v}
+              </span>
+            ))}
           </div>
           <div className="preview">
             <div className="field-label">TEAM</div>

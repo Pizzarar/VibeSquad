@@ -8,6 +8,10 @@
 const routeOverrideLabel = ({ provider, model }: { provider?: string; model?: string }) =>
   [provider && !/\s/.test(provider) ? `provider=${provider}` : "", model && !/\s/.test(model) ? `model=${model}` : ""].filter(Boolean).join(" ");
 
+/** Provider id -> the name the role editor shows. */
+export const PROVIDER_NAME: Record<string, string> = { claude: "Claude", "antigravity-cli": "Gemini", opencode: "OpenCode" };
+export const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
+
 export const STAKES_CHOICES = ["normal", "tierA-security", "tierA-invariant", "mechanical"] as const;
 export type Stakes = (typeof STAKES_CHOICES)[number];
 
