@@ -6841,3 +6841,65 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 html[data-vibe="boring"] .role-model-chip { border-radius: 6px; }
 html[data-vibe="boring"] .re-save .btn.ok:disabled { background: color-mix(in srgb, var(--cyan) 22%, var(--panel)); color: var(--muted); cursor: not-allowed; }
 html[data-vibe="boring"] .re-actions .btn:disabled { border: 1px solid transparent; background: transparent; color: color-mix(in srgb, var(--muted) 55%, transparent); cursor: not-allowed; }
+
+/* usa-62: phone (<=600px) Usage table fit — stack burst split cells, wrap Model x Stakes labels, right-edge scroll hint */
+@media (max-width: 600px) {
+  .usage-table-wrap {
+    background:
+      linear-gradient(to right, var(--usage-tbl-bg, var(--well)) 30%, transparent) left center / 28px 100% no-repeat local,
+      linear-gradient(to left, var(--usage-tbl-bg, var(--well)) 30%, transparent) right center / 28px 100% no-repeat local,
+      linear-gradient(to right, color-mix(in srgb, var(--text) 22%, transparent), transparent) left center / 22px 100% no-repeat scroll,
+      linear-gradient(to left, color-mix(in srgb, var(--text) 22%, transparent), transparent) right center / 22px 100% no-repeat scroll;
+  }
+  html[data-vibe="boring"] .usage-table-wrap { --usage-tbl-bg: var(--panel); }
+
+  [data-testid="usage-burst-split-table"],
+  [data-testid="usage-burst-split-table"] tbody {
+    display: block;
+    width: 100%;
+  }
+  [data-testid="usage-burst-split-table"] thead {
+    display: none;
+  }
+  [data-testid="usage-burst-split-table"] tr {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-testid="usage-burst-split-table"] td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    padding: 2px 4px;
+    border-bottom: 0;
+    white-space: normal;
+  }
+  [data-testid="usage-burst-split-table"] td:first-child {
+    display: block;
+    font-weight: 600;
+    padding: 2px 4px 4px;
+    overflow-wrap: anywhere;
+  }
+  [data-testid="usage-burst-split-table"] td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 400;
+    text-align: left;
+    flex: 0 0 auto;
+  }
+
+  [data-testid="usage-workflow-table"] th:first-child,
+  [data-testid="usage-workflow-table"] td:first-child {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 140px;
+    max-width: 190px;
+    width: 190px;
+  }
+  [data-testid="usage-workflow-table"] td:first-child .usage-low-coverage {
+    display: inline-block;
+    white-space: nowrap;
+  }
+}
