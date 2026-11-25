@@ -114,6 +114,15 @@ export function armTier(wf) {
   return ARMS[String(wf ?? "").trim().toLowerCase()]?.tier ?? "";
 }
 
+/**
+ * Route options a `vs.arm` label gives a role-name spawn: only arm-eligible roles (`Implement`, via ROLE_ARM_SOURCES)
+ * take the arm's provider/tier; Review, Pre-check, Planner... never do, even when they inherit a vs.arm label.
+ */
+export function armRouteFor(roleName, wf) {
+  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "" };
+  return { prefer: armProvider(wf), tier: armTier(wf) };
+}
+
 /** EXP6 history: open until a verdict is logged or the end date passes. `endIso` is VS_EXP6_END (or the default). */
 export function experimentOpen({ now = Date.now(), endIso, verdict = false } = {}) {
   if (verdict) return false;
