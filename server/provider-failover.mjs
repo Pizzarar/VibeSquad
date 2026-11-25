@@ -171,7 +171,9 @@ export function normalizeProviderFamily(providerId) {
 export function spawnFamily(provider, model) {
   const fam = normalizeProviderFamily(provider);
   if (fam === AGY_CLAUDE_FAMILY) return fam;
-  if (fam === "antigravity-cli" && isAgyClaudeModel(model)) return AGY_CLAUDE_FAMILY;
+  // A "provider/model" string ("antigravity-cli/claude-opus-5-5-high") carries the model when none is passed.
+  const m = model || (typeof provider === "string" && provider.includes("/") ? provider.slice(provider.indexOf("/") + 1) : "");
+  if (fam === "antigravity-cli" && isAgyClaudeModel(m)) return AGY_CLAUDE_FAMILY;
   return fam;
 }
 

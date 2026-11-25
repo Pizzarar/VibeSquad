@@ -40,7 +40,9 @@ export function deriveWfArm({ provider, model, profile } = {}) {
   const profName = String(profile?.name ?? "").trim().toLowerCase();
   const m = String(model ?? "").trim().toLowerCase() || profModel.toLowerCase();
   // A model id may name its own family (e.g. "deepseek/deepseek-flash", "claude-opus-5-5") when the provider is missing.
-  const fam = familyOf(provider) || familyOf(profile?.provider) || familyOf(m);
+  const fam0 = familyOf(provider) || familyOf(profile?.provider) || familyOf(m);
+  // R10: Claude on agy (antigravity-cli + claude-opus/sonnet id) is the same model as direct Claude: wf sonnet/opus.
+  const fam = fam0 === "gemini" && /^claude-(?:opus|sonnet)-/.test(m) ? "claude" : fam0;
   // The resolved model decides; the profile name only when no model is known (a ladder-upgraded Sonnet profile is opus).
   const hay = m || profName;
   if (fam === "claude") {
