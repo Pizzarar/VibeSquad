@@ -47,7 +47,13 @@ export function stepLaneStreak(rec0, { agentId, outcome, error = "", now = Date.
   }
   if (outcome !== "failed" || rec.fails.some((f) => f.id === id)) return { rec, tripped: false };
   rec.fails = [...rec.fails, { id, at: now, error: String(error).replace(/\s+/g, " ").slice(0, 160) }].slice(-KEEP_IDS);
-  if (rec.fails.length < FAIL_STREAK_MAX || now < (rec.heldUntil || 0)) return { rec, tripped: false };
+  const heldUntil = Number(rec.heldUntil) || 0;
+  if (now < heldUntil) return { rec, tripped: false }; // a spawn already in flight when the hold began: no extension
+  // Half-open: the first failure after a hold that ended within the window re-trips (the window would otherwise have aged
+  // out the failures behind a 40-60 min hold, letting 3 more spawns storm). A hold older than that starts fresh.
+  const probe = (rec.trips || 0) > 0 && now - heldUntil <= FAIL_STREAK_WINDOW_MS;
+  if (!probe) rec.trips = 0;
+  if (!probe && rec.fails.length < FAIL_STREAK_MAX) return { rec, tripped: false };
   rec.trips = (rec.trips || 0) + 1;
   rec.heldUntil = now + cooldownFor(rec.trips);
   rec.notifiedAt = undefined;
