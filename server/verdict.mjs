@@ -317,14 +317,15 @@ export function runnerRecordVerdict({ agent, lastMessage, tip, resolve, ts = nul
 }
 
 /** idea-883: the newest of several recorded verdicts for one tip (attested log entry, runner record), by ts; nulls skipped.
- * A verdict without a ts sorts oldest; on a tie the later argument wins. */
+ * A verdict without a ts sorts oldest. On a ts tie (both null included) a FAIL beats a PASS (fail closed); between equals the
+ * later argument wins. */
 export function newestVerdict(...verdicts) {
   let best = null;
   let bestAt = -Infinity;
   for (const v of verdicts) {
     if (!v) continue;
     const at = Date.parse(v.ts ?? "") || 0;
-    if (!best || at >= bestAt) {
+    if (!best || at > bestAt || (at === bestAt && !(best.verdict === "FAIL" && v.verdict !== "FAIL"))) {
       best = v;
       bestAt = at;
     }

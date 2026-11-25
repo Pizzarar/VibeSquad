@@ -781,6 +781,35 @@ describe("push-guard: idea-883 runner-attested fallback (pure + store)", () => {
     const b = { verdict: "PASS", ts: "2026-11-25T04:09:00.000Z" };
     assert.equal(newestVerdict(b, null, a), b);
     assert.equal(newestVerdict(null, null), null);
+    // A ts tie (both null included) fails closed: FAIL beats PASS whatever the argument order.
+    const failNull = { verdict: "FAIL", ts: null };
+    const passNull = { verdict: "PASS", ts: null };
+    assert.equal(newestVerdict(failNull, passNull), failNull);
+    assert.equal(newestVerdict(passNull, failNull), failNull);
+    const failAt = { verdict: "FAIL", ts: b.ts };
+    assert.equal(newestVerdict(failAt, b), failAt);
+    assert.equal(newestVerdict(b, failAt), failAt);
+    const pass2 = { verdict: "PASS", ts: b.ts };
+    assert.equal(newestVerdict(b, pass2), pass2, "between equals the later argument wins");
+  });
+
+  test("a team-less reviewer record never counts as the vibesquad Squad's (no squadDir default)", async () => {
+    const home = join(tmp, "rr-home-noteam");
+    mkdirSync(join(home, "teams", "vibesquad"), { recursive: true });
+    writeFileSync(join(home, "teams", "vibesquad", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg5", type: "done", text: "PASS 0/0/0 4c288c19", refs: ["rn-revnt"] })}\n`);
+    runnerLog(home, "rn-revnt", { ...REVIEWER, team: "", turns: [["review", "PASS 0/0/0 4c288c19"]] });
+    const opts = { tips: [T40], home, squads: ["vibesquad"], resolve: () => T40, tipTime: NOW_TIP };
+    assert.equal((await readRunnerVerdicts(opts)).size, 0, "missing labels.team is no Squad");
+    assert.equal((await recordedVerdicts(opts))(T40), null);
+    // The same record with the team set does count (control).
+    runnerLog(home, "rn-revnt", { ...REVIEWER, team: "vibesquad", turns: [["review", "PASS 0/0/0 4c288c19"]] });
+    assert.equal((await recordedVerdicts(opts))(T40)?.verdict, "PASS");
+    // An empty Squad entry is skipped, never read as "vibesquad".
+    assert.equal((await readRunnerVerdicts({ ...opts, squads: ["", "  "] })).size, 0);
+    const attested = { ts: new Date().toISOString(), agent: "rn-dg6", type: "done", text: "PASS 0/0/0 4c288c19", refs: ["rn-revnt"], verdict: { reviewer: "rn-revnt", profile: "Review - Gemini", line: "PASS 0/0/0 4c288c19" } };
+    appendFileSync(join(home, "teams", "vibesquad", "log.jsonl"), `${JSON.stringify(attested)}\n`);
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: [""] })(T40), null, "empty Squad id reads no log");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["vibesquad"] })(T40)?.verdict, "PASS", "control");
   });
 
   test("an unattested digest done falls back to the digested reviewer's runner record and passes", async () => {

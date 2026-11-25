@@ -209,8 +209,11 @@ export function verdictHome({ home, env = process.env } = {}) {
   return path.resolve(home || env.VIBESQUAD_HOME || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
 }
 
-/** A Squad id as its log directory name (the same mapping as appendVsLogEntry's safeSegment in server/brainstorm.mjs). */
-const squadDir = (id) => String(id ?? "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "vibesquad";
+/** A Squad id as its log directory name (the same mapping as appendVsLogEntry's safeSegment in server/brainstorm.mjs), but ""
+ * for an empty/missing id: the gate never defaults a team-less record or Squad entry into the "vibesquad" Squad (fail closed). */
+const squadDir = (id) => String(id ?? "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+/** The non-empty log directory names of `squads`, deduped. */
+const squadDirs = (squads) => [...new Set((squads ?? []).map(squadDir).filter(Boolean))];
 
 /** idea-883: the repo's main checkout dir (a linked worktree resolves to its main repo through the common git dir). */
 export function repoRoot({ cwd = process.cwd(), git = defaultGit } = {}) {
@@ -260,7 +263,7 @@ export function squadLogEntries({ tips = [], home = verdictHome(), squads = [] }
   const byTip = new Map(want.map((t) => [t, []]));
   const keys = [...new Set(want.map((t) => t.slice(0, 7)))];
   if (keys.length) {
-    for (const dir of [...new Set((squads ?? []).map(squadDir))]) {
+    for (const dir of squadDirs(squads)) {
       let text = "";
       try {
         text = fs.readFileSync(path.join(home, "teams", dir, "log.jsonl"), "utf8");
@@ -272,7 +275,7 @@ export function squadLogEntries({ tips = [], home = verdictHome(), squads = [] }
         if (!keys.some((k) => low.includes(k))) continue;
         let e;
         try {
-          e = JSON.parse(line.replace(/^﻿/, ""));
+          e = JSON.parse(line.replace(/^\uFEFF/, ""));
         } catch {
           continue;
         }
@@ -350,7 +353,7 @@ function headLooksLikeReview(file) {
 export async function readRunnerVerdicts({ tips = [], home = verdictHome(), squads = [], resolve, tipTime, ids = [], env = process.env } = {}) {
   const want = normTips(tips);
   const out = new Map();
-  const teams = new Set((squads ?? []).map(squadDir));
+  const teams = new Set(squadDirs(squads));
   if (!want.length || !teams.size) return out;
   const times = new Map(want.map((t) => [t, typeof tipTime === "function" ? tipTime(t) : null]));
   const known = [...times.values()].filter((v) => Number.isFinite(v));
@@ -411,7 +414,8 @@ export async function readRunnerVerdicts({ tips = [], home = verdictHome(), squa
         rb.feedFoldLine(fold, line);
       }
       const agent = rb.finishFold(id, fold, runnerDir, env, null);
-      if (!agent || !teams.has(squadDir(agent.labels?.team))) continue;
+      const team = squadDir(agent?.labels?.team);
+      if (!agent || !team || !teams.has(team)) continue;
       const lastMessage = tools.lastAssistantText(rb.toTimeline(events), Infinity);
       const low = lastMessage.toLowerCase();
       const hit = want.filter((t) => low.includes(t.slice(0, 7)));
