@@ -289,7 +289,9 @@ test('tokenize: quotes, escapes, redirections and comments', () => {
   const words = (s) => tokenize(s, { env }).tokens.filter((t) => t.type === 'word').map((t) => t.text);
   assert.deepEqual(words(`git commit -m "a && b" 2>&1`), ['git', 'commit', '-m', 'a && b', '2>&1']);
   assert.deepEqual(words(`echo 'x;y' \\; z # git reset --hard`), ['echo', 'x;y', ';', 'z']);
-  ok('git commit -m "reset --hard; git clean -fd"');
+  ok('git commit -m "reset --hard; git clean -fd"', WT); // the quoted message is data, not commands
+  // idea-888: in the main checkout the commit itself is refused (an R17 write), labelled as the commit, never as its message
+  assert.equal(bad('git commit -m "reset --hard; git clean -fd"').label, 'git commit');
   ok('ls # git reset --hard');
   // heredoc bodies are data: a commit message or inbox note that mentions destructive git is not a command
   ok(`vs inbox add "$(cat <<'EOF'\nworker ran git reset --hard\ngit clean -fd\nEOF\n)"`);

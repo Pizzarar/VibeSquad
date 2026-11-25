@@ -14,10 +14,25 @@
 // (env/sudo/nice/time/timeout/exec/command/xargs by basename, with their option arguments) are stripped first; operands
 // xargs appends count as paths. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
 // closed. Read-only git, `--help`, `checkout -b`/branch switches and `clean -n`/`stash list|show` always pass.
-// Known gaps: git aliases, scripts that run git themselves, and ACP providers (no PreToolUse hook: adapters/acp.mjs).
-import { statSync } from 'node:fs';
+// idea-888 adds the shared-branch writes R17 names (commit, merge, rebase, pull, cherry-pick, revert, am) to the same
+// classifier, so the hook and the PATH gate below refuse the same set.
+//
+// Provider-neutral PATH gate (idea-888): the hook above exists only for Claude. Every role=worker agent, whatever its
+// provider (claude, agy/Gemini, opencode, Codex over ACP), also gets runner/git-shim/ first on PATH (applyGitShim, called by
+// runner.mjs agentEnv). Its `git` is a POSIX sh script: argv that holds none of the write subcommand names execs the real git
+// at once (no node start: git is called constantly); otherwise runner/git-guard-check.mjs judges the real argv + cwd +
+// GIT_DIR/GIT_WORK_TREE with gitArgvViolation (this file: same classifier, same main-checkout test) and the shim execs the
+// real git only on exit 0. Any other outcome (refusal, node missing, a crash) refuses the write: it fails closed.
+// Main checkouts under the OS temp dir are exempt there only: unlike the hook, the PATH gate also sees git run by scripts and
+// test suites (`git init` + commit in a mkdtemp repo), and a shared project checkout never lives in a temp dir.
+// What the PATH gate does NOT cover (an accident guard, not a sandbox): an absolute git path (/usr/bin/git), a PATH or
+// TMPDIR the agent rewrites, git aliases (`git co .`), libgit2/JGit tools that never exec git, and win32 (no shim yet: the
+// Claude hook still covers Claude workers there). git's own children (hooks, `pull` -> merge) get git's exec-path first
+// on PATH, so they bypass the shim; only the outer command is judged.
+import { accessSync, chmodSync, constants as fsConstants, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OPS = ['&&', '||', ';;', ';', '|&', '|', '&', '\n', '(', ')'];
 // Leading reserved words of compound commands: `if x; then git ...; fi`, `for ...; do git ...; done`, `{ git ...; }`.
@@ -241,10 +256,23 @@ export function destructiveGit(sub, args, dir, { appended = false } = {}) {
     }
     case 'restore':
       return 'git restore';
+    // idea-888 (R17): writes that move or rewrite the shared checkout's branch, index or files.
+    case 'commit':
+      return hasLong(args, '--dry-run') ? null : 'git commit';
+    case 'merge':
+    case 'rebase':
+    case 'pull':
+    case 'cherry-pick':
+    case 'revert':
+    case 'am':
+      return `git ${sub}`;
     default:
       return null;
   }
 }
+
+/** Labels that write only the repository (HEAD, refs, index), never work-tree files: judged by the git dir when one is given. */
+const REPO_ONLY = new Set(['git commit']);
 
 /** Parse `git [global opts] <sub> <args>` from argv (without the leading `git`). */
 export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: envGitDir = null } = {}) {
@@ -270,13 +298,27 @@ export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: 
   const args = argv.slice(k + 1).map((w) => w.text);
   if (workTree !== null) dir = resolveFrom(dir, workTree);
   let forced = null;
-  if (workTree === null && gitDir !== null) {
+  // The repository a --git-dir / GIT_DIR names (even next to a work tree): a commit writes only there, so a shadow repo over
+  // the main checkout's files (opencode/agy snapshots: `--git-dir=<shadow> --work-tree=<checkout> commit`) is not the main repo.
+  let gitDirRepo = null;
+  if (gitDir !== null) {
     const gd = resolveFrom(dir, gitDir);
-    if (gd === UNKNOWN) dir = UNKNOWN;
-    else if (path.basename(gd) === '.git') forced = repoKind(path.dirname(gd));
-    else forced = { kind: 'linked', root: gd }; // .git/worktrees/<x> or a bare repo: not the shared checkout
+    if (gd !== UNKNOWN) gitDirRepo = path.basename(gd) === '.git' ? repoKind(path.dirname(gd)) : { kind: 'linked', root: gd };
   }
-  return { sub, args, dir, forced };
+  if (workTree === null && gitDir !== null) {
+    if (gitDirRepo === null) dir = UNKNOWN;
+    else forced = gitDirRepo; // .git/worktrees/<x> or a bare repo is 'linked': not the shared checkout
+  }
+  return { sub, args, dir, forced, gitDirRepo };
+}
+
+/** The violation for a classified git command `g` (parseGitArgv) with destructive label `label`, or null. */
+function judgeGit(label, g) {
+  const target = REPO_ONLY.has(label) && g.gitDirRepo ? g.gitDirRepo : g.forced;
+  if (target) return target.kind === 'main' ? { label, dir: target.root, root: target.root, unresolved: false } : null;
+  if (g.dir === UNKNOWN) return { label, dir: null, root: null, unresolved: true };
+  const rk = repoKind(g.dir);
+  return rk.kind === 'main' ? { label, dir: g.dir, root: rk.root, unresolved: false } : null;
 }
 
 // ---- command walk ----
@@ -460,16 +502,8 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         gitDir: Object.hasOwn(segEnv, 'GIT_DIR') ? segEnv.GIT_DIR : null,
       });
       const label = destructiveGit(g.sub, g.args, g.dir, { appended });
-      if (label) {
-        if (g.forced) {
-          if (g.forced.kind === 'main') return { label, dir: g.forced.root, root: g.forced.root, unresolved: false };
-        } else if (g.dir === UNKNOWN) {
-          return { label, dir: null, root: null, unresolved: true };
-        } else {
-          const rk = repoKind(g.dir);
-          if (rk.kind === 'main') return { label, dir: g.dir, root: rk.root, unresolved: false };
-        }
-      }
+      const v = label ? judgeGit(label, g) : null;
+      if (v) return v;
     }
     endSeg();
   }
@@ -485,7 +519,7 @@ export function gitGuardRefusalText(v) {
       'No worktree yet? `vs worktree create <unit>`, then cd into the path it prints.';
   }
   return `vs git-guard: refused \`${v.label}\` in ${v.root}: that is the repo's MAIN checkout (.git is a directory), shared by every agent; ` +
-    'other agents\' uncommitted edits live there and this would wipe them (R17: workers never run destructive git in a main checkout). ' +
+    'other agents\' uncommitted edits live there and this would wipe them or rewrite the branch under them (R17: workers never run git writes in a main checkout). ' +
     'Run it in your own linked worktree instead: `vs worktree create <unit>`, then `cd <the path it prints> && pwd`, and rerun it there. ' +
     'Read-only git (status, diff, log, show), `git checkout -b`, `git clean -n` and `git stash list` are fine here.';
 }
@@ -498,4 +532,67 @@ export function gitGuardDecision(input, { env = process.env } = {}) {
   if (typeof command !== 'string' || !/git/i.test(command)) return null;
   const v = findViolation(command, { cwd: input?.cwd || process.cwd(), env, powershell: tool === 'PowerShell' });
   return v ? gitGuardRefusalText(v) : null;
+}
+
+// ---- provider-neutral PATH gate (idea-888) ----
+
+/** The runner role that gets the guard (hook and PATH gate): the agent env (runner agentEnv's VS_ROLE) wins, then meta. */
+export const isWorkerAgent = (meta = {}, env = {}) => String(env?.VS_ROLE ?? meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase() === 'worker';
+
+/** The dir whose `git` shim goes first on a worker's PATH. Holds nothing else, so no other command resolves there. */
+export const GIT_SHIM_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'git-shim');
+/** Env var naming the node binary the shim runs the check with (the runner's own node); unset -> `node` from PATH. */
+export const GIT_SHIM_NODE_ENV = 'VS_GIT_GUARD_NODE';
+
+// A shim that lost its exec bit (a copy that dropped the mode) is skipped by every PATH lookup: git would run unguarded with
+// no error. Restore 0755 once per runner process; a missing file stays a silent miss (the Claude hook still covers Claude).
+const executableOk = new Set();
+function ensureExecutable(file) {
+  if (executableOk.has(file)) return;
+  try { accessSync(file, fsConstants.X_OK); executableOk.add(file); return; } catch { /* not executable or missing */ }
+  try { chmodSync(file, 0o755); accessSync(file, fsConstants.X_OK); executableOk.add(file); } catch { /* missing or read-only: nothing to heal */ }
+}
+
+/**
+ * Put the git shim first on PATH for a worker, in place on `env` (runner.mjs agentEnv's copy). Every role first loses any
+ * inherited shim entry (a runner started from a worker's shell must not gate its leads), so only workers carry it. win32:
+ * no-op (the shim is a POSIX sh script; cmd/PowerShell would not run it). Returns `env`.
+ */
+export function applyGitShim(env, { worker = false, platform = process.platform, execPath = process.execPath, shimDir = GIT_SHIM_DIR } = {}) {
+  if (platform === 'win32' || !env) return env;
+  const rest = String(env.PATH ?? '').split(':').filter((d) => d && path.resolve(d) !== shimDir);
+  delete env[GIT_SHIM_NODE_ENV];
+  if (worker) {
+    ensureExecutable(path.join(shimDir, 'git'));
+    env.PATH = [shimDir, ...rest].join(':');
+    // Only a real node binary: a runner hosted in another executable (electron etc.) leaves the shim on PATH's node.
+    if (/^node(\.exe)?$/i.test(path.basename(execPath ?? ''))) env[GIT_SHIM_NODE_ENV] = execPath;
+  } else if (env.PATH !== undefined) {
+    env.PATH = rest.join(':');
+  }
+  return env;
+}
+
+const within = (p, root) => { const r = path.relative(root, p); return r === '' || (!!r && !r.startsWith('..') && !path.isAbsolute(r)); };
+
+/** Temp dirs whose main checkouts are scratch repos (tests, scripts), not a shared checkout: os.tmpdir() for `env`, plus its realpath. */
+export function scratchRootsOf(env = process.env) {
+  const t = env?.TMPDIR || env?.TMP || env?.TEMP || os.tmpdir();
+  const roots = new Set([path.resolve(t)]);
+  try { roots.add(realpathSync(t)); } catch { /* missing temp dir: the literal path only */ }
+  return [...roots].filter((r) => path.dirname(r) !== r); // never `/`: TMPDIR=/ must not exempt every repo
+}
+
+/**
+ * The PATH gate's decision for one real git invocation: `argv` without the leading `git`, run in `cwd` with `env`
+ * (GIT_DIR / GIT_WORK_TREE read from it). Same classifier and main-checkout test as the hook. Returns null (allow) or the
+ * violation for gitGuardRefusalText.
+ */
+export function gitArgvViolation(argv, { cwd = process.cwd(), env = process.env, scratchRoots = scratchRootsOf(env) } = {}) {
+  const words = (argv ?? []).map((text) => ({ text: String(text), dynamic: false, quoted: true }));
+  const g = parseGitArgv(words, path.resolve(cwd), { workTree: env?.GIT_WORK_TREE || null, gitDir: env?.GIT_DIR || null });
+  const label = destructiveGit(g.sub, g.args, g.dir);
+  const v = label ? judgeGit(label, g) : null;
+  if (v?.root && scratchRoots.some((r) => within(v.root, r))) return null;
+  return v;
 }

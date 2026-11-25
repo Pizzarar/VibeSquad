@@ -1,0 +1,40 @@
+#!/bin/sh
+# VibeSquad worker git gate (idea-888). runner/git-guard.mjs applyGitShim puts this dir first on every role=worker agent's
+# PATH, for every provider. Fast path: argv with none of the write subcommand names below execs the real git with no node
+# start. Otherwise runner/git-guard-check.mjs decides (gitArgvViolation: the same classifier as the Claude hook) and the
+# real git runs only on its exit 0; a refusal, a missing node or a crash refuses the write (fail closed). Not a sandbox:
+# /usr/bin/git or a rewritten PATH skips it (see the header of runner/git-guard.mjs).
+
+# The real git: the first `git` on PATH that is not a shim (this file, or any */git-shim dir, so two shims never loop).
+real=
+oldifs=$IFS
+IFS=:
+set -f
+for d in $PATH; do
+  case $d in ''|*/git-shim|*/git-shim/) continue ;; esac
+  if [ -x "$d/git" ] && [ ! -d "$d/git" ] && ! [ "$d/git" -ef "$0" ]; then real=$d/git; break; fi
+done
+set +f
+IFS=$oldifs
+if [ -z "$real" ]; then
+  echo "vs git-guard: no real git found on PATH after the worker git shim (${0%/*})" >&2
+  exit 127
+fi
+
+# Any argument naming a write subcommand sends the call to the check (a superset of parsing: a false hit only costs a node start).
+check=
+for a in "$@"; do
+  case $a in
+    reset|checkout|switch|clean|stash|restore|commit|merge|rebase|pull|cherry-pick|revert|am) check=1; break ;;
+  esac
+done
+[ -n "$check" ] || exec "$real" "$@"
+
+NODE_OPTIONS= "${VS_GIT_GUARD_NODE:-node}" "${0%/*}/../git-guard-check.mjs" "$@"
+rc=$?
+[ "$rc" -eq 0 ] && exec "$real" "$@"
+if [ "$rc" -ne 77 ]; then
+  echo "vs git-guard: the main-checkout check could not run (exit $rc, node=${VS_GIT_GUARD_NODE:-node}); refusing this possible git write to be safe: git $*" >&2
+  echo "vs git-guard: run it inside your own linked worktree once the check works again, and report the broken check to your lead." >&2
+fi
+exit 128
