@@ -64,13 +64,15 @@ test("decideArm caps (idea-703): a capped arm is never picked; both capped keeps
     assert.equal(r.capped, true);
   }
   // Capped claude: Neon even when Sonnet's turn.
-  const c = await decideArm(base({ capProbe: async () => ({ claude: { reason: "cap" } }) }));
+  const c = await decideArm(base({ capProbe: async () => ({ claude: { reason: "cap" }, "agy-claude": {} }) }));
   assert.deepEqual(pick3(c), ["neon", "capped:claude", true, NEON]);
+  // R10 fu2: direct claude alone is not the sonnet arm capped (it lands on agy-claude first).
+  assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => ({ claude: {} }) }))), ["sonnet", "alternation", false, SONNET]);
   // A cap on the arm that would not be picked anyway is not a reason.
-  assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => ({ claude: {} }), listAgents: async () => [ag("sonnet")] }))), ["neon", "alternation", true, NEON]);
+  assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => ({ claude: {}, "agy-claude": {} }), listAgents: async () => [ag("sonnet")] }))), ["neon", "alternation", true, NEON]);
   // DSP cap is irrelevant (not an arm).
   assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => ({ deepseek: {}, opencode: {} }) }))), ["sonnet", "alternation", false, SONNET]);
-  const both = await decideArm(base({ capProbe: async () => ({ claude: {}, "antigravity-cli": {} }) }));
+  const both = await decideArm(base({ capProbe: async () => ({ claude: {}, "agy-claude": {}, "antigravity-cli": {} }) }));
   assert.deepEqual(pick3(both), ["sonnet", "capped:claude+antigravity-cli", false, SONNET]);
   // Probe error / agent-list error: fail open, requested kept.
   assert.deepEqual(pick3(await decideArm(base({ capProbe: async () => { throw new Error("disk"); } }))), ["sonnet", "fail-open", false, SONNET]);
@@ -196,8 +198,8 @@ test("spawn_worker: normal implementer spawns alternate Sonnet -> Neon -> Sonnet
 test("spawn_worker: capped Neon keeps Sonnet; capped claude picks Neon; both capped keeps the request", async () => {
   const cases = [
     [{ "antigravity-cli": {} }, [ag("sonnet")], SONNET, "claude", "capped:antigravity-cli"],
-    [{ claude: {} }, [], NEON, "antigravity-cli", "capped:claude"],
-    [{ claude: {}, gemini: {} }, [], SONNET, "claude", "capped:claude+antigravity-cli"],
+    [{ claude: {}, "agy-claude": {} }, [], NEON, "antigravity-cli", "capped:claude"],
+    [{ claude: {}, "agy-claude": {}, gemini: {} }, [], SONNET, "claude", "capped:claude+antigravity-cli"],
   ];
   for (const [caps, agents, profile, provider, reason] of cases) {
     const { ctx, creates } = ctxWith([...agents], [], { env: { VIBESQUAD_HOME: home(caps) } });
