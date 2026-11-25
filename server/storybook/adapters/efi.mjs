@@ -16,7 +16,7 @@ const P = {
   recipes: "data/recipes.json", questlines: "data/questlines.json", relations: "data/trader_relations.json",
   scav: "systems/ScavengingSystem.gd", raidStory: "scenes/raids/corridor/raid_story.gd", csv: "docs/review/text_review.csv",
   voice: "docs/narrative/VOICE_BIBLE.md", vibes: "docs/PLAN_MAP_VIBES.md", breadth: "docs/CONTENT_BREADTH_SPEC.md",
-  audit: "docs/narrative/QUEST_AUDIT.md",
+  audit: "docs/narrative/QUEST_AUDIT.md", art: "data/art_manifest.json",
 };
 
 /** Adapter-side term lists for prose bans that do not extract cleanly. Keyed by voice-card id (marker name). */
@@ -48,6 +48,29 @@ const clean = (s) => String(s ?? "").replace(STORY_TODO, "").trim();
 const isTodo = (s) => STORY_TODO.test(String(s ?? ""));
 const titleCase = (id) => id.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const csvProduction = (status) => ({ "STORY-TODO": "placeholder", DRAFT: "ai-draft", "NEEDS-REWRITE": "needs-review", "OWNER-OK": "final" }[String(status).trim()] ?? null);
+
+// Art manifest (F4): status -> production state. MISSING = no art, PLACEHOLDER = provisional, PIPELINE = AI-generated
+// (interim), COMMISSIONED = final. The manifest only lists slots that have art; a missing slot is simply absent.
+const ART_STATUS_TO_PRODUCTION = { MISSING: "missing", PLACEHOLDER: "placeholder", PIPELINE: "ai-draft", COMMISSIONED: "final" };
+const artProduction = (status) => ART_STATUS_TO_PRODUCTION[String(status ?? "").trim()] ?? null;
+
+/**
+ * Resolve a manifest slot id + kind to its {slot, target}. `slot` is "portrait" | "sprite" | "other"; `target` is the
+ * {kind,id} the art depicts (a character/enemy), or null for non-character art (items, rooms, ui, ...).
+ * slot id shapes: enemy.<id> / trader.<id> / squad.<id> (portraits); sprite.<id> and sprite.<id>.front (raid sprites).
+ */
+function artTarget(slotId, kind) {
+  if (kind === "enemy_portrait" && slotId.startsWith("enemy.")) return { slot: "portrait", target: { kind: "enemy", id: slotId.slice("enemy.".length) } };
+  if (kind === "trader_portrait" && slotId.startsWith("trader.")) return { slot: "portrait", target: { kind: "trader", id: slotId.slice("trader.".length) } };
+  if (kind === "squad_portrait" && slotId.startsWith("squad.")) return { slot: "portrait", target: { kind: "squad", id: slotId.slice("squad.".length) } };
+  if (kind === "raid_sprite" && slotId.startsWith("sprite.")) {
+    const rest = slotId.slice("sprite.".length);
+    if (rest.startsWith("prop.")) return { slot: "other", target: null }; // prop sprites are not enemies
+    if (rest.endsWith(".front")) return { slot: "sprite", target: { kind: "enemy", id: rest.slice(0, -".front".length) } };
+    return { slot: "sprite", target: { kind: "enemy", id: rest } };
+  }
+  return { slot: "other", target: null };
+}
 
 function linker() {
   const links = [];
@@ -467,6 +490,33 @@ async function load(reader, sha) {
   // doc bodies (SB3 #3 doc<->data drift reads quotes and file:line cites from these); additive, free-form lore
   for (const [docId, file, body] of [["VOICE_BIBLE", P.voice, voiceText], ["QUEST_AUDIT", P.audit, auditText], ["PLAN_MAP_VIBES", P.vibes, vibesText]]) {
     if (body != null) E({ id: `doc:${docId}`, kind: "lore", display: `${docId} (doc)`, source: src(file, 1), data: { text: body, lore_kind: "doc", path: file } });
+  }
+
+  // Art slots (F4): read-only; one art_slot entity per manifest slot carrying its production state, linked to the
+  // character/enemy it depicts only when that entity exists at this sha (reg0.has). The adapter emits no findings: missing
+  // art is reported by the F2 coverage audit (registry/audit.mjs artCoverageFindings) from these entities.
+  const artText = await reader.readFile(P.art);
+  if (artText != null) { // optional file: a project without a manifest is unchanged (no warning, no entities)
+    let artJson = null;
+    let artF = finder("");
+    try { artJson = JSON.parse(artText); artF = finder(artText); } catch (e) {
+      warnings.push(`unparsable ${P.art}: ${String(e.message).slice(0, 120)}`);
+    }
+    const slots = artJson?.slots;
+    if (slots && typeof slots === "object" && !Array.isArray(slots)) {
+      for (const [slotId, s] of Object.entries(slots)) {
+        const { slot, target } = artTarget(slotId, s?.kind);
+        const L = linker();
+        if (target && reg0.has(target.kind, target.id)) L(slot === "sprite" ? "sprite" : "portrait", target.kind, target.id);
+        E({
+          id: slotId, kind: "art_slot", display: slotId, aliases: [], source: src(P.art, artF.key(slotId)), links: L.links,
+          production: artProduction(s?.status),
+          data: { artKind: s?.kind ?? null, slot, status: s?.status ?? null, batch: s?.batch ?? null, path: s?.path ?? null, candidates: s?.candidates ?? null, target },
+        });
+      }
+    } else if (artJson) {
+      warnings.push(`${P.art}: no slots object, no art slots imported`);
+    }
   }
   return { entities: ents, warnings };
 }
