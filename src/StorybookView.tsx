@@ -74,6 +74,9 @@ export function useStorybookTarget(): Target {
 /** One shared probe status per project behind the ⋯ menu, the topbar tabs and the phone drawer:
  *  unknown = not fetched yet; present = HEAD 2xx; missing = HEAD 404. Non-2xx / network errors clear the entry so the next read retries. */
 const probe = new Map<string, "unknown" | "present" | "missing">();
+const probeFailed = new Set<string>();
+const probeReprobeAt = new Map<string, number>();
+const PROBE_REPROBE_MS = 5000;
 // A probe can resolve after the ⋯ menu / phone drawer first reads it (slow host): notify subscribers so consumers re-render
 // (same subscribe/notify shape as the `target` store above).
 const probeSubs = new Set<() => void>();
@@ -87,10 +90,34 @@ export function probeStorybook(projectId: string): boolean {
     void fetch(api(projectId), { method: "HEAD" }).then((r) => {
       if (r.status === 404) { probe.set(projectId, "missing"); probeEmit(); }
       else if (r.ok) { probe.set(projectId, "present"); probeEmit(); }
-      else { probe.delete(projectId); probeEmit(); }
-    }).catch(() => { probe.delete(projectId); probeEmit(); });
+      else { probeFailed.add(projectId); probe.delete(projectId); probeEmit(); }
+      if (probe.has(projectId)) { probeFailed.delete(projectId); probeReprobeAt.delete(projectId); }
+    }).catch(() => { probeFailed.add(projectId); probe.delete(projectId); probeEmit(); });
   }
   return probe.get(projectId) === "missing";
+}
+
+function reprobeStorybook(projectId: string): void {
+  if (probe.has(projectId) || !probeFailed.has(projectId)) return;
+  const now = Date.now();
+  if (now - (probeReprobeAt.get(projectId) ?? -Infinity) < PROBE_REPROBE_MS) return;
+  probeReprobeAt.set(projectId, now);
+  probeStorybook(projectId);
+}
+
+function useStorybookProbe(projectId: string | null): void {
+  useEffect(() => {
+    if (!projectId) return;
+    probeStorybook(projectId);
+    const onFocus = () => reprobeStorybook(projectId);
+    const onVis = () => { if (document.visibilityState === "visible") reprobeStorybook(projectId); };
+    if (typeof window !== "undefined") window.addEventListener("focus", onFocus);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVis);
+    return () => {
+      if (typeof window !== "undefined") window.removeEventListener("focus", onFocus);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [projectId]);
 }
 
 /** Subscribe to the known-missing probe and re-render when it resolves (useStorybookTarget pattern). */
@@ -100,7 +127,7 @@ export function useStorybookMissing(projectId: string | null): boolean {
     () => (projectId ? probe.get(projectId) === "missing" : false),
     () => false,
   );
-  useEffect(() => { if (projectId) probeStorybook(projectId); }, [projectId]);
+  useStorybookProbe(projectId);
   return isMissing;
 }
 
@@ -112,7 +139,7 @@ export function useStorybookPresent(projectId: string | null): boolean {
     () => (projectId ? probe.get(projectId) === "present" : false),
     () => false,
   );
-  useEffect(() => { if (projectId) probeStorybook(projectId); }, [projectId]);
+  useStorybookProbe(projectId);
   return isPresent;
 }
 
