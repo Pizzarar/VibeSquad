@@ -46,7 +46,7 @@ import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
 import { isDuetDirector, liveDuetPainterOf } from "../art-duet.mjs";
-import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover, spawnFamily } from "../provider-failover.mjs";
 import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
 import { liveQuotaUsage } from "../limits-read.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
@@ -2061,7 +2061,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
         const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
         const p = (route?.profile ?? null) as StoredProfile | null;
-        const fam = normalizeProviderFamily(p?.provider);
+        // R10: spawn family (agy-claude runs on the antigravity-cli runner, a separate quota from Gemini).
+        const fam = spawnFamily(p?.provider, p?.model);
         return p?.provider && fam && fam !== failedFam ? p : null;
       }
       const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
@@ -2460,15 +2461,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const stakesOn = normalizeStakes(stakesRaw) !== "normal";
           // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so they are not explicit here
           // and the failover provider's rung applies.
-          const finalFamily = normalizeProviderFamily(String(next.provider ?? provider));
-          const sameProvider = finalFamily === normalizeProviderFamily(provider);
+          // R10: families are spawn families (provider + model): antigravity-cli running a Claude id is agy-claude, its own
+          // quota/cap. So a caller's claude-sonnet-5-5-medium on antigravity-cli is kept only when the spawn lands on
+          // agy-claude, never past an agy-claude cap onto Gemini or direct claude.
           const rawModel = rawCallerModel;
+          const finalFamily = spawnFamily(String(next.provider ?? provider), next.model ?? rawModel);
+          const sameProvider = finalFamily === spawnFamily(provider, rawModel);
           const modelFamily = normalizeProviderFamily(rawModel);
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
           // An override route also drops any other ladder family's model (deepseek on claude, r2 rn-a5cd265243b5 L1): the
           // route already did, and the config's copy must not bring it back as an explicit caller model.
           const callerModel =
-            (modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily) ||
+            (modelFamily &&
+              (modelFamily === "claude" || modelFamily === "antigravity-cli" || modelFamily === "agy-claude") &&
+              modelFamily !== finalFamily) ||
             (roleRoute?.override && isForeignModel(finalFamily, rawModel))
               ? ""
               : rawModel;
@@ -2579,6 +2585,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             explicitCapped,
             modelDropped: Boolean(roleRoute?.override?.modelDropped),
             shadow,
+            // R10: name the quota family when the spawn runs on agy-claude, or `claude` when agy-claude was walked past capped.
+            family:
+              spawnFamily(String(next.provider ?? provider), next.model) === "agy-claude"
+                ? "agy-claude"
+                : roleRoute?.route?.skipped?.includes("agy-claude") && normalizeProviderFamily(String(next.provider ?? provider)) === "claude"
+                  ? "claude"
+                  : "",
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
           // R2 (PLAN_PER_ROLES_LADDER_1125): the reason the spawn SHOWS (`Role · model · reason`: drawer header, spawn_worker
@@ -3221,7 +3234,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const cwd = String(me?.cwd ?? agent?.cwd ?? "");
       const where = teamOf(labels, cwd || undefined);
       const fromProvider = String(me?.provider ?? agent?.provider ?? "").trim();
-      const fromFam = normalizeProviderFamily(fromProvider) || fromProvider || "?";
+      // R10: agy-claude (antigravity-cli + a Claude id) is its own family: its death hops off agy-claude, never off Gemini.
+      const fromFam = spawnFamily(fromProvider, me?.model ?? agent?.model) || fromProvider || "?";
       const metric = (text: string) => {
         const line = `upstream-respawn ${text}`;
         log(line);
@@ -3258,7 +3272,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const fromProfile = String(labels.profile ?? "").trim();
       if (!fromProfile) return skip("no-profile");
-      const alt = alternateWorkerProfile(fromProfile, fromProvider, String(labels.stakes ?? ""));
+      const alt = alternateWorkerProfile(fromProfile, fromFam === "?" ? fromProvider : fromFam, String(labels.stakes ?? ""));
       if (!alt?.provider) return skip("no-alternate");
       // R2 H1: the claim, synchronously before the create (no await since the A4 check).
       if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");
@@ -3286,7 +3300,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (!newId) return skip("spawn-no-id");
       await deps.setLabels(deadId, { [RESPAWNED_AS_LABEL]: newId }).catch((e: unknown) => log(`respawnedAs label failed for ${deadId}: ${e}`));
-      const toFam = normalizeProviderFamily(alt.provider) || alt.provider;
+      const toFam = spawnFamily(alt.provider, alt.model) || alt.provider;
       const why = String(error || "upstream failure").replace(/\s+/g, " ").slice(0, 160);
       // The lead's notice (decision wakes it): both ids, so it re-points its watch from the dead worker to the replacement.
       appendLog(where.team, {

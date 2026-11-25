@@ -19,7 +19,7 @@ import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { indexedFold, indexedFoldSync } from "./roster-index.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
-import { normalizeProviderFamily, readLiveCapDoc, setProviderCapped } from "../provider-failover.mjs";
+import { normalizeProviderFamily, readLiveCapDoc, setProviderCapped, spawnFamily } from "../provider-failover.mjs";
 import { effectiveAgentRole } from "../identity.mjs";
 import { noteLaneSpawnOutcome } from "../spawn-streak.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
@@ -613,6 +613,16 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes =
   } catch {
     return null; // best effort: the exit already carries the reason
   }
+}
+
+/**
+ * R10: the cap key for a live agent's provider fault: its spawn family (provider + model), so an antigravity-cli agent
+ * running a Claude id caps agy-claude, never Gemini. Blank provider stays blank (no cap).
+ */
+export function capFamilyOf(agent) {
+  const provider = String(agent?.provider ?? "").trim();
+  if (!provider) return provider;
+  return spawnFamily(provider, agent?.model) || provider;
 }
 
 /** family -> [{ agentId, at }]: recent balance faults (process memory; a restart only costs one more unconfirmed cap). */
@@ -1710,7 +1720,8 @@ export class RunnerBackend {
       // idea-504: after the cap (so spawn failover already routes around the provider), tell the hooks: a worker that died on
       // an upstream failure, or on a missing CLI binary (idea-821), in its first turn is re-spawned once on the alternate provider
       // (agent-duties). A cancel never is.
-      const fault = capProviderOnUpstreamExit(agent.provider, e, { cwd: agent.cwd, agentId: id })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
+      // R10: the spawn family (antigravity-cli + a Claude id = agy-claude), so an agy-claude death caps agy-claude only, never Gemini.
+      const fault = capProviderOnUpstreamExit(capFamilyOf(agent), e, { cwd: agent.cwd, agentId: id })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
       if ((e.upstream === true || fault === "binary-missing") && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
     }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
@@ -1720,7 +1731,7 @@ export class RunnerBackend {
   async capOnProviderError(id, e) {
     try {
       const agent = this.live.known.get(id) ?? (await bounded(this.fetchAgent(id))).agent;
-      capProviderOnUpstreamExit(agent?.provider, e, { cwd: agent?.cwd, agentId: id });
+      capProviderOnUpstreamExit(capFamilyOf(agent), e, { cwd: agent?.cwd, agentId: id });
     } catch { /* best effort: the error event already carries the reason */ }
   }
 
