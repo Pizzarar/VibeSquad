@@ -9,7 +9,8 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { createAcpAdapter, pickModel } from "../runner/adapters/acp.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { capFamilyOf, capProviderOnUpstreamExit } from "../server/backend/runner-backend.mjs";
+import { RunnerBackend, capFamilyOf, capProviderOnUpstreamExit } from "../server/backend/runner-backend.mjs";
+import { createRunnerHookHost } from "../server/backend/runner-hooks.mjs";
 import { countArms } from "../server/exp6-arm.mjs";
 import { ROUTE_LABEL, createPlugin } from "../server/hooks/agent-duties.ts";
 import { QUOTA_READING_MAX_AGE_MS, usageFromLimits } from "../server/limits-read.mjs";
@@ -469,6 +470,115 @@ test(
       assert.equal(out.config.model, "claude-haiku-5-5");
       assert.equal(out.config.thinkingOptionId, "low");
       assert.doesNotMatch(out.labels[ROUTE_LABEL], /family=agy-claude/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// Case 12 (R10 review gap 1): RunnerBackend handleLogEvent (:1724) and capOnProviderError (:1734) call capFamilyOf(agent),
+// so an agy-claude agent's upstream exit or provider error caps agy-claude only, never antigravity-cli (Gemini).
+test(
+  "R10-12: RunnerBackend handleLogEvent (:1724) and capOnProviderError (:1734) cap agy-claude, not antigravity-cli",
+  withEnv(async ({ vsHome, cappedProvidersPath }) => {
+    const agent = { id: "rn-agy-cap", provider: A, model: AGY_CLAUDE_MID_MODEL, cwd: CWD, status: "closed", labels: { role: "worker" } };
+    const rc = { vs: vsHome, home: join(vsHome, "runner"), request: async () => { throw new Error("unused"); }, stream: () => ({ close() {} }) };
+    const b = new RunnerBackend({ client: rc, buildPrefix: async () => "" });
+    b.live.hwm = new Map();
+    b.noteSeen = () => {};
+    b.emitTimeline = () => {};
+    b.refreshLaneWhosHere = async () => {};
+    b.fetchAgent = async () => ({ agent });
+    b.emitEvent = () => {};
+
+    // Site 1: handleLogEvent exit (runner-backend.mjs:1724)
+    await b.handleLogEvent({ id: agent.id, event: { seq: 1, ts: Date.now(), type: "exit", code: 1, upstream: true, error: "HTTP 503 service unavailable" } });
+    const exitCaps = readCappedProviders({ cappedProvidersPath, useDiskCaps: true });
+    assert.deepEqual(Object.keys(exitCaps), [AGY_CLAUDE_FAMILY], "handleLogEvent exit must cap agy-claude only");
+    assert.equal(exitCaps[A], undefined);
+
+    // Site 2: capOnProviderError (runner-backend.mjs:1734)
+    writeFileSync(cappedProvidersPath, "{}", "utf8");
+    await b.capOnProviderError(agent.id, { type: "error", ts: Date.now(), message: "exceeded your current quota" });
+    const errCaps = readCappedProviders({ cappedProvidersPath, useDiskCaps: true });
+    assert.deepEqual(Object.keys(errCaps), [AGY_CLAUDE_FAMILY], "capOnProviderError must cap agy-claude only");
+    assert.equal(errCaps[A], undefined);
+  }),
+);
+
+// Case 13 (R10 review gap 2): upstream-respawn (agent-duties.ts ~3266) derives fromFam via spawnFamily(provider, model),
+// so a dead agy-claude worker hops off agy-claude onto direct claude instead of respawning back onto agy-claude.
+test(
+  "R10-13: upstream-respawn on an agy-claude worker hops off agy-claude to direct claude",
+  withEnv(async () => {
+    const dead = {
+      id: "rn-agy-dead",
+      title: "Per3 · agy task",
+      cwd: CWD,
+      provider: A,
+      model: AGY_CLAUDE_MID_MODEL,
+      status: "closed",
+      archivedAt: null,
+      labels: LABELS("Implement", { stakes: "normal" }),
+    };
+    const agents = new Map([[dead.id, dead]]);
+    const created = [];
+    const backend = {
+      async getAgent(aid) {
+        const a = agents.get(aid);
+        if (!a) throw new Error(`no agent ${aid}`);
+        return { ...a, labels: { ...a.labels } };
+      },
+      async fetchAgentTimeline() {
+        return {
+          entries: [
+            { item: { type: "user_message", text: "implement the change" }, seqStart: 1, seqEnd: 1 },
+            { item: { type: "error", message: "HTTP 503 service unavailable" }, seqStart: 2, seqEnd: 2 },
+          ],
+        };
+      },
+      async listAgents() { return [...agents.values()].map((a) => ({ ...a, labels: { ...a.labels } })); },
+      async createAgent({ config, prompt, labels }) {
+        const a = { id: `rn-new-${created.length + 1}`, provider: config.provider, model: config.model, prompt, labels: { ...labels } };
+        created.push(a);
+        agents.set(a.id, a);
+        return a;
+      },
+      async sendAgentPrompt() { return { queued: false }; },
+      async archiveAgent() {},
+      async updateAgent(aid, { labels } = {}) {
+        const a = agents.get(aid);
+        if (a && labels) a.labels = { ...a.labels, ...labels };
+      },
+      async cancelAgent() {},
+      async deleteHeartbeat() {},
+    };
+    const host = await createRunnerHookHost(backend, { startWatcher: false, deps: { cappedProviders: [], retryBaseMs: 30 }, pollMs: 20 });
+    try {
+      await host.emit("agent.upstream_exit", { agent: await backend.getAgent(dead.id), error: "HTTP 503 service unavailable", ts: Date.now() });
+      assert.equal(created.length, 1, "one respawn created");
+      assert.equal(created[0].provider, C, "hops off agy-claude onto direct claude, not back onto agy-claude");
+      assert.equal(created[0].model, "claude-sonnet-5-5");
+    } finally {
+      host.dispose();
+    }
+  }),
+);
+
+// Case 14 (R10 review gap 3): callerFamily fix (agent-duties.ts ~2497) treats a bare Claude id inherited by a Gemini
+// spawn as foreign (callerFamily=antigravity-cli), not agy-claude, so Lead - Gemini keeps its explicit thinkingOptionId.
+test(
+  "R10-14: Lead - Gemini inheriting bare claude-opus-5-5 keeps its thinkingOptionId (callerFamily=antigravity-cli)",
+  withEnv(async () => {
+    const h = harness({ usageProviders: [] });
+    try {
+      const out = await h.spawn(
+        { provider: A, model: "claude-opus-5-5", thinkingOptionId: "high" },
+        { labels: LABELS("Lead - Gemini", { role: "lead", stakes: "tierA-invariant" }) },
+      );
+      assert.equal(out.config.provider, A);
+      assert.equal(out.config.model, "gemini-4-neon");
+      assert.equal(out.config.thinkingOptionId, "high");
     } finally {
       h.stop?.();
     }
