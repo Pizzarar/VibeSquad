@@ -8,10 +8,7 @@
 import { appendVsLogEntry } from "./brainstorm.mjs";
 import { BUSY, effectiveAgentRole, isLiveAgent } from "./idle-lane-kick.mjs";
 import { asleepTeamIds, readTeamsConfig } from "./identity.mjs";
-
-// TODO C1 exports CRUNCH_MODE_RULES; lead swaps import at merge
-const CRUNCH_MODE_RULES =
-  `Crunch mode is ON for this Squad: act on your lean end-to-end (plan, hand off, dispatch, merge through the normal gates) until the lane has a tryable build. Log each call as \`vs log decision "(auto) ..."\`. Stop only for deletes, releases, money and outward/public actions: put those in ONE needs-you digest and keep working on everything else. Review, suite, UX Reviewer and merge gates still apply; Crunch skips asking, not checking.`;
+import { CRUNCH_MODE_RULES } from "./hooks/agent-duties.ts";
 
 export const CRUNCH_ON_MESSAGE = `${CRUNCH_MODE_RULES}\n\nPick your lean and go`;
 export const CRUNCH_OFF_MESSAGE = "Crunch mode is OFF: back to asking before scope calls.";
