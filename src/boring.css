@@ -1467,14 +1467,14 @@ html[data-vibe="boring"] .btn.phone-crunch-btn:disabled { color: var(--muted); }
 
 /* === PLAN_PROJECT_ORDER O2: pinned Main project row + drag-reorder (@ui-bois). @boring-mode polish: build on this block, keep the hooks.
    The pin sits OUTSIDE .boring-project-tree (the scroller) so folder collapse and scroll never hide it. It is sized by content, shrinks and
-   scrolls inside to keep the footer on screen, and never below its full header (58px collapsed, 220px expanded); below that the sidebar scrolls. */
-html[data-vibe="boring"] .boring-main-pin { flex: 0 1 auto; min-height: 58px; overflow-y: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface-3); }
+   scrolls inside to keep the footer on screen, and never below its full header (60px collapsed, 220px expanded); below that the sidebar scrolls. */
+html[data-vibe="boring"] .boring-main-pin { flex: 0 1 auto; min-height: 60px; overflow-y: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface-3); }
 html[data-vibe="boring"] .boring-main-pin:has(.boring-project-block.open) { min-height: 220px; }
 /* No open-card chrome inside the pin (it has its own frame): the header must not jump when Main expands. */
 html[data-vibe="boring"] .boring-main-pin .boring-project-block, html[data-vibe="boring"] .boring-main-pin .boring-project-block.open { background: transparent; border: 0; border-radius: 0; padding: 0 9px; gap: 2px; }
-html[data-vibe="boring"] .boring-main-pin ~ .boring-project-tree { min-height: 64px; }
+html[data-vibe="boring"] .boring-main-pin ~ .boring-project-tree { flex-basis: 0; min-height: 120px; }
 /* Two-line header so the name keeps the width: line 1 = dot, bust, name, badge; line 2 = Open, actions. ~1.5x a normal row. */
-html[data-vibe="boring"] .boring-main-line { position: sticky; top: 0; z-index: 1; background: var(--surface-3); display: grid; grid-template-columns: 16px 1fr auto auto; align-items: center; min-height: 54px; padding-bottom: 2px; }
+html[data-vibe="boring"] .boring-main-line, html[data-vibe="boring"] .boring-main-line.boring-project-line { position: sticky; top: 0; z-index: 1; background: var(--surface-3); display: grid; grid-template-columns: 16px 1fr auto auto; align-items: center; min-height: 54px; padding-bottom: 2px; }
 html[data-vibe="boring"] .boring-main-line > .boring-chevron-btn { grid-column: 1; grid-row: 1 / span 2; }
 html[data-vibe="boring"] .boring-main-line .boring-project-row { grid-column: 2 / -1; grid-row: 1; min-height: 30px; gap: 8px; font-weight: 600; padding-top: 2px; padding-bottom: 2px; }
 html[data-vibe="boring"] .boring-main-line .boring-project-row.on { box-shadow: none; }
