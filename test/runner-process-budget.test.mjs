@@ -54,12 +54,12 @@ function setup(maxLive) {
 }
 const mk = (runner, extra = {}) => runner.create({ provider: 'claude', cwd: os.tmpdir(), ...extra });
 
-test('default cap is 24 and VS_RUNNER_MAX_LIVE overrides it', () => {
-  assert.equal(DEFAULT_MAX_LIVE, 24);
-  assert.equal(maxLiveFromEnv({}), 24);
+test('default cap is 16 and VS_RUNNER_MAX_LIVE overrides it', () => {
+  assert.equal(DEFAULT_MAX_LIVE, 16);
+  assert.equal(maxLiveFromEnv({}), 16);
   assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '3' }), 3);
-  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: 'nope' }), 24);
-  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '0' }), 24);
+  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: 'nope' }), 16);
+  assert.equal(maxLiveFromEnv({ VS_RUNNER_MAX_LIVE: '0' }), 16);
 });
 
 test('claude adapter passes --resume only when resuming', () => {

@@ -212,10 +212,8 @@ export function defaultAdapters(opts = {}) {
 }
 
 // Overall safety ceiling on live agent processes. Process-per-turn keeps the real count near the running turns
-// (idle agents are parked right after their turn), so this is only a backstop. Each claude is ~0.4 GB with its MCP sidecars,
-// so 24 is ~10 GB (idea-896: 16 filled with opencode processes and held suite slots while owner chats queued). Owner jobs
-// may go over it by OWNER_OVER_CAP (see _makeRoom).
-export const DEFAULT_MAX_LIVE = 24;
+// (idle agents are parked right after their turn), so this is only a backstop. Each claude is ~0.4 GB with its MCP sidecars.
+export const DEFAULT_MAX_LIVE = 16;
 export function maxLiveFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_MAX_LIVE);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_MAX_LIVE;
