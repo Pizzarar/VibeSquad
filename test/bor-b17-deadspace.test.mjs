@@ -113,6 +113,13 @@ test("r3: Start Brainstorm from the right pane keeps the split; right card is pa
   assert.match(ade, /rightSpin = \(p: Pin\) => spinUpPin\(p, undefined, undefined, "right"\)/);
   assert.match(ade, /boringStartBrainstorm\(pin, c\.right \? rightSpin : undefined\)/);
   assert.match(ade, /boringStartBugs\(view\.team\.id, c\.right \? \{ spinUp: rightSpin \} : \{\}\)/);
+  // r3b: EVERY start/open action on the right card lands in the right pane (split stays on)
+  assert.match(ade, /c\.right \? void Promise\.resolve\(onSpinUpOverlord\(view\)\)\.then\(\(id\) => id && openAgentInTab\(id, "right"\)\)/); // Start Overlord
+  assert.match(ade, /c\.right \? onSpinUpPin\(hubPin, undefined, "right"\) : onSpinUpPin\(hubPin\)/); // Start RiffBot
+  assert.match(read("src", "App.tsx"), /\(pin: Pin, profile\?: string, into\?: "right"\) => void spinUpPin\(pin, profile, undefined, into\)/);
+  assert.match(read("src", "App.tsx"), /return spinUpOverlord\(view, \{/);
+  assert.match(ade, /rightHandlers: PickerHandlers = \{ \.\.\.pickerHandlers, openAgent: \(id\) => \{ setActivePane\("right"\)/); // quick-jump opens
+  assert.match(ade, /buildQuickJumps\(model, c\.laneId, c\.right \? rightHandlers : pickerHandlers\)/);
   // Gemini M2: the picker's card target is pane-local state, a dormant pill never selects the lane in the host
   assert.match(ade, /const \[rightCard, setRightCard\] = useState<CardTarget \| null>/);
   assert.match(ade, /renderEmpty=\{\(t\) => emptyCard\(t\)\}/);

@@ -1813,18 +1813,18 @@ export function App() {
   );
   const onSpinUpPin = useCallback(
     // A failed start is already recorded on pinFocus.spinUpError (spinUpPin), which the hub page shows under the TVs.
-    (pin: Pin, profile?: string) => void spinUpPin(pin, profile).catch(() => {}),
+    (pin: Pin, profile?: string, into?: "right") => void spinUpPin(pin, profile, undefined, into).catch(() => {}),
     [],
   );
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
   const [overlordBusy, setOverlordBusy] = useState(false);
   const [overlordErr, setOverlordErr] = useState<{ squadId: string; message: string } | null>(null); // shown inline under the TVs (was alert()), scoped to its Squad
-  const onSpinUpOverlord = useCallback((view: TeamView, profileOverride?: string) => {
+  const onSpinUpOverlord = useCallback((view: TeamView, profileOverride?: string): Promise<string | undefined> => {
     setOverlordBusy(true);
     setOverlordErr(null);
     const profileName = profileOverride || overlordProfileName(view);
     const profile = findProfile(profileName, getProfiles());
-    void spinUpOverlord(view, {
+    return spinUpOverlord(view, {
       spawn: spawnTeamAgent,
       retire: (m) => retireAgent(m.agent),
       profile,
@@ -1832,7 +1832,7 @@ export function App() {
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
       resolveCwd: (hub) => fetchHubCwd(hub),
     })
-      .catch((e) => setOverlordErr({ squadId: view.team.id, message: e?.message ?? String(e) }))
+      .catch((e): undefined => { setOverlordErr({ squadId: view.team.id, message: e?.message ?? String(e) }); return undefined; })
       .finally(() => setOverlordBusy(false));
   }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode

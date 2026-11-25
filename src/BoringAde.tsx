@@ -396,8 +396,9 @@ type Props = {
   view: TeamView | undefined;
   onSelectSquad: (id: string) => void;
   onOpenPin: PinHandler;
-  onSpinUpPin: (pin: Pin, profile?: string) => void;
-  onSpinUpOverlord: (view: TeamView) => void;
+  onSpinUpPin: (pin: Pin, profile?: string, into?: "right") => void;
+  /** Resolves to the new Overlord id (or undefined on a failed spawn) so the split's right card can open it in the right pane. */
+  onSpinUpOverlord: (view: TeamView) => void | Promise<string | undefined>;
   overlordBusy?: boolean;
   onAddBuddy: () => void;
   onNewSquad: () => void;
@@ -695,8 +696,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const startKey = startKeyFor(cPin, c.laneId);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
-      overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && onSpinUpOverlord(view), disabled: overlordBusy },
-      riffbot: { text: "RiffBot is sleeping.", cta: "Start RiffBot", run: () => hubPin && onSpinUpPin(hubPin), disabled: !hubPin },
+      overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && (c.right ? void Promise.resolve(onSpinUpOverlord(view)).then((id) => id && openAgentInTab(id, "right")) : onSpinUpOverlord(view)), disabled: overlordBusy },
+      riffbot: { text: "RiffBot is sleeping.", cta: "Start RiffBot", run: () => hubPin && (c.right ? onSpinUpPin(hubPin, undefined, "right") : onSpinUpPin(hubPin)), disabled: !hubPin },
       brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => (cPin ? startBrainstorm(cPin, c) : startBugs(c)), disabled: (!cPin && !needsBugsLane) || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => (c.right ? switchRightToBrainstorm(c) : setSelectedRole("brainstorm")), disabled: false },
     }[cKind];
@@ -734,6 +735,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const running = view.members.filter((m) => m.agent.status === "running" && !seen.has(m.agent.id) && !m.agent.archivedAt).map((m): StripItem => ({ id: m.agent.id, needs: false, sub: "Working", title: memberTitle(m) }));
     return [...rows.map((r): StripItem => ({ id: r.item.id, needs: true, err: r.item.kind === "error", title: r.who, sub: r.who.includes(r.lane) ? needsYouReason(r.item) : `${r.lane} · ${needsYouReason(r.item)}` })), ...running];
   };
+  // Every open action on the right card lands in the right pane (activePane is forced right first; openHere reads the live pane).
+  const rightHandlers: PickerHandlers = { ...pickerHandlers, openAgent: (id) => { setActivePane("right"); pickerHandlers.openAgent(id); } };
   /** Right-pane card target -> its own ctx (pane-local: clicking the left pane never rewrites it). */
   const rightCtx = (t: CardTarget): CardCtx => {
     if (t.key === "_overlord") return { laneId: t.key, kind: "overlord", pin: null, right: true };
@@ -761,7 +764,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         {c.kind === "brainstorm" && startFor?.error && (
           <p className="boring-empty-error" role="alert" data-testid="boring-start-error">Could not start Brainstorm: {startFor.error}</p>
         )}
-        <BoringEmptyJumps {...buildQuickJumps(model, c.laneId, pickerHandlers)} />
+        <BoringEmptyJumps {...buildQuickJumps(model, c.laneId, c.right ? rightHandlers : pickerHandlers)} />
       </div>
     );
   };
