@@ -55,6 +55,7 @@ type LadderLike = Record<string, Partial<Record<string, { model?: string; effort
 export type Override = { provider: string; model?: string };
 
 /** Tier a role runs at for these stakes (server/stakes-ladder.mjs: tierA-* -> top, mechanical -> cheap, else the role's own). */
+// Parity with server stakesTier pinned by test/walk-mapping-parity.test.mjs.
 export function tierFor(role: RoleLike, stakes: string): string {
   if (stakes === "tierA-security" || stakes === "tierA-invariant") return "top";
   if (stakes === "mechanical") return "cheap";
