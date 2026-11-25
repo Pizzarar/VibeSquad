@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -258,6 +258,38 @@ export function useUsage(squad: string | null = null): { data: UsageData | null;
 
 /** C2: the Perfection angel on top opens `perfection` (the standing Workflows/audit lane); null → she shows but is not clickable. */
 export type UsagePerfection = { pin: Pin | null; onOpen?: PinHandler };
+
+/** usa-59: compact stakes / lane toggle under the burst table: each row's cell per burst bucket reads "units · 1st-try % · $/unit". */
+function BurstSplit({ cohorts }: { cohorts: BurstCohorts }) {
+  const [by, setBy] = useState<"off" | "stakes" | "lane">("off");
+  const rows = by === "stakes" ? cohorts.byStakes : by === "lane" ? cohorts.byLane : undefined;
+  if (!cohorts.byStakes?.length && !cohorts.byLane?.length) return null;
+  return (
+    <div data-testid="usage-burst-split">
+      <div className="usage-squad-filter" role="group" aria-label="Split burst table by" style={{ margin: "8px 0" }}>
+        <span className="usage-squad-label small muted">Split by:</span>
+        {(["off", "stakes", "lane"] as const).map((k) => (
+          <button key={k} type="button" className={`usage-squad-pill${by === k ? " is-active" : ""}`} data-testid={`usage-burst-split-${k}`} aria-pressed={by === k} onClick={() => setBy(k)}>{k === "off" ? "none" : k}</button>
+        ))}
+      </div>
+      {rows && (
+        <table className="usage-table" data-testid="usage-burst-split-table">
+          <thead><tr><th>{by === "stakes" ? "Stakes" : "Lane"}</th>{cohorts.buckets.map((b) => <th key={b.key} className="num">{b.label}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} data-testid="usage-burst-split-row">
+                <td>{r.key} <span className="muted">({r.units})</span></td>
+                {r.buckets.map((c) => (
+                  <td key={c.key} className="num">{c.units === 0 ? "—" : c.insufficient ? `n<${cohorts.minN} (${c.units})` : `${c.units} · ${burstCellText(c, c.firstTryPassRate, pctText, cohorts.minN)} · ${burstCellText(c, c.costPerUnit, usdText, cohorts.minN)}`}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
 
 export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } = {}) {
   const [squad, setSquad] = useState<string | null>(() => {
@@ -833,6 +865,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                   ))}
                 </tbody>
               </table>
+              <BurstSplit cohorts={data.burstCohorts} />
               <div className="small muted" data-testid="usage-burst-note">
                 n&lt;{data.burstCohorts.minN} = too few units to compare{data.burstCohorts.unjoined > 0 ? ` · unjoined ${data.burstCohorts.unjoined} (no dispatch burst recorded)` : ""}
               </div>

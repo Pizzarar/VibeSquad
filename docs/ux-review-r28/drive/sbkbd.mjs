@@ -1,0 +1,50 @@
+// R28 probe: Back INTO a ?sb= Storybook entry, then out of it to Normal and a click (must push); keyboard-only nav (Ctrl+K, Ctrl+J) right after Back
+import { open, state } from "./lib.mjs";
+const [port, w, h, zoom, theme, out] = [+process.argv[2], +process.argv[3], +process.argv[4], +process.argv[5], process.argv[6], process.argv[7]];
+const { browser, page, errs } = await open(port, { w, h, zoom, theme }, "?demo=&team=vibesquad");
+const tag = `${theme}-${w}`;
+const step = async (n, shot) => { await page.waitForTimeout(700); const s = await state(page); if (shot && out) await page.screenshot({ path: `${out}/${tag}-sk-${n}.png` }); const sb = /sb=/.test(s.url) && !(await page.locator(".boring-sidebar").count()); const inv = sb || (s.on.length === 1 && (s.chat ? /agent=/.test(s.url) : !/agent=/.test(s.url))); console.log(`${n.padEnd(16)} ${s.url.padEnd(48)} ${sb ? "SB" : (s.chat ? "chat" : "ov") + ":" + s.crumb} on=${s.on.length} inv=${inv} len=${s.hlen} :: ${s.hist}`); return s; };
+const needs = (t) => page.locator(".boring-sidebar .boring-needs-open", { hasText: t }).first().click();
+const palette = async (q) => { await page.keyboard.press("Control+k"); await page.waitForTimeout(400); await page.keyboard.type(q); await page.waitForTimeout(400); await page.keyboard.press("Enter"); };
+const openSb = async () => { await page.locator('[data-testid="boring-project-menu-vibesquad"]').click({ force: true }); await page.waitForTimeout(300); await page.locator('[data-testid="custom-context-menu"] >> text=Open Storybook').click(); };
+await needs("Review - Sonnet"); await step("1-rev");
+await openSb(); await step("2-sb");
+await page.goBack(); await step("3-back(normal)");
+await needs("Audit - token scout"); await step("4-click(push)");
+await page.goBack(); await step("5-back(rev)");
+await page.goBack(); await step("6-back(Ov)");
+await page.goForward(); await step("7-fwd(rev)");
+await page.goForward(); await step("8-fwd(aud)");
+await page.goForward(); await step("9-fwd(none)");
+// Back INTO sb: open sb, Forward-able entry after it via palette from inside Storybook
+await openSb(); await step("10-sb");
+await palette("UI Lab"); await step("11-pal-from-sb", true);
+await page.goBack(); await step("12-back(into?)", true);
+await page.goBack(); await step("13-back");
+await page.goForward(); await step("14-fwd");
+await page.goForward(); await step("15-fwd");
+await needs("Review - Gemini"); await step("16-click(push)", true);
+await page.goForward(); await step("17-fwd(none)");
+// Planted: a real ?sb= entry behind the current screen, then Back into it, then Back/Forward out and click
+await page.evaluate(() => { history.pushState({ sb: "vibesquad" }, "", "?demo=&team=vibesquad&agent=demo-aud&sb=vibesquad"); history.pushState(null, "", "?demo=&team=vibesquad&agent=demo-aud"); }); await step("18-plant-sb");
+await page.goBack(); await step("19-back(into sb)", true);
+await page.goForward(); await step("20-fwd(normal)", true);
+await needs("Review - Sonnet"); await step("21-click(push)", true);
+await page.goForward(); await step("22-fwd(none)");
+await page.goBack(); await step("23-back(aud)");
+await page.goBack(); await step("24-back(sb)");
+await page.keyboard.press("Escape"); await step("25-esc(from sb)");
+// keyboard-only after Back
+await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); await step("26-efi");
+await needs("Audit - token scout"); await step("27-aud");
+await page.goBack(); await step("28-back(efi Ov)");
+await page.keyboard.press("Control+j"); await step("29-ctrlj(push)", true);
+await page.goBack(); await step("30-back");
+await page.goForward(); await step("31-fwd");
+await page.goForward(); await step("32-fwd(none)");
+await page.goBack(); await step("33-back");
+await palette("UI Bois"); await step("34-ctrlk(push)");
+await page.goForward(); await step("35-fwd(none)");
+await page.goBack(); await step("36-back");
+console.log("pageerrors=" + errs.length + (errs.length ? " " + errs.join(" ; ") : ""));
+await browser.close();

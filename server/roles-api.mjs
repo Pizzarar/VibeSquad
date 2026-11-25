@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { withFileLock } from "./file-lock.mjs";
 import { getProfilesPath, loadProfiles, normalizeProfile, profilesFileBody } from "./profiles.mjs";
 import { buildRolesFromProfiles, loadRoles, migrateProfilesFile, normalizeRole, normalizeRoles, roleKeyOf } from "./profiles-v2.mjs";
-import { ROLE_TABLE } from "./role-route.mjs";
+import { ROLE_TABLE, isHiddenRole } from "./role-route.mjs";
 import { DEFAULT_TIER_LADDER, TIERS, cleanRung, loadTierLadder, routeProviderFamily, stakesLadderPath } from "./stakes-ladder.mjs";
 import { writeSettingsAtomic } from "./user-settings.mjs";
 
@@ -58,6 +58,7 @@ export function getRolesState({ profilesPath, ladderPath } = {}) {
     source: loaded.source,
     schemaVersion: loaded.schemaVersion,
     roles: loaded.roles,
+    hiddenRoles: Object.keys(loaded.roles).filter((k) => isHiddenRole(k, loaded.roles)),
     ladder: loadTierLadder(ladderPath),
     ladderDefaults: JSON.parse(JSON.stringify(DEFAULT_TIER_LADDER)),
     tiers: [...TIERS],
@@ -111,7 +112,7 @@ export function saveRoles(patch, profilesPath) {
     throw httpError(500, /invalid JSON|newer than/.test(String(mig.error)) ? `refusing to save: profiles.json ${mig.error}. Fix or restore it first.` : "profiles.json migration failed; see the server log");
   }
   const parsed = readJson(path);
-  const next = normalizeRoles(parsed.roles);
+  const next = normalizeRoles(parsed.roles, { profiles: parsed.profiles });
   for (const [rawKey, raw] of Object.entries(patch)) {
     const key = roleKeyOf(rawKey);
     if (!ROLE_KEY_RE.test(key) || RESERVED_KEYS.has(key)) throw bad(`Role key "${rawKey}" is not allowed (a-z, 0-9 and -)`);

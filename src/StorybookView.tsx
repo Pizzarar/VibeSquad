@@ -1,6 +1,6 @@
 // Storybook view (SB5, docs/PLAN_STORYBOOK_V1.md). READ-ONLY: quest web per trader chain, per-location, per-character,
 // findings list. Data: GET /api/storybook/:project (SB4) in the SB1 snapshot shape. All grouping/filter/Mermaid logic is in storybookLogic.ts.
-// Entry: the project ⋯ menu ("Open Storybook", CommandPalette.teamCtxItems) → openStorybook(); App renders this instead of the cockpit.
+// Entry: the Code | Storybook tabs, the "Open Storybook: <project>" palette command, the phone ⋯ entry → openStorybook(); App renders this instead of the cockpit.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { MermaidView } from "./MermaidView";
@@ -11,6 +11,7 @@ import {
   indexEntities, interpretLoad, interpretRefresh, locationView, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
+import { ProjectTabs } from "./ProjectTabs";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
@@ -70,33 +71,49 @@ export function useStorybookTarget(): Target {
   return useSyncExternalStore((cb) => { subs.add(cb); return () => { subs.delete(cb); }; }, () => target, () => null);
 }
 
-/** Known-missing probe for the ⋯ menu (UX R18 m6): true once a project is known to have no Storybook (404), so the item can hide. */
-const missing = new Map<string, boolean>();
+/** One shared probe status per project behind the ⋯ menu, the topbar tabs and the phone drawer:
+ *  unknown = not fetched yet; present = HEAD 2xx; missing = HEAD 404. Non-2xx / network errors clear the entry so the next read retries. */
+const probe = new Map<string, "unknown" | "present" | "missing">();
 // A probe can resolve after the ⋯ menu / phone drawer first reads it (slow host): notify subscribers so consumers re-render
 // (same subscribe/notify shape as the `target` store above).
-const missingSubs = new Set<() => void>();
-const missingEmit = () => missingSubs.forEach((f) => f());
+const probeSubs = new Set<() => void>();
+const subscribeProbe = (cb: () => void) => { probeSubs.add(cb); return () => { probeSubs.delete(cb); }; };
+const probeEmit = () => probeSubs.forEach((f) => f());
+/** Known-missing probe (UX R18 m6): true once a project is known to have no Storybook (404), so the ⋯ menu can hide. */
 export function probeStorybook(projectId: string): boolean {
-  if (!missing.has(projectId)) {
-    missing.set(projectId, false);
-    // Only a definite 404 means "no Storybook"; network errors / 5xx are forgotten so the next menu build retries.
+  if (!probe.has(projectId)) {
+    probe.set(projectId, "unknown");
+    // Only a definite 404 means "no Storybook"; a 2xx means present; network errors / 5xx are forgotten so the next read retries.
     void fetch(api(projectId), { method: "HEAD" }).then((r) => {
-      if (r.status === 404) { missing.set(projectId, true); missingEmit(); }
-      else if (!r.ok) { missing.delete(projectId); missingEmit(); }
-    }).catch(() => { missing.delete(projectId); missingEmit(); });
+      if (r.status === 404) { probe.set(projectId, "missing"); probeEmit(); }
+      else if (r.ok) { probe.set(projectId, "present"); probeEmit(); }
+      else { probe.delete(projectId); probeEmit(); }
+    }).catch(() => { probe.delete(projectId); probeEmit(); });
   }
-  return missing.get(projectId) === true;
+  return probe.get(projectId) === "missing";
 }
 
 /** Subscribe to the known-missing probe and re-render when it resolves (useStorybookTarget pattern). */
 export function useStorybookMissing(projectId: string | null): boolean {
   const isMissing = useSyncExternalStore(
-    (cb) => { missingSubs.add(cb); return () => { missingSubs.delete(cb); }; },
-    () => (projectId ? missing.get(projectId) === true : false),
+    subscribeProbe,
+    () => (projectId ? probe.get(projectId) === "missing" : false),
     () => false,
   );
   useEffect(() => { if (projectId) probeStorybook(projectId); }, [projectId]);
   return isMissing;
+}
+
+/** True only once a project is KNOWN to have a Storybook (HEAD 2xx) — never optimistic, so the topbar tabs
+ *  don't flicker for projects that have none. Built on the same probe store/emitter as useStorybookMissing. */
+export function useStorybookPresent(projectId: string | null): boolean {
+  const isPresent = useSyncExternalStore(
+    subscribeProbe,
+    () => (projectId ? probe.get(projectId) === "present" : false),
+    () => false,
+  );
+  useEffect(() => { if (projectId) probeStorybook(projectId); }, [projectId]);
+  return isPresent;
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────────
@@ -457,18 +474,20 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   return (
     <div className="sb-root" data-testid="storybook-view">
       <header className="sb-head">
-        <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={() => onClose()}>← Back</button>
+        <button type="button" className="sb-btn sb-back" data-testid="sb-back" aria-label="Back" onClick={() => onClose()}><span className="sb-back-arrow" aria-hidden="true">←</span><span className="sb-back-text" aria-hidden="true"> Back</span></button>
         <div className="sb-title">
           <span className="sb-eye" aria-hidden="true">◉</span>
-          <h2>Storybook <span className="sb-proj">· {name}</span></h2>
+          <h2><span className="sb-word">Storybook </span><span className="sb-sep" aria-hidden="true">· </span><span className="sb-proj">{name}</span></h2>
         </div>
+        <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
           {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
           {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
-          <button type="button" className="sb-btn" data-testid="sb-refresh" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}>{busy ? "Refreshing…" : "Refresh"}</button>
+          <button type="button" className={`sb-btn sb-refresh${busy ? " sb-busy" : ""}`} data-testid="sb-refresh" aria-label="Refresh" aria-busy={busy} title="Re-snapshot Storybook" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}><span className="sb-refresh-icon" aria-hidden="true">↻</span><span className="sb-refresh-text" aria-hidden="true">{busy ? "Refreshing…" : "Refresh"}</span></button>
         </div>
       </header>
+      {checked && <div className="sb-checked sb-checked-row" role="status" data-testid="sb-checked-row">{checked}</div>}
       {notice && <div className="sb-notice" role="status" data-testid="sb-notice">{notice}</div>}
       {state.kind === "loading" && <p className="sb-empty">Loading Storybook…</p>}
       {state.kind === "none" && <p className="sb-empty" data-testid="sb-none">{NO_STORYBOOK}. Storybook needs a registered adapter for the project’s repo; ask the squad lead to add one.</p>}

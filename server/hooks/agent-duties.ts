@@ -50,17 +50,22 @@ import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import {
+  ROUTE_OVERRIDE_ENV,
+  ROUTE_OVERRIDE_LABEL,
   ROUTE_STAMP_LABELS,
   cappedFamilies,
+  isForeignModel,
   legacyRouteMeta,
   legacyShadowMismatch,
   liveRoles,
+  parseRouteOverride,
   roleNameHit,
   roleSpawnProfile,
   routeMetricText,
   routeRoleKeyOf,
   routeTierOf,
 } from "../spawn-route.mjs";
+import { armProvider } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
@@ -168,6 +173,8 @@ const RESPAWN_SAFE_TOOL_KINDS = new Set(["read", "search", "think", "fetch"]);
 const RESPAWN_DROPPED_LABELS = new Set([
   "profile", "provider", "model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
   RESPAWNED_AS_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
+  // The respawn moves to the alternate provider on purpose: an inherited caller override would pin it back on the dead one.
+  ROUTE_OVERRIDE_LABEL,
 ]);
 
 /**
@@ -1831,7 +1838,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
-          const hit = roleSpawnProfile(hint, { stakes: labels.stakes, caps: cappedFamilies(currentUsageList()), roles });
+          const hit = roleSpawnProfile(hint, {
+            stakes: labels.stakes,
+            caps: cappedFamilies(currentUsageList()),
+            roles,
+            prefer: armProvider(labels["vs.arm"]),
+            override: parseRouteOverride(labels[ROUTE_OVERRIDE_LABEL]), // H1: the caller's provider/model still win here
+          });
           if (hit) match = { profile: hit.profile as StoredProfile, explicit: true };
         }
       }
@@ -2112,7 +2125,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // (role default tier x stakes), role mode. It then runs as an explicit profile built from that route, so the cap
         // wins and a caller model is dropped when the family changes (P5a review M3). Old names and aliases never get
         // here (stored/pack match first; capitalised "Lead"/"Brainstorm" are aliases): they keep today's walk below.
-        let roleRoute: { profile: any; route: any; explicitCapped: boolean } | null = null;
+        // H1 (idea-974): spawn_worker names the caller's own provider/model in ROUTE_OVERRIDE_LABEL (config alone can't
+        // tell them from a filled-in default). A role route takes them as `explicit`: they win, stakes still pick that
+        // provider's rung unless a model is given, a cap still hops (roleSpawnProfile). Old names/aliases ignore it.
+        // Paseo never hands labels to this hook, so the env twin (VS_ROUTE_OVERRIDE, set next to VS_PROFILE) carries it too.
+        const routeOverride = parseRouteOverride(reqLabels[ROUTE_OVERRIDE_LABEL] || env?.[ROUTE_OVERRIDE_ENV]);
+        let roleRoute: {
+          profile: any;
+          route: any;
+          explicitCapped: boolean;
+          override: { provider: string; model: string; hopped: boolean; modelDropped: boolean } | null;
+        } | null = null;
         if (requestedProfileName && !profileMatch?.explicit) {
           const roles = liveRoles(loadStoredProfiles());
           if (roleNameHit(requestedProfileName, roles)) {
@@ -2121,6 +2144,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               caps: cappedFamilies(usageList, [provider]),
               roles,
               explicitModel: rawCallerModel,
+              override: routeOverride,
+              // R1: an R0 implementer arm pick (spawn_worker stamps vs.arm) routes the role onto that arm's provider first.
+              prefer: armProvider(reqLabels["vs.arm"]),
             });
           }
           if (roleRoute) {
@@ -2375,7 +2401,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const rawModel = rawCallerModel;
           const modelFamily = normalizeProviderFamily(rawModel);
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
-          const callerModel = modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily ? "" : rawModel;
+          // An override route also drops any other ladder family's model (deepseek on claude, r2 rn-a5cd265243b5 L1): the
+          // route already did, and the config's copy must not bring it back as an explicit caller model.
+          const callerModel =
+            (modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily) ||
+            (roleRoute?.override && isForeignModel(finalFamily, rawModel))
+              ? ""
+              : rawModel;
           const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
           // Role routes: the tier ladder applies at every stakes value (normal = the role's default tier), so an explicit
           // caller model/effort beats it at normal too (Decided "explicit beats everything", resolveRoute). A caller value
@@ -2394,8 +2426,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             ? {
                 stakes: normalizeStakes(stakesRaw),
                 apply: false,
-                reason:
-                  keepModel && keepEffort
+                reason: roleRoute.override
+                  ? roleRoute.override.hopped
+                    ? "override+failover"
+                    : "override"
+                  : keepModel && keepEffort
                     ? "explicit"
                     : keepModel || keepEffort
                       ? "explicit+ladder"
@@ -2478,6 +2513,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             tier: routeTier,
             role: routeRole,
             explicitCapped,
+            modelDropped: Boolean(roleRoute?.override?.modelDropped),
             shadow,
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);

@@ -342,3 +342,31 @@ test("idea-894 pickLiveRestart: local yields to a newer host prop", () => {
   assert.deepEqual(pickLiveRestart(undefined, { id: "c", state: "queued" }), { id: "c", state: "queued" }, "no local -> prop");
   assert.equal(pickLiveRestart(undefined, undefined), null);
 });
+
+// usa-57 (idea-933): phone route to the Usage dashboard.
+test("usa-57: drawer button, banner route and ≤600px CSS", () => {
+  const c = src("PhoneCockpit.tsx"), app = src("App.tsx"), css = src("styles.css"), v = src("PhoneUsageView.tsx"), st = src("phoneUsageStore.ts");
+  assert.match(c, /data-testid="phone-usage-btn"/);
+  assert.match(c, /openPhoneUsage\(\)/);
+  assert.match(c, /<PhoneUsageView \/>/);
+  assert.match(app, /<QuotaAlertBanner canOpenUsage \/>/);
+  assert.match(v, /OPEN_USAGE_EVENT, openPhoneUsage/); // banner tap -> view
+  assert.match(v, /e\.key === "Escape"/);
+  assert.match(st, /history\.pushState/);
+  assert.match(st, /history\.back\(\)/); // Back button undoes our pushed entry
+  assert.match(st, /addEventListener\("popstate"/);
+  for (const cls of [".phone-usage-view", ".phone-usage-bar", ".phone-usage-back", ".phone-usage-title", ".phone-usage-body", ".phone-usage-btn"]) assert.ok(css.includes(cls), cls);
+  assert.match(css, /\.phone-usage-body \.usage-limits \{ grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(css, /\.phone-usage-body \.usage-table-wrap[^}]*overflow-x: auto/);
+});
+
+test("usa-57 R1: cold ?focus=usage opens the phone view, safe-area top, dialog a11y, banner inside the overlay", () => {
+  const app = src("App.tsx"), css = src("styles.css"), v = src("PhoneUsageView.tsx");
+  assert.match(app, /takeColdUsageFocus\(\)\) \{\s*if \(isPhoneShell\(isAndroidUserAgent\(\), window\.innerWidth\)\) openPhoneUsage\(\)/);
+  assert.match(css, /\.phone-usage-bar \{[^}]*var\(--phone-safe-top, 0px\)/);
+  assert.match(css, /\.phone-usage-body \{[^}]*safe-area-inset-bottom/);
+  assert.match(v, /aria-modal="true"/);
+  assert.match(v, /backRef\.current\?\.focus\(\)/);
+  assert.match(v, /prev\.focus\(\)/);
+  assert.match(v, /<QuotaAlertBanner canOpenUsage=\{false\} \/>/);
+});
