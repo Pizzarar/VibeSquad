@@ -221,10 +221,9 @@ export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
 // decides; FAIL or none refuses. Enforced by .githooks/pre-merge-commit + pre-commit (git merge into master/main) and
 // .githooks/pre-push (server/push-guard.mjs). Owner/lead override: `git -c vs.verdictOverride=<sha> merge|push` or
 // VS_VERDICT_OVERRIDE=<sha>[,<sha>] (the merge or tip sha); every use is logged as a `decision` entry in the Squad log.
-// idea-941 rollout guard: until the running server attests `VERDICT_WRITER_CAPABILITY` at boot (server-start-*.json capabilities),
-// the gate warns instead of refusing. Once attested, it fails closed.
 
-/** Capability token the server writes at boot (server-start-*.json) and exposes on /api/health once it writes `verdict` on done entries (idea-941). */
+/** Capability token exposed on /api/health by a server that writes the server-attested `verdict` field on digest `done`
+ * entries (idea-941). INFO ONLY: the merge/push gate never reads it (a marker any process can write must not weaken it). */
 export const VERDICT_WRITER_CAPABILITY = "attested-verdict";
 
 /** A unit merge subject: `Merge unit-…` / `Merge branch 'unit-…'` (unit branches are `unit-<lane>-<idea>…`, made with `vs worktree create`; the
@@ -364,16 +363,44 @@ export function evaluateMergeVerdicts({ merges = [], recorded = () => null, over
   return { ok: refused.length === 0, passed, overridden, refused };
 }
 
-/** Human-readable refusal (or rollout-guard warning when `attested === false`) for stderr; "" when every unit merge has a recorded PASS (or is overridden). `squads`: the Squad
- * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). */
-export function formatVerdictRefusal(result, { action = "push", squads, attested = true } = {}) {
+/**
+ * idea-941: apply an ACTIVE owner rollout window (server/verdict-window.mjs) to an evaluateMergeVerdicts result. Inside the
+ * window a *missing* verdict ("no-verdict") is downgraded to a warning (moved to `warned`); a recorded FAIL still refuses.
+ * Without an active window the result is returned unchanged (fail closed). Pure.
+ */
+export function applyRolloutWindow(result, { active = false } = {}) {
+  if (!active || !result || result.ok) return { ...result, warned: [] };
+  const warned = result.refused.filter((r) => r.reason === "no-verdict");
+  const refused = result.refused.filter((r) => r.reason !== "no-verdict");
+  return { ...result, ok: refused.length === 0, refused, warned };
+}
+
+/** idea-941: the loud stderr banner while an owner rollout window is active; lists the missing-verdict merges it let through. */
+export function formatRolloutWarning(result, { action = "push", windowLine = "" } = {}) {
+  const warned = result?.warned ?? [];
+  const short = (s) => String(s ?? "").slice(0, 8);
+  const bar = "!".repeat(78);
+  const lines = [bar, `vs verdict gate: OWNER ROLLOUT WINDOW ACTIVE (idea-941): a missing verdict warns instead of refusing; a FAIL still refuses.`];
+  if (windowLine) lines.push(`  ${windowLine}`);
+  for (const r of warned) {
+    const head = r.sha ? `${short(r.sha)} ${String(r.subject ?? "").slice(0, 80)}` : String(r.subject ?? "").slice(0, 80);
+    lines.push(`  WARNING: allowing ${action} of ${head}`, `           tip ${short(r.tip)}: no recorded verdict (re-review it, or the lead overrides with git -c vs.verdictOverride=${short(r.tip)})`);
+  }
+  lines.push(
+    "  PASS digests written before the server restarted onto the verdict-writer build never get the `verdict` field retroactively.",
+    "  When the window expires the gate fails closed again; close it early with: vs push-guard window close",
+    bar,
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+/** Human-readable refusal for stderr; "" when every unit merge has a recorded PASS (or is overridden). `squads`: the Squad
+ * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). `windowLine`: the idea-941
+ * rollout window's status when one exists but did not apply (expired / invalid / FAIL inside it). */
+export function formatVerdictRefusal(result, { action = "push", squads, windowLine = "" } = {}) {
   if (result.ok) return "";
   const short = (s) => String(s ?? "").slice(0, 8);
-  const lines = [
-    attested
-      ? `vs verdict gate: refusing to ${action}: a unit commit's latest recorded verdict is FAIL or missing (idea-883, fail closed).`
-      : `vs verdict gate: WARNING (rollout guard, idea-941) — allowing ${action}: the running server has not attested \`${VERDICT_WRITER_CAPABILITY}\` yet, so the gate warns instead of refusing.`,
-  ];
+  const lines = [`vs verdict gate: refusing to ${action}: a unit commit's latest recorded verdict is FAIL or missing (idea-883, fail closed).`];
   if (Array.isArray(squads)) {
     lines.push(
       squads.length
@@ -390,18 +417,12 @@ export function formatVerdictRefusal(result, { action = "push", squads, attested
         : `           tip ${short(r.tip)}: no recorded verdict (no reviewer digest \`PASS|FAIL H/M/L <hash>\` line names this tip)`,
     );
   }
-  const shas = result.refused.map((r) => short(r.tip || r.sha)).join(",");
-  if (!attested) {
-    lines.push(
-      "Once the server restarts onto the verdict-writer build, this gate fails closed (FAIL or missing verdict refuses).",
-      `Note: PASS digests written before that restart never get the \`verdict\` field retroactively, so after the restart they need a re-review or an override (git -c vs.verdictOverride=${shas} ${action} ...).`,
-    );
-    return `${lines.join("\n")}\n`;
-  }
+  if (windowLine) lines.push(`  ${windowLine}`);
   lines.push(
     "Get a review PASS on the exact tip (vs verdict <reviewer> --branch <unit> exits 0), then retry.",
     "Pre-restart PASS digests (written before the server restarted onto the verdict-writer build) never get the `verdict` field retroactively: re-review the tip or use an override below.",
   );
+  const shas = result.refused.map((r) => short(r.tip || r.sha)).join(",");
   lines.push(
     "Docs-only or lead-checked unit (no code reviewer, or a docs:<path> review, which names no commit): the lead overrides with the tip",
     `and says why in the merge subject. Owner/lead only: git -c vs.verdictOverride=${shas} ${action} ... (or VS_VERDICT_OVERRIDE=${shas}).`,
