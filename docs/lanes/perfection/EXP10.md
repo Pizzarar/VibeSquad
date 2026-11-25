@@ -5,7 +5,7 @@ Owner: Per (lane perfection). Plan: `docs/PLAN_PER_BEST_USE_1125.md` block B1. R
 Rule (owner, 11-25): judge on **first-try review PASS** first, then **fix-after-merge (fam)** as a guard, then fit per task kind. $/merged unit is only a tiebreak; no arm wins because it saves a quota.
 
 ## 1. Method
-- **Source U**: `GET http://127.0.0.1:4180/__vibesquad/providers/usage-export?format=json` (exportedAt 2026-11-25T02:41Z), `merged.units[]`, all Squads pooled (VibeSquad + EFI squads: repos VibeSquad, Escape-From-Idle, ForgeWirk, RedFrontier).
+- **Source U**: `GET http://127.0.0.1:4180/__vibesquad/providers/usage-export?format=json` (exportedAt 2026-11-25T02:41Z), `merged.units[]`, all Squads pooled (VibeSquad + EFI squads: repos VibeSquad, EFI, ForgeWirk, RedFrontier).
 - **Window**: `mergedAt >= 2026-11-08` -> 937 units. Kept units with `implementerModel` (727 of 937; the other 210 are tag-only/`unattributed` rows with no model, no stakes, no cost, so they cannot be placed). **Excluded** the capped window 11-23 22:00Z..11-24 00:10Z by `mergedAt` (20 attributed units) -> **n = 707**.
 - **Provider** from `implementerModel` (not profile name; `Implement - Sonnet` with an Opus/Fable model is the stakes ladder): Sonnet = claude-sonnet-5-5, Opus = claude-opus-5-5, Fable = claude-fable-5-1, DSP = deepseek-v4-pro, DSF = deepseek-flash, Gemini = gemini-4-argon (trial).
 - **first-try PASS** = `reviewRounds <= 1` (EXP2/EXP6 definition; `passRate` is not used). **fam** = `fixAfterMerge` (fix unit same lane within 24h). **$/unit** = mean `costUsd` of the implementer run (reviewer not included; n with cost in parentheses; all rows had cost).
@@ -15,7 +15,7 @@ Rule (owner, 11-25): judge on **first-try review PASS** first, then **fix-after-
 
 ## 2. Blocking data gap: first-try is not measurable outside the VibeSquad repo
 `reviewRounds` is parsed from merge-subject text ("review rN"). By repo, rounds {0,1,2,3+}:
-VibeSquad 320/30/132/26; **Escape-From-Idle 139/1/1/0; ForgeWirk 36/0/0/0; RedFrontier 22/0/0/0**.
+VibeSquad 320/30/132/26; **EFI 139/1/1/0; ForgeWirk 36/0/0/0; RedFrontier 22/0/0/0**.
 So every game-repo unit reads as first-try PASS (163 of 163 "game" kind, 100%) because those repos' merge subjects do not carry the review-round marker, not because review passed. **Game/Godot first-try and any game-kind provider comparison is therefore uninformative.** Missing field: a real per-unit review outcome (reviewer verdict or round count read from the review/verdict log, e.g. `vs verdict` records keyed by unit) for non-VibeSquad repos. That is the @usage ask; do not build here.
 
 Consequence: quality cells below are computed on the **VibeSquad repo only** (server/ui/docs). Game-kind rows are shown for n and $ only.
