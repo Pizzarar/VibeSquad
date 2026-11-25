@@ -18,11 +18,11 @@ import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { seedDefaultPack } from "../server/profiles.mjs";
 import { verifiedIdentity } from "./helpers/agent-token.mjs";
+import { until } from "./helpers/load-budget.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const CLI_PATH = resolve(REPO_ROOT, "cli", "vs.mjs");
 const tmp = () => mkdtempSync(join(os.tmpdir(), "vs-closed-res-"));
-const tick = () => new Promise((r) => setTimeout(r, 20));
 
 // ---------------------------------------------------------------------------
 // 1. The shared predicate
@@ -113,32 +113,39 @@ function fakeSpawn() {
   impl.calls = calls;
   return impl;
 }
-const mkRunner = (dir, spawnImpl) => new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) } });
+const mkRunner = (dir, spawnImpl) => new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, parkGraceMs: 60_000, bgProbe: null });
 
 test("runner status(): a lost agent is resumable (saved session), an exited / session-less one is not", async () => {
   const dir = tmp();
   const r1 = mkRunner(dir, fakeSpawn());
-  const lostId = r1.create({ provider: "claude", cwd: os.tmpdir(), prompt: "hello" });
-  await tick();
-  assert.equal(r1.status(lostId).status, "idle");
-  // restart: a fresh Runner over the same log has no live child -> lost with a saved session
-  const r2 = mkRunner(dir, fakeSpawn());
-  assert.equal(r2.status(lostId).status, "lost");
-  assert.equal(r2.status(lostId).resumable, true, "a lost agent with a session is resumable");
+  let r2, r3;
+  try {
+    const lostId = r1.create({ provider: "claude", cwd: os.tmpdir(), prompt: "hello" });
+    await until(() => r1.status(lostId).status === "idle" && r1.status(lostId).resumable);
+    assert.equal(r1.status(lostId).status, "idle");
+    // restart: a fresh Runner over the same log has no live child -> lost with a saved session
+    r2 = mkRunner(dir, fakeSpawn());
+    assert.equal(r2.status(lostId).status, "lost");
+    assert.equal(r2.status(lostId).resumable, true, "a lost agent with a session is resumable");
 
-  // exited: shutdown logs an exit -> not resumable
-  r1.shutdown();
-  const r3 = mkRunner(dir, fakeSpawn());
-  assert.equal(r3.status(lostId).status, "exited");
-  assert.equal(r3.status(lostId).resumable, false);
+    // exited: shutdown logs an exit -> not resumable
+    r1.shutdown();
+    r3 = mkRunner(dir, fakeSpawn());
+    assert.equal(r3.status(lostId).status, "exited");
+    assert.equal(r3.status(lostId).resumable, false);
 
-  // session-less: never emitted a session -> lost but not resumable
-  const noSession = "rn-nosession";
-  r3.store.append(noSession, "created", { provider: "claude", model: null, cwd: os.tmpdir(), meta: { title: "x" } });
-  r3.store.append(noSession, "status", { status: "running" });
-  assert.equal(r3.status(noSession).status, "lost");
-  assert.equal(r3.status(noSession).resumable, false);
-  rmSync(dir, { recursive: true, force: true });
+    // session-less: never emitted a session -> lost but not resumable
+    const noSession = "rn-nosession";
+    r3.store.append(noSession, "created", { provider: "claude", model: null, cwd: os.tmpdir(), meta: { title: "x" } });
+    r3.store.append(noSession, "status", { status: "running" });
+    assert.equal(r3.status(noSession).status, "lost");
+    assert.equal(r3.status(noSession).resumable, false);
+  } finally {
+    r1.shutdown();
+    r2?.shutdown();
+    r3?.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
