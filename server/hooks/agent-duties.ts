@@ -56,6 +56,7 @@ import {
   ROUTE_STAMP_LABELS,
   cappedFamilies,
   isForeignModel,
+  legacyDeepSeekReroute,
   legacyRouteMeta,
   legacyShadowMismatch,
   liveRoles,
@@ -2152,19 +2153,49 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               tier: armTier(reqLabels["vs.arm"]),
             });
           }
-          if (roleRoute) {
-            matchedProfile = roleRoute.profile as StoredProfile;
-            profileMatch = { profile: matchedProfile, explicit: true };
-            // Role-name spawns carry profile=<Role> (old names keep their old name during the window).
-            const roleName = String(roleRoute.profile.name);
-            if (nextReqLabels?.profile) nextReqLabels.profile = roleName;
-            if (config?.labels?.profile && config.labels.profile !== roleName) {
-              next.labels = { ...(next.labels ?? config.labels), profile: roleName };
-              changed = true;
+        }
+        // A2 (idea-986): an old name that pins DeepSeek (Work Order - DSP, Mechanical - DSF, alias Coder) runs as a role
+        // spawn of Implement at stakes=mechanical (tierA stakes kept) while opencode is capped in the `vs cap` map: no
+        // pinned model, the cheap walk (Flash, Haiku, DeepSeek last). Uncapped = today's walk. The metric keeps
+        // `legacy-name` (legacyRerouted) so R5's old-name count still sees it.
+        let legacyRerouted = false;
+        if (!roleRoute && requestedProfileName && profileMatch?.explicit && matchedProfile) {
+          const reroute = legacyDeepSeekReroute(requestedProfileName, {
+            capped: readCappedProviderMap(),
+            profile: matchedProfile,
+            stakes: stakesRaw,
+          });
+          if (reroute) {
+            roleRoute = roleSpawnProfile(reroute.role, {
+              stakes: reroute.stakes,
+              caps: cappedFamilies(usageList, [provider]),
+              roles: liveRoles(loadStoredProfiles()),
+              explicitModel: rawCallerModel,
+            });
+            if (roleRoute) {
+              legacyRerouted = true;
+              // As a failover relabel: a label-less spawn still carries the old name at agent.created, so
+              // enforceProfileAfterSpawn relabels it to the role instead of refusing the off-profile provider.
+              const at = Date.now();
+              const label = String(roleRoute.profile.name);
+              failoverSpawns.set(`${title}::${cwd}`, { profile: label, at });
+              if (reqAgentId) failoverSpawns.set(reqAgentId, { profile: label, at });
+              log(`legacy-deepseek-reroute: ${requestedProfileName} -> ${roleRoute.profile.name} stakes=${reroute.stakes} provider=${roleRoute.route.provider} (opencode capped)`);
             }
-            // Every carrier says the role, also when the role came by config.profile / env VS_PROFILE only (as failover relabels).
-            reqLabels.profile = roleName;
           }
+        }
+        if (roleRoute) {
+          matchedProfile = roleRoute.profile as StoredProfile;
+          profileMatch = { profile: matchedProfile, explicit: true };
+          // Role-name spawns carry profile=<Role> (old names keep their old name during the window).
+          const roleName = String(roleRoute.profile.name);
+          if (nextReqLabels?.profile) nextReqLabels.profile = roleName;
+          if (config?.labels?.profile && config.labels.profile !== roleName) {
+            next.labels = { ...(next.labels ?? config.labels), profile: roleName };
+            changed = true;
+          }
+          // Every carrier says the role, also when the role came by config.profile / env VS_PROFILE only (as failover relabels).
+          reqLabels.profile = roleName;
         }
 
         // Remember whether the caller explicitly named the profile BEFORE any failover, so a
@@ -2472,7 +2503,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           let routeRole = "";
           let explicitCapped = false;
           let shadow = "";
-          const legacyName = wasExplicit && !roleRoute && Boolean(legacyProfileRole(requestedProfileName));
+          const legacyName = legacyRerouted || (wasExplicit && !roleRoute && Boolean(legacyProfileRole(requestedProfileName)));
           if (roleRoute) {
             routeTier = roleRoute.route.tier;
             routeRole = roleRoute.route.role;

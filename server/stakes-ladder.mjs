@@ -13,7 +13,7 @@ export const DEFAULT_STAKES_LADDER = {
   claude: {
     "tierA-security": { model: "claude-opus-5-5", effort: "high" },
     "tierA-invariant": { model: "claude-opus-5-5", effort: "high" },
-    mechanical: { model: "claude-sonnet-5-5", effort: "low" },
+    mechanical: { model: "claude-haiku-5-5", effort: "low" }, // A2 idea-986: was sonnet/low
   },
   "antigravity-cli": {
     "tierA-security": { model: GEMINI_TOP_MODEL, effort: "high" },
@@ -100,7 +100,7 @@ export const DEFAULT_TIER_LADDER = deepFreeze({
   claude: {
     top: { model: "claude-opus-5-5", effort: "high" },
     mid: { model: "claude-sonnet-5-5", effort: "medium" },
-    cheap: { model: "claude-sonnet-5-5", effort: "low" },
+    cheap: { model: "claude-haiku-5-5", effort: "low" }, // A2 idea-986: was sonnet/low
   },
   "antigravity-cli": {
     top: { model: GEMINI_TOP_MODEL, effort: "high" },
