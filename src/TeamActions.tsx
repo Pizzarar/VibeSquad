@@ -20,7 +20,8 @@ import { useDraft } from "./drafts";
 import { rememberSent, useImageDraft } from "./imageDrafts";
 import { spawnTeamAgentWithImages } from "./paseoSpawn";
 import { defaultNewAgentProfile, getPref, reapplyDefaultProfile } from "./prefs";
-import { findProfile, getProfiles, ladderModels, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
+import { DEMO_LADDER, DEMO_ROLES, findProfile, getProfiles, profileRoleName, rolePickRows, shortModel, useProfiles, type Profile, type Role } from "./profiles";
+import { STAKES_CHOICES, buildRoleSpawn, ladderPick, overrideGroups, parseOverrideValue } from "./roleSpawn";
 
 export { TeamSettingsModal, ProfileImportModal, ARCHETYPES } from "./TeamSettingsModal";
 export { findProfile, getProfiles, useProfiles, type Profile, type Role };
@@ -101,17 +102,49 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
   </label>
 );
 
+/** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> rung" | "<provider> · <model>". */
+function ModelOverrideSelect({ role, ladder, value, onChange }: { role: { name: string; tier: string; providers: string[] }; ladder: Parameters<typeof overrideGroups>[1]; value: string; onChange: (v: string) => void }) {
+  return (
+    <Field label="MODEL OVERRIDE (optional)">
+      <select value={value} data-testid="model-override" onChange={(e) => onChange(e.target.value)}>
+        <option value="">From ladder (stakes)</option>
+        {overrideGroups(role, ladder).map((g) => (
+          <optgroup key={g.provider} label={g.provider}>
+            <option value={g.provider}>{g.provider} · ladder rung</option>
+            {g.models.map((m) => (
+              <option key={m} value={`${g.provider}|${m}`}>
+                {shortModel(m)}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
 export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; onClose: () => void; onCreated: (id: string) => void }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles, installedProviders } = useProfiles();
+  const { profiles, installedProviders, roles: rolesState, ladder: ladderState } = useProfiles();
+  const roles = rolesState ?? DEMO_ROLES;
+  const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
   // Settings › New Agent defaults prefill profile and folder (empty = the built-in choice).
   const resolveProfile = (name: string) => findProfile(name, profiles)?.name;
   const [profileName, setProfileName] = useState(() => defaultNewAgentProfile(getPref("newAgent.profile"), resolveProfile));
   const profile = findProfile(profileName, profiles) ?? profiles[0]!;
-  // R1: the model comes from the tier ladder unless the spawner picks one here ("" = from ladder).
-  const [modelOverride, setModelOverride] = useState("");
+  // R1: a role row sends the ROLE as the profile; stakes x tier ladder picks the model unless the spawner overrides it.
+  const [stakes, setStakes] = useState<string>("normal");
+  const [ovValue, setOvValue] = useState(""); // "" = from ladder, "<provider>" or "<provider>|<model>"
   const roleName = profileRoleName(profile.name) ?? profile.name;
+  const pickRow = rolePickRows(profiles, profile.name).find((r) => r.value === profile.name);
+  const roleDef = pickRow ? roles[pickRow.roleKey] : undefined;
+  // A saved legacy pick (or an unknown role) keeps today's pinned-profile spawn until changed.
+  const viaRole = !!pickRow && !pickRow.legacy && !!roleDef && !!pickRow.roleKey;
+  const override = viaRole ? parseOverrideValue(ovValue) : null;
+  const roleSpawn = viaRole ? buildRoleSpawn({ roleKey: pickRow!.roleKey, role: roleDef!, ladder, stakes, override }) : null;
+  const savedDefault = getPref("newAgent.profile").trim();
+  const savedMissing = !!savedDefault && !findProfile(savedDefault, profiles);
   const [role, setRole] = useState<Role>(profile.role);
   // The modal can open before /__vibesquad/profiles loads: re-apply a custom default once they arrive,
   // unless the user already chose a profile or role.
@@ -205,7 +238,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
   const pickProfile = (name: string) => {
     userPickedProfile.current = true;
     const p = findProfile(name, profiles) ?? profiles[0]!;
-    setModelOverride("");
+    setOvValue("");
     setProfileName(p.name);
     setRole(p.role);
   };
@@ -219,20 +252,25 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     laneId,
     laneName: lane?.name ?? laneId,
     role,
-    profile: profile.name,
+    profile: roleSpawn ? roleSpawn.profile : profile.name,
     ord: effectiveOrd,
     topic,
     task,
     job,
   });
-  const defaults = defaultSpawnConfigFor(profile.provider);
-  const modeId = profile.modeId ?? defaults.modeId;
-  const isProviderInstalled = installedProviders.includes(profile.provider);
-  const effectiveModel = modelOverride || profile.model;
-  const badges: [string, string][] = [["provider/model", `${profile.provider}/${effectiveModel}`]];
+  const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
+  const defaults = defaultSpawnConfigFor(spawnProvider);
+  const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
+  const isProviderInstalled = installedProviders.includes(spawnProvider);
+  const ladderModel = roleDef ? (override?.provider && override.provider !== roleDef.providers[0] ? ladderPick({ ...roleDef, providers: [override.provider] }, ladder, stakes).model : ladderPick(roleDef, ladder, stakes).model) : "";
+  const badges: [string, string][] = roleSpawn
+    ? [["provider/model", `${spawnProvider}/${roleSpawn.model ?? ladderModel}`], ["via", roleSpawn.model ? "override" : override ? "override (provider rung)" : "ladder"], ["stakes", stakes]]
+    : [["provider/model", `${profile.provider}/${profile.model}`]];
   if (modeId) badges.push(["modeId", modeId]);
-  if (profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
-  if (profile.featureValues && Object.keys(profile.featureValues).length > 0) {
+  if (!roleSpawn && profile.thinkingOptionId) badges.push(["thinkingOptionId", profile.thinkingOptionId]);
+  if (roleSpawn) {
+    badges.push(["shareMcp", String(defaults.shareMcp)]);
+  } else if (profile.featureValues && Object.keys(profile.featureValues).length > 0) {
     for (const [k, v] of Object.entries(profile.featureValues)) {
       badges.push([k, String(v)]);
     }
@@ -272,17 +310,15 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const r = await Promise.race([spawnTeamAgentWithImages({
-        provider: profile.provider,
-        model: effectiveModel,
-        modeId,
-        thinkingOptionId: profile.thinkingOptionId,
-        featureValues: profile.featureValues,
-        notes: profile.notes,
+        provider: spawnProvider,
+        ...(roleSpawn
+          ? roleSpawn.model ? { model: roleSpawn.model } : {}
+          : { model: profile.model, modeId, thinkingOptionId: profile.thinkingOptionId, featureValues: profile.featureValues, notes: profile.notes }),
         approvalPolicy: defaults.approvalPolicy,
         sandbox: defaults.sandbox,
         shareMcp: defaults.shareMcp,
         title,
-        labels,
+        labels: roleSpawn ? { ...labels, ...roleSpawn.labels } : labels,
         prompt,
         cwd,
         worktree: newWt && branch ? { branch } : undefined,
@@ -331,7 +367,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
     >
       <div className="na-grid">
         <div className="na-col">
-          <Field label="PROFILE">
+          <Field label="ROLE">
             <select value={profile.name} onChange={(e) => pickProfile(e.target.value)}>
               {rolePickRows(profiles, profile.name).map((r) => {
                 const p = findProfile(r.value, profiles);
@@ -344,19 +380,32 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
               })}
             </select>
           </Field>
-          <Field label="MODEL OVERRIDE (optional)">
-            <select value={modelOverride} data-testid="model-override" onChange={(e) => setModelOverride(e.target.value)}>
-              <option value="">From ladder (stakes)</option>
-              {ladderModels(profile.provider).map((m) => (
-                <option key={m} value={m}>
-                  {shortModel(m)}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {savedMissing && !userPickedProfile.current && (
+            <div className="stat-alert small" data-testid="saved-default-missing">
+              Saved default &quot;{savedDefault}&quot; is missing; using {roleName}.
+            </div>
+          )}
+          {viaRole && roleDef ? (
+            <>
+              <Field label="STAKES">
+                <select value={stakes} data-testid="stakes-select" onChange={(e) => setStakes(e.target.value)}>
+                  {STAKES_CHOICES.map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <ModelOverrideSelect role={roleDef} ladder={ladder} value={ovValue} onChange={setOvValue} />
+            </>
+          ) : (
+            <div className="muted small" data-testid="legacy-pick-note">
+              Saved legacy pick: spawns with its pinned model until you choose a role.
+            </div>
+          )}
           {!isProviderInstalled && (
             <div className="stat-alert small" data-testid="missing-provider-badge">
-              Provider not installed: install {profile.provider}
+              Provider not installed: install {spawnProvider}
             </div>
           )}
           <div className="spawn-defaults" title="Applied at spawn (A1/A6)">
@@ -367,7 +416,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             ))}
           </div>
           <div className="row2">
-            <Field label="ROLE">
+            <Field label="SEAT">
               <select
                 value={role}
                 onChange={(e) => {
@@ -627,7 +676,9 @@ export function AddBuddyModal({
   onOpenExisting?: (id: string) => void;
 }) {
   const { agents, workspaces } = usePaseo();
-  const { profiles } = useProfiles();
+  const { profiles, roles: rolesState, ladder: ladderState } = useProfiles();
+  const roles = rolesState ?? DEMO_ROLES;
+  const ladder = ladderState ?? DEMO_LADDER;
   const team = view.team;
   const brainstormProfiles = useMemo(
     () => profiles.filter((p) => p.role === "brainstorm"),
@@ -639,6 +690,12 @@ export function AddBuddyModal({
     brainstormProfiles[0] ??
     findProfile("brainstorm", profiles) ??
     profiles[0]!;
+  const [stakes, setStakes] = useState<string>("normal");
+  const [ovValue, setOvValue] = useState("");
+  const pickRow = rolePickRows(profiles, profile.name, (p) => p.role === "brainstorm").find((r) => r.value === profile.name);
+  const roleDef = pickRow ? roles[pickRow.roleKey] : undefined;
+  const viaRole = !!pickRow && !pickRow.legacy && !!roleDef;
+  const roleSpawn = viaRole ? buildRoleSpawn({ roleKey: pickRow!.roleKey, role: roleDef!, ladder, stakes, override: parseOverrideValue(ovValue) }) : null;
   const [topic, setTopic] = useState("");
   const [customBrief, setCustomBrief] = useState<string | null>(null);
   const [cwd, setCwd] = useState("");
@@ -706,12 +763,14 @@ export function AddBuddyModal({
     lane: laneId,
     lead: laneId,
     role: "brainstorm",
-    profile: profile.name,
+    profile: roleSpawn ? roleSpawn.profile : profile.name,
     ...(topic.trim() ? { topic: topic.trim() } : {}),
+    ...(roleSpawn ? roleSpawn.labels : {}),
   };
 
-  const defaults = defaultSpawnConfigFor(profile.provider);
-  const modeId = profile.modeId ?? defaults.modeId;
+  const spawnProvider = roleSpawn ? roleSpawn.provider : profile.provider;
+  const defaults = defaultSpawnConfigFor(spawnProvider);
+  const modeId = roleSpawn ? undefined : (profile.modeId ?? defaults.modeId);
 
   const submit = async () => {
     if (!topic.trim()) return;
@@ -732,12 +791,10 @@ export function AddBuddyModal({
       }
 
       const r = await spawnTeamAgent({
-        provider: profile.provider,
-        model: profile.model,
-        modeId,
-        thinkingOptionId: profile.thinkingOptionId,
-        featureValues: profile.featureValues,
-        notes: profile.notes,
+        provider: spawnProvider,
+        ...(roleSpawn
+          ? roleSpawn.model ? { model: roleSpawn.model } : {}
+          : { model: profile.model, modeId, thinkingOptionId: profile.thinkingOptionId, featureValues: profile.featureValues, notes: profile.notes }),
         approvalPolicy: defaults.approvalPolicy,
         sandbox: defaults.sandbox,
         shareMcp: defaults.shareMcp,
@@ -828,8 +885,8 @@ export function AddBuddyModal({
             </div>
           )}
           <div className="row2">
-            <Field label="BRAINSTORM PROFILE">
-              <select value={profile.name} onChange={(e) => setProfileName(e.target.value)}>
+            <Field label="BRAINSTORM ROLE">
+              <select value={profile.name} onChange={(e) => { setOvValue(""); setProfileName(e.target.value); }}>
                 {rolePickRows(profiles, profile.name, (p) => p.role === "brainstorm").map((r) => (
                   <option key={r.value} value={r.value} title={r.value}>
                     {r.label}
@@ -837,6 +894,20 @@ export function AddBuddyModal({
                 ))}
               </select>
             </Field>
+            {viaRole && roleDef && (
+              <Field label="STAKES">
+                <select value={stakes} data-testid="stakes-select" onChange={(e) => setStakes(e.target.value)}>
+                  {STAKES_CHOICES.map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+          </div>
+          <div className="row2">
+            {viaRole && roleDef && <ModelOverrideSelect role={roleDef} ladder={ladder} value={ovValue} onChange={setOvValue} />}
             <Field label="WORKSPACE">
               <select value={cwd} onChange={(e) => setCwd(e.target.value)}>
                 {dirs.map((d) => (
@@ -858,7 +929,7 @@ export function AddBuddyModal({
             <div className="pills">
               {Object.entries(labels).map(([k, v]) => (
                 <span key={k} className="label-pill">
-                  {k}={v}
+                  {k}={k === "profile" ? (profileRoleName(v) ?? v) : v}
                 </span>
               ))}
             </div>

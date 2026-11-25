@@ -814,7 +814,7 @@ export function pickableProfiles(list: Profile[], keep?: string | null, roles?: 
   });
 }
 
-export type RolePick = { /** profile name the picker stores */ value: string; label: string; legacy: boolean };
+export type RolePick = { /** profile name the picker stores */ value: string; label: string; legacy: boolean; /** role key it belongs to ("" = unknown) */ roleKey: string };
 
 /**
  * Picker rows by ROLE (R1: roles only, the model comes from the ladder). One row per visible role, backed by that role's
@@ -831,14 +831,15 @@ export function rolePickRows(list: Profile[], keep?: string | null, filter?: (p:
     if (!cands.length) continue;
     const rank = (p: Profile) => (p.name.split(/\s+-\s+/)[0].trim().toLowerCase() === name.toLowerCase() ? 0 : 2) + (p.provider === "claude" ? 0 : 1);
     const main = [...cands].sort((a, b) => rank(a) - rank(b))[0]!;
-    rows.push({ value: main.name, label: name, legacy: false });
+    rows.push({ value: main.name, label: name, legacy: false, roleKey: key });
     seen.add(main.name);
   }
   const k = String(keep ?? "").trim();
   if (k && !seen.has(k)) {
     const role = profileRoleName(k, roles);
     const known = list.some((p) => p.name === k);
-    rows.push({ value: k, label: role ? `${role} (legacy: ${k})` : `${k} (missing)`, legacy: known });
+    const roleKey = visibleRoleKeys(roles).concat(Object.keys(roles ?? {})).find((x) => roles?.[x]?.name === role) ?? "";
+    rows.push({ value: k, label: role ? `${role} (legacy: ${k})` : `${k} (missing)`, legacy: known, roleKey });
   }
   return rows;
 }

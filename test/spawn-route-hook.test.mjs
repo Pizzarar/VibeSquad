@@ -24,7 +24,8 @@ import {
   roleMcpExtras,
   routeMetricText,
 } from "../server/spawn-route.mjs";
-import { STAKES_VALUES } from "../server/stakes-ladder.mjs";
+import { DEFAULT_TIER_LADDER, STAKES_VALUES } from "../server/stakes-ladder.mjs";
+import { ROUTE_OVERRIDE_ENV, isForeignModel } from "../server/route-override.mjs";
 import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, today } from "./helpers/route-golden.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
@@ -234,6 +235,86 @@ test(
       const t = await h.spawn({ provider: "claude", thinkingOptionId: "low" }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude") }) });
       assert.deepEqual([t.config.provider, t.config.model, t.config.thinkingOptionId], [C, "claude-opus-5-5", "low"]);
       assert.match(t.labels[ROUTE_LABEL], /reason=override /);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// r2 (rn-a5cd265243b5 L1): provider + a model of another family must not launch e.g. claude/gemini-4-neon. The foreign
+// model is dropped, the provider kept with its own rung, and the metric says model-dropped=family.
+test("r2 isForeignModel: another ladder family's model is foreign; opencode vendor ids and unknown ids are not", () => {
+  const rows = [
+    ["claude", "gemini-4-neon", true],
+    ["claude", "deepseek/deepseek-flash", true],
+    ["opencode", "claude-opus-5-5", true],
+    ["antigravity-cli", "claude-sonnet-5-5", true],
+    ["opencode", "gemini-4-neon", true],
+    ["claude", "claude-sonnet-5-5", false],
+    ["antigravity-cli", "gemini-3.8-flash", false],
+    ["opencode", "deepseek/deepseek-flash", false],
+    ["opencode", "anthropic/claude-opus-5-5", false],
+    ["claude", "some-unknown-model", false],
+    ["claude", "", false],
+    ["", "gemini-4-neon", false],
+  ];
+  for (const [p, m, want] of rows) assert.equal(isForeignModel(p, m), want, `${p} + ${m}`);
+});
+
+test(
+  "r2 override: provider + a foreign-family model drops the model, keeps the provider's rung, logs model-dropped=family",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    const top = (fam) => DEFAULT_TIER_LADDER[fam].top;
+    try {
+      for (const [prov, model, fam, mode] of [
+        ["claude", "gemini-4-neon", C, "auto"],
+        ["claude", "deepseek/deepseek-flash", C, "auto"],
+        ["opencode", "claude-opus-5-5", O, "build"],
+        [A, "claude-sonnet-5-5", A, "default"],
+      ]) {
+        const at = `${prov} + ${model}`;
+        // The caller's model rides in the config too (not profile-derived): it must not come back as an explicit model.
+        const out = await h.spawn({ provider: prov, model }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV(prov, model) }) });
+        assert.deepEqual(landed(out), { provider: fam, model: top(fam).model, effort: top(fam).effort, modeId: mode }, at);
+        assert.match(out.labels[ROUTE_LABEL], /reason=override tier=top role=review model-dropped=family$/, at);
+      }
+      // Same family, and opencode's own vendor/model ids, are kept (no model-dropped).
+      const same = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) });
+      assert.equal(same.config.model, "claude-sonnet-5-5");
+      assert.doesNotMatch(same.labels[ROUTE_LABEL], /model-dropped/);
+      const vendor = await h.spawn({ provider: "opencode", model: "anthropic/claude-opus-5-5" }, { labels: LABELS("Review", OV("opencode", "anthropic/claude-opus-5-5")) });
+      assert.deepEqual([vendor.config.provider, vendor.config.model], [O, "anthropic/claude-opus-5-5"]);
+      assert.doesNotMatch(vendor.labels[ROUTE_LABEL], /model-dropped/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "r2 app create path: Paseo hands the hook only {config, env}: the VS_ROUTE_OVERRIDE env twin carries the override",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      // The New Agent modal's shape on Paseo: no request labels reach before(agent.create); profile/stakes/override in env.
+      const env = { VS_ROLE: "worker", VS_PROFILE: "Review", VS_STAKES: "tierA-invariant", [ROUTE_OVERRIDE_ENV]: "provider=claude model=claude-sonnet-5-5" };
+      const out = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5", title: "app review" }, { env });
+      assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "high", modeId: "auto" });
+      // Provider-only from the app: the claude rung for the stakes.
+      const only = await h.spawn({ provider: "claude", title: "app review 2" }, { env: { ...env, [ROUTE_OVERRIDE_ENV]: "provider=claude" } });
+      assert.deepEqual(landed(only), { provider: C, model: "claude-opus-5-5", effort: "high", modeId: "auto" });
+      // Without the env twin the same request is a filled-in default: the Review role routes to Gemini.
+      const { [ROUTE_OVERRIDE_ENV]: _drop, ...plainEnv } = env;
+      const plain = await h.spawn({ provider: "claude", title: "app review 3" }, { env: plainEnv });
+      assert.equal(plain.config.provider, A);
+      // The runner path (labels do reach the hook): the label alone works, and wins over a stale env twin.
+      const viaLabel = await h.spawn(
+        { provider: "claude", title: "app review 4" },
+        { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude") }), env: { [ROUTE_OVERRIDE_ENV]: `provider=${A}` } },
+      );
+      assert.deepEqual([viaLabel.config.provider, viaLabel.config.model], [C, "claude-opus-5-5"]);
+      assert.match(viaLabel.labels[ROUTE_LABEL], /reason=override /);
     } finally {
       h.stop?.();
     }
