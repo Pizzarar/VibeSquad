@@ -385,7 +385,7 @@ export class Runner {
     this._rosterWatchGuard = null; // the guard setTimeout (null when not scheduled); stopped by closeRosterWatch/shutdown
     this._rosterWatchGuardMs = rosterWatchGuardMs;
     this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
-    this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` (bigint) of the watched dir, captured when the watch opens
+    this._rosterWatchIdentity = null; // `${ino}:${birthtimeNs}` (bigint; ns because ms collides on ino reuse) of the watched dir, captured when the watch opens
     this._rosterWatchReopen = false; // a reopen is pending: the guard closed the watch (missing/replaced dir) and reopens once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
@@ -1839,7 +1839,7 @@ export class Runner {
   _ensureRosterWatch() {
     if (this._rosterWatch || this._rosterWatchFailed || this._shutDown) return;
     let identity = null;
-    try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
+    try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
     let w;
     try {
       w = this.rosterWatchFactory(this.store.dir, (_event, name) => {
@@ -1909,7 +1909,7 @@ export class Runner {
     let st = null;
     try { st = await this.rosterWatchStat(this.store.dir); } catch { /* gone or unreadable: treat as gone */ }
     if (this._shutDown || this._rosterWatchGuardGen !== gen) return; // shutdown/close/error landed mid-stat (H1)
-    const identity = st ? `${st.ino}:${st.birthtimeMs}` : null;
+    const identity = st ? `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}` : null;
     if (this._rosterWatch) {
       if (!st) {
         // deleted under the watch: drop the handle and keep polling so the dir's return reopens it.
