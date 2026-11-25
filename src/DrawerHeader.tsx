@@ -34,6 +34,7 @@ import { usePinSlot, useRailCardVisible } from "./pinSlots";
 import { FeaturesMenu } from "./FeaturesMenu";
 import { useAgentConfig } from "./useAgentConfig";
 import { SandboxView } from "./SandboxView";
+import { etClock } from "./etTime";
 
 const REQUEST_REPORT_PROMPT =
   "Your last turn produced no report. Reply now with your final report as a normal message (what you did, files changed, done-check result). Do not use SendMessage or ListAgents.";
@@ -69,7 +70,7 @@ export function NeedsYouControls({ agent }: { agent: PaseoAgent }) {
           {snoozed && (
             <span className="muted">
               {" "}
-              · until {new Date(until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              · until {etClock(until)}
             </span>
           )}
         </span>

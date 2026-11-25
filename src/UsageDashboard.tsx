@@ -8,6 +8,7 @@ import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 import { fetchJsonTimeout } from "./fetchTimeout";
 import { isHubLaneId } from "./teams";
 import { agentDisplayName } from "./identity";
+import { etDateTime } from "./etTime";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -165,7 +166,7 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
         <div className="usage-bar-fill" style={{ width: `${used}%` }} />
       </div>
       <div className="usage-limit-meta small">
-        <span title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
+        <span title={resetMs ? etDateTime(resetMs) : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
         <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
       </div>
       {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? new Date(checked).toLocaleString() : undefined}>{sampled}</div>}
@@ -491,8 +492,8 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                         <dt>Team</dt><dd>{p.team ?? "—"}</dd>
                         <dt>Buddy</dt><dd>{shortLead(p.buddy)}</dd>
                         <dt>Current lead</dt><dd>{shortLead(p.currentLead)}</dd>
-                        <dt>Started</dt><dd>{new Date(p.startedAt).toLocaleString()}</dd>
-                        <dt>Done</dt><dd>{p.doneAt === null ? "—" : new Date(p.doneAt).toLocaleString()}</dd>
+                        <dt>Started</dt><dd>{etDateTime(p.startedAt)}</dd>
+                        <dt>Done</dt><dd>{p.doneAt === null ? "—" : etDateTime(p.doneAt)}</dd>
                       </dl>
                     </details>
                   ))}

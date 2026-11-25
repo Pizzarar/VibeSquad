@@ -130,6 +130,7 @@ import {
   useUiScale,
   useUiScaleHud,
 } from "./uiScale";
+import { etDateTime } from "./etTime";
 
 const COLLAPSED_TEAMS_KEY = "vibesquad.collapsedTeams";
 const DISMISSED_LAN_IPS_KEY = "vibesquad.dismissedLanIps";
@@ -472,7 +473,7 @@ const Sidebar = memo(function Sidebar(props: {
                 <div
                   key={`${u.provider}-${u.account ?? ""}`}
                   className={`quota-pill ${quotaTone(u.usedPct)}`}
-                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                  title={[u.account, u.resetAt && `resets ${etDateTime(u.resetAt)}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
                 >
                   <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
                   <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>

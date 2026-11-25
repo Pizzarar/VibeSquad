@@ -5898,6 +5898,8 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .card, .idea-inbox, .team-head, .pin-tile, .handoff-panel, .pin-rail-active-buddy { background-clip: padding-box; background-origin: padding-box; }
 .sidebar-footer-row { padding-bottom: calc(var(--u3-px) * 3); flex-shrink: 0; }
 .sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
+/* The fixed bottom-left "Normal mode" chip (psycho focus/pin-focus) floats over the sidebar footer; reserve its height so the footer buttons stay clickable (idea-734). */
+.app.focus .sidebar-footer-row, .app.pin-focus .sidebar-footer-row { margin-bottom: 40px; }
 .team-head .team-emblem { flex-shrink: 0; }
 /* ── Narrow-window rails (src/railCollapse.ts): under 1600 css px the sidebar (.sidebar-collapsed, existing 56px rail) and the right pin rail
    (.pin-rail-collapsed, 64px icon strip; it replaces the old max-width:900px forced strip) start collapsed so the hub floor gets the width. The toggle in each expands it for the session. ── */
@@ -6094,11 +6096,15 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .sidebar:not(.collapsed) .brand { flex-wrap: wrap; gap: var(--sp-1); }
 .sidebar:not(.collapsed) .brand .sidebar-collapse-btn { margin-left: auto; }
 .sidebar .pin-row { gap: var(--sp-1); }
+/* idea-734: trim right padding so short lane names ("Bug Chaser") are not ellipsized next to the @handle + badges. */
+.sidebar .pin-row { padding-right: 4px; }
 /* Banner text stays on one row (ellipsis, full text in the title attr) so narrow screens never grow it past the painted strip. */
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
 .top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
 .top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: min(max-content, 12ch); } /* short lane names (BRAINSTORM) never ellipsize; long ones still do */
+/* In the pin-focus bar the crumb keeps its natural width (the flexible slot absorbs the squeeze); shrinking it let its segments overflow under the @handle (hit-mismatch). */
+.pin-focus-bar .top-breadcrumb { flex: none; }
 /* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
 .pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
 /* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
@@ -6421,10 +6427,11 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping. */
+  gap: 3px;
+  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping.
+     idea-734: tighter gap/padding so "Overlord" + its needs-you badge is not ellipsized at 390px. */
   min-width: 0;
-  padding: 0 4px;
+  padding: 0 2px;
   overflow: hidden;
   white-space: nowrap;
 }
