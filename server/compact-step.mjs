@@ -1,7 +1,9 @@
 // K2 (PLAN_COMPACT_IN_PLACE_1108): the compact-before-handoff step shared by the Buddy watcher (token-watch.mjs) and the lead ladder
-// (lead-handoff.mjs). Claude agents only: the runner keeps one long-lived `claude -p` child, so a `/compact <focus>` user turn shrinks the
-// context in place (same id, labels, worktree). Anything else -- non-Claude, busy, already tried, failed, timed out, still over the cap --
-// returns a non-"ok" outcome and the caller runs its existing handoff ladder unchanged. Reuses runner.sendAgentPrompt; no new route.
+// (lead-handoff.mjs). Providers with a working in-place compaction (COMPACT_PROVIDERS): the runner keeps one long-lived child, so a
+// `/compact` user turn shrinks the context in place (same id, labels, worktree). Claude takes a focus (`/compact <focus>`); agy (K2b,
+// docs/lanes/perfection/K2B.md) gets a bare `/compact` and its ACP adapter synthesizes the `compacted` boundary on that turn's end.
+// Anything else -- other providers, busy, already tried, failed, timed out, still over the cap -- returns a non-"ok" outcome and the
+// caller runs its existing handoff ladder unchanged. Reuses runner.sendAgentPrompt; no new route.
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { LEAD_COMPACT_FOCUS, leadUsedTokens } from "./lead-handoff.mjs";
@@ -97,6 +99,26 @@ export function isClaudeAgent(agent) {
   return String(agent?.provider ?? "").toLowerCase() === "claude";
 }
 
+/**
+ * K2b: providers whose /compact compacts in place AND ends in a `compacted` boundary the step can wait on. opencode compacts and
+ * marks it too (the adapter emits the boundary), but runs no lead or Buddy and its meter stays stale until the next turn: not enabled.
+ * Value: whether `/compact` takes a focus argument (agy's is unverified, and its adapter only trusts a bare `/compact`).
+ */
+export const COMPACT_PROVIDERS = Object.freeze({ claude: { focus: true }, "antigravity-cli": { focus: false } });
+const PROVIDER_ALIASES = { agy: "antigravity-cli", antigravity: "antigravity-cli" };
+const compactProvider = (agent) => {
+  const p = String(agent?.provider ?? "").toLowerCase();
+  return COMPACT_PROVIDERS[PROVIDER_ALIASES[p] ?? p] ?? null;
+};
+/** True when the agent's provider has a working /compact (the callers' crossing trackers only arm for these). */
+export function canCompact(agent) {
+  return !!compactProvider(agent);
+}
+/** The /compact line for this agent: with the focus where the provider takes one. */
+export function compactCommand(agent, focus) {
+  return compactProvider(agent)?.focus ? `/compact ${focus ?? ""}`.trim() : "/compact";
+}
+
 /** Idle = not mid-turn. A `/compact` while running would steer into the live turn, so the caller defers or skips. */
 export function isIdleForCompact(agent) {
   const s = String(agent?.status ?? "").toLowerCase();
@@ -139,6 +161,8 @@ export function createCompactor({
 } = {}) {
   const tried = new Set(); // agent ids: one compaction per agent, even before the label write lands or across a replay
   const overCap = (agent, hardCap) => Number.isFinite(hardCap) && !!agent && leadUsedTokens(agent) >= hardCap;
+  /** K2c: the raw meter passed the hard cap (the forced handoff wins): the stop carries the reading that tripped it. */
+  const capStop = (agent) => ({ stop: "hard-cap", raw: leadUsedTokens(agent) });
 
   /** The runner's view now (a usage upsert can lag a turn that already started); null when unreadable. */
   async function freshAgent(id) {
@@ -179,17 +203,27 @@ export function createCompactor({
     return { next, drain, off: () => { cancelled = true; wake?.(); off(); } };
   }
 
-  /** Waits for this attempt's outcome: compacted | no-boundary | turn-failed | turn-timeout | queue-timeout. */
-  async function awaitAttempt(w, queued) {
+  /**
+   * Waits for this attempt's outcome: compacted | no-boundary | turn-failed | turn-timeout | queue-timeout, or { stop: "hard-cap", raw }
+   * once the turn has started and the fresh raw meter reaches hardCap (polled every idlePollMs; a running turn can grow it).
+   */
+  async function awaitAttempt(w, queued, id, hardCap) {
     let started = !queued; // a direct delivery opened (or steered into) a turn at send time
     let deadline = Date.now() + (started ? timeoutMs : queueTimeoutMs);
+    const poll = Number.isFinite(hardCap);
     for (;;) {
       const left = deadline - Date.now();
       if (left <= 0) return started ? "turn-timeout" : "queue-timeout";
-      const s = await w.next(left);
+      const s = await w.next(started && poll ? Math.min(left, idlePollMs) : left);
       if (s === "compacted") return "compacted";
       if (s === "cancelled") return "turn-failed";
-      if (s === "tick") continue;
+      if (s === "tick") {
+        if (started && poll) {
+          const now = await freshAgent(id);
+          if (overCap(now, hardCap)) return capStop(now);
+        }
+        continue;
+      }
       if (s === "started") {
         if (!started) { started = true; deadline = Date.now() + timeoutMs; }
         continue;
@@ -218,7 +252,10 @@ export function createCompactor({
       if (s === "cancelled") return "none";
       if (s !== "tick") continue;
       if ((await landing(id, since)) === "gone") return "none";
-      if (Number.isFinite(hardCap) && overCap(await freshAgent(id), hardCap)) return "hard-cap";
+      if (Number.isFinite(hardCap)) {
+        const now = await freshAgent(id);
+        if (overCap(now, hardCap)) return capStop(now);
+      }
     }
   }
 
@@ -228,7 +265,7 @@ export function createCompactor({
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const now = await freshAgent(id);
-      if (overCap(now, hardCap)) return "hard-cap"; // K2c: the raw meter passed the hard cap meanwhile: the forced handoff wins
+      if (overCap(now, hardCap)) return capStop(now); // K2c: the raw meter passed the hard cap meanwhile: the forced handoff wins
       if (now && !busyForCompact(now)) return "idle";
       const left = deadline - Date.now();
       if (left <= 0) return "busy";
@@ -268,7 +305,7 @@ export function createCompactor({
    */
   async function run(agent, opts = {}) {
     const id = agent?.id;
-    if (!id || !isClaudeAgent(agent)) return { outcome: "skipped", reason: "non-claude" };
+    if (!id || !canCompact(agent)) return { outcome: "skipped", reason: "no-compact" };
     if (pending.has(id)) return { outcome: "skipped", reason: "busy" }; // a run for this agent is already in flight
     pending.add(id);
     try {
@@ -311,9 +348,11 @@ export function createCompactor({
       return finish("failed", { reason: "label-write" }); // without the label a replay could loop: do not compact
     }
 
-    const text = `/compact ${focus ?? ""}`.trim();
+    const text = compactCommand(agent, focus);
     const w = watchAgent(id);
     let got;
+    let capRaw; // the raw meter reading that stopped the run at the hard cap (no refetch: a later read can be stale or missing)
+    const capped = (r) => { if (r?.stop !== "hard-cap") return false; capRaw = r.raw; got = "hard-cap"; return true; };
     try {
       for (;;) {
         if (w.drain()) { got = "compacted"; break; }
@@ -325,20 +364,21 @@ export function createCompactor({
         } catch {
           return finish("failed", { reason: "send" });
         }
-        got = await awaitAttempt(w, sent?.queued === true);
+        got = await awaitAttempt(w, sent?.queued === true, id, hardCap);
+        if (capped(got)) break;
         if (got !== "no-boundary") break;
         // C1/C3/C4: the /compact rode along with another message. A steered one first gets its late boundary window (C1), also
         // on the last attempt: the CLI can still run the held /compact, and the caller's handoff must not overlap it.
         if ((await landing(id, sentAt)) === "steered") {
           const late = await awaitLate(w, id, sentAt, hardCap);
           if (late === "compacted") { got = "compacted"; break; }
-          if (late === "hard-cap") { got = "hard-cap"; break; }
+          if (capped(late)) break;
         }
         if (attempts >= maxAttempts) break;
         // Then it is re-sent alone once the agent is idle again (a boundary that lands meanwhile is the success it looks like).
         const idle = await awaitIdle(w, id, hardCap);
         if (idle === "compacted") { got = "compacted"; break; }
-        if (idle === "hard-cap") { got = "hard-cap"; break; }
+        if (capped(idle)) break;
         if (idle !== "idle") { got = "no-boundary"; break; }
       }
     } finally {
@@ -346,7 +386,7 @@ export function createCompactor({
     }
     if (got === "turn-timeout") return finish("timeout", { reason: "turn" });
     if (got === "queue-timeout") return finish("timeout", { reason: "queue" });
-    if (got === "hard-cap") return finish("failed", { reason: "hard-cap", rawUsed: leadUsedTokens((await freshAgent(id)) ?? agent) });
+    if (got === "hard-cap") return finish("failed", { reason: "hard-cap", rawUsed: capRaw });
     if (got !== "compacted") return finish("failed", { reason: got });
     const after = await usedNow(id, before);
     const spend = await spendOf(id);
