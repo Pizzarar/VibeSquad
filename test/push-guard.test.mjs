@@ -9,8 +9,8 @@ import { after, before, describe, test } from "node:test";
 
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
-import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
-import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict } from "../server/verdict.mjs";
+import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, readRunnerVerdicts, recordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
+import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "../server/verdict.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const HOOKS = join(ROOT, ".githooks").replace(/\\/g, "/");
@@ -739,5 +739,160 @@ describe("push-guard: idea-883 verdict gate on real git", () => {
     assert.equal(ov.code, 0, ov.err);
     assert.match(ov.err, /OVERRIDE\s+\w{8} tip \w{8}: verdict gate overridden/);
     assert.equal(remoteTip(origin), m);
+  });
+});
+
+// ---- idea-883 runner-attested fallback: the reviewer's own last message from the on-disk runner store (<home>/runner/agents).
+// Covers a digest `done` written before the server ran the attested-verdict writer (deploy skew) and a re-tasked reviewer's
+// later turn that was never digested. Trust comes from the reviewer's runner record, never from a log entry's text.
+const REVIEWER = { profile: "Review - Gemini", title: "Bug3 · unit-x review" };
+const IMPLEMENTER = { profile: "Implement - Sonnet", title: "Bug3 · unit-x fix" };
+/** Write <home>/runner/<sub>/<id>.jsonl: a created event, then per turn an input and the reply (split in two output chunks). */
+function runnerLog(home, id, { profile, title, team = "squad-a", turns = [], sub = "agents", t0 = Date.now() - 60_000 } = {}) {
+  const dir = join(home, "runner", sub);
+  mkdirSync(dir, { recursive: true });
+  let seq = 0;
+  let ts = t0;
+  const ev = (type, data = {}) => JSON.stringify({ seq: seq++, ts: ts++, type, ...data });
+  const lines = [ev("created", { provider: "claude", model: "m", cwd: "/tmp/x", meta: { team, lane: "lane-alpha", role: "worker", profile, title, labels: { team, role: "worker" } }, systemPrompt: "rules" })];
+  for (const [input, reply] of turns) {
+    const cut = Math.floor(reply.length / 2);
+    lines.push(ev("input", { text: input }), ev("status", { status: "running" }), ev("output", { text: reply.slice(0, cut) }), ev("output", { text: reply.slice(cut) }), ev("turn_done", { stopReason: "end_turn" }), ev("status", { status: "idle" }));
+  }
+  writeFileSync(join(dir, `${id}.jsonl`), `${lines.join("\n")}\n`);
+}
+const T41 = "5d399d2a" + "b".repeat(32);
+const NOW_TIP = () => Date.now() - 30_000; // tip committed before the reviewer's log was written
+
+describe("push-guard: idea-883 runner-attested fallback (pure + store)", () => {
+  test("runnerRecordVerdict: a reviewer's own PASS on the tip passes; FAIL fails; non-reviewer, stale or foreign hash -> null", () => {
+    const rev = { id: "rn-rev", ...REVIEWER, labels: { profile: REVIEWER.profile } };
+    const impl = { id: "rn-imp", ...IMPLEMENTER, labels: { profile: IMPLEMENTER.profile } };
+    const r = runnerRecordVerdict({ agent: rev, lastMessage: "Review done.\nPASS 0/0/1 4c288c19\nbody", tip: T40, resolve: () => T40, ts: 1795579758502 });
+    assert.deepEqual(r, { verdict: "PASS", line: "PASS 0/0/1 4c288c19", ts: "2026-11-25T04:09:18.502Z", agent: null, reviewer: "rn-rev", source: "runner" });
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "FAIL 1/0/0 4c288c19", tip: T40 }).verdict, "FAIL");
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "PASS 0/0/0 4c288c19\nFAIL 0/1/0 4c288c19", tip: T40 }).verdict, "FAIL", "fails closed");
+    assert.equal(runnerRecordVerdict({ agent: impl, lastMessage: "PASS 0/0/0 4c288c19", tip: T40 }), null, "an implementer's own PASS line is not a verdict");
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "PASS 0/0/0 deadbee1", tip: T40 }), null, "names another commit");
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "PASS 0/0/0 4c288c19", tip: T40, resolve: () => "" }), null, "ambiguous here");
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "PASS 0/0/0 docs:README.md", tip: T40 }), null);
+    assert.equal(runnerRecordVerdict({ agent: rev, lastMessage: "no verdict", tip: T40 }), null);
+    // newestVerdict: by ts, nulls skipped.
+    const a = { verdict: "FAIL", ts: "2026-11-25T04:00:00.000Z" };
+    const b = { verdict: "PASS", ts: "2026-11-25T04:09:00.000Z" };
+    assert.equal(newestVerdict(b, null, a), b);
+    assert.equal(newestVerdict(null, null), null);
+    // A ts tie (both null included) fails closed: FAIL beats PASS whatever the argument order.
+    const failNull = { verdict: "FAIL", ts: null };
+    const passNull = { verdict: "PASS", ts: null };
+    assert.equal(newestVerdict(failNull, passNull), failNull);
+    assert.equal(newestVerdict(passNull, failNull), failNull);
+    const failAt = { verdict: "FAIL", ts: b.ts };
+    assert.equal(newestVerdict(failAt, b), failAt);
+    assert.equal(newestVerdict(b, failAt), failAt);
+    const pass2 = { verdict: "PASS", ts: b.ts };
+    assert.equal(newestVerdict(b, pass2), pass2, "between equals the later argument wins");
+  });
+
+  test("a team-less reviewer record never counts as the vibesquad Squad's (no squadDir default)", async () => {
+    const home = join(tmp, "rr-home-noteam");
+    mkdirSync(join(home, "teams", "vibesquad"), { recursive: true });
+    writeFileSync(join(home, "teams", "vibesquad", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg5", type: "done", text: "PASS 0/0/0 4c288c19", refs: ["rn-revnt"] })}\n`);
+    runnerLog(home, "rn-revnt", { ...REVIEWER, team: "", turns: [["review", "PASS 0/0/0 4c288c19"]] });
+    const opts = { tips: [T40], home, squads: ["vibesquad"], resolve: () => T40, tipTime: NOW_TIP };
+    assert.equal((await readRunnerVerdicts(opts)).size, 0, "missing labels.team is no Squad");
+    assert.equal((await recordedVerdicts(opts))(T40), null);
+    // The same record with the team set does count (control).
+    runnerLog(home, "rn-revnt", { ...REVIEWER, team: "vibesquad", turns: [["review", "PASS 0/0/0 4c288c19"]] });
+    assert.equal((await recordedVerdicts(opts))(T40)?.verdict, "PASS");
+    // An empty Squad entry is skipped, never read as "vibesquad".
+    assert.equal((await readRunnerVerdicts({ ...opts, squads: ["", "  "] })).size, 0);
+    const attested = { ts: new Date().toISOString(), agent: "rn-dg6", type: "done", text: "PASS 0/0/0 4c288c19", refs: ["rn-revnt"], verdict: { reviewer: "rn-revnt", profile: "Review - Gemini", line: "PASS 0/0/0 4c288c19" } };
+    appendFileSync(join(home, "teams", "vibesquad", "log.jsonl"), `${JSON.stringify(attested)}\n`);
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: [""] })(T40), null, "empty Squad id reads no log");
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["vibesquad"] })(T40)?.verdict, "PASS", "control");
+  });
+
+  test("an unattested digest done falls back to the digested reviewer's runner record and passes", async () => {
+    const home = join(tmp, "rr-home-1");
+    mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
+    // The deploy-skew shape: the digest's done entry (refs[0] = the reviewer) has no server-attested `verdict` field.
+    writeFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg1", type: "done", text: "PASS 0/0/1 4c288c19 reviewer=Review - Gemini: ok", refs: ["rn-rev1"] })}\n`);
+    assert.equal(readRecordedVerdicts({ tips: [T40], home, squads: ["squad-a"] })(T40), null, "attested-only path records nothing");
+    runnerLog(home, "rn-rev1", { ...REVIEWER, turns: [["review unit-x", "Findings: none.\nPASS 0/0/1 4c288c19\nTests 12/12."]] });
+    const rec = await recordedVerdicts({ tips: [T40], home, squads: ["squad-a"], resolve: () => T40, tipTime: NOW_TIP });
+    assert.equal(rec(T40)?.verdict, "PASS");
+    assert.equal(rec(T40).reviewer, "rn-rev1");
+    assert.equal(rec(T40).source, "runner");
+    // The named reviewer is read even without a tip time (forced id), and from agents-archive.
+    const home2 = join(tmp, "rr-home-1b");
+    mkdirSync(join(home2, "teams", "squad-a"), { recursive: true });
+    writeFileSync(join(home2, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg1", type: "done", text: "PASS 0/0/1 4c288c19", refs: ["rn-rev9"] })}\n`);
+    runnerLog(home2, "rn-rev9", { ...REVIEWER, sub: "agents-archive", turns: [["r", "PASS 0/0/1 4c288c19"]] });
+    assert.equal((await recordedVerdicts({ tips: [T40], home: home2, squads: ["squad-a"], resolve: () => T40 }))(T40)?.verdict, "PASS");
+  });
+
+  test("a non-reviewer's record, a reviewer FAIL, another Squad's reviewer, or a self-declared done line is refused", async () => {
+    const home = join(tmp, "rr-home-2");
+    mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
+    const log = (refs, text) => appendFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg2", type: "done", text, refs })}\n`);
+    // Self-declared: the implementer's own done says PASS, and its own last message says PASS too. Neither counts.
+    log(["rn-imp2"], "PASS 0/0/0 4c288c19 reviewer=Review - Gemini: self-declared");
+    runnerLog(home, "rn-imp2", { ...IMPLEMENTER, turns: [["fix unit-x", "Done.\nPASS 0/0/0 4c288c19"]] });
+    const opts = { tips: [T40, T41], home, squads: ["squad-a"], resolve: (h) => (T40.startsWith(h) ? T40 : T41.startsWith(h) ? T41 : ""), tipTime: NOW_TIP };
+    assert.equal((await recordedVerdicts(opts))(T40), null, "non-reviewer record refused");
+    // A done line with no runner record behind it at all.
+    log(["rn-ghost"], "PASS 0/0/0 4c288c19 reviewer=Review - Gemini: no such agent");
+    log([], "PASS 0/0/0 4c288c19 reviewer=Review - Gemini: no refs");
+    assert.equal((await recordedVerdicts(opts))(T40), null, "a self-declared line is never read");
+    // Another Squad's reviewer PASS on this tip does not count for squad-a.
+    runnerLog(home, "rn-revz", { ...REVIEWER, team: "squad-z", turns: [["review", "PASS 0/0/0 4c288c19"]] });
+    assert.equal((await recordedVerdicts(opts))(T40), null, "another Squad's reviewer");
+    // The repo's own reviewer FAILs the tip: a FAIL, which refuses.
+    runnerLog(home, "rn-rev2", { ...REVIEWER, turns: [["review", "FAIL 1/0/0 4c288c19\nH1 broken"]] });
+    const rec = await recordedVerdicts(opts);
+    assert.equal(rec(T40)?.verdict, "FAIL");
+    assert.equal(evaluateMergeVerdicts({ merges: [{ sha: SHA("1"), subject: "Merge unit-x: x (@alp)", tip: T40 }], recorded: rec }).refused[0].reason, "fail");
+    assert.equal(rec(T41), null);
+    // A runner log older than the tip's commit cannot be a review of it (and is not read): the scan skips it.
+    assert.equal((await readRunnerVerdicts({ ...opts, tipTime: () => Date.now() + 3_600_000 })).size, 0);
+  });
+
+  test("a re-tasked reviewer's second-turn verdict passes with no digest at all; the newest verdict decides", async () => {
+    const home = join(tmp, "rr-home-3");
+    mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
+    // Turn 1 FAILed T41 (attested digest, older); turn 2 re-reviewed the moved tip T40 and PASSed it; no entry names T40.
+    appendFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date(Date.now() - 120_000).toISOString(), agent: "rn-dg3", type: "done", text: "FAIL 0/1/0 5d399d2a", refs: ["rn-rev3"], verdict: { reviewer: "rn-rev3", profile: "Review - Gemini", line: "FAIL 0/1/0 5d399d2a" } })}\n`);
+    runnerLog(home, "rn-rev3", { ...REVIEWER, turns: [["review unit-x at 5d399d2a", "FAIL 0/1/0 5d399d2a\nM1"], ["follow-up: branch moved to 4c288c19", "M1 fixed.\nPASS 0/0/1 4c288c19"]] });
+    const opts = { tips: [T40, T41], home, squads: ["squad-a"], resolve: (h) => (T40.startsWith(h) ? T40 : T41.startsWith(h) ? T41 : ""), tipTime: NOW_TIP };
+    const rec = await recordedVerdicts(opts);
+    assert.equal(rec(T40)?.verdict, "PASS", "the second turn's own verdict");
+    assert.equal(rec(T40).reviewer, "rn-rev3");
+    assert.equal(rec(T41)?.verdict, "FAIL", "the attested FAIL still stands for the old tip (the last message names only T40)");
+    // The same reviewer re-reviews T41 and passes it: its newer runner verdict beats the older attested FAIL.
+    runnerLog(home, "rn-rev3", { ...REVIEWER, turns: [["review", "FAIL 0/1/0 5d399d2a"], ["re-review 5d399d2a", "PASS 0/0/0 5d399d2a"]] });
+    assert.equal((await recordedVerdicts(opts))(T41)?.verdict, "PASS");
+    // A newer attested FAIL beats an older runner PASS.
+    appendFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date(Date.now() + 60_000).toISOString(), agent: "rn-dg4", type: "done", text: "FAIL 1/0/0 5d399d2a", refs: ["rn-rev4"], verdict: { reviewer: "rn-rev4", profile: "Review - Gemini", line: "FAIL 1/0/0 5d399d2a" } })}\n`);
+    assert.equal((await recordedVerdicts(opts))(T41)?.verdict, "FAIL");
+  });
+
+  test("real git: a unit merge with only the reviewer's runner record merges; an implementer's record is refused", () => {
+    const { work } = freshRepo();
+    const home = join(tmp, "rr-git-home");
+    mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
+    writeFileSync(join(home, "teams", "squad-a", "log.jsonl"), "");
+    const env = baseEnv({ VIBESQUAD_HOME: home });
+    const tip = unitBranch(work, "unit-rr-ok", { verdict: null });
+    runnerLog(home, "rn-rrrev1", { ...REVIEWER, t0: Date.now(), turns: [["review", `PASS 0/0/0 ${tip.slice(0, 8)}`]] });
+    const okMerge = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-rr-ok: x (@alp)", "unit-rr-ok"], env);
+    assert.equal(okMerge.code, 0, okMerge.err);
+    const bad = unitBranch(work, "unit-rr-bad", { verdict: null });
+    runnerLog(home, "rn-rrimp1", { ...IMPLEMENTER, t0: Date.now(), turns: [["fix", `PASS 0/0/0 ${bad.slice(0, 8)}`]] });
+    appendFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${JSON.stringify({ ts: new Date().toISOString(), agent: "rn-dg", type: "done", text: `PASS 0/0/0 ${bad.slice(0, 8)}`, refs: ["rn-rrimp1"] })}\n`);
+    const r = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-rr-bad: x (@alp)", "unit-rr-bad"], env);
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /no recorded verdict/);
+    ok(work, ["merge", "--abort"]);
   });
 });

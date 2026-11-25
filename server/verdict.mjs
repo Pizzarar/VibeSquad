@@ -216,7 +216,8 @@ export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
 // ---- idea-883: the recorded verdict gates merging / pushing a unit commit (fail closed) ----
 // A unit merge's tip (the merged branch head) needs a recorded verdict: a team-log `done` entry in the repo's own Squad log that
 // carries the server-attested `verdict` field (written only by verbatimDigestText for a digest of a reviewer agent, see
-// digestVerdictRecord; the log body cannot set it), whose hash resolves in the repo to exactly that tip. The latest such entry
+// digestVerdictRecord; the log body cannot set it), whose hash resolves in the repo to exactly that tip, or a reviewer's own
+// last message in its runner record (runnerRecordVerdict, read by push-guard readRunnerVerdicts). The latest such verdict
 // decides; FAIL or none refuses. Enforced by .githooks/pre-merge-commit + pre-commit (git merge into master/main) and
 // .githooks/pre-push (server/push-guard.mjs). Owner/lead override: `git -c vs.verdictOverride=<sha> merge|push` or
 // VS_VERDICT_OVERRIDE=<sha>[,<sha>] (the merge or tip sha); every use is logged as a `decision` entry in the Squad log.
@@ -288,6 +289,51 @@ export function latestRecordedVerdict(entries, tip, { resolve } = {}) {
 }
 
 /**
+ * idea-883 fallback (deploy skew, undigested turns): the verdict a reviewer's own last message gives `tip`, read from the
+ * reviewer's runner record (the same source and rule as `vs verdict`, evaluateVerdictGate). Covers a digest `done` entry
+ * written without the server-attested field (server not yet restarted onto the writer) and a re-tasked reviewer's later turn
+ * that was never digested. Trust comes from the record, never from a team-log entry's text: `agent` must be a reviewer
+ * (isReviewerAgent), and only verdict lines whose hash `resolve` maps to exactly the tip count. Any FAIL naming the tip is a
+ * FAIL; a PASS needs the whole message to pass evaluateVerdictGate on the tip. `ts`: when the message was written (epoch ms
+ * or ISO). Returns { verdict, line, ts (ISO), agent: null, reviewer, source: "runner" } or null.
+ */
+export function runnerRecordVerdict({ agent, lastMessage, tip, resolve, ts = null } = {}) {
+  const t = String(tip ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(t) || !isReviewerAgent(agent)) return null;
+  const namesTip = (hash) => {
+    const h = String(hash ?? "").toLowerCase();
+    if (isDocsTarget(h) || !/^[0-9a-f]{7,64}$/.test(h) || !t.startsWith(h)) return false;
+    return typeof resolve === "function" ? String(resolve(h) ?? "").trim().toLowerCase() === t : true;
+  };
+  const mine = scanVerdicts(lastMessage).filter((x) => namesTip(x.verdict.hash));
+  if (!mine.length) return null;
+  const when = ts == null || ts === "" ? null : new Date(typeof ts === "number" ? ts : Date.parse(ts));
+  const out = (verdict, line) => ({ verdict, line, ts: when && !Number.isNaN(when.getTime()) ? when.toISOString() : null, agent: null, reviewer: String(agent?.id ?? ""), source: "runner" });
+  const fail = mine.find((x) => x.verdict.verdict === "FAIL");
+  if (fail) return out("FAIL", fail.line);
+  const gate = evaluateVerdictGate({ agent, lastMessage, tip: t });
+  if (!gate.ok || !namesTip(parseVerdictLine(gate.line)?.hash)) return null;
+  return out("PASS", gate.line);
+}
+
+/** idea-883: the newest of several recorded verdicts for one tip (attested log entry, runner record), by ts; nulls skipped.
+ * A verdict without a ts sorts oldest. On a ts tie (both null included) a FAIL beats a PASS (fail closed); between equals the
+ * later argument wins. */
+export function newestVerdict(...verdicts) {
+  let best = null;
+  let bestAt = -Infinity;
+  for (const v of verdicts) {
+    if (!v) continue;
+    const at = Date.parse(v.ts ?? "") || 0;
+    if (!best || at > bestAt || (at === bestAt && !(best.verdict === "FAIL" && v.verdict !== "FAIL"))) {
+      best = v;
+      bestAt = at;
+    }
+  }
+  return best;
+}
+
+/**
  * Decide a batch of unit merges. merges: [{ sha, subject, tip }] (tip = the merged branch head); recorded(tip) -> the latest
  * recorded verdict or null; overrides: sha prefixes (merge or tip). Non-unit merges are skipped. Pure.
  * Returns { ok, passed: [], overridden: [], refused: [{ sha, subject, tip, reason: "fail"|"no-verdict", line }] }.
@@ -307,7 +353,7 @@ export function evaluateMergeVerdicts({ merges = [], recorded = () => null, over
       continue;
     }
     const r = tip ? recorded(tip) : null;
-    if (r?.verdict === "PASS") passed.push({ ...entry, line: r.line });
+    if (r?.verdict === "PASS") passed.push({ ...entry, line: r.line, ...(r.source ? { source: r.source, reviewer: r.reviewer } : {}) });
     else refused.push({ ...entry, reason: r ? "fail" : "no-verdict", line: r?.line ?? "" });
   }
   return { ok: refused.length === 0, passed, overridden, refused };
@@ -322,7 +368,7 @@ export function formatVerdictRefusal(result, { action = "push", squads } = {}) {
   if (Array.isArray(squads)) {
     lines.push(
       squads.length
-        ? `  verdicts read from Squad log(s): ${squads.join(", ")} (only reviewer digests count; other Squads' logs never do)`
+        ? `  verdicts read from Squad log(s): ${squads.join(", ")} (only attested reviewer digests, or the reviewer's own runner record, count; other Squads' never do)`
         : "  this repo matches no Squad's paths in teams.json, so no verdict can be recorded for it (fail closed)",
     );
   }
