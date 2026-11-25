@@ -6,7 +6,7 @@
 // the pin focused with "Start fresh Brainstorm" (src/pinFocusLogic.ts has the rules).
 import { useSyncExternalStore } from "react";
 import { isRetiredAgent } from "./identity";
-import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
+import { closeTab, getPanes, openAgent, openAgentInTab, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { focusDrawerOpen, hubOpenAgent } from "./ctxMenuLogic";
@@ -87,7 +87,8 @@ export const getPinsHome = () => state.home;
 export const getSquadsHome = () => state.home && !state.focus && state.squadsHome;
 export const useSquadsHome = () => useSyncExternalStore(subscribe, getSquadsHome);
 
-const show = (id: string) => {
+const show = (id: string, into?: "right") => {
+  if (into === "right" && getPanes().split) return openAgentInTab(id, "right"); // B17: a start from the split's right pane keeps the split
   if (getPanes().split) toggleSplit(); // one drawer on screen: fold the split, nothing remounts
   openAgent(id);
 };
@@ -227,7 +228,7 @@ export function openPinMember(pin: Pin, agentId: string) {
 }
 
 /** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */
-export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof openPin = openPin): Promise<string> {
+export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof openPin = openPin, into?: "right"): Promise<string> {
   const mine = ++seq;
   const active = getPanes().leftActiveId;
   set({
@@ -243,7 +244,7 @@ export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof op
     const f = state.focus;
     if (f?.seq === mine && f.agentId !== id) {
       set({ focus: { ...f, agentId: id, gone: false, held: null, spinUpError: null }, spinUpError: null });
-      show(id);
+      show(id, into);
     }
     if (state.focus?.seq === mine) focusComposerSoon(id);
     return id;

@@ -1525,7 +1525,7 @@ html[data-vibe="boring"] .boring-pp-body { flex: 0 0 auto; display: flex; flex-d
 html[data-vibe="boring"] .boring-pp-sec { display: flex; flex-direction: column; gap: 8px; }
 html[data-vibe="boring"] .boring-pp-h { margin: 0; font-size: var(--t-small); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
 html[data-vibe="boring"] .boring-pp-strip { display: flex; flex-wrap: wrap; gap: 8px; }
-html[data-vibe="boring"] .boring-pp-agent { max-width: min(100%, 640px); display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-1); font-size: var(--t-ui); cursor: pointer; max-width: 100%; }
+html[data-vibe="boring"] .boring-pp-agent { max-width: min(100%, 640px); display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 12px; box-sizing: border-box; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-1); font-size: var(--t-ui); cursor: pointer; }
 html[data-vibe="boring"] .boring-pp-agent:hover, html[data-vibe="boring"] .boring-pp-pill:hover { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-pp-agent.attn, html[data-vibe="boring"] .boring-pp-lane.attn { border-color: var(--st-attn); }
 html[data-vibe="boring"] .boring-pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: 8px; }
@@ -1550,6 +1550,9 @@ html[data-vibe="boring"] .drawer:has(.boring-convo-col) { container-type: inline
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) { --ctx-w: 460px; }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) { --ctx-w: 36px; }
 html[data-vibe="boring"] .boring-empty-card { max-width: 720px; width: 100%; box-sizing: border-box; text-align: left; align-items: flex-start; }
+/* B17 r3 D2: at wide widths user bubbles right-align to the 960px prose measure (beside the replies), not the 1680px column edge. */
+html[data-vibe="boring"] .boring-drawer .tl-user, html[data-vibe="boring"] .boring-drawer .timeline .tl-user { margin-right: max(0px, calc((100% - var(--measure-col)) / 2 + var(--measure-col) - var(--measure-prose))); }
+html[data-vibe="boring"] .boring-empty-lane { margin: 0; font-size: var(--t-title); line-height: 1.3; font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-empty-card > p { margin: 0; color: var(--text-1); font-size: var(--t-body); }
 html[data-vibe="boring"] .boring-empty-jumps { display: flex; flex-direction: column; gap: 14px; width: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
 html[data-vibe="boring"] .boring-empty-jumps > section { display: flex; flex-direction: column; gap: 8px; }

@@ -84,9 +84,14 @@ test("picker interaction: pills/cards open the agent, filter narrows, no-match m
 });
 
 test("empty-lane quick-jumps: sibling role, live worker, other active lanes (never itself)", () => {
-  const j = buildQuickJumps(model(), "wiki", h);
+  // Gemini M1: a WORKING-only lane (needsYou 0, running 1) must qualify via structured state, not display text.
+  const mw = model(); mw.conversations[0].needsYou = 0;
+  const j = buildQuickJumps(mw, "wiki", h);
   assert.deepEqual(j.here, []);
   assert.deepEqual(j.others.map((o) => o.key), ["ui"]);
+  assert.match(j.others[0].sub, /Lead working/);
+  mw.conversations[0].running = 0;
+  assert.deepEqual(buildQuickJumps(mw, "wiki", h).others, [], "an idle, non-needs-you lane is not an 'active lane'");
   const ui = buildQuickJumps(model(), "ui", h);
   assert.deepEqual(ui.here.map((x) => x.key), ["lead", "brainstorm", "w:w1"]);
   assert.deepEqual(ui.here.map((x) => x.label), ["Lead", "Brainstorm", "Painter"]); // L5: one label pattern, status in the sub
@@ -98,6 +103,32 @@ test("empty-lane quick-jumps: sibling role, live worker, other active lanes (nev
   assert.equal(renderToStaticMarkup(React.createElement(BoringEmptyJumps, { here: [], others: [] })), "");
   const src = read("src", "BoringAde.tsx");
   for (const id of ["boring-empty-card", "boring-empty-cta"]) assert.ok(src.includes(`data-testid="${id}"`), id);
+});
+
+test("r3: Start Brainstorm from the right pane keeps the split; right card is pane-local; Esc returns focus to Split; labels", () => {
+  const ade = read("src", "BoringAde.tsx"), pf = read("src", "pinFocus.ts"), pp = read("src", "BoringPanePicker.tsx");
+  // UX M4: spinUpPin(..., "right") -> show(id, "right") -> openAgentInTab(id, "right") instead of folding the split into the left pane
+  assert.match(pf, /const show = \(id: string, into\?: "right"\) => \{\n  if \(into === "right" && getPanes\(\)\.split\) return openAgentInTab\(id, "right"\);/);
+  assert.match(pf, /show\(id, into\)/);
+  assert.match(ade, /rightSpin = \(p: Pin\) => spinUpPin\(p, undefined, undefined, "right"\)/);
+  assert.match(ade, /boringStartBrainstorm\(pin, c\.right \? rightSpin : undefined\)/);
+  assert.match(ade, /boringStartBugs\(view\.team\.id, c\.right \? \{ spinUp: rightSpin \} : \{\}\)/);
+  // Gemini M2: the picker's card target is pane-local state, a dormant pill never selects the lane in the host
+  assert.match(ade, /const \[rightCard, setRightCard\] = useState<CardTarget \| null>/);
+  assert.match(ade, /renderEmpty=\{\(t\) => emptyCard\(t\)\}/);
+  assert.match(pp, /if \(live \|\| !renderEmpty\) onOpen\(\); else setEmptyFor\(\{ key: laneKey, pill \}\)/);
+  assert.match(ade, /openAgentInTab\(id, "right"\);\n    else setRightCard/); // "Switch to Brainstorm" opens the live Buddy on the right
+  // N5 focus return, N2 lane name on the card + breadcrumb
+  assert.match(ade, /closeSplitToButton/); assert.match(ade, /boring-split-toggle"\]'\)\?\.focus\(\)/);
+  assert.match(ade, /data-testid="boring-empty-lane"/); assert.match(ade, /rightCard && panes\.activePane === "right" \? rightCardName\(rightCard\)/);
+  // Gemini L2 / N3: hub members are Overlord / RiffBot, Bugs is Bugs; error items get an error dot; no "· Desk" role labels
+  assert.match(ade, /return m\.kind === "lead" \? "Overlord" : "RiffBot"/); assert.match(ade, /err: r\.item\.kind === "error"/);
+  assert.match(pp, /i\.err \? "error"/);
+  assert.doesNotMatch(ade, /\?\? "Desk"\}`/);
+  // Gemini L1 / N6 + D2
+  const css = read("src", "boring.css");
+  assert.doesNotMatch(css, /\.boring-pp-agent \{[^}]*max-width: min\(100%, 640px\)[^}]*max-width: 100%/);
+  assert.ok(css.includes("margin-right: max(0px, calc((100% - var(--measure-col)) / 2 + var(--measure-col) - var(--measure-prose)))"));
 });
 
 test("CSS: fluid measure vars, B17 section scoped/single-line, Psycho + styles.css untouched", () => {
@@ -232,6 +263,35 @@ test("browser: split picker in the real app: strip = sidebar Needs-you, names re
       await page.keyboard.press("Escape");
       await page.waitForTimeout(300);
       assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 0, "Esc closes the split");
+      await ctx.close(); }
+    // r3 Gemini M2b: the right card is pane-local: clicking the left pane never rewrites it; it names its lane (UX N2) and the crumb follows.
+    { const { ctx, page } = await app(b, E, baseUrl, 1600, 900, 1, "dark");
+      await page.locator('[data-testid="boring-split-toggle"]').click();
+      await page.locator('[data-testid="boring-split-empty"]').waitFor();
+      await page.locator('[data-testid="boring-pp-open-wiki-brainstorm"]').click();
+      const card = page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]');
+      await card.waitFor({ timeout: 3000 });
+      const before = await card.innerText();
+      assert.match(await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-lane"]').innerText(), /wiki/i);
+      assert.match(await page.locator('[data-testid="boring-breadcrumb"], .boring-breadcrumb').first().innerText(), /wiki/i, "breadcrumb names the right card's lane");
+      await page.locator('[data-testid="boring-pane-left"]').click({ position: { x: 20, y: 20 } });
+      await page.waitForTimeout(300);
+      assert.equal(await card.innerText(), before, "left-pane click does not rewrite the right card");
+      assert.doesNotMatch(await card.innerText(), /RiffBot is sleeping/);
+      // Gemini M2a: a dormant Lead pill's "Switch to Brainstorm" opens the live Brainstorm IN THE RIGHT PANE (split stays on)
+      await page.locator('[data-testid="boring-pp-back"]').click();
+      const leadPill = page.locator('[data-testid^="boring-pp-open-"][data-testid$="-lead"]:not(.live)');
+      const n = await leadPill.count();
+      if (n) {
+        await leadPill.first().click();
+        const cta = page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-cta"]');
+        if (/Switch to Brainstorm/.test(await cta.innerText())) {
+          await cta.click();
+          await page.waitForTimeout(500);
+          assert.ok(await page.locator('[data-testid="boring-chat-split"]').count(), "split stays on");
+          assert.equal(await page.locator('[data-testid="boring-pane-right"] .drawer').count() > 0 || await page.locator('[data-testid="boring-pp-empty"]').count() > 0, true);
+        }
+      }
       await ctx.close(); }
     // Psycho: no boring app
     const ctx = await b.newContext({ viewport: { width: 1280, height: 720 } });
