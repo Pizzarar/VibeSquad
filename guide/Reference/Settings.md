@@ -101,7 +101,7 @@ An amber **⚠ CONFIG WARNING** box appears at the top only when a config file c
 
 ## Runner & Providers
 
-![The Runner & Providers tab: one card per provider with a status pill, its version, an Enabled checkbox, and the Extra models, Extra modes and Default model fields](../assets/screenshots/07g-settings-runner.png)
+![The Runner & Providers tab: one card per provider with a status pill, its version, an Enabled checkbox, its Offered models list, and the Extra models, Extra modes and Default model fields](../assets/screenshots/07g-settings-runner.png)
 
 The runner is the background program that actually runs your agents. This tab lists the providers it can start (Claude Code, Codex and so on). VibeSquad finds them by probing the command-line tools installed on this PC. Each provider has a status pill, its version when known, and an **Enabled** checkbox. Three fields let you add to what the pickers offer:
 
