@@ -210,6 +210,52 @@ test("idea-978 Tier A: a whitespace-only unmerged commit after a squash is NOT m
     assert.equal(calls.filter((c) => c.startsWith("log -p")).length, 1);
   }));
 
+test("idea-978 Tier A: post-squash CRLF-only and EOF-newline-only unmerged commits are NOT merged", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    git(["config", "core.autocrlf", "false"], repo);
+    const mk = (name, text, after) => {
+      const wt = addWorktree(repo, sanct, "repo", name);
+      commitFile(wt, `${name}.txt`, text);
+      return () => commitFile(wt, `${name}.txt`, after, `${name} variant`);
+    };
+    const crlf = mk("unit-crlf", "a\nb\n", "a\r\nb\r\n");
+    const eol = mk("unit-eol", "line1\n", "line1");
+    commitFile(repo, "pre.txt", "x\n");
+    for (const n of ["unit-crlf", "unit-eol"]) {
+      git(["merge", "-q", "--squash", n], repo);
+      git(["commit", "-q", "-m", `${n} squashed`], repo);
+    }
+    commitFile(repo, "after.txt", "y\n");
+    assert.equal(byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }))["unit-crlf"].merged, true);
+    crlf();
+    eol();
+    const res = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(res["unit-crlf"].merged, false);
+    assert.equal(res["unit-eol"].merged, false);
+  }));
+
+test("idea-978: the base scan is chunked (history longer than one chunk is still searched, each chunk is its own git call)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-old");
+    commitFile(wt, "old.txt", "1\n");
+    commitFile(wt, "old.txt", "1\n2\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-old"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    for (let i = 0; i < 260; i++) commitFile(repo, "n.txt", `${i}\n`, `n${i}`); // pushes the squash into the second 250-commit chunk
+    const calls = [];
+    const spy = (args, cwd, o) => (calls.push(args.join(" ")), execFileSync("git", args, { cwd, encoding: "utf8", input: o?.input, stdio: [o?.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] }).trim());
+    const r = mergedStatus(repo, git(["rev-parse", "unit-old"], repo), ["refs/heads/master"], { git: spy });
+    assert.equal(r.how, "squash-patch");
+    assert.ok(calls.filter((c) => c.startsWith("log -p")).length >= 2);
+  }));
+
 test("dirty: untracked build output is ignored, tracked edits and other untracked files are not", () =>
   withTmp((root) => {
     const repo = join(root, "repo");
