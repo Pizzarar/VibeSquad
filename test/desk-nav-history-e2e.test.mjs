@@ -217,33 +217,63 @@ test("B1 e2e (b,c): Back to ?team=gone and to a non-canonical ?agent=..&team=.. 
   }
 });
 
-// (4)/(e) urlSyncDecision: takeStorybookReplace still honored, and the pop ends on the settle run only — never on URL equality.
-test("B1: urlSyncDecision ends a pop on the settle run, never on URL equality; takeStorybookReplace honored", async () => {
+// (a) M1: the pop must not stick when BoringApp is not mounted (Storybook takeover etc.): the first user input ends it, so the next nav pushes.
+test("B1 e2e (a): a pop followed by a non-Boring route and then a user nav pushes", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.evaluate(() => { history.pushState(null, "", "?demo=&team=vibesquad&sb=1"); history.pushState(null, "", "?demo=&team=vibesquad"); });
+  await take();
+  await page.goBack(); // pop into a ?sb= entry
+  await page.waitForTimeout(900);
+  await take();
+  await page.keyboard.press("Escape"); // first user input ends the pop
+  await page.locator(".boring-sidebar .boring-needs-open", { hasNotText: "Audit - token scout" }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  const nav = await take();
+  assert.ok(pushes(nav) >= 1 || nav.url.includes("agent="), `a user nav after the pop pushes (got ${JSON.stringify(nav.h)})`);
+  assert.equal(nav.h.includes("replaceState") && pushes(nav) === 0, false, "not swallowed as replaceState");
+  await context.close();
+});
+
+// (b) L1: a double Back retargets: the screen lands on the 2nd target, and the next click pushes.
+test("B1 e2e (b): double Back lands on the 2nd target; the next click pushes", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  const rows = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => /· VibeSquad/.test(x));
+  for (const r of rows.slice(0, 3)) { await page.locator(".boring-sidebar .boring-needs-open", { hasText: r.slice(0, 20) }).first().click(); await page.waitForTimeout(500); }
+  const trail = await page.evaluate(() => location.search);
+  await take();
+  await page.evaluate(() => { history.back(); history.back(); }); // two pops in one tick
+  await page.waitForTimeout(1200);
+  const two = await take();
+  assert.equal(pushes(two), 0, `double Back: 0 pushState (got ${JSON.stringify(two.h)})`);
+  assert.notEqual(two.url, trail);
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: rows[0].slice(0, 20) }).first().click();
+  await page.waitForTimeout(900);
+  const nav = await take();
+  assert.ok(pushes(nav) >= 1 || nav.url === two.url, `next click pushes, or re-selects the already-shown agent (got ${JSON.stringify(nav.h)})`);
+  await context.close();
+});
+
+// urlSyncDecision: takeStorybookReplace honored; the pop never pushes and ends on reaching the popped URL.
+test("B1: urlSyncDecision never pushes while a pop target is set; takeStorybookReplace honored", async () => {
   const { transformSync } = await import("rolldown/utils");
   const { readFileSync } = await import("node:fs");
   const code = transformSync("urlSync.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code;
   const { urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   let taken = 0;
   const sb = (v) => () => { taken++; return v; };
-  const D = (o) => urlSyncDecision({ settledGen: 0, storybookReplace: sb(false), ...o });
-  // no pop: normal pushes, storybook replace honored and consumed only on a write
-  assert.deepEqual(D({ next: "?a", current: "?b", pop: null, storybookReplace: sb(true) }), { write: true, replace: true, pop: null });
-  assert.deepEqual(D({ next: "?a", current: "?b", pop: null }), { write: true, replace: false, pop: null });
+  const D = (o) => urlSyncDecision({ popTarget: null, storybookReplace: sb(false), ...o });
+  assert.deepEqual(D({ next: "?a", current: "?b", storybookReplace: sb(true) }), { write: true, replace: true, endPop: false });
+  assert.deepEqual(D({ next: "?a", current: "?b" }), { write: true, replace: false, endPop: false });
   const t0 = taken;
-  assert.equal(D({ next: "?a", current: "?a", pop: null, storybookReplace: sb(true) }).write, false);
+  assert.equal(D({ next: "?a", current: "?a", storybookReplace: sb(true) }).write, false);
   assert.equal(taken, t0, "not consumed when nothing is written");
-  const arm = { settleGen: 3 };
-  // before the settle: never push, never clear — even when next === current (mixed pop render 1, Gemini M2) or next === the popped URL
-  for (const [next, current] of [["?x", "?p"], ["?p", "?p"], ["?p", "?stale"]]) {
-    const d = D({ next, current, pop: arm, settledGen: 2 });
-    assert.equal(d.replace, true); assert.deepEqual(d.pop, arm, `armed before settle (${next} / ${current})`);
-    assert.equal(d.write, next !== current);
-  }
-  // settle run: replace if different, then clear unconditionally (healed URL, unknown team, canonicalised order, unknown agent)
-  assert.deepEqual(D({ next: "?healed", current: "?popped", pop: arm, settledGen: 3 }), { write: true, replace: true, pop: null });
-  assert.deepEqual(D({ next: "?same", current: "?same", pop: arm, settledGen: 3 }), { write: false, replace: true, pop: null });
-  // a pop write drains a stale Storybook one-shot so the next user nav pushes
+  assert.deepEqual(D({ next: "?p", current: "?p", popTarget: "?p" }), { write: false, replace: true, endPop: true }, "reached the popped URL: no write, pop ends");
+  assert.deepEqual(D({ next: "?p", current: "?transient", popTarget: "?p" }), { write: true, replace: true, endPop: true }, "a stale render's transient replace is restored in place (never a push)");
+  assert.deepEqual(D({ next: "?healed", current: "?p", popTarget: "?p" }), { write: true, replace: true, endPop: false }, "healed mixed entry: replace, stay armed (input ends it)");
+  assert.equal(D({ next: "?x", current: "?x", popTarget: "?p" }).write, false);
   const before = taken;
-  D({ next: "?x", current: "?p", pop: arm, settledGen: 2 });
+  D({ next: "?x", current: "?p", popTarget: "?p" });
   assert.equal(taken, before + 1, "drained during a pop write");
 });
