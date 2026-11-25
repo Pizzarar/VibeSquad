@@ -1,0 +1,36 @@
+PASS dark-1920 rev ctrlk             start=?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=3
+   act  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 dLen=1 pushes=[?demo=&team=vibesquad&agent=demo-aud] mixed=[] :: pushState ?demo=&team=vibesquad&agent=demo-aud
+   back -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   back2-> ?demo=&team=efi ov:Main Game Project›Overview on=1 :: POP ?demo=&team=efi
+   fwd  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   fwd2 -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=4 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 rev needs-row         start=?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=3
+   act  -> ?demo=&team=vibesquad&agent=demo-rev chat:VibeSquad›Desk›Worker on=1 dLen=1 pushes=[?demo=&team=vibesquad&agent=demo-rev] mixed=[] :: pushState ?demo=&team=vibesquad&agent=demo-rev
+   back -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   back2-> ?demo=&team=efi ov:Main Game Project›Overview on=1 :: POP ?demo=&team=efi
+   fwd  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   fwd2 -> ?demo=&team=vibesquad&agent=demo-rev chat:VibeSquad›Desk›Worker on=1 len=4 :: POP ?demo=&team=vibesquad&agent=demo-rev
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 rev proj-badge(pill)  start=?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=3
+   act  -> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 dLen=1 pushes=[?demo=&team=vibesquad] mixed=[] :: pushState ?demo=&team=vibesquad
+   back -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   back2-> ?demo=&team=efi ov:Main Game Project›Overview on=1 :: POP ?demo=&team=efi
+   fwd  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   fwd2 -> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 len=4 :: POP ?demo=&team=vibesquad
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 rev sidebar-row       start=?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=3
+   act  -> ?demo=&team=vibesquad&agent=demo-agy-err chat:VibeSquad›Desk›Worker on=1 dLen=1 pushes=[?demo=&team=vibesquad&agent=demo-agy-err] mixed=[] :: pushState ?demo=&team=vibesquad&agent=demo-agy-err
+   back -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   back2-> ?demo=&team=efi ov:Main Game Project›Overview on=1 :: POP ?demo=&team=efi
+   fwd  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   fwd2 -> ?demo=&team=vibesquad&agent=demo-agy-err chat:VibeSquad›Desk›Worker on=1 len=4 :: POP ?demo=&team=vibesquad&agent=demo-agy-err
+   reload start:ok final:ok back2:ok errs=0 
+FAIL dark-1920 rev proj-row          start=?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=3
+   act  -> ?demo=&team=site ov:Site›Overview on=1 dLen=1 pushes=[?demo=&team=site] mixed=[] :: pushState ?demo=&team=site
+   back -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   back2-> ?demo=&team=efi ov:Main Game Project›Overview on=1 :: POP ?demo=&team=efi
+   fwd  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   fwd2 -> ?demo=&team=site ov:Site›Overview on=1 len=4 :: POP ?demo=&team=site
+   reload start:ok final:ok back2:ok errs=0 {"d1":true,"noMixed":true,"crossProj":false,"backToStart":true,"back2Live":true,"fwdMirror":true,"fwd2Final":true,"inv":true,"errs":true,"reload":true}
+fails=1

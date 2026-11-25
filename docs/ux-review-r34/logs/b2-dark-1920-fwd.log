@@ -1,0 +1,43 @@
+PASS dark-1920 fwd ctrlk             start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi&agent=demo-lead-ui chat:Main Game Project›UI Lab›Lead on=1 dLen=1 pushes=[?demo=&team=efi&agent=demo-lead-ui] mixed=[] :: pushState ?demo=&team=efi&agent=demo-lead-ui
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi&agent=demo-lead-ui chat:Main Game Project›UI Lab›Lead on=1 len=4 :: POP ?demo=&team=efi&agent=demo-lead-ui
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 fwd needs-row         start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 dLen=1 pushes=[?demo=&team=efi&agent=demo-lead-efi] mixed=[] :: pushState ?demo=&team=efi&agent=demo-lead-efi
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi&agent=demo-lead-efi chat:Main Game Project›Main Game›Lead on=1 len=4 :: POP ?demo=&team=efi&agent=demo-lead-efi
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 fwd proj-badge(pill)  start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi ov:Main Game Project›Overview on=1 dLen=1 pushes=[?demo=&team=efi] mixed=[] :: pushState ?demo=&team=efi
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi ov:Main Game Project›Overview on=1 len=4 :: POP ?demo=&team=efi
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 fwd sidebar-row       start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi&agent=demo-lead-ui chat:Main Game Project›UI Lab›Lead on=1 dLen=1 pushes=[?demo=&team=efi&agent=demo-lead-ui] mixed=[] :: pushState ?demo=&team=efi&agent=demo-lead-ui
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi&agent=demo-lead-ui chat:Main Game Project›UI Lab›Lead on=1 len=4 :: POP ?demo=&team=efi&agent=demo-lead-ui
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 fwd sidebar-mate      start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi&slot=overlord ov:Main Game Project›Desk›Overlord on=1 dLen=1 pushes=[?demo=&team=efi&slot=overlord] mixed=[] :: pushState ?demo=&team=efi&slot=overlord
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi&slot=overlord ov:Main Game Project›Desk›Overlord on=1 len=4 :: POP ?demo=&team=efi&slot=overlord
+   reload start:ok final:ok back2:ok errs=0 
+PASS dark-1920 fwd proj-row          start=?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 len=3
+   act  -> ?demo=&team=efi ov:Main Game Project›Overview on=1 dLen=1 pushes=[?demo=&team=efi] mixed=[] :: pushState ?demo=&team=efi
+   back -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   back2-> ?demo=&team=vibesquad ov:VibeSquad›Overview on=1 :: POP ?demo=&team=vibesquad
+   fwd  -> ?demo=&team=vibesquad&agent=demo-aud chat:VibeSquad›Desk›Worker on=1 :: POP ?demo=&team=vibesquad&agent=demo-aud
+   fwd2 -> ?demo=&team=efi ov:Main Game Project›Overview on=1 len=4 :: POP ?demo=&team=efi
+   reload start:ok final:ok back2:ok errs=0 
+fails=0
