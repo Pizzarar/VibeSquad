@@ -474,19 +474,20 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   return (
     <div className="sb-root" data-testid="storybook-view">
       <header className="sb-head">
-        <button type="button" className="sb-btn sb-back" data-testid="sb-back" onClick={() => onClose()}>← Back</button>
+        <button type="button" className="sb-btn sb-back" data-testid="sb-back" aria-label="Back" onClick={() => onClose()}><span className="sb-back-arrow" aria-hidden="true">←</span><span className="sb-back-text" aria-hidden="true"> Back</span></button>
         <div className="sb-title">
           <span className="sb-eye" aria-hidden="true">◉</span>
-          <h2><span className="sb-word">Storybook </span><span className="sb-proj">· {name}</span></h2>
+          <h2><span className="sb-word">Storybook </span><span className="sb-sep" aria-hidden="true">· </span><span className="sb-proj">{name}</span></h2>
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
           {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
           {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
-          <button type="button" className="sb-btn" data-testid="sb-refresh" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}>{busy ? "Refreshing…" : "Refresh"}</button>
+          <button type="button" className={`sb-btn sb-refresh${busy ? " sb-busy" : ""}`} data-testid="sb-refresh" aria-label="Refresh" aria-busy={busy} title="Re-snapshot Storybook" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}><span className="sb-refresh-icon" aria-hidden="true">↻</span><span className="sb-refresh-text" aria-hidden="true">{busy ? "Refreshing…" : "Refresh"}</span></button>
         </div>
       </header>
+      {checked && <div className="sb-checked sb-checked-row" role="status" data-testid="sb-checked-row">{checked}</div>}
       {notice && <div className="sb-notice" role="status" data-testid="sb-notice">{notice}</div>}
       {state.kind === "loading" && <p className="sb-empty">Loading Storybook…</p>}
       {state.kind === "none" && <p className="sb-empty" data-testid="sb-none">{NO_STORYBOOK}. Storybook needs a registered adapter for the project’s repo; ask the squad lead to add one.</p>}

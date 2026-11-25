@@ -104,9 +104,10 @@ test("fix round (UX R22 M1/m1/m2/m3 + review M1): sb-head pill placement, active
   assert.match(css, /\.sb-title \{[^}]*flex: 0 1 auto/, "title no longer grows, so the pill follows it");
   assert.match(css, /\.sb-head-right \{[^}]*margin-left: auto/, "right cluster pushed to the end");
   assert.match(css, /\n\.sb-head \.project-tabs \.boring-switch-pill \{/, "unscoped (Psycho) pill base rule");
-  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-root \.sb-head \.project-tabs \.boring-switch-pill \{ min-height: 40px; \}/, "phone 40px segments");
-  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-word \{ display: none; \}/, "phone keeps the project name, drops the Storybook word");
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-root \.sb-head \.project-tabs \.boring-switch-pill \{ min-height: 40px;/, "phone 40px segments");
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.sb-word, \.sb-sep \{ display: none; \}/, "phone keeps the project name, drops the Storybook word and the orphan separator");
   assert.ok(s.includes('<span className="sb-word">Storybook </span>'), "sb-word wrapper");
+  assert.ok(s.includes('<span className="sb-sep" aria-hidden="true">· </span><span className="sb-proj">{name}</span>'), "separator split out of sb-proj (R23 m2)");
   assert.match(b, /\.project-tabs \.boring-switch-pill\.on \{ color: var\(--accent\); box-shadow: inset 0 0 0 1px var\(--accent\); \}/, "active cue scoped to .project-tabs, existing token");
   assert.ok(!/project-tabs[^{]*\{[^}]*opacity/.test(b + css), "dim by colour, never opacity");
 });
