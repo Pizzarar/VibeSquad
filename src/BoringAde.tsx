@@ -32,6 +32,7 @@ import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
 import { useStorybookPresent } from "./StorybookView";
 import { CrunchToggle } from "./CrunchToggle";
+import { orderViews } from "./projectOrder";
 import { UsageDashboard } from "./UsageDashboard";
 
 export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
@@ -938,7 +939,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     { label: "New folder…", separatorBefore: true, run: () => { const n = window.prompt("New folder name")?.trim(); if (n) void folderOp({ op: "createFolder", name: n }); } },
   ];
   const stat = (v: TeamView) => { const mm = v.team.id === activeTeamId ? model : boringSidebarModel(v, now); return { needsYou: mm.totalNeedsYou, err: mm.projectErr }; };
-  const partition = partitionViews(allViews, folders, stat);
+  const partition = partitionViews(orderViews(allViews), folders, stat); // teams.json order, the Main project first (PLAN_PROJECT_ORDER)
   const awakeViews = filterAwakeViews(allViews, folders);
   const activeAsleep = view ? isViewAsleep(view, folders) : false;
   // B13b: the living sky reacts to Squad state; an asleep project is always idle.
