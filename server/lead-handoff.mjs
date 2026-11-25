@@ -603,11 +603,12 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
   }
   let profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
-  // G2 (idea-1012): a stored lead profile whose provider is >=95% on live quota starts on its counterpart, the same
-  // resolveProfileWithFailover walk the spawn hook runs (caps first, so a capped counterpart is skipped), so the successor's
-  // prompt + labels match the provider it runs on. Only quota triggers it here: a `vs cap` alone stays the hook's swap, as before.
+  // G2 (idea-1012) + L1: a stored lead profile whose provider is capped (`vs cap`) or >=95% on live quota starts on its
+  // counterpart, the same resolveProfileWithFailover walk the spawn hook runs (caps first, so a capped counterpart is
+  // skipped), so the successor's profile, prompt (NON_CLAUDE_LEAD_CAP_RULES), labels and env match the provider it runs on.
+  // usageList already holds the caps (in-memory + disk) ahead of quota rows, so disk is not re-read here.
   let failover = null;
-  if (profile && quota.length > 0 && isProviderOverQuota(profile.provider, quota, undefined, { ignoreDiskCaps: true }).overQuota) {
+  if (profile && isProviderOverQuota(profile.provider, usageList, undefined, { ignoreDiskCaps: true }).overQuota) {
     const fo = resolveProfileWithFailover(profile, profiles, usageList, { ignoreDiskCaps: true });
     if (fo.failedOver && fo.profile) {
       failover = { from: profile.name, to: fo.profile.name, reason: fo.reason };
