@@ -503,8 +503,9 @@ export async function digestLogRecord(caller, type, text, backend) {
     const profile = String(worker?.labels?.profile ?? worker?.profile ?? "").trim() || null;
     // R2 (PLAN_PER_ROLES_LADDER_1125): the stamp names the model that actually reviewed (`reviewer=Review · gemini-4-pro`), so a
     // role-name reviewer is not ambiguous; it sits after the verdict prefix (the gate parser never reads it). The attested
-    // verdict below keeps the bare profile.
-    const actualModel = String(worker?.labels?.["vs.model"] ?? worker?.labels?.model ?? worker?.model ?? "").trim();
+    // verdict below keeps the bare profile. The agent's live model wins (a mid-run model switch reviews on the new one); the
+    // spawn-time `vs.model` label is only the fallback for a record that carries no model.
+    const actualModel = [worker?.model, worker?.labels?.["vs.model"], worker?.labels?.model].map((v) => String(v ?? "").trim()).find(Boolean) ?? "";
     const stamp = profile && actualModel ? `${profile} · ${actualModel}` : profile;
     const workerText = lastAssistantText(tl, Infinity);
     const out = digestVerdictText({ workerText, digestText: text, reviewer: isReviewerAgent(worker), profile: stamp }).text;

@@ -580,12 +580,18 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
   // R2 (PLAN_PER_ROLES_LADDER_1125): `Role · model · reason`, read back from the created agent (the runner returns it after
-  // the spawn hook ran), so the result names what actually runs: the agent's model, else the hook's `vs.model`, else this
-  // tool's pre-hook pick. The reason is the hook's `why=` on `vs.route`; a backend that returns no route works it out here.
-  const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || model || "";
+  // the spawn hook ran), so the result names what actually runs: the agent's model, else the hook's `vs.model`. The reason is
+  // the hook's `why=` on `vs.route`. Only when the hook did not run (no `why=`) does this tool fall back to its own pre-hook
+  // pick: after the hook, no model means the provider's own default runs, so the pre-hook `model` would name one that doesn't.
+  const hookWhy = routeWhy(agent?.labels?.["vs.route"]);
+  const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || (hookWhy ? "" : model) || "";
   const reasonShown =
-    routeWhy(agent?.labels?.["vs.route"]) ||
+    hookWhy ||
     shownSpawnReason({
+      // A pre-R2 hook's `reason=` (no `why=`) still names a failover; so does an agent that came back on another provider
+      // than this tool asked for.
+      hookReason: /(?:^|\s)reason=(\S+)/.exec(String(agent?.labels?.["vs.route"] ?? ""))?.[1] ?? "",
+      failover: Boolean(clean(agent?.provider) && provider && clean(agent?.provider) !== provider),
       override: Boolean(given.provider || given.model),
       arm: Boolean(labels[ARM_LABEL]),
       legacyName: Boolean(lookupRole(profile?.name || profileName)?.legacy),

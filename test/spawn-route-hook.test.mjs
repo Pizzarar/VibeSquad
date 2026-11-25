@@ -152,7 +152,7 @@ test(
         [impl.labels.provider, impl.labels.model, impl.labels.tier, impl.labels.stakes],
         [C, "claude-sonnet-5-5", "mid", "normal"],
       );
-      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement why=rung$/);
+      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement why=ladder$/);
       assert.doesNotMatch(impl.labels[ROUTE_LABEL], /legacy-name/);
 
       const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "tierA-invariant" }) });
@@ -185,7 +185,7 @@ test(
   "A2: a mechanical role spawn lands on Gemini Flash; with Gemini capped on Claude Haiku; DeepSeek only when both are capped",
   withEnv(async () => {
     const cases = [
-      [[], row(A, "gemini-3.8-flash", "medium", "accept-edits"), "reason=ladder tier=cheap role=implement why=rung"],
+      [[], row(A, "gemini-3.8-flash", "medium", "accept-edits"), "reason=ladder tier=cheap role=implement why=ladder"],
       // The metric names one reason for a role route; stakes (ladder) win over failover, as for tierA + a capped claude.
       // R2: the shown reason (why=) still says failover when a capped provider was skipped.
       [[A], row(C, "claude-haiku-5-5", "low", "auto"), "reason=ladder tier=cheap role=implement why=failover"],
@@ -915,7 +915,7 @@ test(
         { labels: LABELS("Implement") },
       );
       assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
-      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement why=rung$/);
+      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement why=ladder$/);
       assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
     } finally {
       h.stop?.();
