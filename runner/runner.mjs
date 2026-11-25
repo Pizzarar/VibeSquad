@@ -223,7 +223,8 @@ export function maxLiveFromEnv(env = process.env) {
 export const DEFAULT_TURN_CAPS = { claude: 12, gemini: 4, antigravity: 3, other: 4 };
 // Owner turns (a human send from the UI / `vs send`) may run over a family's cap: at most this many extra
 // owner turns per family at once, so an owner message to a busy Buddy starts within seconds instead of
-// waiting behind the worker backlog. The count is released as each over-cap owner turn ends.
+// waiting behind the worker backlog. The count is released as each over-cap owner turn ends. idea-896: the same number is the
+// owner allowance over maxLive (extra live processes, machine-wide; see _makeRoom).
 export const OWNER_OVER_CAP = 2;
 // idea-203: a worker digest (DIGEST_PROFILE + labels.digestFor, both protected meta an agent caller can't set) is a short
 // read-and-log turn the lead's verdict waits on. It is admitted ahead of non-owner, non-digest jobs, and over its family's
@@ -389,7 +390,8 @@ export class Runner {
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, canRun: () => !this._agyBusy(), ...(agyUsage ? { run: agyUsage } : {}) }) : null;
+    // idea-701: the default poller runs `agy -p /usage` in an isolated HOME, so it needs no busy guard; an injected run (tests) keeps the idea-349 guard.
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
@@ -567,7 +569,7 @@ export class Runner {
     const job = {
       id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta),
       run: () => {
-        this._makeRoom(id);
+        this._makeRoom(id, { owner: job.owner === true }); // a coalesced owner send makes the queued create an owner job
         const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
         const entry = this._start(id, { provider, model: cur.model ?? model, cwd, meta: cur, systemPrompt });
         if (job.text) { this._noteOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
@@ -781,7 +783,12 @@ export class Runner {
   // that, or an agent whose held work just exited and whose wake check is pending (idea-312: parking it now would drop the
   // wake; it runs a turn within one grace). yieldHolds false (a forced park's stopped-work notice, _forcePark): idle agents only,
   // never another hold, so one yield for room never cascades into the next (the notice waits for a slot like any send).
-  _makeRoom(except, { dryRun = false, yieldHolds = true } = {}) {
+  // idea-896 owner: an owner job (job.owner) may start over maxLive by up to OWNER_OVER_CAP extra live processes, machine-wide.
+  // It still parks idle agents first (down to maxLive), and yields a hold only for what the allowance does not cover. The
+  // allowance in use is the live count over maxLive itself, so nothing is tagged or double-counted: it frees when an over
+  // process leaves live (parked after its turn, crash, stop) and, once its turn ends or is cancelled, that idle process is the
+  // first room parked for the next job. Non-owner jobs still need live below maxLive.
+  _makeRoom(except, { dryRun = false, yieldHolds = true, owner = false } = {}) {
     const others = [...this.live.entries()].filter(([k]) => k !== except);
     if (others.length < this.maxLive) return true;
     // A held or unprobed idle agent is probed now (one not yet probed may have nothing); the result re-pumps. A hold this probe
@@ -800,9 +807,11 @@ export class Runner {
     const yieldable = !yieldHolds ? [] : others.filter(([, e]) => this._parkable(e) && e.work?.length > 0 && e.heldSince !== null && e.heldSince !== undefined && now - e.heldSince >= this.parkHoldYieldMs)
       .sort((a, b) => a[1].heldSince - b[1].heldSince);
     const need = others.length - this.maxLive + 1;
-    if (dryRun) return idle.length + yieldable.length >= need; // enough parkable agents to get below the ceiling
-    for (let n = need; n > 0; n--) {
-      if (idle.length) { this.park(idle.shift()[0]); continue; }
+    const mustFree = owner ? Math.max(0, others.length - (this.maxLive + OWNER_OVER_CAP) + 1) : need; // owner: below maxLive + OWNER_OVER_CAP
+    if (dryRun) return idle.length + yieldable.length >= mustFree; // enough parkable agents to get below the ceiling
+    let freed = 0;
+    for (; freed < need && idle.length; freed++) this.park(idle.shift()[0]);
+    for (; freed < mustFree; freed++) {
       if (!yieldable.length) return false;
       const [k, e] = yieldable.shift();
       this._forcePark(k, e, 'room');
@@ -881,7 +890,7 @@ export class Runner {
       // budget) may start: the family never starts more than cap + OWNER_OVER_CAP + digestReserve turns at once.
       if (running >= cap && !this._overCapKind(job)) return false;
     }
-    return !!entry || this._makeRoom(job.id, { dryRun: true, yieldHolds: job.yieldHolds !== false });
+    return !!entry || this._makeRoom(job.id, { dryRun: true, yieldHolds: job.yieldHolds !== false, owner: job.owner === true });
   }
 
   // idea-146: a queued job that may not yield a hold (a stopped-work notice) and waits only for that reason: with yields it
@@ -1545,10 +1554,10 @@ export class Runner {
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
   // promptless: a bare resume (no send behind it), whose `starting` is tagged `resume: true` (see _settleResume).
-  _resume(id, fallbackSpec = null, { promptless = false, yieldHolds = true } = {}) {
+  _resume(id, fallbackSpec = null, { promptless = false, yieldHolds = true, owner = false } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
-    if (!this._makeRoom(id, { yieldHolds })) throw new Error('no live process slot free');
+    if (!this._makeRoom(id, { yieldHolds, owner })) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
   }
@@ -1665,7 +1674,7 @@ export class Runner {
   // Starts (or resumes) the job's agent and delivers its text, marking an owner job that begins a fresh turn over the
   // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
   _deliverJob(job) {
-    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false });
+    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false, owner: job.owner === true });
     this._noteOverCap(job, entry);
     this._deliver(entry, job.text, job.images ?? []);
   }
