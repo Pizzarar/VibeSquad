@@ -1427,3 +1427,11 @@ html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; 
 html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
 /* Plan tab open: the in-timeline pinned todo bar duplicates it. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
+
+/* Code | Storybook tabs (PLAN_CODE_STORYBOOK_TABS T1): segmented pill right of the breadcrumb, same look as the switcher pills. */
+html[data-vibe="boring"] .boring-topbar-lead { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 0 1 auto; }
+html[data-vibe="boring"] .boring-topbar-lead .boring-topbar-title { flex: 0 1 auto; }
+html[data-vibe="boring"] .project-tabs { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+html[data-vibe="boring"] .project-tabs .boring-switch-pill { min-height: 28px; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+/* sb-head: pill wraps instead of clipping (phone ordering lives in storybook.css's 600px block). */
+html[data-vibe="boring"] .sb-head .project-tabs { flex-wrap: wrap; }

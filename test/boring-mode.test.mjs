@@ -148,6 +148,8 @@ stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis._
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
+stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
+stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/, `from "./react-hooks.mjs"`)

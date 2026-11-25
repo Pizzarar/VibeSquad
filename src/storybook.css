@@ -101,6 +101,7 @@
   .sb-tab { padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); }
   .sb-back { order: 0; }
   .sb-title { order: 1; flex: 1 1 0; }
+  .sb-head .project-tabs { order: 1; }
   .sb-head-right { order: 2; }
   .sb-head { padding: 8px 10px; }
   .sb-body { padding: 10px 10px 40px; }
