@@ -1,6 +1,7 @@
 // E5 §7 item 8 relay links, Tier A review R1 regressions (docs/lanes/android-app/E5_RELAY_LINKS_REVIEW_R1.md Gemini
 // 0H/2M/3L; X1_E5_RELAY_LINKS_WALK.md 0H/1M/1L/5I). One describe per finding; attacker cases are marked "attacker:".
-// Run: node --test --import ./test/setup/hermetic.mjs test/relay-links-r1.test.mjs
+// Run: node --test test/relay-links-r1.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
