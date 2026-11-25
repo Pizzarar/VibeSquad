@@ -42,7 +42,9 @@ export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT, { gitGu
   const command = `node ${arg(script)} ${drainFile ? arg(drainFile) : '-'}${gitGuard ? ' --git-guard' : ''}`;
   return { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command, timeout: 10 }] }] };
 }
-export const isWorkerAgent = (meta = {}, env = {}) => String(env?.VS_ROLE ?? meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase() === 'worker';
+// One definition (runner/git-guard.mjs), shared with runner.mjs agentEnv's PATH gate (idea-888); the hook stays as defense in depth.
+export { isWorkerAgent } from '../git-guard.mjs';
+import { isWorkerAgent } from '../git-guard.mjs';
 // Extras are opt-in: a profile with mcpExtras:["playwright"] (server/profiles.mjs; the backend stamps it as the vs.mcp label)
 // or any agent labelled vs.mcp=playwright (comma list).
 export const wantsExtra = (meta = {}, name) => String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes(name);

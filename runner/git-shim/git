@@ -1,0 +1,65 @@
+#!/bin/sh
+# VibeSquad worker git gate (idea-888). runner/git-guard.mjs applyGitShim puts this dir first on every role=worker agent's
+# PATH, for every provider. Fast path: a read-only builtin subcommand (and no write subcommand name anywhere in argv) execs
+# the real git with no node start. Otherwise runner/git-guard-check.mjs decides (gitArgvViolation: the same classifier as the Claude hook) and the
+# real git runs only on its exit 0; a refusal, a missing node or a crash refuses the write (fail closed). Not a sandbox:
+# /usr/bin/git or a rewritten PATH skips it (see the header of runner/git-guard.mjs).
+
+# The real git: the first `git` on PATH that is not a shim (this file, or any */git-shim dir, so two shims never loop).
+real=
+oldifs=$IFS
+IFS=:
+set -f
+for d in $PATH; do
+  case $d in ''|*/git-shim|*/git-shim/) continue ;; esac
+  if [ -x "$d/git" ] && [ ! -d "$d/git" ] && ! [ "$d/git" -ef "$0" ]; then real=$d/git; break; fi
+done
+set +f
+IFS=$oldifs
+if [ -z "$real" ]; then
+  echo "vs git-guard: no real git found on PATH after the worker git shim (${0%/*})" >&2
+  exit 127
+fi
+
+# Fast path (no node start): the subcommand, the first word after git's global options, is a builtin that never writes,
+# and no word anywhere names a write subcommand (a backstop if this parse ever disagrees with git's). git runs a builtin
+# before it looks at aliases, so no `-c alias.x=...`, --config-env or config-file alias can turn these into a write.
+# Anything else (a write verb, an alias, an external git-<x>) goes to the check, which resolves aliases the way git does.
+# Keep the three lists in sync with runner/git-guard.mjs (GIT_GLOBAL_VALUE_OPTS, GIT_SAFE_BUILTINS, GIT_WRITE_VERBS).
+sub=
+skip=
+for a in "$@"; do
+  if [ -n "$skip" ]; then skip=; continue; fi
+  case $a in
+    -C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source|--shallow-file|--super-prefix) skip=1 ;;
+    -*) ;;
+    *) sub=$a; break ;;
+  esac
+done
+fast=
+case $sub in
+  ''|status|log|diff|show|rev-parse|rev-list|branch|tag|fetch|push|remote|config|worktree|\
+  ls-files|ls-tree|ls-remote|cat-file|describe|blame|annotate|grep|for-each-ref|show-ref|\
+  symbolic-ref|merge-base|name-rev|shortlog|reflog|format-patch|range-diff|diff-tree|diff-index|\
+  diff-files|check-ignore|check-attr|check-ref-format|hash-object|count-objects|fsck|gc|var|help|\
+  version|init|clone|add|rm|mv|notes|show-branch|cherry|archive|bundle|verify-commit|\
+  verify-tag|submodule|bisect|difftool|mergetool) fast=1 ;;
+esac
+if [ -n "$fast" ]; then
+  for a in "$@"; do
+    case $a in
+      reset|checkout|switch|clean|stash|restore|commit|merge|rebase|pull|cherry-pick|revert|am) fast=; break ;;
+    esac
+  done
+fi
+[ -n "$fast" ] && exec "$real" "$@"
+
+# VS_GIT_REAL: the real git for the check's alias lookups (set here, so the caller's env cannot point it elsewhere).
+VS_GIT_REAL=$real NODE_OPTIONS= "${VS_GIT_GUARD_NODE:-node}" "${0%/*}/../git-guard-check.mjs" "$@"
+rc=$?
+[ "$rc" -eq 0 ] && exec "$real" "$@"
+if [ "$rc" -ne 77 ]; then
+  echo "vs git-guard: the main-checkout check could not run (exit $rc, node=${VS_GIT_GUARD_NODE:-node}); refusing this possible git write to be safe: git $*" >&2
+  echo "vs git-guard: run it inside your own linked worktree once the check works again, and report the broken check to your lead." >&2
+fi
+exit 128

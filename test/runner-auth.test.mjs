@@ -468,7 +468,7 @@ test("X1a: agentEnv: an inherited VS_AGENT_TOKEN in base is replaced by the agen
   assert.equal(env.VS_AGENT_ID, "rn-child");
   assert.equal(env.PASEO_AGENT_ID, "rn-child");
   assert.equal(env.VS_LANE, "art");
-  assert.equal(env.PATH, "p");
+  assert.equal(env.PATH.split(":").at(-1), "p", "the inherited PATH is kept (a worker gets the idea-888 git shim in front of it)");
   assert.equal(agentEnv("rn-child", {}, base).VS_AGENT_TOKEN, undefined, "no token given: the inherited one is still dropped");
   assert.equal(base.VS_AGENT_TOKEN, "leaders-token", "base is not mutated");
 });

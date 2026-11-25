@@ -12,6 +12,7 @@ import { sha256 } from './reap.mjs';
 import { readDetachedLedger, writeDetachedLedger } from './detached.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
+import { applyGitShim, isWorkerAgent } from './git-guard.mjs';
 import { LEGACY_PROFILE_ALIASES } from '../server/profile-aliases.mjs';
 import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndexInfo, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import { COLD_FOLD_MIN, coldFoldEntries, coldFoldWorkersFromEnv } from './fold-cold.mjs';
@@ -57,7 +58,7 @@ export function validateCreate({ model, cwd, meta = {} }) {
 // Env a child gets: the runner's own env is stale for identity (it carries whichever lead started the runner),
 // so every agent id/team/lane/role is overwritten from its own meta. The per-agent token (X1a) is set from the runner's
 // memory only, and an inherited one (the runner was started from an agent's shell) is always dropped first: a child
-// never carries another agent's token.
+// never carries another agent's token. Workers also get the provider-neutral git gate on PATH (idea-888).
 export function agentEnv(id, meta = {}, base = process.env, { token } = {}) {
   const env = { ...base, VS_AGENT_ID: id, PASEO_AGENT_ID: id };
   delete env.VS_AGENT_TOKEN;
@@ -67,7 +68,8 @@ export function agentEnv(id, meta = {}, base = process.env, { token } = {}) {
     if (v !== undefined && v !== null && v !== '') env[k] = String(v);
     else delete env[k];
   }
-  return env;
+  // idea-888: a worker gets the git shim first on PATH, whatever its provider (runner/git-guard.mjs applyGitShim).
+  return applyGitShim(env, { worker: isWorkerAgent(meta, env) });
 }
 
 // ---- Per-agent identity (PLAN_X1_IDENTITY X1a) ---------------------------------------------------------------------
