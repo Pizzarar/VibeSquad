@@ -905,6 +905,9 @@ test(
       // tierA stakes on the neon arm: top rung of the preferred family (arms only exist at normal, but the hook is pure routing).
       const t = await run({ "vs.arm": "neon", stakes: "tierA-invariant" });
       assert.equal(t.config.provider, A);
+      // R8: vs.arm=flash routes a role-name Implement spawn onto the antigravity-cli cheap rung (gemini-3.8-flash).
+      const f = await run({ "vs.arm": "flash", "vs.model": "gemini-3.8-flash" });
+      assert.deepEqual([f.config.provider, f.config.model, f.labels.profile], [A, "gemini-3.8-flash", "Implement"]);
     } finally {
       h.stop?.();
     }
@@ -912,6 +915,8 @@ test(
     try {
       const c = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "neon" }) });
       assert.equal(c.config.provider, C, "a capped arm provider fails over along the role list");
+      const cf = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "flash" }) });
+      assert.deepEqual([cf.config.provider, cf.config.model], [C, "claude-sonnet-5-5"], "a capped flash arm fails over to Claude mid rung");
     } finally {
       hc.stop?.();
     }

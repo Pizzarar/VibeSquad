@@ -20,7 +20,7 @@ const pick3 = (r) => [r.arm, r.reason, r.swapped, r.profile];
 
 test("arm table: Sonnet + Neon only, DSP is never an arm", () => {
   assert.deepEqual(IMPLEMENTER_ARMS, ["sonnet", "neon"]);
-  assert.deepEqual(Object.values(ARMS).map((a) => a.profile), [SONNET, NEON]);
+  assert.deepEqual(IMPLEMENTER_ARMS.map((wf) => ARMS[wf].profile), [SONNET, NEON]);
   assert.equal(armOfProfile(SONNET).wf, "sonnet");
   assert.equal(armOfProfile("worker").wf, "sonnet");
   assert.equal(armOfProfile(NEON).wf, "neon");
