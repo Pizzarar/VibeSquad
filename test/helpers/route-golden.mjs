@@ -45,6 +45,10 @@ export const TODAY_FIXTURE = JSON.parse(readFileSync(new URL("../fixtures/route-
 // itself stays byte-for-byte): R7 (docs/PLAN_PER_ROLES_LADDER_1125.md, 2026-11-25) mechanical stakes on opencode run
 // DeepSeek Flash instead of keeping the landed profile's v4-pro (32 rows; provider, effort and mode unchanged).
 const R7_OPENCODE_MECHANICAL_MODEL = "deepseek/deepseek-flash";
+// A2 (idea-986, PLAN_PER_ROLES_LADDER_1125 Amend 11-25 Per3): the claude mechanical rung is Claude Haiku (was Sonnet/low).
+// Every pinned claude+mechanical row must still read Sonnet/low, so a fixture change cannot hide behind this delta.
+const A2_CLAUDE_MECHANICAL_FROM = "claude-sonnet-5-5";
+const A2_CLAUDE_MECHANICAL_MODEL = "claude-haiku-5-5";
 
 /** Today's route for a profile name (b634cc9a, pinned + the deltas above): the failover walk, then the stakes ladder on the landed profile. */
 export function today(name, caps, stakes) {
@@ -54,6 +58,32 @@ export function today(name, caps, stakes) {
   const i = byCaps[capKey]?.[stakes === undefined ? "(none)" : stakes];
   if (i === undefined) throw new Error(`no pinned golden row for ${name} caps=[${caps}] stakes=${stakes}`);
   const [provider, pinnedModel, effort, modeId] = TODAY_FIXTURE.rows[i];
-  const model = stakes === "mechanical" && provider === O ? R7_OPENCODE_MECHANICAL_MODEL : pinnedModel;
+  let model = pinnedModel;
+  if (stakes === "mechanical" && provider === O) model = R7_OPENCODE_MECHANICAL_MODEL;
+  if (stakes === "mechanical" && provider === C) {
+    if (pinnedModel !== A2_CLAUDE_MECHANICAL_FROM || effort !== "low") {
+      throw new Error(`A2 delta: pinned claude mechanical row for ${name} caps=[${caps}] is ${pinnedModel}/${effort}, not Sonnet/low`);
+    }
+    model = A2_CLAUDE_MECHANICAL_MODEL;
+  }
   return { provider, model, effort, modeId };
+}
+
+// A2 (idea-986): old names that pin DeepSeek (server/spawn-route.mjs LEGACY_DEEPSEEK_PIN_ROUTES; "Coder" reaches
+// Work Order - DSP) run in the spawn hook as Implement while opencode is capped: tierA-* stakes kept (top rung, the
+// role's own order claude > Gemini), every other stakes value -> mechanical (cheap rung, Gemini Flash > Claude Haiku >
+// opencode). All capped = the walk's first family. Literal rows, not computed from the ladder under test.
+export const A2_REROUTED_NAMES = Object.freeze(["Work Order - DSP", "Mechanical - DSF", "Coder"]);
+const A2_TOP = { [C]: row(C, "claude-opus-5-5", "high", "auto"), [A]: row(A, "gemini-4-neon", "high", "accept-edits") };
+const A2_CHEAP = { [A]: row(A, "gemini-3.8-flash", "medium", "accept-edits"), [C]: row(C, "claude-haiku-5-5", "low", "auto") };
+
+/** True when the hook reroutes this old name (opencode capped). */
+export const a2Rerouted = (name, caps) => A2_REROUTED_NAMES.includes(name) && caps.includes(O);
+
+/** The spawn hook's route for an old name: today() unless A2 reroutes it (then the Implement row above). */
+export function todayHook(name, caps, stakes) {
+  if (!a2Rerouted(name, caps)) return today(name, caps, stakes);
+  const tierA = typeof stakes === "string" && stakes.startsWith("tierA-");
+  const [rungs, order] = tierA ? [A2_TOP, [C, A]] : [A2_CHEAP, [A, C]];
+  return { ...rungs[order.find((f) => !caps.includes(f)) ?? order[0]] };
 }

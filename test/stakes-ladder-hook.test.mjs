@@ -100,7 +100,7 @@ test(
     const h = harness();
     try {
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS(), env: { VS_STAKES: "mechanical" } });
-      assert.equal(out.config.model, "claude-sonnet-5-5");
+      assert.equal(out.config.model, "claude-haiku-5-5"); // A2 idea-986: claude mechanical rung (was sonnet)
       assert.equal(out.config.thinkingOptionId, "low");
     } finally {
       h.stop?.();
