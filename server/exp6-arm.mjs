@@ -64,9 +64,14 @@ export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP
  * parsed THROWS (readCappedProviders would read it as "no caps"): decideArm then treats the arm as capped and keeps the
  * requested profile, so a corrupt cap file never swaps a spawn onto a dead provider (idea-703). Other callers of
  * provider-failover.mjs keep their behaviour.
+ * G2 r1 (@per, idea-1012): families >=95% on live quota (runner/limits.jsonl, limits-read liveQuotaUsage, the same source
+ * and isProviderOverQuota test the spawn hook fails over on) are added as caps, so the arm the hook would hop off is never
+ * picked: the pick goes to the other arm with reason capped:<family>, and vs.arm / wf name the provider that actually runs.
+ * A `vs cap` entry for the family wins (kept as is). The quota read never throws (unreadable = no quota caps).
  */
 export async function readArmCaps({ env = process.env } = {}) {
-  const { readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
+  const { isProviderOverQuota, normalizeProviderFamily, readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
+  const { liveQuotaUsage } = await import("./limits-read.mjs");
   const cappedProvidersPath = env?.VIBESQUAD_CAPPED_PROVIDERS_PATH || (env?.VIBESQUAD_HOME ? join(env.VIBESQUAD_HOME, "capped-providers.json") : undefined);
   const path = resolveCappedProvidersPath(cappedProvidersPath ? { cappedProvidersPath } : {});
   if (existsSync(path)) {
@@ -74,7 +79,15 @@ export async function readArmCaps({ env = process.env } = {}) {
     const map = doc && typeof doc === "object" && !Array.isArray(doc) ? (doc.capped ?? doc) : null;
     if (!map || typeof map !== "object" || Array.isArray(map)) throw new Error(`capped-providers.json: unexpected shape at ${path}`);
   }
-  return readCappedProviders({ useDiskCaps: true, cappedProvidersPath: path });
+  const caps = { ...readCappedProviders({ useDiskCaps: true, cappedProvidersPath: path }) };
+  const quota = liveQuotaUsage({ home: env?.VIBESQUAD_HOME || undefined });
+  for (const entry of quota) {
+    const fam = normalizeProviderFamily(entry?.id);
+    if (!fam || caps[fam]) continue;
+    const q = isProviderOverQuota(fam, quota, undefined, { ignoreDiskCaps: true });
+    if (q.overQuota) caps[fam] = { reason: q.reason, quota: true };
+  }
+  return caps;
 }
 
 /** The capped family key of `wf`'s provider in the capped map/array, or "" (not capped). */
