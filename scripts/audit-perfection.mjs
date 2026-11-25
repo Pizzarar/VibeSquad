@@ -2,7 +2,7 @@
 // Perfection audit run (PLAN_PERFECTION_AUDIT A2). The run follows docs/lanes/perfection/AUDIT_BRIEF.md, which reads
 // docs/lanes/perfection/AUDIT_CHECKLIST.md. Two verbs:
 //   node scripts/audit-perfection.mjs collect [--dir <runner/agents>] [--since <ISO>] [--repo <git dir>]
-//       -> JSON { findings: [...] } of the mechanical checks (owner-stamp buckets 1-5, stale usage-review:* items).
+//       -> JSON { findings: [...] } of the mechanical checks (owner-stamp buckets 1-5, stale usage-review:* items, new catalog models not on ladder).
 //   node scripts/audit-perfection.mjs file <findings.json|-> [--dry-run]
 //       -> files each finding as one inbox item (lane perfection, source "audit:perfection"), deduped against OPEN items and keys archived/rejected in the last 14 days.
 // A finding is { key, text, evidence, risky? }. `key` is the stable dedupe id; risky/owner-only ones also go to `vs log needs-you`.
@@ -12,6 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { addInboxCards, readInboxCards, triageInboxCards, buildConciseTitle } from '../server/inbox.mjs';
+import { buildCatalog, probeModelLists } from '../server/providers-catalog.mjs';
+import { loadTierLadder, routeProviderFamily, stakesLadderPath } from '../server/stakes-ladder.mjs';
+import { migrateModelId } from '../server/model-ids.mjs';
 import { audit, loadRuns, relayBucket, handoffBucket, fixerBucket, fixOfferBucket, scriptableTurnsBucket, gitMerges } from './audit-owner-stamps.mjs';
 import { createHash } from 'node:crypto';
 
@@ -27,6 +30,8 @@ const OPEN_STATUSES = new Set(['parked', 'accepted']);
 const JUDGED_STATUSES = new Set(['archived', 'rejected']);
 /** A key on a card archived/rejected within this window is a judged finding: not re-filed. */
 export const JUDGED_WINDOW_MS = 14 * 24 * 3600 * 1000;
+export const NEW_MODEL_KEY_PREFIX = 'new-model:';
+const isPermanentJudgedKey = (key) => Boolean(key && key.startsWith(NEW_MODEL_KEY_PREFIX));
 const KEY_RE = /\(audit-key: ([^)]+)\)/;
 
 /** The one place the audit lane id is chosen. A1's findAuditLane replaces this body. */
@@ -50,7 +55,17 @@ export function fileFindings(findings, { baseHome, dryRun = false, needsYou = ()
   const auditCards = readInboxCards(baseHome).filter((c) => c.source === AUDIT_SOURCE);
   const openCards = auditCards.filter((c) => OPEN_STATUSES.has(c.status));
   const open = new Set(openCards.map((c) => keyOf(c.text)).filter(Boolean));
-  const judged = new Set(auditCards.filter((c) => JUDGED_STATUSES.has(c.status) && now - Date.parse(c.updatedAt || c.createdAt) < JUDGED_WINDOW_MS).map((c) => keyOf(c.text)).filter(Boolean));
+  const judged = new Set(
+    auditCards
+      .filter((c) => {
+        if (!JUDGED_STATUSES.has(c.status)) return false;
+        const k = keyOf(c.text);
+        if (!k) return false;
+        return isPermanentJudgedKey(k) || now - Date.parse(c.updatedAt || c.createdAt) < JUDGED_WINDOW_MS;
+      })
+      .map((c) => keyOf(c.text))
+      .filter(Boolean),
+  );
   const filed = [];
   const updated = [];
   const skipped = [];
@@ -86,6 +101,107 @@ export function staleUsageReviewFindings({ baseHome, now = Date.now() } = {}) {
       text: `Open ${c.source} item ${c.id} is older than 3 days: triage it (accept/reject) or fix it. "${String(c.title || c.text).slice(0, 80)}".`,
       evidence: `inbox ${c.id} created ${c.createdAt}, status ${c.status}`,
     }));
+}
+
+const EFFORT_SUFFIX_RE = /-(?:minimal|low|medium|high|xhigh|max)$/i;
+const IGNORED_CATALOG_MODEL_RE = /^gemini-pro-orchestrator(?:-|$)/i;
+const MODEL_OWNER_RE = [
+  [/^(?:anthropic\/)?claude(?:-|$)/i, 'claude'],
+  [/^(?:google\/)?gemini(?:-|$)/i, 'antigravity-cli'],
+  [/^(?:openai\/)?(?:gpt|o[134]|codex)(?:-|$)/i, 'codex'],
+  [/^(?:deepseek\/)?deepseek(?:-|$)/i, 'opencode'],
+];
+
+function modelOwnerProvider(modelId) {
+  for (const [re, fam] of MODEL_OWNER_RE) if (re.test(modelId)) return fam;
+  return null;
+}
+
+/** Normalize a model id for ladder comparison: migrate retired ids and strip trailing effort suffixes. */
+export function normalizeLadderModelId(model) {
+  if (typeof model !== 'string') return '';
+  const migrated = migrateModelId(model.trim());
+  return migrated.replace(EFFORT_SUFFIX_RE, '').trim();
+}
+
+async function defaultReadCatalog({ home, probeLists = probeModelLists, loadCatalog = buildCatalog, warn = (msg) => console.error(msg) } = {}) {
+  const lists = await probeLists();
+  for (const [prov, res] of Object.entries(lists ?? {})) {
+    if (res?.error) warn(`audit-perfection: live model probe failed for ${prov} (falling back to ${res.source || 'static'}): ${res.error}`);
+  }
+  return loadCatalog({ home });
+}
+
+/**
+ * Diff each provider's model catalog against the models named on the ladder (defaults + stored overrides).
+ * Effort variants (e.g. gemini-4-neon-high -> gemini-4-neon) and retired aliases are normalized before comparing.
+ * Cross-provider model entries (e.g. claude-* or gpt-* served through antigravity-cli) and orchestrator wrappers are skipped.
+ * If the catalog cannot be read (provider offline / error), logs a warning and returns [] without throwing.
+ */
+export async function newModelFindings({ baseHome, catalog, readCatalog = defaultReadCatalog, ladder, probeLists, loadCatalog, warn = (msg) => console.error(msg) } = {}) {
+  let cat = catalog;
+  if (cat === undefined) {
+    try {
+      cat = await readCatalog({ home: baseHome, ...(probeLists ? { probeLists } : {}), ...(loadCatalog ? { loadCatalog } : {}), warn });
+    } catch (err) {
+      warn(`audit-perfection: catalog read failed: ${err?.message ?? err}`);
+      return [];
+    }
+  }
+  if (!cat || typeof cat !== 'object') return [];
+
+  let lad = ladder;
+  if (lad === undefined) {
+    try {
+      const file = baseHome ? path.join(baseHome, 'stakes-ladder.json') : stakesLadderPath();
+      lad = loadTierLadder(file);
+    } catch {
+      return [];
+    }
+  }
+  if (!lad || typeof lad !== 'object') return [];
+
+  const ladderModels = new Map();
+  for (const [prov, rungs] of Object.entries(lad)) {
+    const fam = routeProviderFamily(prov) || String(prov).trim().toLowerCase();
+    if (!fam || !rungs || typeof rungs !== 'object') continue;
+    let set = ladderModels.get(fam);
+    if (!set) { set = new Set(); ladderModels.set(fam, set); }
+    for (const rung of Object.values(rungs)) {
+      const norm = normalizeLadderModelId(rung?.model);
+      if (norm) set.add(norm.toLowerCase());
+    }
+  }
+
+  const findings = [];
+  const seen = new Set();
+  for (const [prov, entry] of Object.entries(cat)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const fam = routeProviderFamily(entry.provider || prov) || String(prov).trim().toLowerCase();
+    if (!fam) continue;
+    const models = Array.isArray(entry.models) ? entry.models : [];
+    const onLadder = ladderModels.get(fam) ?? new Set();
+    for (const item of models) {
+      const rawId = typeof item === 'string' ? item : item?.id;
+      const norm = normalizeLadderModelId(rawId);
+      if (!norm) continue;
+      if (IGNORED_CATALOG_MODEL_RE.test(norm)) continue;
+      const owner = modelOwnerProvider(norm);
+      if (owner && owner !== fam) continue;
+      const normLower = norm.toLowerCase();
+      if (onLadder.has(normLower)) continue;
+      const dedupeKey = `${fam}/${normLower}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const source = typeof item === 'object' && item?.source ? item.source : 'catalog';
+      findings.push({
+        key: `${NEW_MODEL_KEY_PREFIX}${fam}/${normLower}`,
+        text: `${fam}/${norm} seen in catalog, not on ladder: trial it as an arm?`,
+        evidence: `providers-catalog ${fam} (${rawId}, ${source}) not on stakes-ladder`,
+      });
+    }
+  }
+  return findings;
 }
 
 /** Mechanical checks over the runner transcripts: scripts/audit-owner-stamps.mjs buckets 1-5 (reused, not reimplemented). */
@@ -152,6 +268,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const findings = [
       ...(fs.existsSync(args.dir) ? transcriptFindings({ dir: args.dir, since, repo: args.repo }) : []),
       ...staleUsageReviewFindings({}),
+      ...(await newModelFindings({})),
     ];
     console.log(JSON.stringify({ findings }, null, 2));
   } else if (verb === 'file') {
