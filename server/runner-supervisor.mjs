@@ -113,6 +113,51 @@ export function restartWhenIdle(owner, at = Date.now()) {
 /** The armed owner restart ({ at }) or null. */
 export const pendingIdleRestart = (owner) => idleRestarts.get(owner) ?? null;
 
+/** idea-870: how long the runner keeps new turns queued for a restart the server is about to do (the kill takes ~3 s at most). */
+export const RESTART_GATE_TTL_MS = 30_000;
+
+/**
+ * idea-870: close the runner's restart gate (runner/server.mjs POST /restart-gate). The runner checks idle and closes the gate
+ * in one synchronous step, so no turn can start between that check and our kill; while closed, a new turn queues and the next
+ * runner replays it. -> { gated: true } | { busy: true, running, held, ids } (a turn started since our runnerBusy check) |
+ * { gated: false, legacy: true } (a runner without the route, or a runner that is down: nothing to gate, restart as before) |
+ * { busy: true, unknown: true, error } (no answer we can trust, e.g. a timeout: never kill on that).
+ */
+export async function closeRestartGate(owner, { ttlMs = RESTART_GATE_TTL_MS } = {}) {
+  try {
+    const r = await owner.rc.request("POST", "/restart-gate", { ttlMs });
+    if (r?.gated === true) return { gated: true };
+    return { gated: false, busy: true, running: r?.running ?? null, held: r?.held ?? null, ids: Array.isArray(r?.ids) ? r.ids : [] };
+  } catch (e) {
+    if (e?.status === 404 || e?.status === 0 || (e?.transport && !e?.timedOut)) return { gated: false, legacy: true };
+    return { gated: false, busy: true, unknown: true, ids: [], error: String(e?.message ?? e) };
+  }
+}
+
+/** idea-870: reopen the gate after a restart that did not happen (best effort: it lapses on its own after the TTL). */
+export function openRestartGate(owner) {
+  return Promise.resolve().then(() => owner.rc.request("DELETE", "/restart-gate")).then(() => true, () => false);
+}
+
+/**
+ * idea-870: the one way the supervisor and the owner's "Restart runner" kill a runner they found idle. A turn can start in the
+ * ms between runnerBusy() and the kill (the 9aa9be4e worker note), so the idle check is repeated by the runner itself while it
+ * closes its restart gate, and only a closed gate (or a runner too old to have one) is killed. A restart already in flight is
+ * joined, never gated (the gate would land on its fresh runner). -> { restarted: true } | { restarted: false, gate }.
+ */
+export async function restartIfStillIdle(owner, { gate = closeRestartGate, open = openRestartGate, restart = (o) => restartRunnerNow(o) } = {}) {
+  if (owner?.rc?.restarting) { await restart(owner); return { restarted: true, joined: true }; }
+  const g = await gate(owner);
+  if (g.busy) return { restarted: false, gate: g };
+  try {
+    await restart(owner);
+  } catch (e) {
+    if (g.gated) await open(owner);
+    throw e;
+  }
+  return { restarted: true };
+}
+
 /**
  * `owner`: { startOwned(): Promise<boolean>, rc: { healthy(): Promise<boolean>, home } } (a RunnerBackend).
  * Checks every `checkMs`; when the runner is down it starts it, and after a failed start waits longer (backoff, capped).
@@ -135,7 +180,7 @@ export function superviseRunner(owner, {
   agentList = (o) => Promise.resolve().then(() => o.listAgents()).then((a) => (Array.isArray(a) ? a : null), () => null),
   runningCount = (o) => agentList(o).then((agents) => (agents ? agents.filter((a) => a.status === "running").length : null)),
   diskHash = () => hashRunnerFiles(runtimeRunnerDir()),
-  restart = (o) => restartRunnerNow(o),
+  restart = (o) => restartIfStillIdle(o), // idea-870: the runner re-checks idle under its restart gate; { restarted: false } = busy again
   log = logRunnerMetric,
 } = {}) {
   let stopped = false;
@@ -198,12 +243,21 @@ export function superviseRunner(owner, {
             }
           } else {
             pendingLogged = false;
+            // idea-870: a turn that started after runnerBusy() keeps the runner (the gate's own idle check says busy): no
+            // kill, the armed owner restart stays armed and the hash restart is retried on a later idle tick.
+            const raced = (r) => {
+              if (r?.restarted !== false) return false;
+              pendingLogged = true;
+              if (wanted) idleRestarts.set(owner, wanted);
+              const g = r.gate ?? {};
+              log(`runner restart pending: the runner turned busy before the kill (${g.unknown ? `restart gate unanswered: ${g.error ?? "unknown"}` : `${g.running ?? "?"} running, ${g.held ?? "?"} held${g.ids?.length ? `: ${g.ids.slice(0, 8).join(", ")}` : ""}`}), nothing killed, waiting for them to finish${wanted ? " [owner restart armed]" : ""}`);
+              return true;
+            };
             if (wanted) {
               idleRestarts.delete(owner);
               gaveUpLogged = false;
               log("runner restart: owner restart armed while busy, runner idle now, restarting");
-              await restart(owner);
-              restartedFor = disk;
+              if (!raced(await restart(owner))) restartedFor = disk;
             } else if (disk === restartedFor) {
               if (!gaveUpLogged) {
                 gaveUpLogged = true;
@@ -212,8 +266,7 @@ export function superviseRunner(owner, {
             } else {
               gaveUpLogged = false;
               log("runner restart: runtime runner code changed, restarting");
-              await restart(owner);
-              restartedFor = disk;
+              if (!raced(await restart(owner))) restartedFor = disk;
             }
           }
         }

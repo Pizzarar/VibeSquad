@@ -7,6 +7,7 @@
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
 import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
 import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
+import { ROLE_PROVIDER_CHAINS } from "./provider-failover.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -20,16 +21,19 @@ import {
 export { routeProviderFamily };
 
 /**
- * The 8 roles (from the 12 profiles in use 2026-11-17). `providers` is the preference order walked on cap/quota, with
- * the same three hops as today's failover (server/provider-failover.mjs COUNTERPART_PROFILES + ROLE_FAILOVER_CHAINS).
+ * The 9 roles (8 from the 12 profiles in use 2026-11-17, + planner in R1). `providers` is the preference order walked on cap/quota, read
+ * from the role-keyed chain table (server/provider-failover.mjs ROLE_PROVIDER_CHAINS, R1): the same three hops the old
+ * names' COUNTERPART_PROFILES + ROLE_FAILOVER_CHAINS land on.
  * `modes[provider]` = {modeId, effort}: copied from the profile today's failover lands on for that role + provider;
  * effort is the fallback used only when the tier rung has none.
+ * `hidden: true` = resolves and routes as usual but is left out of role listings (`vs profiles`, Settings pickers):
+ * work-order is the old DSP-first lane kept for old names and explicit requests (R1); new spawns pick implement.
  */
 export const ROLE_TABLE = deepFreeze({
   lead: {
     name: "Lead",
     tier: "top",
-    providers: ["claude", "antigravity-cli", "opencode"],
+    providers: roleChain("lead"),
     modes: {
       claude: { modeId: "auto", effort: "medium" }, // Lead - Claude
       "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Lead - Gemini
@@ -39,17 +43,28 @@ export const ROLE_TABLE = deepFreeze({
   brainstorm: {
     name: "Brainstorm",
     tier: "top",
-    providers: ["claude", "antigravity-cli", "opencode"],
+    providers: roleChain("brainstorm"),
     modes: {
       claude: { modeId: "auto", effort: "medium" }, // Brainstorm - Claude
       "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Brainstorm - Gemini
       opencode: { modeId: "build", effort: "high" }, // Senior Reasoning - DSP
     },
   },
+  planner: {
+    // R1: planning/spec work (old Planner - Sonnet, Spec - Opus) gets its own role instead of riding implement.
+    name: "Planner",
+    tier: "mid",
+    providers: roleChain("planner"),
+    modes: {
+      claude: { modeId: "auto", effort: "medium" }, // Planner - Sonnet
+      "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Lead - Gemini
+      opencode: { modeId: "build", effort: "high" }, // Senior Reasoning - DSP
+    },
+  },
   implement: {
     name: "Implement",
     tier: "mid",
-    providers: ["claude", "antigravity-cli", "opencode"],
+    providers: roleChain("implement"),
     modes: {
       claude: { modeId: "auto", effort: "medium" }, // Implement - Sonnet
       "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Lead - Gemini / Implement - Gemini (trial)
@@ -59,7 +74,8 @@ export const ROLE_TABLE = deepFreeze({
   "work-order": {
     name: "Work Order",
     tier: "mid",
-    providers: ["opencode", "claude", "antigravity-cli"],
+    hidden: true,
+    providers: roleChain("work-order"),
     modes: {
       opencode: { modeId: "build", effort: "high" }, // Work Order - DSP
       claude: { modeId: "auto", effort: "medium" }, // Implement - Sonnet
@@ -70,7 +86,7 @@ export const ROLE_TABLE = deepFreeze({
     // EXP4 (d9692a36): Gemini stays the default reviewer.
     name: "Review",
     tier: "mid",
-    providers: ["antigravity-cli", "claude", "opencode"],
+    providers: roleChain("review"),
     modes: {
       "antigravity-cli": { modeId: "default", effort: "medium" }, // Review - Gemini
       claude: { modeId: "auto", effort: "medium" }, // Review - Sonnet
@@ -80,7 +96,7 @@ export const ROLE_TABLE = deepFreeze({
   "pre-check": {
     name: "Pre-check",
     tier: "cheap",
-    providers: ["antigravity-cli", "claude", "opencode"],
+    providers: roleChain("pre-check"),
     modes: {
       "antigravity-cli": { modeId: "default", effort: "low" }, // Pre-check - Flash
       claude: { modeId: "auto", effort: "low" }, // Check - Haiku
@@ -90,7 +106,7 @@ export const ROLE_TABLE = deepFreeze({
   "art-director": {
     name: "Art Director",
     tier: "mid",
-    providers: ["antigravity-cli", "claude", "opencode"],
+    providers: roleChain("art-director"),
     modes: {
       "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Art Director - Gemini
       claude: { modeId: "auto", effort: "medium" }, // Art Painter - Opus
@@ -100,7 +116,7 @@ export const ROLE_TABLE = deepFreeze({
   "art-painter": {
     name: "Art Painter",
     tier: "top",
-    providers: ["claude", "antigravity-cli", "opencode"],
+    providers: roleChain("art-painter"),
     modes: {
       claude: { modeId: "auto", effort: "medium" }, // Art Painter - Opus
       "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Art Director - Gemini
@@ -176,6 +192,22 @@ const LEGACY_VIA = {
 export const LEGACY_ROUTES = deepFreeze(
   Object.fromEntries(Object.entries(LEGACY_VIA).map(([name, via]) => [name, { role: LEGACY_PROFILE_ROLES[name], via }])),
 );
+
+/** A copy of the role's failover chain (ROLE_PROVIDER_CHAINS), so ROLE_TABLE never aliases the shared table. */
+function roleChain(key) {
+  const chain = ROLE_PROVIDER_CHAINS[key];
+  if (!chain?.length) throw new Error(`role-route: no failover chain for role "${key}"`);
+  return [...chain];
+}
+
+/** Role keys a listing shows: hidden roles (ROLE_TABLE `hidden`, or a stored role marked hidden) are left out. */
+export function isHiddenRole(key, roles = ROLE_TABLE) {
+  return Boolean(roles?.[key]?.hidden ?? ROLE_TABLE[key]?.hidden);
+}
+
+export function listedRoleKeys(roles = ROLE_TABLE) {
+  return Object.keys(roles ?? {}).filter((k) => !isHiddenRole(k, roles));
+}
 
 function deepFreeze(o) {
   for (const v of Object.values(o)) if (v && typeof v === "object") deepFreeze(v);

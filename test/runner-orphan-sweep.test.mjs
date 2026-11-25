@@ -162,7 +162,7 @@ test('ledger: add never writes synchronously, removals coalesce, final file matc
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
 
-test('ledger: an add is written promptly, not held behind the 50 ms removal window (idea-572)', async () => {
+test('ledger: an add is written promptly, not held behind the 50 ms removal window (idea-572)', async (t) => {
   const home = tmp();
   const ledger = createChildLedger(home);
   const { EventEmitter } = await import('node:events');
@@ -170,11 +170,18 @@ test('ledger: an add is written promptly, not held behind the 50 ms removal wind
   const old = mk(915001);
   ledger.add(old, 'node.exe');
   await ledger.settled();
-  old.emit('exit'); // arms the coalescing timer
+  // idea-925: freeze setTimeout from here, so the 50 ms removal timer can never fire. The add must then land on the
+  // kick() path alone; a real-time I/O-turn budget (the old 40 setImmediate loop) flaked when the disk was slow.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  old.emit('exit'); // arms the (frozen) coalescing timer
   const c = mk(915002);
   ledger.add(c, 'node.exe');
-  for (let i = 0; i < 40 && !readChildren(home).some((r) => r.pid === 915002); i++) await new Promise((r) => setImmediate(r));
-  assert.ok(readChildren(home).some((r) => r.pid === 915002), 'add landed within a few I/O turns');
+  const deadline = Date.now() + 10_000; // only a hang guard: the wait ends on the file, not on elapsed time
+  while (!readChildren(home).some((r) => r.pid === 915002)) {
+    if (Date.now() > deadline) assert.fail('add never landed while the removal timer was frozen');
+    await new Promise((r) => setImmediate(r));
+  }
+  t.mock.timers.reset(); // real timers back; settled() flushes the pending removal
   await ledger.settled();
   assert.deepEqual(readChildren(home).map((r) => r.pid), [915002]);
 });

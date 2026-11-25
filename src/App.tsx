@@ -133,6 +133,7 @@ import {
   useUiScale,
   useUiScaleHud,
 } from "./uiScale";
+import { etDateTime } from "./etTime";
 
 const COLLAPSED_TEAMS_KEY = "vibesquad.collapsedTeams";
 const DISMISSED_LAN_IPS_KEY = "vibesquad.dismissedLanIps";
@@ -475,7 +476,7 @@ const Sidebar = memo(function Sidebar(props: {
                 <div
                   key={`${u.provider}-${u.account ?? ""}`}
                   className={`quota-pill ${quotaTone(u.usedPct)}`}
-                  title={[u.account, u.resetAt && `resets ${new Date(u.resetAt).toLocaleString()}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
+                  title={[u.account, u.resetAt && `resets ${etDateTime(u.resetAt)}`, u.staleModelListWarning && "model list may be stale"].filter(Boolean).join(" · ")}
                 >
                   <span style={{ color: prov.color }}>{prov.symbol} {prov.name}</span>
                   <span>{u.usedPct !== undefined ? `${Math.round(u.usedPct)}% used` : u.remainingLabel}</span>
@@ -2329,7 +2330,7 @@ export function App() {
           className="tchip"
           data-testid="psycho-focus-normal-btn"
           title="Switch to Normal mode"
-          style={{ position: "fixed", left: 8, bottom: 8, zIndex: 50, opacity: 0.8 }}
+          style={{ position: "fixed", zIndex: 50, opacity: 0.8 }}
           onClick={() => setPref("app.vibe", "boring")}
         >
           Normal mode

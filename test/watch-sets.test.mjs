@@ -5,7 +5,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
+import { RunnerBackend } from "../server/backend/runner-backend.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -3064,3 +3065,182 @@ test(
     }
   }),
 );
+
+// ---- idea-897: a delivered report must not read as idle-no-report when the turn events were missed ----
+
+test("idea-897: an idle worker whose snapshot lastProgressAt is after the watch was armed counts its final message as the report (no turn events seen)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString() }; // last turn progress BEFORE arming
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => "PASS 0/0/0 abc1234 TOTAL 101 specs", deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 5 * 60_000;
+    snap.lastProgressAt = new Date(clock.t).toISOString(); // the re-task ran and reported; no turn_started/turn_ended reached the engine
+    clock.t += 61_000;
+    await eng.tick();
+    clock.t += 31 * 60_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.ok(!w.pings.some((p) => /idle-no-report/.test(p.text)), JSON.stringify(w.pings));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 review H2: a non-turn write (updatedAt moves, lastProgressAt does not) leaves an old final message as idle-no-report", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897b-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString(), updatedAt: new Date(clock.t - 60_000).toISOString() };
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => "OLD round report", deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 5 * 60_000;
+    snap.updatedAt = new Date(clock.t).toISOString(); // a label/meta write, not a turn
+    clock.t += 61_000;
+    await eng.tick();
+    clock.t += 31 * 60_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.notEqual(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 review M3: progress advancing past a cached finalText re-reads the timeline instead of delivering the old round's text", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897c-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString() };
+    let msg = "ROUND1 report";
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => msg, deliver: () => true, retryMs: 0 });
+    await eng.tick(); // caches ROUND1 as finalText (floor not met, so not done)
+    clock.t += 5 * 60_000;
+    msg = "ROUND2 report"; // new turn ran; turn_started/turn_ended never reached the engine
+    snap.lastProgressAt = new Date(clock.t).toISOString();
+    clock.t += 61_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.match(String(w.items[0].report ?? ""), /ROUND2/, JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 integration: a real idle agent read through RunnerBackend.fetchAgent carries lastProgressAt, and the engine counts the re-task report (meta writes do not)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897d-"));
+  try {
+    mkdirSync(join(sb, "agents"), { recursive: true });
+    const logFile = join(sb, "agents", "rn-w.jsonl");
+    const clock = { t: Date.now() };
+    const ev = (seq, ts, type, extra = {}) => JSON.stringify({ seq, ts, type, ...extra }) + "\n";
+    writeFileSync(logFile, ev(1, clock.t - 120_000, "input", { text: "go" }) + ev(2, clock.t - 60_000, "output", { text: "round1" }));
+    const rec = { id: "rn-w", provider: "claude", status: "idle", cwd: sb, createdAt: clock.t - 120_000, updatedAt: clock.t - 60_000, lastSeq: 2, meta: {} };
+    const backend = new RunnerBackend({ client: { home: sb, request: async () => ({ ...rec }) }, hooks: false });
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    let msg = "ROUND1 report";
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async (ref) => (await backend.fetchAgent(ref)).agent, lastMessage: async () => msg, deliver: () => true, retryMs: 0 });
+    const first = (await backend.fetchAgent("rn-w")).agent;
+    assert.ok(first.lastProgressAt, "idle agent read via fetchAgent exposes lastProgressAt");
+    await eng.tick(); // caches ROUND1 (progress predates the watch)
+    clock.t += 5 * 60_000;
+    // a meta/label write moves updatedAt only: must not count as progress
+    rec.updatedAt = clock.t; rec.lastSeq = 3;
+    appendFileSync(logFile, ev(3, clock.t, "meta", { labels: { a: "b" } }));
+    clock.t += 61_000;
+    await eng.tick();
+    assert.notEqual(listWatches({ all: true }, { home: sb }).find((x) => x.id === id).items[0].state, "done");
+    // the re-task ran: real turn output lands in the log
+    clock.t += 60_000;
+    msg = "ROUND2 report";
+    rec.updatedAt = clock.t; rec.lastSeq = 5;
+    appendFileSync(logFile, ev(4, clock.t - 1000, "input", { text: "again" }) + ev(5, clock.t, "output", { text: "round2" }));
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.match(String(w.items[0].report ?? ""), /ROUND2/, JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+// ---- idea-942: an archived worker that finished with a final message is done, not STALLED (archived) ----
+
+const A = (text, turnEnd = false) => ({ item: { type: "assistant_message", text }, turnEnd });
+const U = { item: { type: "user_message", text: "go" } };
+const TOOL = { item: { type: "tool_call", name: "bash" } };
+const ERR = { item: { type: "error", message: "boom" } };
+
+// The stub applies the same completedTurnText the production lastMessage uses for an archived worker (completedOnly).
+async function archivedRun(entries, status = "idle") {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-942-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status, archivedAt: new Date(clock.t).toISOString(), lastProgressAt: new Date(clock.t + 1000).toISOString() };
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async (_ref, o) => (o?.completedOnly ? completedTurnText(entries) : "NOT-COMPLETED-ONLY"), deliver: () => true, retryMs: 0 });
+    await eng.tick();
+    clock.t += 61_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    eng.stop?.();
+    return { item: w.items[0], pings: w.pings };
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+}
+
+test("idea-942: an archived idle worker whose last turn completed (turn_done) is done and carries the final message", async () => {
+  const r = await archivedRun([U, A("PASS 0/0/0 abc1234 TOTAL 5 specs", true)]);
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
+  assert.ok(!r.pings.some((p) => /STALLED|archived/.test(p.text)), JSON.stringify(r.pings));
+  assert.match(JSON.stringify(r.pings), /PASS 0\/0\/0 abc1234/);
+});
+
+test("idea-942: an archived worker with no final message still stalls as archived", async () => {
+  const r = await archivedRun([U]);
+  assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  assert.equal(r.item.reason, "archived");
+});
+
+test("idea-942: archived mid-turn (intermediate assistant message, no turn_done) stays stalled archived", async () => {
+  for (const entries of [[U, A("Let me look at the code")], [U, A("Let me look", false), TOOL]]) {
+    const r = await archivedRun(entries);
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+    assert.equal(r.item.reason, "archived");
+  }
+});
+
+test("idea-942: closed (killed mid-turn) and archived is stalled, not done, with or without an intermediate message", async () => {
+  for (const entries of [[U, A("partial plan"), TOOL], [U]]) {
+    const r = await archivedRun(entries, "closed");
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+    assert.notEqual(r.item.state, "done");
+  }
+});
+
+test("idea-942: crashed-then-archived (error entry, status closed) never reads as done, even after a reply", async () => {
+  for (const entries of [[U, ERR], [U, A("reply before the crash", true), U, ERR], [U, A("half a reply"), ERR]]) {
+    const r = await archivedRun(entries, "closed");
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  }
+  assert.equal(completedTurnText([U, A("done", true)]), "done");
+  assert.equal(completedTurnText([U, A("done", true), U, A("new turn, mid")]), "", "a newer unfinished turn is not the final message");
+});
+
+test("idea-942: a completed turn on a closed+archived worker is done (the archive killed an already-finished session)", async () => {
+  const r = await archivedRun([U, A("PASS 0/0/0 deadbee", true)], "closed");
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
+});

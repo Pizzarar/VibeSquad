@@ -2661,3 +2661,183 @@ test("systemd R1 helpers: KillMode gate (unset = control-group), refuse only for
   const bus = detectSystemd({ port: 4180, serverPid: 9, env: {}, platform: "linux", sd: { ctl: () => ({ status: 1, stdout: "", stderr: "Failed to connect to bus" }), cgroup: () => "" } });
   assert.match(bus.warnings[0], /Failed to connect to bus.*Re-adopt/);
 });
+
+test("idea-653: the run writes vs-restart-progress.json: starting, waiting (deadline, running/held) on each poll, finished with its result", async () => {
+  const w = await world({ running: [2, 1, 0] });
+  try {
+    const seen = [];
+    const progressFile = path.join(w.outDir, "vs-restart-progress.json");
+    const r = await w.run({}, [], { sleep: async (ms) => { try { seen.push(JSON.parse(readFileSync(progressFile, "utf8"))); } catch { /* not yet */ } await new Promise((res) => setTimeout(res, Math.min(ms, 5))); } });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const waiting = seen.filter((p) => p.phase === "waiting");
+    assert.ok(waiting.length >= 2, `waiting written on each poll: ${JSON.stringify(seen.map((p) => p.phase))}`);
+    assert.equal(waiting[0].pid, process.pid);
+    assert.equal(waiting[0].startedAt, r.startedAt);
+    assert.equal(waiting[0].running, 2);
+    assert.ok(Date.parse(waiting[0].waitDeadline) > Date.parse(r.startedAt));
+    assert.equal(waiting[1].running, 1, "refreshed on the next poll");
+    const last = JSON.parse(readFileSync(progressFile, "utf8"));
+    assert.equal(last.phase, "finished");
+    assert.equal(last.ok, true);
+    assert.equal(last.resultFile, r.resultFile);
+    assert.ok(!readdirSync(w.outDir).some((f) => /^restart-.*progress/.test(f)), "never named like a result file");
+  } finally { await w.cleanup(); }
+});
+
+// idea-695: rr-20261123212542-a218 deferred only on the requester's own `vs restart status` poll loop. The requester's own
+// held work is recorded, never waited on; any other agent's held work still holds and defers the restart.
+test("idea-695: withoutRequester strips only the requester's held work", async () => {
+  const { withoutRequester } = await import("../scripts/restart-runtime.mjs");
+  const h = { running: 0, held: 2, heldAgents: ["rn-req", "rn-other"], heldWork: { "rn-req": [{ pid: 1, name: "bash" }], "rn-other": [{ pid: 2, name: "node" }] } };
+  const r = withoutRequester(h, "rn-req");
+  assert.deepEqual(r.health.heldAgents, ["rn-other"]);
+  assert.equal(r.health.held, 1);
+  assert.deepEqual(Object.keys(r.health.heldWork), ["rn-other"]);
+  assert.deepEqual(r.excluded, { id: "rn-req", work: [{ pid: 1, name: "bash" }] });
+  assert.deepEqual(h.heldAgents, ["rn-req", "rn-other"], "the input is not mutated");
+  for (const [hh, req] of [[h, null], [h, "rn-nobody"], [{ running: 0 }, "rn-req"], [null, "rn-req"]]) {
+    const n = withoutRequester(hh, req);
+    assert.equal(n.health, hh);
+    assert.equal(n.excluded, null);
+  }
+  assert.equal(parseArgs(["--requester", "rn-req"]).requester, "rn-req");
+  for (const bad of ["", "-x", "a b", "x".repeat(65), "a;b"]) assert.throws(() => parseArgs(["--requester", bad]), /requester/, bad);
+});
+
+test("idea-695: the requester's own held work never defers its restart; another agent's still does", async () => {
+  const w = await world({ running: [0], held: [["rn-req"]] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05, requester: "rn-req" });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.deferred, undefined);
+    assert.equal(r.requesterExcluded?.id, "rn-req");
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], held: [["rn-req", "rn-other"]] });
+  try {
+    const r = await w2.run({ waitTimeoutSec: 0.05, requester: "rn-req" });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.deferred?.heldAgents, ["rn-other"], JSON.stringify(r.deferred));
+    assert.equal(r.requesterExcluded?.id, "rn-req");
+    assert.equal(w2.shutdownAuth.length, 0, "runner never told to stop");
+  } finally { await w2.cleanup(); }
+  const w3 = await world({ running: [0], held: [["rn-req"]] });
+  try {
+    const r = await w3.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.ok, false, "without --requester the same hold defers, as before");
+    assert.deepEqual(r.deferred?.heldAgents, ["rn-req"]);
+  } finally { await w3.cleanup(); }
+});
+
+test("idea-695: vs restart names its agent caller as --requester; the owner may name one; fireArgs", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const { fireArgs } = await import("../server/restart-request.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-home-"));
+  const run = async (flags, opts) => {
+    const seen = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try { await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, teams, drainGuard: () => ({ pending: [] }), ...opts }); return seen[0]; } finally { process.stdout.write = orig; }
+  };
+  try {
+    const tokenEnv = { VS_AGENT_ID: "rn-deadbeef0000", VS_AGENT_TOKEN: "t0k", VIBESQUAD_HOME: home };
+    const verify = async ({ id }) => ({ id, role: "lead", lane: "vibesquad", team: "vibesquad", overlord: true });
+    const a = await run({}, { env: tokenEnv, verify });
+    assert.equal(a[a.indexOf("--requester") + 1], "rn-deadbeef0000", "an agent caller is its own requester");
+    assert.equal((await run({ requester: "rn-deadbeef0000" }, { env: tokenEnv, verify })).filter((x) => x === "--requester").length, 1);
+    await assert.rejects(run({ requester: "rn-other" }, { env: tokenEnv, verify }), /--requester is your own id/);
+    const owner = { env: { VIBESQUAD_HOME: home }, hasOwnerProof: () => true };
+    assert.equal((await run({}, owner)).includes("--requester"), false, "the owner names none by default");
+    const o = await run({ requester: "rn-req" }, owner);
+    assert.equal(o[o.indexOf("--requester") + 1], "rn-req", "the owner (the server's fire) may name one");
+    await assert.rejects(run({ requester: "a b" }, owner), /--requester must be an agent id/);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+  assert.deepEqual(fireArgs({ requestedBy: "owner" }), []);
+  assert.deepEqual(fireArgs({}), []);
+  assert.deepEqual(fireArgs({ requestedBy: "rn-abc" }), ["--requester", "rn-abc"]);
+  assert.deepEqual(fireArgs({ requestedBy: "bad id;x" }), []);
+});
+
+// idea-673: vs restart extend / abort reach a script still in its idle wait through vs-restart-control.json (this pid only).
+test("idea-673: a control abort ends the idle wait at once: nothing stopped, no deferral, the reason recorded", async () => {
+  const { CONTROL_FILE } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, nonce: "n1", by: "owner", abort: { reason: "wrong tip" } }));
+    const t0 = Date.now();
+    const r = await w.run({ waitTimeoutSec: 30 });
+    assert.ok(Date.now() - t0 < 10_000, "did not wait out the 30 s timeout");
+    assert.equal(r.ok, false);
+    assert.equal(r.controlAbort?.by, "owner");
+    assert.equal(r.controlAbort?.reason, "wrong tip");
+    assert.equal(r.deferred, undefined);
+    assert.match(r.errors[0], /^aborted by owner while waiting for runner idle: wrong tip; nothing was stopped/);
+    assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
+    assert.deepEqual(w.spawned, [], "nothing started");
+    assert.equal(existsSync(path.join(w.outDir, CONTROL_FILE)), false, "consumed");
+    assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker cleared");
+    // rn-01a55ab3f1bf minor: the 'finished' write in finally keeps the abort's nonce, so vs restart abort's ack poll (500 ms,
+    // long after finally ran) still sees its own abort read instead of a false "left its idle wait" alarm.
+    const { PROGRESS_FILE } = await import("../scripts/restart-runtime.mjs");
+    const p = JSON.parse(readFileSync(path.join(w.outDir, PROGRESS_FILE), "utf8"));
+    assert.equal(p.phase, "finished");
+    assert.equal(p.control?.nonce, "n1");
+    assert.equal(p.control?.kind, "abort");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-673 (rn-01a55ab3f1bf major): control extends are capped at EXTEND_MAX_MS after the run's start, not after now", async () => {
+  const { CONTROL_FILE, EXTEND_MAX_MS } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    const T0 = Date.parse("2026-11-23T16:00:00.000Z");
+    let t = T0;
+    let wrote = false;
+    const ctl = (rec) => writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, by: "owner", ...rec }));
+    ctl({ nonce: "e1", extendUntil: T0 + 3 * 3600_000 }); // asks past the cap at once
+    const depsOver = {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        if (!wrote && t >= T0 + 90 * 60_000) { wrote = true; ctl({ nonce: "e2", extendUntil: t + 2 * 3600_000 }); } // a second +120 at t=90 min
+        await new Promise((r) => setTimeout(r, 0));
+      },
+    };
+    const r = await w.run({ waitTimeoutSec: 60 }, [], depsOver);
+    const capIso = new Date(T0 + EXTEND_MAX_MS).toISOString();
+    assert.equal(r.startedAt, new Date(T0).toISOString());
+    assert.equal(r.waitExtended?.length, 2, JSON.stringify(r.waitExtended));
+    assert.equal(r.waitExtended[0].waitDeadline, capIso, "first extend cut to the cap from the start");
+    assert.equal(r.waitExtended[1].waitDeadline, capIso, "the second extend cannot slide it further");
+    assert.ok(r.deferred, "still held at the cap: defers as before");
+    assert.ok(t <= T0 + EXTEND_MAX_MS + 10 * 60_000, `the wait ended at the cap (+${(t - T0) / 60_000} min)`);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-673: a control extend pushes the wait deadline out and refreshes the drain; another pid's control is ignored", async () => {
+  const { CONTROL_FILE } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    writeFileSync(path.join(w.outDir, CONTROL_FILE), JSON.stringify({ pid: process.pid, nonce: "n2", by: "rn-ove", extendUntil: Date.now() + 400 }));
+    const t0 = Date.now();
+    const r = await w.run({ waitTimeoutSec: 0.05 });
+    assert.ok(Date.now() - t0 >= 350, `waited to the extended deadline (${Date.now() - t0} ms)`);
+    assert.equal(r.waitExtended?.length, 1, JSON.stringify(r.waitExtended));
+    assert.equal(r.waitExtended[0].by, "rn-ove");
+    assert.equal(r.waitExtended[0].nonce, "n2");
+    assert.ok(r.deferred, "still held past the extended deadline: defers as before");
+    assert.ok(w.drainCalls.filter((c) => c.method === "POST").length >= 2, `drain refreshed: ${JSON.stringify(w.drainCalls)}`);
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], held: [["rn-x"]] });
+  try {
+    mkdirSync(w2.outDir, { recursive: true });
+    writeFileSync(path.join(w2.outDir, CONTROL_FILE), JSON.stringify({ pid: 1, nonce: "n3", abort: {} }));
+    const r = await w2.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.controlAbort, undefined);
+    assert.ok(r.deferred);
+    assert.equal(existsSync(path.join(w2.outDir, CONTROL_FILE)), true, "another run's control is left alone");
+  } finally { await w2.cleanup(); }
+});

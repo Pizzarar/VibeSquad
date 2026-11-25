@@ -34,6 +34,7 @@ import {
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane, useShownPane } from "./panes";
 import { agentDisplayName } from "./identity";
+import { etDateTime } from "./etTime";
 
 export function ago(iso?: string | null, now = Date.now()): string {
   if (!iso) return "?";
@@ -221,7 +222,7 @@ export const useClock = <T extends string | number | boolean>(read: (now: number
 /** Relative age ("5m") that refreshes itself without re-rendering its parent. */
 export function Ago({ iso }: { iso?: string | null }) {
   const text = useClock((now) => ago(iso, now));
-  const full = iso ? new Date(iso).toLocaleString() : undefined;
+  const full = iso ? etDateTime(iso) : undefined;
   return <span title={full && full !== "Invalid Date" ? full : undefined}>{text}</span>;
 }
 

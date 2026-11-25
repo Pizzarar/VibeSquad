@@ -79,11 +79,12 @@ const ADMIN_ONLY_PROFILE_RE = /^(brainstorm|pre-check)\b/i;
 // Meta an agent caller may never set, on `meta.*` or `meta.labels.*` (every key server/identity.mjs, lead-handoff.mjs and
 // agent-duties.ts read for privilege: role, lane, team, ord, parent, digest, orphan, retirement markers).
 export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
-export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived'];
+// idea-629: `schedule` / `scheduleName` mark a schedule-spawned agent (server/schedules.mjs execute); only the VS server sets them.
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
 const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
 const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
 // Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.
-const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan']);
+const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan', 'schedule', 'scheduleName']);
 
 export function secretEquals(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
@@ -99,6 +100,16 @@ export function identityOf(meta = {}) {
   const rawRole = String(pick('role') ?? '').trim().toLowerCase();
   const role = rawRole === 'buddy' ? 'brainstorm' : rawRole;
   return { role, lane: pick('lane'), team: pick('team'), profile: pick('profile'), labels };
+}
+
+/**
+ * idea-629: the schedule id of a schedule-spawned agent, or null. Trusted because `schedule` is a protected label: an agent
+ * spawn has it stripped (STRIPPED_SPAWN_LABELS) and an agent meta patch setting it is a 403 (protectedMetaIn), so only the
+ * VS server's admin spawn (server/schedules.mjs execute) or the owner can put it on a record. Never read from the env.
+ */
+export function scheduleOf(meta = {}) {
+  const v = String(meta?.labels?.schedule ?? '').trim();
+  return /^sch-[A-Za-z0-9_-]{1,64}$/.test(v) ? v : null; // server/schedules.mjs ID_RE
 }
 
 // The protected part of a meta patch (what an agent caller is refused for), or null when the patch touches none of it.
@@ -385,7 +396,7 @@ export class Runner {
     this._rosterWatchGuard = null; // the guard setTimeout (null when not scheduled); stopped by closeRosterWatch/shutdown
     this._rosterWatchGuardMs = rosterWatchGuardMs;
     this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
-    this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` (bigint) of the watched dir, captured when the watch opens
+    this._rosterWatchIdentity = null; // `${ino}:${birthtimeNs}` (bigint; ns because ms collides on ino reuse) of the watched dir, captured when the watch opens
     this._rosterWatchReopen = false; // a reopen is pending: the guard closed the watch (missing/replaced dir) and reopens once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
@@ -427,6 +438,8 @@ export class Runner {
     this._drainTimer = null;
     this._reqDrain = null; // { id, tip, since, until, reason } while a restart request is open (see setRequestDrain); memory only too
     this._reqDrainTimer = null;
+    this._restartGate = null; // idea-870: { until } while the VS server holds the restart gate (POST /restart-gate); new turns queue
+    this._restartGateTimer = null;
     this._removeDrainFile(); // a drain file a crashed runner left behind
     // Persisted boot fold (runner/fold-index.mjs): the real server passes <runner home>/fold-index.json; null (tests) = none.
     this.foldIndexFile = foldIndexFile;
@@ -445,6 +458,29 @@ export class Runner {
     this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
     this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
     this._resaveTimer = null;
+  }
+
+  // ---- Restart gate (idea-870) ----
+  // The VS server's owner/RR1 runner restart checks idle and then hard-kills the runner; a turn starting between the two was
+  // cut. runner/server.mjs POST /restart-gate checks idle and closes this gate in one synchronous step: from then on a job
+  // that needs a NEW turn queues (_fits), and recoverQueued replays it on the next runner. A turn already open is never
+  // touched. TTL-bound (a server that dies before its kill cannot leave the runner gated); DELETE /restart-gate reopens it.
+  setRestartGate(ttlMs) {
+    const ttl = Math.min(120_000, Math.max(1000, Number(ttlMs) || 30_000));
+    this._restartGate = { until: Date.now() + ttl };
+    clearTimeout(this._restartGateTimer);
+    this._restartGateTimer = setTimeout(() => this.clearRestartGate(), ttl);
+    this._restartGateTimer.unref?.();
+    return this._restartGate;
+  }
+
+  clearRestartGate() {
+    const was = this._restartGate !== null;
+    clearTimeout(this._restartGateTimer);
+    this._restartGateTimer = null;
+    this._restartGate = null;
+    if (was) this._pump();
+    return was;
   }
 
   // ---- Restart drain (ideas 198 + 186) ----
@@ -623,7 +659,8 @@ export class Runner {
     const digestFor = labels.digestFor ? String(labels.digestFor) : null;
     const digest = profile === DIGEST_PROFILE && !!digestFor;
     const overlord = role === 'lead' && !!lane && !!team && this.hubLane(team) === lane;
-    return { id, role, lane, team, profile, digest, digestFor, status: s.status, overlord };
+    const schedule = scheduleOf(meta); // idea-629: a schedule-spawned agent (trusted label, see scheduleOf)
+    return { id, role, lane, team, profile, digest, digestFor, status: s.status, overlord, schedule };
   }
 
   // A lead that still counts for the lane: created, not exited, not archived, not retired, role lead, same team + lane.
@@ -883,6 +920,7 @@ export class Runner {
 
   _fits(job) {
     const entry = this.live.get(job.id);
+    if (job.needsTurn && !(entry?.inflight > 0) && this._restartGate && Date.now() < this._restartGate.until) return false; // idea-870: gated for a restart
     if (job.needsTurn && !(entry?.inflight > 0)) {
       const cap = this.turnCaps[job.family] ?? this.turnCaps.other;
       const running = this._running(job.family);
@@ -1839,7 +1877,7 @@ export class Runner {
   _ensureRosterWatch() {
     if (this._rosterWatch || this._rosterWatchFailed || this._shutDown) return;
     let identity = null;
-    try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
+    try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
     let w;
     try {
       w = this.rosterWatchFactory(this.store.dir, (_event, name) => {
@@ -1909,7 +1947,7 @@ export class Runner {
     let st = null;
     try { st = await this.rosterWatchStat(this.store.dir); } catch { /* gone or unreadable: treat as gone */ }
     if (this._shutDown || this._rosterWatchGuardGen !== gen) return; // shutdown/close/error landed mid-stat (H1)
-    const identity = st ? `${st.ino}:${st.birthtimeMs}` : null;
+    const identity = st ? `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}` : null;
     if (this._rosterWatch) {
       if (!st) {
         // deleted under the watch: drop the handle and keep polling so the dir's return reopens it.

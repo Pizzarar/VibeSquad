@@ -1,3 +1,4 @@
+import { etDateTime } from "./etTime.ts";
 // Pure logic for the "feels like an app" quick wins: tab title/favicon count, relative timestamps,
 // transcript find, rename key handling, restore-last-view. No React, no DOM, so tests import it directly.
 
@@ -14,7 +15,7 @@ export const tabTitle = (count: number, base = BASE_TITLE): string => (count > 0
 // Visible text comes from prefs.formatTimestamp (one source of truth with the Settings home); this is only the tooltip.
 export const fullTime = (iso?: string | null): string => {
   const t = iso ? new Date(iso).getTime() : NaN;
-  return Number.isNaN(t) ? "" : new Date(t).toLocaleString();
+  return Number.isNaN(t) ? "" : etDateTime(t);
 };
 
 // ---- inline rename --------------------------------------------------------------------

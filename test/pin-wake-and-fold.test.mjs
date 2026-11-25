@@ -347,7 +347,8 @@ test("(6) vs pin merge adds fromLane.id + code to intoLane.aliases and sets from
       "utf8",
     );
 
-    const env = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root, PASEO_AGENT_ID: "" };
+    fs.writeFileSync(join(home, "local-token"), "a".repeat(64) + "\n"); // owner proof: pin merge is gated (idea-632)
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VS_|PASEO_)/.test(k))), VIBESQUAD_HOME: home, VIBESQUAD_ROOT: root };
     const res = spawnSync(
       process.execPath,
       ["cli/vs.mjs", "pin", "merge", "bug-chaser-2", "bug-chaser", "--note", "fold duplicate", "--team", "vibesquad"],

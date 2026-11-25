@@ -29,6 +29,8 @@ import {
   fetchProfiles,
   saveProfile,
   seedDefaultPack,
+  pickableProfiles,
+  profileRoleName,
   useProfiles,
   type Profile,
   type Role,
@@ -623,10 +625,10 @@ export function TeamSettingsModal({
         data-setting-id="profiles"
         data-readonly={legacyReadOnly ? "true" : undefined}
       >
-        <LegacyWrap readOnly={legacyReadOnly} count={profiles.length}>
+        <LegacyWrap readOnly={legacyReadOnly} count={pickableProfiles(profiles, selectedProfileName).length}>
         {!legacyReadOnly && <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
-            <div className="field-label">LEGACY AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
+            <div className="field-label">LEGACY AGENT PROFILES (~/.vibesquad/profiles.json · {pickableProfiles(profiles, selectedProfileName).length} profiles)</div>
             <div className="muted small" data-testid="legacy-profiles-subtitle">
               Spawns that ask for an old profile name (like &quot;Implement - Sonnet&quot;) use these. Until you save a role above,
               the Roles editor shows roles built from these profiles; the first role save makes this list read-only.
@@ -665,7 +667,7 @@ export function TeamSettingsModal({
             background: "var(--well)",
           }}
         >
-          {profiles.map((p) => {
+          {pickableProfiles(profiles, selectedProfileName).map((p) => {
             const isSelected = p.name === selectedProfileName;
             const inst = installedProviders.includes(p.provider);
             return (
@@ -692,7 +694,8 @@ export function TeamSettingsModal({
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span className="chip">{p.role.toUpperCase()}</span>
-                  <b>{p.name}</b>
+                  <b title={p.name}>{p.name}</b>
+                  {profileRoleName(p.name) && <span className="muted small">→ {profileRoleName(p.name)}</span>}
                   <span className="def-badge">
                     {p.provider} / {p.model}
                   </span>
@@ -731,11 +734,12 @@ export function TeamSettingsModal({
                   {!profiles.some((p) => p.name === selectedProfileName) && (
                     <option value="">{draftProfile.name} (unsaved)</option>
                   )}
-                  {profiles.map((p) => {
+                  {pickableProfiles(profiles, selectedProfileName).map((p) => {
                     const inst = installedProviders.includes(p.provider);
+                    const label = p.name;
                     return (
-                      <option key={p.name} value={p.name}>
-                        {inst ? p.name : `${p.name} (install ${p.provider})`}
+                      <option key={p.name} value={p.name} title={p.name}>
+                        {inst ? label : `${label} (install ${p.provider})`}
                       </option>
                     );
                   })}
