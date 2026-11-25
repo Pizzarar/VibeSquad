@@ -1,5 +1,6 @@
 // E5 outbound E2EE relay: host (server/relay-tunnel.mjs) <-> client (src/remoteRelayTransport.ts) through a fake,
-// recording, untrusted relay. No network. Run: node --test --import ./test/setup/hermetic.mjs test/relay-tunnel.test.mjs
+// recording, untrusted relay. No network. Run: node --test test/relay-tunnel.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";

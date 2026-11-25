@@ -21,7 +21,7 @@ import { checkTestLockDir, testLockDir } from "../cli/fifo-queue.mjs";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
-import { VERDICT_PREFIX_SRC } from "./verdict.mjs";
+import { VERDICT_PREFIX_SRC, extractVerdictLine, parseVerdictLine, stripUnverifiedPrefix } from "./verdict.mjs";
 
 export const WATCH_KINDS = Object.freeze(["agent", "suite", "restart"]);
 export const DEFAULT_STALL_MIN = 15;
@@ -383,8 +383,64 @@ function itemLabel(item) {
   return item.ref ? `restart ${item.ref}` : "restart";
 }
 
+/**
+ * idea-883: an agent item's verdict, read in code from its own texts (final message + counted report), never from prose or
+ * test counts. Same source and rule as `vs verdict` / the digest (extractVerdictLine: a FAIL line anywhere wins, else the first
+ * PASS line). Returns the canonical `PASS|FAIL H/M/L <hash>` tag, or null when no text carries a verdict line.
+ */
+export function itemVerdict(item) {
+  if (item?.kind !== "agent") return null;
+  // An orphan-sweep report ("UNVERIFIED (digest failed): FAIL 1/0/3 <sha>") still carries the final's verdict line.
+  const line = extractVerdictLine(stripUnverifiedPrefix([item.final, item.report].filter(Boolean).map(String).join("\n")));
+  const v = line ? parseVerdictLine(line) : null;
+  if (!v) return null;
+  return `${v.verdict} ${v.severity ?? `${v.high}/${v.medium}/${v.low}`} ${v.hash}`;
+}
+
+/** The verdict tag a finished agent item shows: its verdict line, or NO VERDICT (never a PASS read from prose). */
+const NO_VERDICT = "NO VERDICT";
+const verdictTag = (item) => itemVerdict(item) ?? NO_VERDICT;
+const finishedAgent = (i) => i.kind === "agent" && (i.state === "done" || i.state === "fail");
+
+/** idea-883: "2 FAIL, 1 PASS, 3 NO VERDICT" over the finished agent items (FAIL first), "" when there are none. */
+function verdictTally(set) {
+  const n = { FAIL: 0, PASS: 0, [NO_VERDICT]: 0 };
+  for (const i of set.items) if (finishedAgent(i)) n[itemVerdict(i)?.split(" ")[0] ?? NO_VERDICT]++;
+  return Object.entries(n).filter(([, c]) => c).map(([k, c]) => `${c} ${k}`).join(", ");
+}
+
+/**
+ * idea-883: the code-built verdict block for a set's finished agent items. A W4 merge digest and the truncated fallback lead
+ * with it, so a verdict never depends on an LLM summary or on where truncation cut a report. "" when no agent item finished.
+ */
+export function verdictBlock(set) {
+  const items = (set?.items ?? []).filter(finishedAgent);
+  if (!items.length) return "";
+  return [
+    "Verdicts (read in code from each agent's own `PASS|FAIL H/M/L <hash>` line; a FAIL anywhere wins; merge gate: vs verdict):",
+    ...items.map((i) => `- agent ${i.ref}: ${verdictTag(i)}`),
+  ].join("\n");
+}
+
+/**
+ * idea-883: an LLM merge digest may not state verdicts; any verdict word it wrote is masked (the code block above is the source).
+ * All-caps and Title-case (`PASS`, `Pass`, `Passed`, `FAILS`, `Failed`, `No verdict`) are masked; all-lowercase is kept, since
+ * that is how test counts read (`3/3 pass`, `65 passed, 0 failed`).
+ */
+export function maskVerdictWords(text) {
+  return String(text ?? "").replace(
+    /\b(?:PASS(?:ED|ES)?|FAIL(?:ED|S|URE)?|NO[- ]VERDICT|Pass(?:ed|es)?|Fail(?:ed|s|ure)?|No[- ][Vv]erdict)\b/g,
+    "[verdict↑]",
+  );
+}
+
 function itemLine(item) {
-  const rep = item.report ? ` — ${oneLine(item.report)}` : "";
+  // idea-883: a finished agent item leads with its code-read verdict (or NO VERDICT), so the 400-char cap can never cut a
+  // trailing FAIL off; a report that already starts with exactly that tag is left as is (no doubled tag, text unchanged).
+  const body = item.report ? oneLine(item.report) : "";
+  const tag = finishedAgent(item) ? verdictTag(item) : "";
+  const lead = tag && !body.startsWith(tag) ? `${tag}${body ? " — " : ""}` : "";
+  const rep = lead || body ? ` — ${lead}${body}` : "";
   if (item.state === "done") return `- ${itemLabel(item)}: done${rep}`;
   if (item.state === "fail") return `- ${itemLabel(item)}: FAIL${rep}`;
   if (item.state === "stalled") return `- ${itemLabel(item)}: STALLED (${item.reason})${rep}`;
@@ -439,7 +495,8 @@ function completionText(set) {
     f || s
       ? `Watch ${set.id} finished: ${d} done${f ? `, ${f} FAIL` : ""}${s ? `, ${s} still stalled` : ""} (of ${set.items.length}).`
       : `Watch ${set.id} complete: all ${set.items.length} item${set.items.length === 1 ? "" : "s"} done.`;
-  return [head, ...set.items.map(itemLine), "Run 'vs log --since-me' for the full reports."].join("\n");
+  const tally = verdictTally(set);
+  return [tally ? `${head} Verdicts: ${tally}.` : head, ...set.items.map(itemLine), "Run 'vs log --since-me' for the full reports."].join("\n");
 }
 
 function stallText(set, fresh) {
@@ -1014,7 +1071,9 @@ export function createWatchEngine({
           }
           // Fallback: a failed spawn (or a later over-long ping) gets the raw text truncated, so the owner always gets something.
           try {
-            await deliver({ ...d, text: ping.text.slice(0, DIGEST_MERGE_MAX) + `(+${ping.text.length - DIGEST_MERGE_MAX} chars, see vs log)` });
+            // idea-883: the code-built verdict block leads, so truncation never drops a verdict.
+            const vb = verdictBlock(set);
+            await deliver({ ...d, text: (vb ? `${vb}\n` : "") + ping.text.slice(0, DIGEST_MERGE_MAX) + `(+${ping.text.length - DIGEST_MERGE_MAX} chars, see vs log)` });
           } catch (e) {
             log(`watch ${set.id} fallback delivery failed: ${e?.message ?? e}`);
           }

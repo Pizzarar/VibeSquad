@@ -712,9 +712,11 @@ export function importPaseoProfiles(rawInput, options = {}) {
   };
 }
 
-export function seedDefaultPack(profilesPath) {
+/** `opts.beforeWrite(profiles, path)` may throw to refuse the write (P5d: legacy writes after the v2 migration). */
+export function seedDefaultPack(profilesPath, { beforeWrite } = {}) {
   const targetPath = getProfilesPath(profilesPath);
   const profiles = DEFAULT_PACK_PROFILES.map((p) => normalizeProfile(p));
+  beforeWrite?.(profiles, targetPath);
   writeProfilesFile(targetPath, profiles);
   return {
     ok: true,
@@ -979,7 +981,8 @@ export function loadProfiles(profilesPath, options = {}) {
   };
 }
 
-export function saveProfiles(input, profilesPath) {
+/** `opts.beforeWrite(nextProfiles, path)` may throw to refuse the write (P5d: legacy writes after the v2 migration). */
+export function saveProfiles(input, profilesPath, { beforeWrite } = {}) {
   const targetPath = getProfilesPath(profilesPath);
   let nextProfiles = [];
   if (Array.isArray(input)) {
@@ -1006,6 +1009,7 @@ export function saveProfiles(input, profilesPath) {
   } else {
     throw new Error("Expected { profiles: [...] } or { profile: {...} }");
   }
+  beforeWrite?.(nextProfiles, targetPath);
   writeProfilesFile(targetPath, nextProfiles);
   return {
     ok: true,

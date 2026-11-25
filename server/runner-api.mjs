@@ -2,7 +2,8 @@
 // Writes are gated by the caller (vibesquad-api.mjs: owner, or an allow-listed verified agent forwarded to the runner's scope rules).
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { callerOf } from "./auth.mjs";
-import { pickBugIntakeAgent } from "./inbox.mjs";
+import { pickBugIntakeAgent, readInboxCards } from "./inbox.mjs";
+import { appendTesterThreadLine, onTesterThreadLine, testerThreadLines } from "./tester-thread.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -15,13 +16,14 @@ const HEARTBEAT_MS = 15000;
  * GET /__vibesquad/runner/events: SSE of roster upserts, timeline appends and status transitions (RunnerBackend.subscribeEvents).
  * The backend starts it with the full roster; the listener, heartbeat and runner stream are released when the client goes away.
  */
-function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS, filter = null) {
+function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS, filter = null, extra = null) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
   res.write(": ok\n\n");
   const write = (ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
   // E6a: a filter maps one backend event to the events this client may see (0..n); without one every event goes out as is.
   const send = filter ? (ev) => { for (const out of filter(ev)) write(out); } : write;
   let off = null;
+  let offExtra = null;
   let closed = false;
   const beat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': hb\n\ndata: {"kind":"hb"}\n\n'); }, heartbeatMs); // comment for proxies; data event so the browser watchdog sees activity
   beat.unref?.();
@@ -30,13 +32,19 @@ function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS, filter = nu
     closed = true;
     clearInterval(beat);
     off?.();
+    offExtra?.();
   };
   req.on("close", cleanup);
   res.on("close", cleanup);
   // The backend delivers the initial roster itself, in order with live events. A runner that is down yields
   // { kind: "disconnected" } (never an empty roster), so the browser keeps the agents it has.
   off = backend.subscribeEvents(send);
-  if (closed) off();
+  // L1: `extra(write)` subscribes a side source written as is (never through `filter`), e.g. a tester's own thread ticks.
+  if (extra) offExtra = extra(write);
+  if (closed) {
+    off();
+    offExtra?.();
+  }
 }
 
 /** What the browser reads on boot: the runner is always on (every lane runs on it). */
@@ -219,6 +227,32 @@ export async function fetchTesterTimeline(backend, id, { limit, before } = {}) {
   };
 }
 
+/**
+ * PTO v1.2 T: the tester's own thread on `teamId`, in the runner timeline shape (so the Tester Desk's AgentDrawer keeps
+ * working): `seqStart`/`seqEnd` are the per-device thread seq, not the agent's. Never the agent's raw timeline.
+ */
+export function testerOwnTimeline(caller, teamId, { limit, before } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 0, 0), TESTER_TIMELINE_MAX) || TESTER_TIMELINE_MAX;
+  let lines = testerThreadLines(String(caller?.id ?? ""), teamId, readInboxCards());
+  if (Number.isFinite(before)) lines = lines.filter((l) => l.seq < before);
+  const page = lines.slice(-n);
+  const entries = page.map((l) => ({
+    ...(typeof l.ts === "string" ? { timestamp: l.ts } : {}),
+    seqStart: l.seq,
+    seqEnd: l.seq,
+    item: { type: l.role === "user" ? "user_message" : "assistant_message", text: redactText(l.text) },
+  }));
+  return {
+    entries,
+    hasOlder: lines.length > page.length,
+    ...(page.length ? { lastSeq: page[page.length - 1].seq } : {}),
+    startCursor: page.length ? { epoch: "runner", seq: page[0].seq } : null,
+  };
+}
+
+/** The allowed Squad whose bug-intake agent is `id` (one of `teams`), or null. */
+const intakeTeamOf = (agents, teams, id) => teams.find((t) => pickBugIntakeAgent(agents, t)?.id === id) ?? null;
+
 /** C0 controls and DEL out; \t and \n stay (a tester's line may be multi-line); \r goes too, so \r\n collapses to \n. */
 const stripTesterControl = (s) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 /** A tester's chat text, sanitized: control chars stripped, prompt fences defanged, ``` runs broken (no fake code blocks). */
@@ -237,12 +271,14 @@ export async function sendTesterInput(backend, caller, id, text, { cardId = null
 }
 
 const TESTER_PASS_EVENTS = new Set(["connected", "disconnected", "hb"]);
-const TESTER_TIMELINE_TYPES = new Set(["input", "output"]); // runner event types that become user/assistant messages
 
 /**
  * The SSE filter for a tester: keeps its own id -> agent map from roster/agent/remove, re-derives the allowed bug-intake
  * set after each, and emits a fresh filtered roster whenever that set changes. Forwards connected/disconnected/hb, and
- * agent/remove/created/status/timeline only for an allowed id; drops permission, tools and any kind it does not know.
+ * agent/remove/created/status only for an allowed id; drops permission, tools and any kind it does not know.
+ * L1 (review rn-b4d883e5fad2): raw `timeline` events are dropped too, even for an allowed id. The bug-intake agent is shared
+ * (owner chat, lane work, other testers), so its seq/type would leak their activity and turn counts. A tester's timeline
+ * refetch is driven by { kind: "tester-thread", seq } instead, sent only for lines stored under its own device id.
  */
 export function createTesterEventFilter(teamsOf) {
   const all = new Map();
@@ -285,13 +321,38 @@ export function createTesterEventFilter(teamsOf) {
       const agent = testerAgentView(allowed.get(ev.agentId));
       return [kind === "status" ? { kind, agentId: ev.agentId, from: ev.from, to: ev.to, agent } : { kind, agentId: ev.agentId, agent }];
     }
-    if (kind === "timeline") {
-      if (!allowed.has(ev.agentId) || !TESTER_TIMELINE_TYPES.has(ev.type)) return [];
-      return [{ kind, agentId: ev.agentId, ...(Number.isFinite(ev.seq) ? { seq: ev.seq } : {}), type: ev.type }];
-    }
     return [];
   };
 }
+
+/**
+ * Review rn-630d32bc8390: concurrent GET /runner/events streams one tester device id may hold. Past it a new stream is
+ * refused with 429 (the open ones are never touched): the Tester Desk's runnerBridge recreates a stream after any close with
+ * backoff, so evicting the oldest instead would make a device with cap+1 tabs churn its streams forever, while a refusal
+ * just backs the extra tab off until a slot frees. Owner streams are not counted; owner-playtest devices never stream.
+ */
+export const TESTER_STREAMS_PER_DEVICE = 4;
+const testerStreams = new Map(); // deviceId -> open stream count
+/** Open tester event streams for `deviceId` (tests and diagnostics). */
+export const testerStreamCount = (deviceId) => testerStreams.get(deviceId) ?? 0;
+/** Take one stream slot for `deviceId`: an idempotent release function, or null when the device is at the cap. */
+function takeTesterStreamSlot(deviceId) {
+  const n = testerStreamCount(deviceId);
+  if (n >= TESTER_STREAMS_PER_DEVICE) return null;
+  testerStreams.set(deviceId, n + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = testerStreamCount(deviceId) - 1;
+    if (left > 0) testerStreams.set(deviceId, left);
+    else testerStreams.delete(deviceId);
+  };
+}
+
+/** L1: the SSE side source for tester `deviceId`: { kind: "tester-thread", seq } per line stored under that device only. */
+export const testerThreadTicks = (deviceId) => (write) =>
+  onTesterThreadLine(deviceId, ({ seq }) => write({ kind: "tester-thread", ...(Number.isSafeInteger(seq) ? { seq } : {}) }));
 
 /** E6a: handleRunnerApi for a bug-tester caller (see the block comment above). Never reaches the owner/agent branches. */
 async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, caller, testerTeams }) {
@@ -301,9 +362,35 @@ async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, ca
     const parts = path.slice(PREFIX.length).split("/"); // exact shape: an empty segment never matches below
     const url = new URL(req.url, "http://x");
     const teamsOf = () => testerTeamRecords(caller, testerTeams);
-    const allowedNow = async () => testerIntakeAgents(await backend.listAgents().catch(() => []), teamsOf());
+    const agentsNow = async () => {
+      const list = await backend.listAgents().catch(() => []);
+      return Array.isArray(list) ? list.map((a) => a?.agent ?? a).filter(Boolean) : [];
+    };
+    const allowedNow = async () => testerIntakeAgents(await agentsNow(), teamsOf());
     if (req.method === "GET" && parts.length === 1 && parts[0] === "status") return sendJson(res, 200, { enabled: true });
-    if (req.method === "GET" && parts.length === 1 && parts[0] === "events") return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf));
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "events") {
+      const deviceId = String(caller.id);
+      const release = takeTesterStreamSlot(deviceId);
+      if (!release) {
+        res.setHeader?.("retry-after", "15");
+        throw Object.assign(new Error(`too many open event streams for this device (max ${TESTER_STREAMS_PER_DEVICE})`), { status: 429 });
+      }
+      // The slot rides on the side source: streamEvents' close cleanup (req or res close) unsubscribes the ticks and frees it.
+      const ticks = testerThreadTicks(deviceId);
+      const extra = (write) => {
+        const off = ticks(write);
+        return () => {
+          off();
+          release();
+        };
+      };
+      try {
+        return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf), extra);
+      } catch (err) {
+        release(); // idempotent: never leak a slot if the stream failed to start
+        throw err;
+      }
+    }
     if (req.method === "GET" && parts.length === 1 && parts[0] === "agents") {
       if (url.searchParams.has("archived")) throw testerForbidden("forbidden: bug-tester device cannot list archived agents");
       return sendJson(res, 200, { enabled: true, agents: [...(await allowedNow()).values()].map(testerAgentView) });
@@ -314,15 +401,20 @@ async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, ca
       const isRead = req.method === "GET" && (parts.length === 2 || action === "timeline");
       const isInput = req.method === "POST" && action === "input";
       if (!isRead && !isInput) throw testerForbidden();
-      const allowed = await allowedNow();
+      const agents = await agentsNow();
+      const allowed = testerIntakeAgents(agents, teamsOf());
       if (!allowed.has(id)) throw testerForbidden("forbidden: not a bug-intake agent of your Squads");
       if (parts.length === 2) return sendJson(res, 200, { agent: testerAgentView(allowed.get(id)) });
+      const team = intakeTeamOf(agents, teamsOf(), id);
+      if (!team) throw testerForbidden("forbidden: not a bug-intake agent of your Squads");
       if (action === "timeline") {
+        // PTO v1.2 T: the caller's own thread on that Squad, never the agent's raw timeline (owner chat, other testers).
         const before = url.searchParams.get("direction") === "before" ? Number(url.searchParams.get("cursor")) : NaN;
-        return sendJson(res, 200, await fetchTesterTimeline(backend, id, { limit: url.searchParams.get("limit"), before }));
+        return sendJson(res, 200, testerOwnTimeline(caller, team.id, { limit: url.searchParams.get("limit"), before }));
       }
       const body = (await readBody(req)) ?? {};
       await sendTesterInput(backend, caller, id, body?.text); // only `text` is read: owner / interrupt / steerOnly / images never pass
+      await appendTesterThreadLine(String(caller.id), { role: "user", kind: "chat", teamId: team.id, cardId: null, text: stampTesterText(caller, sanitizeTesterInput(body.text)) });
       return sendJson(res, 200, { ok: true });
     }
     throw testerForbidden();

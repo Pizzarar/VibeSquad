@@ -1,82 +1,77 @@
-# VibeSquad UX review, round 22: @desk B1, Normal-mode Back/Forward follows the URL
+# VibeSquad UX review, round 22: Code | Storybook tabs (idea-834 T1)
 
-Date: 2026-11-24 · Build: `desk-b1-popstate` @ `cd42ba45` · BASE: `master` @ `15e49a29` · Spec: `docs/PLAN_DESK_NAV_HISTORY.md` B1 done-checks.
+Date: 2026-11-25 · Build: `unit-ui-sb-tabs` @ `82a64189` (base `8f01b16f`).
 
-**Setup.** Both builds were made with `npx vite build` from their own trees (branch worktree; BASE from `git archive 15e49a29`). Each was served by a static harness (`/api` returns 404, and `?demo=1` supplies the cast), not the live server. Driven with Playwright (headless Chromium) in Normal mode at 1920×1080 @1 and 3200×1800 @1.2 (CSS 2667×1500), dark and light. An init script wraps `history.pushState/replaceState` and logs `popstate`, so each step records the exact history writes and `history.length`. There were 0 page errors in every run. No source edits. The drive scripts are in `docs/ux-review-r22/drive/`. Per-step JSON for each config is in `docs/ux-review-r22/<theme>-<size>.json`.
+**Setup.** `npx vite --port 5434` from this worktree, `?demo`. `?demo` has no Storybook project, so a Playwright `page.route('**/api/storybook/**')` answers `vibesquad` with HEAD 200 / GET 200 and a valid SB1 snapshot (2 entities, 1 finding). Every other project (`efi`, `site`, the `team-*` demos) gets 404. Chromium 1920×1080, 1280×720, 3200×1800 @ dpr 1.2 (the owner's 4K at 120%), and phone 390×844 @ dpr 3 (isMobile), each in dark and light. There were 0 page errors. Shots are in `docs/ux-review-r22/`. No source edits.
 
-Sequences start on `?demo=&team=vibesquad` (Overview). The chat is opened by clicking the "Audit - token scout" Needs-you row, which is the realistic way in (it pushes an entry). Deep-linking straight to `?demo&team=…&agent=…` hides finding M2: the app's `?demo` → `?demo=` normalisation push adds a spare chat entry.
+**Verdict at `82a64189`: FAIL 0/1/3 (critical/major/minor).** Everything about navigation works. The one major finding is placement: the pill is not "in the same spot" in the two headers, which the plan requires (`PLAN_CODE_STORYBOOK_TABS.md:11`). The fix is XS.
 
-**Verdict at `cd42ba45`: FAIL 0/2/1 (critical/major/minor).** B1 fixes the core symptom: after every Back or Forward, the URL, screen, sidebar selection and breadcrumb agree (they didn't on BASE). Two B1 done-checks still fail. Forward never mirrors Back, and after a cross-project pick Back gets stuck on one entry (M1). Chat → Open in Inbox → Back doesn't return to the chat (M2).
+## Status vs the previous round
 
-## Status vs previous rounds
+R21 reviewed SB5 (the Storybook view itself), not this unit. Its open m1 (a dead Back press after a forward pick leaves Storybook) and nit (double Esc) are not touched by T1 and were not re-driven.
 
-| Item | Previous | Now | Evidence |
-|---|---|---|---|
-| R14-2: Back after "Open in Inbox" restores the chat | open (minor; patched in `4403ac7d` with `replaceState`) | **Still open → M2.** Back now skips the chat entirely. | `*-04-f1-back.png` |
-| R21 pre-existing / idea-844: after a Ctrl+K pick, Back changes the URL but not the screen | open | **Fixed for screen/URL agreement.** Back from the pick shows the previous chat, and the URL agrees. **Regressed** on history: see M1. | `dark-1920-12-f2-back.png`, `*-15-f2-back3.png` |
-| Chat → project row → Back = chat | BASE: URL `?team=efi&agent=demo-aud`, screen Main Game Overview (disagree) | **Fixed** (chat shown, URL agrees) | `dark-1920-08-f3-back.png` vs `base-dark-1920-08-f3-back.png` |
-| SPEC R2 #4: one `.on` row, breadcrumb = selected row = open agent, after each Back/Forward | BASE fails at f3-back (`inv=false`) | **Pass** in all 4 configs, every step | `*.json` → `inv: true` on all rows |
-| Reload of every visited URL matches its screen | BASE: `?team=vibesquad` reload ≠ live screen | **Pass** on page and selection in all 4 configs. Only the Overview sub-tab differs (m1). | matrix output below |
-
-## Results matrix (identical in dark/light × 1920/3200@1.2)
-
-| Step | Expected | Branch URL → screen | OK |
-|---|---|---|---|
-| chat (Needs-you click) | Audit chat | `team=vibesquad&agent=demo-aud` → chat | ✓ |
-| f1 Open in Inbox | VibeSquad Overview, Idea Inbox tab | `team=vibesquad` → Overview/Inbox (**replaceState**) | ✓ |
-| f1 Back | Audit chat | `team=vibesquad` → Overview/Inbox (the chat entry was overwritten) | **✗ M2** |
-| f1 Forward | Inbox | `team=vibesquad` → Inbox | ✓ (trivially) |
-| f3 project row "Main Game Project" | Main Game Overview | `team=efi` → Overview (2 pushes; the 1st is a mixed `team=efi&agent=demo-aud`, which is B2) | ✓ |
-| f3 Back | Audit chat | `team=vibesquad&agent=demo-aud` → chat, **then 2 new pushes** | ✓ screen, ✗ history |
-| f3 Forward | Main Game Overview | no-op: stays on chat | **✗ M1** |
-| f2 Ctrl+K "UI Lab" → Enter | UI Lab Lead chat | `team=efi&agent=demo-lead-ui` → chat | ✓ |
-| f2 Back | Audit chat | `team=vibesquad&agent=demo-aud` → chat, **then 1 new push** | ✓ screen, ✗ history |
-| f2 Forward | UI Lab Lead chat | no-op: stays on Audit chat | **✗ M1** |
-| f2 Back ×3 more | walk back through history | stuck: each Back pops the mixed entry and re-pushes the Audit URL; `history.length` stays 9 | **✗ M1** |
-| Reload ×4 distinct URLs | same page as live | same page, same `.on` row, same breadcrumb | ✓ (m1 tab) |
-
-BASE on the same f2 sequence: Back ×4 walks `efi&agent=demo-aud` → `vibesquad&agent=demo-aud` → `vibesquad` (the screen lags, which B1 targets), and it never traps.
+| Check | Result | Evidence |
+|---|---|---|
+| Topbar pill right of the breadcrumb, known-Storybook project only | **Pass** | `vibesquad`: pill at x=548 (1080), x=530 (720), x=620 (4K), after `VibeSquad › Overview` (`1080d-code.png`, `4kd-code.png`). It also shows on an agent page: `VibeSquad › Desk › Worker  Code Storybook` (`agent.png`). |
+| 404 project: no chrome change | **Pass** | `efi`: no `.project-tabs` in the DOM, topbar identical to base (`efi-404.png`). Boot sends only HEAD; the single GET fires on the Storybook click. |
+| Storybook click | **Pass** | URL gains `&sb=vibesquad` and history +1. sb-head shows the pill with Storybook pressed (`aria-pressed=true`). |
+| Code from Storybook = Back | **Pass** | `history.length` stays 4 and the URL returns to the exact prior entry. Browser Forward re-enters correctly. From an agent page, Code returns to `?agent=demo-aud` with `Desk › Worker` intact. |
+| Cold load with `?sb=`, then Code | **Pass** | `history.length` stays 3, the page lands on `?team=vibesquad` and never leaves the app (`cold-code.png`). |
+| Reload on `?sb=` | **Pass** | Storybook reopens. |
+| Esc / ← Back unchanged | **Pass** | Esc → `?team=vibesquad`. The `← Back` button behaves the same. |
+| Ctrl+J from Storybook | **Pass** | Leaves to `?agent=demo-aud`, with `sb` cleared. |
+| Pill is in the same spot in both headers | **Fail (M1)** | Topbar x=548 vs sb-head x=1391 at 1080. At 4K it's x=620 vs x=2651. |
+| Active segment is distinguishable | **Weak (m1)** | Light mode: the inactive pill is darker than the active one. |
+| Phone ≤600px sb-head: title ellipsis, pill on row 1 | **Pass, with m2** | Title 113px with ellipsis, pill at y=16 on row 1, no horizontal overflow (docW 390) (`phd-sb.png`, `phl-sb.png`). The ellipsis cuts off the project name, though. |
+| Compact contract | **Pass** | No added scroll: scrollHeight equals the viewport at every size. No new menus. |
+| Dim by colour, not opacity | **Pass** | Both segments have `opacity: 1`. Inactive state comes from background only. |
+| Invariants (counts, one selected row, crumb = row = agent) | **Pass / unchanged** | Breadcrumb tracks the agent through Storybook and back. The selection count is unchanged from base. |
 
 ## Findings
 
 ### Major
 
-#### M1 · Back/Forward re-derivation pushes new history entries, so Forward is dead and Back can trap
-- **Job hurt:** 2 and 3 (move between agents and projects and retrace steps). Browser Back/Forward is how the owner retraces a detour. After one cross-project Ctrl+K pick or project-row click, Forward does nothing and Back loops on the same chat forever. The only way out is to click in the sidebar. This is a regression vs BASE, where history stayed walkable and only the screen lagged.
-- **Evidence (all 4 configs):**
-  - Forward no-op: `dark-1920-09-f3-fwd.png`, `dark-1920-13-f2-fwd.png`, `light-3200-13-f2-fwd.png` (still on the Audit chat; Forward should be UI Lab › Lead).
-  - Back trap: `dark-1920-15-f2-back3.png`. The history log for each Back: `POP ?team=efi&agent=demo-aud | pushState ?team=vibesquad&agent=demo-aud`, and `history.length` stays at 9.
-  - Clean entries also push: chat → same-project row → Back → Forward gives `POP ?team=vibesquad | pushState …&agent=demo-aud | pushState ?team=vibesquad`. `history.length` goes 3→5 on one Forward, so every Forward adds two duplicate entries.
-- **Cause:**
-  - The App URL-sync effect always uses `pushState` when the derived state differs from `location` (`src/App.tsx:1857-1860`). That includes the renders that follow a `popstate`.
-  - After a pop, the derived state passes through stale values before B1's re-derivation settles. `onPop` (`src/App.tsx:1665-1673`) sets the team, `boringShown` still holds the old agent, and then `BoringAde`'s B1 effect (`src/BoringAde.tsx:556-573`) switches mode.
-  - On a mixed B2 entry (`team=<prev>&agent=<new>`), `src/BoringAde.tsx:561` also calls `onSelectSquad(<agent's real team>)`, which changes `activeTeamId` again. Each of these transient states gets pushed, and every push wipes the Forward stack.
-- **Fix:**
-  - In `onPop`, set a "popping" flag (or record the popped `location.search`). While it's set, the URL-sync effect must use `replaceState` and must never push. Clear it once BoringAde's B1 effect has run (for example, at the end of that effect or on the next `navGen` render).
-  - This makes the mixed-entry case self-heal in place (the entry is rewritten to the agent's real team), so the trap goes away even before B2.
-  - Add a test that asserts `history.length` is unchanged across Back and Forward. The `desk-nav-history` test covers only `boringLandingFromUrl`.
-- **Files:** `src/App.tsx`, `src/BoringAde.tsx`, `test/desk-nav-history.test.mjs` · **Effort:** S
+- **M1 · The pill jumps sides between the two headers (up to about 2000 CSS px at 4K), so it doesn't work as a stable tab control.**
+  - **Job hurt:** 4 (Review output): flipping between a project's code and its Storybook. A segmented control's value is that you click Storybook, then click Code in the same place. Here, after clicking Storybook at the top-left, Code has moved to the far right next to "5 need you". The plan says "same pill in the same spot" (`PLAN_CODE_STORYBOOK_TABS.md:11`).
+  - **Evidence:**
 
-#### M2 · Chat → "Open in Inbox" → Back doesn't return to the chat (R14-2 done-check)
-- **Job hurt:** 4 (review output). The loop is: hover a ref → open the card → go back to the conversation. After Back, the screen doesn't change at all: still VibeSquad › Overview on the Idea Inbox tab (`dark-1920-04-f1-back.png`, `light-3200-04-f1-back.png`). The chat entry is gone from history, so a second Back goes to whatever came before the chat. If the chat was opened from a deep link or notification, Back leaves the app.
-- **Cause:** `src/RefPopover.tsx:266-276` (the R14 patch, `4403ac7d`) overwrites the chat's own history entry with `replaceState(?team=…)`. At the time, that kept the URL honest because Normal's mode didn't follow popstate. B1 makes the screen follow popstate, so the workaround now defeats B1's own done-check.
-- **Fix:** delete the `replaceState` block in `openInbox`'s Normal branch and let App's URL sync push `?team=` as for any other navigation. B1's popstate re-derivation then returns the chat on Back. This depends on M1's fix so the pop doesn't re-push.
-- **Files:** `src/RefPopover.tsx` (owner lane for the trigger: @ui-bois, per R14) · **Effort:** XS
+    | Viewport | Topbar pill x | sb-head pill x |
+    |---|---|---|
+    | 1280×720 | 530 | 751 |
+    | 1920×1080 | 548 | 1391 |
+    | 3200×1800 @ 1.2 | 620 | 2651 |
+
+    Shots: `1080d-code.png` vs `1080d-sb.png`, `4kd-code.png` vs `4kd-sb.png`, and `4k-sbhead-pill-crop.png`.
+  - **Cause:** `.sb-title { flex: 1 1 auto }` (`src/storybook.css:26`) grows the title to fill the header, which pushes `<ProjectTabs>` (`src/StorybookView.tsx:481`) right, up against `.sb-head-right`.
+  - **Fix:** on desktop, make `.sb-title` `flex: 0 1 auto` and give `.sb-head-right` `margin-left: auto`. The pill then sits right after "Storybook · VibeSquad", mirroring "breadcrumb → pill" in the topbar. Keep the ≤600px block as it is.
+  - **Files:** `src/storybook.css` · **Effort:** XS
 
 ### Minor
 
-#### m1 · The Overview sub-tab (Overview / Idea Inbox / Standup Feed) isn't in the URL, and it sticks across projects
-- **Job hurt:** 2. Reloading `?team=vibesquad` after Open in Inbox shows the Overview tab, not Idea Inbox (reload row in the matrix, `tab="Overview"` vs live `"Idea Inbox (1)"`). After opening the Inbox in VibeSquad, clicking "Main Game Project" opens Main Game on its Idea Inbox tab (`dark-1920-07-f3-proj.png`). Back/Forward between two entries of the same project can't restore the tab, which is part of why M2's Back press looks dead.
-- **Cause:** `overviewTab` is local BoringAde state (`src/BoringAde.tsx:1091-1093`) and isn't reset on a project change. This is pre-existing and not charged to B1.
-- **Fix:** reset `overviewTab` to `"overview"` when the project changes, except for the Open-in-Inbox path. Optionally serialise a `tab=inbox` query param.
-- **Files:** `src/BoringAde.tsx` · **Effort:** XS
+- **m1 · The active segment barely differs from the inactive one, and in light mode it reads inverted.**
+  - **Job hurt:** orientation (which view am I in?). The title and breadcrumb soften this.
+  - **Evidence:** Both segments use the same text colour. In dark, active is `rgb(51,42,74)` and inactive is `rgb(38,38,50)`, about 1.15:1. In light, active is a pale lilac `rgb(233,227,248)` and inactive is a beige `rgb(230,227,221)`, so the *inactive* pill looks heavier (`light-pill-crop.png`). The Overview / Idea Inbox tabs right below use a clearly stronger selected style.
+  - **Cause:** the inherited `.boring-switch-pill.on` style (`src/boring.css:407`) against the resting pill background. T1 adopted this per plan ("same look as the switcher pills").
+  - **Fix:** for `.project-tabs`, give the active segment an accent cue (accent text or a 1px `--accent` ring), or a transparent background for the inactive one. Route the colour pair to @art.
+  - **Files:** `src/boring.css` · **Effort:** XS
 
-## Known, out of scope for B1 (B2 next)
-- A project-row click from another project's chat and a Ctrl+K cross-project pick each push two entries, and the first is a mixed `?team=<new>&agent=<prev>` (`pushState ?team=efi&agent=demo-aud | pushState ?team=efi…`). That's B2's coalescing work. M1 is still charged to B1: on BASE the same mixed entries never trap Back, and the push-on-pop is B1's handler.
-- On a `?demo` deep link with no `=`, the first render pushes a normalised `?demo=` duplicate. This is demo-only.
+- **m2 · Phone sb-head title ellipsizes to "Storyb…", hiding which project you're in.**
+  - **Job hurt:** orientation on phone.
+  - **Evidence:** `phd-sb.png`: `◉ Storyb…  Code Storybook`. The word "Storybook" is already on the pill right next to it, so the truncation removes the only unique part.
+  - **Fix:** at ≤600px, hide the "Storybook" word in the h2 and keep `· VibeSquad`, or ellipsize the project span only.
+  - **Files:** `src/storybook.css` (600px block, lines 101-111), maybe `src/StorybookView.tsx:479` · **Effort:** XS
+
+- **m3 · Phone pill segments are 28px tall,** while ← Back and Refresh in the same header are 44px.
+  - **Job hurt:** tap accuracy on phone.
+  - **Evidence:** project-tabs box `[225,16,155,28]` at 390×844.
+  - **Fix:** `min-height: 40px` for `.sb-head .project-tabs .boring-switch-pill` inside the 600px block.
+  - **Files:** `src/storybook.css` · **Effort:** XS
 
 ## Owner decisions
-- None. Both majors are inside the B1 done-checks the owner already approved in `docs/PLAN_DESK_NAV_HISTORY.md`.
 
-## Inbox cards (for the lead to file)
-- @desk: M1 (B1 rework: no push while handling popstate), M2 (drop the R14 `replaceState`; coordinate the `src/RefPopover.tsx` hunk with @ui-bois), m1 (reset the overview tab on a project change).
+- **Tabs in the phone Normal shell.** The phone Normal view (390×844) uses the mobile shell (project select + ⋯ menu), with no `boring-topbar`, so there's no Code | Storybook pill there. On phone, Storybook is reached via ⋯ → "Open Storybook · project", and the pill appears only once you're inside Storybook. **Recommendation:** leave it. The ⋯ entry already covers phone, and a pill in the cramped mobile header would break the compact contract.
+
+## Not charged to T1
+
+- The 12 `ui:overlap` hits are pre-existing on master (idea-945).
+- R21 m1 (dead Back press after a forward pick out of Storybook) is unchanged.

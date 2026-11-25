@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { BRAINSTORM_PACK, HUB_BUDDY_RULES, HUB_LEAD_RULES, VIBE_MODE_BUDDY_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../server/hooks/agent-duties.ts";
+import { BRAINSTORM_PACK, CRUNCH_MODE_RULES, HUB_BUDDY_RULES, HUB_LEAD_RULES, createPlugin, injectedPrefix, isHubCwd, rolePack } from "../server/hooks/agent-duties.ts";
 import { buildBrainstormInitialPrompt } from "../server/brainstorm.mjs";
 import { BRAINSTORM_NOTE_BODY } from "../server/profiles.mjs";
 
@@ -21,10 +21,13 @@ test("topic Buddy pack has no hub rules; hub Buddy pack appends them", () => {
   console.log(`hub pack char delta: +${hub.length - BRAINSTORM_PACK.length}`);
 });
 
-test("hub rules come after vibe rules; other roles ignore isHub", () => {
-  assert.equal(rolePack("brainstorm", "", true, true), `${BRAINSTORM_PACK}\n${VIBE_MODE_BUDDY_RULES}\n${HUB_BUDDY_RULES}`);
+test("hub rules come after crunch rules; other roles ignore isHub", () => {
+  assert.equal(rolePack("brainstorm", "", true, true), `${BRAINSTORM_PACK}\n${CRUNCH_MODE_RULES}\n${HUB_BUDDY_RULES}`);
   assert.equal(rolePack("worker", "", false, true), rolePack("worker", ""));
   assert.equal(rolePack("lead", "", false, true), `${rolePack("lead", "")}
+${HUB_LEAD_RULES}`);
+  assert.equal(rolePack("lead", "", true, true), `${rolePack("lead", "")}
+${CRUNCH_MODE_RULES}
 ${HUB_LEAD_RULES}`);
 });
 

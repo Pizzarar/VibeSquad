@@ -54,6 +54,8 @@ import { BoringApp } from "./BoringAde";
 import { urlSyncDecision } from "./urlSync";
 import { StorybookHost, closeStorybook, probeStorybook, takeStorybookReplace, useStorybookTarget } from "./StorybookView";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
+import { isPhoneShell } from "./phoneCockpitLogic";
+import { openPhoneUsage } from "./phoneUsageStore";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { TesterCockpit } from "./TesterCockpit";
@@ -1611,7 +1613,7 @@ export function App() {
   // Psycho: land on Squads Home (from any view) and scroll to the dashboard. No reload.
   useEffect(() => {
     const onOpenUsage = () => {
-      if (getPref("app.vibe") === "boring") return;
+      if (getPref("app.vibe") === "boring" || isPhoneShell(isAndroidUserAgent(), window.innerWidth)) return; // phone: PhoneUsageView opens itself
       enterSquadsHome();
       setTimeout(() => document.querySelector('[data-testid="squads-dashboard"]')?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 400);
     };
@@ -1634,7 +1636,10 @@ export function App() {
     if (linkedAgent) {
       openAgent(linkedAgent);
     }
-    if (takeColdUsageFocus() && vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    if (takeColdUsageFocus()) {
+      if (isPhoneShell(isAndroidUserAgent(), window.innerWidth)) openPhoneUsage(); // quota-alert push (/?focus=usage) on the phone shell
+      else if (vibe !== "boring") enterSquadsHome(); // Normal: BoringApp already started in usage mode
+    }
     if (linkedFocus === "needs-you") {
       setFocus(true);
       setTimeout(() => {
@@ -2043,7 +2048,7 @@ export function App() {
   if (phoneShell) {
     return (
       <>
-      <QuotaAlertBanner canOpenUsage={false} />
+      <QuotaAlertBanner canOpenUsage />
       <PhoneCockpit
         views={sidebarViews}
         view={view}

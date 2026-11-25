@@ -6,6 +6,8 @@ import { efiAdapter } from "../server/storybook/adapters/efi.mjs";
 import { loadSnapshot } from "../server/storybook/adapter.mjs";
 import { validateFinding } from "../server/storybook/schema.mjs";
 import { CHECK_MODULES, runChecks } from "../server/storybook/checks/index.mjs";
+import { CHARACTER_KINDS } from "../server/storybook/checks/structural.mjs";
+import { KIND_TABLE } from "../server/registry/index.mjs";
 
 const cleanups = [];
 after(() => cleanups.forEach((c) => c()));
@@ -163,10 +165,61 @@ test("SB2-FIX M1: a check returning a non-array becomes a warn, others still run
 });
 
 test("SB2-FIX L2: single-word collision keys on the token (punctuated names)", async () => {
-  const items = JSON.parse(FILES["data/items.json"]); items.items.push({ id: "tool_tank", name: "(Tank)", category: "tool", tier: 1, weight: 1, base_value: 1 });
-  const en = JSON.parse(FILES["data/enemies.json"]); en.enemies.big_tank = { name: "Big Tank", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
-  const r = await run({ ...FILES, "data/items.json": JSON.stringify(items), "data/enemies.json": JSON.stringify(en) });
-  assert.ok(r.by("#7").some((f) => /word "tank"/.test(f.msg) && /tool_tank/.test(f.msg) && /big_tank/.test(f.msg)), r.by("#7").map((f) => f.msg).join("\n"));
+  const en = JSON.parse(FILES["data/enemies.json"]);
+  en.enemies.tank_diver = { name: "(Tank)", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
+  en.enemies.big_tank = { name: "Big Tank", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
+  const r = await run({ ...FILES, "data/enemies.json": JSON.stringify(en) });
+  assert.ok(r.by("#7").some((f) => /word "tank"/.test(f.msg) && /tank_diver/.test(f.msg) && /big_tank/.test(f.msg)), r.by("#7").map((f) => f.msg).join("\n"));
+});
+
+test("#7 SB6b: word-subset is quiet for same-kind item chains (Coffee / Coffee Beans)", async () => {
+  const items = JSON.parse(FILES["data/items.json"]);
+  items.items.push({ id: "coffee", name: "Coffee", category: "material", tier: 1, weight: 1, base_value: 1 });
+  items.items.push({ id: "coffee_beans", name: "Coffee Beans", category: "material", tier: 1, weight: 1, base_value: 1 });
+  const r = await run({ ...FILES, "data/items.json": JSON.stringify(items) });
+  assert.equal(r.by("#7").filter((f) => /word "coffee"/.test(f.msg)).length, 0, r.by("#7").map((f) => f.msg).join("\n"));
+});
+
+test("#7 SB6b: word-subset is quiet for an item vs a room starter name (Barrel / Barrel Fire)", async () => {
+  const items = JSON.parse(FILES["data/items.json"]);
+  items.items.push({ id: "barrel", name: "Barrel", category: "material", tier: 1, weight: 1, base_value: 1 });
+  const rooms = JSON.parse(FILES["data/rooms.json"]);
+  rooms.rooms.workshop.starter_display_name = "Barrel Fire";
+  const r = await run({ ...FILES, "data/items.json": JSON.stringify(items), "data/rooms.json": JSON.stringify(rooms) });
+  assert.equal(r.by("#7").filter((f) => /word "barrel"/.test(f.msg)).length, 0, r.by("#7").map((f) => f.msg).join("\n"));
+});
+
+test("#7 SB6b: character vs item word overlap is quiet, character vs character still fires", async () => {
+  const items = JSON.parse(FILES["data/items.json"]);
+  items.items.push({ id: "tank_plate", name: "Tank Plate", category: "material", tier: 1, weight: 1, base_value: 1 });
+  const sq = JSON.parse(FILES["data/squad.json"]);
+  sq.members.push({ id: "tank", callsign: "Tank", name: "Bo", bio: "b", trait_text: "t", key: "k", size: 0.1, unlock: "", flaw: null, synergy: null });
+  const base = { ...FILES, "data/items.json": JSON.stringify(items), "data/squad.json": JSON.stringify(sq) };
+  const quiet = await run(base);
+  assert.equal(quiet.by("#7").filter((f) => /word "tank"/.test(f.msg)).length, 0, quiet.by("#7").map((f) => f.msg).join("\n"));
+  const en = JSON.parse(FILES["data/enemies.json"]);
+  en.enemies.big_tank = { name: "Big Tank", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
+  const hit = await run({ ...FILES, "data/squad.json": JSON.stringify(sq), "data/enemies.json": JSON.stringify(en) });
+  assert.ok(hit.by("#7").some((f) => /word "tank"/.test(f.msg) && /squad tank/.test(f.msg) && /enemy big_tank/.test(f.msg)), hit.by("#7").map((f) => f.msg).join("\n"));
+});
+
+test("#7 SB6b-minors: a non-character entity sharing the word does not silence a character-vs-character clash", async () => {
+  const items = JSON.parse(FILES["data/items.json"]);
+  items.items.push({ id: "tank_plate", name: "Tank Plate", category: "material", tier: 1, weight: 1, base_value: 1 });
+  const sq = JSON.parse(FILES["data/squad.json"]);
+  sq.members.push({ id: "tank", callsign: "Tank", name: "Bo", bio: "b", trait_text: "t", key: "k", size: 0.1, unlock: "", flaw: null, synergy: null });
+  const en = JSON.parse(FILES["data/enemies.json"]);
+  en.enemies.big_tank = { name: "Big Tank", hp: 1, attack: 1, defense: 1, xp: 1, loot: {} };
+  const r = await run({ ...FILES, "data/items.json": JSON.stringify(items), "data/squad.json": JSON.stringify(sq), "data/enemies.json": JSON.stringify(en) });
+  const hit = r.by("#7").filter((f) => /word "tank"/.test(f.msg));
+  assert.equal(hit.length, 1, r.by("#7").map((f) => f.msg).join("\n"));
+  assert.ok(/squad tank/.test(hit[0].msg) && /enemy big_tank/.test(hit[0].msg) && !/item tank_plate/.test(hit[0].msg), hit[0].msg);
+});
+
+test("#7 SB6b-minors: CHARACTER_KINDS derives from the registry character flag", () => {
+  assert.deepEqual([...CHARACTER_KINDS].sort(), ["enemy", "squad", "trader"]);
+  assert.deepEqual([...CHARACTER_KINDS].sort(), KIND_TABLE.defs.filter((d) => d.character === true).map((d) => d.kind).sort());
+  assert.ok(KIND_TABLE.defs.filter((d) => !CHARACTER_KINDS.includes(d.kind)).every((d) => d.character === false));
 });
 
 test("SB2-FIX L3: STORY-TODO without a space still trims the marker", async () => {

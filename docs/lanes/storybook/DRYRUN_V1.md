@@ -195,7 +195,138 @@ fixes):
    word-subset clause in `server/storybook/checks/structural.mjs` (`word "... is a name and also part of another name"`)
    could be limited to mixed kinds. No change made.
 
+## SB6b re-run
+
+Re-ran the engine read-only at the same pinned sha (`fd4f8c37`) on branch `sb6b-tighten-7`, through the same pinned-sha
+reader (`git show` / `git ls-tree`, no fetch, no EFI worktree read, no write). Only `server/storybook/checks/structural.mjs`
+changed: the #7 word-subset clause now reports a word only when **every** name sharing it is a character-like kind
+(`trader`, `squad`, `enemy`). Exact-name and id clashes are unchanged.
+
+The brief's "character vs item → finding" shape cannot coexist with this target on EFI: the `scav` group
+(`Scav` vs `Scav Boots`…) and the `map` group (`Map` vs `Map Room Guard`) are character-vs-item overlaps and are exactly
+two of the 15 rows that must drop to reach 4. The implemented rule keeps the two character-vs-character word clashes
+(`Tank` vs `Tank Diver`, `The Foreman` vs `Line Foreman`) and quiets every group that involves an item or room.
+
+Summary line after the change:
+
+```
+[STORYBOOK] sha=fd4f8c37 #3=11 #4=4 #5=2 #6=6 #7=4 #8=89 #11=6 total=122
+```
+
+### #7 after (4: 2 word clashes + 1 exact name + 1 id)
+
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| 1 | info | word "foreman": enemy `boss_sublevel5_guardian` (The Foreman) + enemy `line_foreman` (Line Foreman) | **real** (INV: "Foreman") |
+| 2 | info | word "tank": squad `tank` (Tank) + enemy `tank_diver` (Tank Diver) | **real** (INV: "Tank") |
+| 3 | info | name "wrench" is shared by item `tool_wrench` (Wrench) + squad `wrench` (Wrench) | **real** (INV: "Wrench") |
+| 4 | warn | id "doc" is used by squad `doc` (Saint) + trader `doc` (Doc) | **real** (INV: "doc") |
+
+Raw:
+
+```
+[info]  enemy:boss_sublevel5_guardian word "foreman" is a name and also part of another name: enemy boss_sublevel5_guardian (The Foreman), enemy line_foreman (Line Foreman)
+[info]  enemy:tank_diver word "tank" is a name and also part of another name: enemy tank_diver (Tank Diver), squad tank (Tank)
+[info]  item:tool_wrench name "wrench" is shared by item tool_wrench (Wrench), squad wrench (Wrench)
+[warn]  squad:doc id "doc" is used by squad + trader (Saint / Doc)
+```
+
+The 15 former rows are gone, including all 10 item-vs-item chains (`Coffee`/`Coffee Beans`, `Kevlar`/`Kevlar Boots`, …),
+the 3 item-vs-room overlaps (`Barrel`/`Barrel Fire`, `Generator`/`Generator`, `Intel`/`Intel Table`) and the 2
+character-vs-item theme overlaps (`Scav`/`Scav Boots`, `Map`/`Map Room Guard`). No other check count changed; `#1`, `#2`,
+`#9`, `#10` remain 0.
+
+### SB6b minors re-run (character filter before the every() check)
+
+The word-subset clause now filters owners and hits to character kinds (registry `character: true`) before requiring two
+distinct entities, so an item sharing the word no longer silences a real character-vs-character clash. One group surfaces
+that the item had been hiding: the `scav` word, shared by three enemies (`Scav`, `Armored Scav`, `Depot Scav`; the item
+`Scav Boots` used to mask it). Same pinned sha:
+
+```
+[STORYBOOK] sha=fd4f8c37 #1=0 #2=0 #5=2 #7=5 #8=89 total=123
+[info]  enemy:armored_scav word "scav" is a name and also part of another name: enemy armored_scav (Armored Scav), enemy depot_scav (Depot Scav), enemy scav (Scav)
+```
+
+#7 is 5 (the 4 above + `scav`); the `scav` row is an enemy-variant chain, so triage it as a likely real-but-benign row.
+
 ## Public-release hygiene
 
 This file names the project "EFI" and uses repo-relative paths only; no absolute paths, IPs, or personal identifiers.
 Verified with `node --test test/public-release.test.mjs` (see commit message for the pass/fail counts).
+
+---
+
+# #12 (SB7) — lore contradictions
+
+SB7 (v1.1, last check) implements INV §4 check #12: the fact store + contradiction finder. Same read-only discipline as SB6;
+every byte came through the pinned-sha reader, nothing in the EFI working tree was read, and no fetch or write was performed.
+
+## Pinned sha
+
+| Field | Value |
+|---|---|
+| Ref | `origin/main` |
+| Sha | `683818e70939ff74062ebf7c8156a949fc22dbd6` (`683818e7`) |
+| Measured | tree moved since SB6's `fd4f8c37`; `#3` dropped 11 → 10 (the doc_2 audit row changed), other counts unchanged |
+
+## Summary line (raw)
+
+```
+[STORYBOOK] sha=683818e7 #3=10 #4=4 #5=2 #6=6 #7=19 #8=89 #11=6 total=136
+```
+
+`#12=0`, so it is absent from the line (only ids with findings appear). The fact store is built and registered, and the
+current tree asserts no two values for the same single-valued slot.
+
+## What was built
+
+`server/storybook/checks/lore.mjs` exports check `#12` ("Lore contradictions (fact triples)") and is appended to
+`CHECK_MODULES` in `server/storybook/checks/index.mjs` (the only line changed there). Deterministic only — no LLM.
+
+Fact triples `(subject, slot, value)` are collected from two high-precision sources and normalised through entity aliases:
+
+| Slot | Subject | Value | Source |
+|---|---|---|---|
+| `boss_of` | enemy | location | the enemy's `boss_of` link, every location's `boss` row (inverted), and PLAN_MAP_VIBES per-map "Boss" backtick id |
+| `at_location` | quest step | location | `at_location` link (kill/extract task) |
+| `trader` / `targets_enemy` / `wants_item` / `needs_room` / `needs_skill` | quest step | trader / enemy / item / room / skill | quest-step links |
+| `seen_at` / `parent` | enemy | location / enemy | CONTENT_BREADTH_SPEC look rows (re-keyed from the `look:` lore row to the enemy it describes) |
+| `spoken_by` | line | trader / squad | narrative-line speaker link |
+| `produces` / `workshop` | recipe | item / room | recipe links |
+| `unlocked_at` | squad member | location | squad `unlock` link |
+| `first_clear_unique` | location | item | location reward link |
+
+A contradiction is two facts that assign different values to the same `(subject, slot)`. Severity: `warn` when every
+conflicting value is backed by a structured link, `info` when a value rests only on the PLAN_MAP_VIBES doc parse
+("prefer precision over recall"). The `boss` → `boss_of` inversion is what makes "an enemy is boss of two locations"
+detectable.
+
+## #12 findings (raw)
+
+```
+#12 count = 0
+```
+
+## Per-check verdict (INV §4 | got | verdict)
+
+| # | INV §4 example | Got at `683818e7` | Verdict |
+|---|---|---|---|
+| 12 | "Needs a fact store first; start with the doc-drift check (#3)" | 0 findings; the fact store is implemented, registered, and exercised by tests; the current tree is internally consistent | **explained** — INV row 12 carried no enumerated contradiction to reproduce, only the absence of a fact store; the store now exists and reports 0 |
+
+## Bugs
+
+None. `#12=0` is the same correct-behaviour class as SB6's `#1=0`/`#2=0`/`#9=0`/`#10=0`:
+
+- The 7 bosses each map to exactly one location in `data/locations.json`, and every PLAN_MAP_VIBES per-map "Boss" backtick
+  id agrees with that data (harbor→dockmaster, railway→yardmaster, customs→smuggler, military base→colonel,
+  bunker→overseer). The two sublevel bosses (`boss_sublevel5_guardian`, `boss_sublevel10_guardian`) live in band rows
+  (several floors each), so the check deliberately skips their band text rather than guess one floor (precision).
+- The CB3 named-map look rows (`yard_scav` … `strongroom_guard`) still warn at ingest because their enemies are not on
+  `origin/main`; their `seen_at`/`parent` links are skipped rather than treated as facts about a missing enemy.
+
+The contradiction finder is exercised by `test/storybook-lore.test.mjs` on the shared fake repo: an enemy that is boss of
+two locations is a `warn`; a PLAN_MAP_VIBES boss that disagrees with the data is `info`; a boss id that is not an enemy is
+skipped. Character-location slots with no structured source in EFI's data (traders carry no location field; `faction` is a
+reserved kind) were intentionally left unparsed rather than add a lexical guess (info-level noise, against the
+precision-over-recall lean).

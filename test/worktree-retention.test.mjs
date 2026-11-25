@@ -2,6 +2,7 @@
 // or lost and untouched for 7 days. Dry run by default; WIP goes to refs/vs-archive/<unit> (branch never moves); restore
 // round-trips the tree byte-for-byte; links are never followed; live cwd / recent touch / merged / owner live are kept.
 // Temp repos only: nothing here touches the real sanctuary.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";

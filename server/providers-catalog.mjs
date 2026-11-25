@@ -454,6 +454,17 @@ function primaryUnitRef(st) {
   return worked;
 }
 
+/** usa-58: a run that implemented several units in turn (one session, `cd <worktree B>` after finishing A) is credited ONE primary
+ * unit by primaryUnitRef; the rest of its units used to miss as no-worker-cwd-match. Units it ran >= SECONDARY_UNIT_CALLS tool
+ * calls inside (real worktree activity, not a prose mention) are its secondary units. Only used as a last resort, see resolveImplementer. */
+const SECONDARY_UNIT_CALLS = 5;
+function secondaryUnitRefs(st) {
+  if (!st.unitWorked || st.unitWorkedOverflow) return [];
+  const primary = primaryUnitRef(st);
+  if (!primary) return []; // no primary unit: the run's cost sits on no merge, so it must not be credited to a secondary one either
+  return [...st.unitWorked].filter(([n, c]) => c >= SECONDARY_UNIT_CALLS && n !== primary && /^unit-/.test(n)).map(([n]) => n);
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -609,7 +620,7 @@ const PROFILE_NAME_BY_ID = new Map(DEFAULT_PACK_PROFILES.map((p) => [p.id, p.nam
 /** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
-  if (typeof m.role === "string" && m.role) st.role = m.role;
+  if (typeof m.role === "string" && m.role) st.role = m.role.replace(/^(?:former|old|retired)-/i, ""); // usa-56: retired roles ("former-lead") fold into the live role at the source
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
@@ -1014,7 +1025,8 @@ function parseNumstat(raw) {
 }
 
 /** Merge commits -> units {sha, unit, code, reviewRounds, mergedAt, locAdded, locDeleted, filesChanged, subject}.
- * unit = branch from "Merge branch 'x'". One `git log` over recent history joined in memory (no per-merge spawns),
+ * Only first-parent merges on HEAD's mainline count (usa-54); `units.excluded` = Map sha -> reason of the merges that are
+ * provably not units (back-merges, branch-to-branch merges). unit = branch from the merge subject (mergeSubjectBranch). One `git log` over recent history joined in memory (no per-merge spawns),
  * cached by HEAD sha, plus one bounded `--first-parent --numstat` companion pass for LOC (also cached). The merged side
  * of a merge = commits reachable from its 2nd parent until the first-parent (mainline) chain from HEAD is hit.
  * reviewRounds = highest N among "review rN" subjects on that side. Lane code = the merge subject's `(@code)` tag,
@@ -1038,6 +1050,18 @@ export function readMergedUnits(git = defaultGit) {
 const MERGED_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"];
 const NUMSTAT_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat", "--format=%H"];
 
+/** usa-54: a merge OF the default branch (`git pull` on main, "Merge origin/master into unit-x"): never a unit itself. */
+const BACK_MERGE_RE = /^Merge (?:(?:remote-tracking )?branch '(?:origin\/)?(?:main|master)'|(?:origin\/)?(?:main|master)(?=[\s:,(]|$))/i;
+/** Merge subject -> unit branch. "Merge branch 'x'" (git, GitLab "... into 'main'"), the hand-typed "Merge unit-<name>: ..."
+ * form some leads used 11-19..11-20 (usa-44), and usa-54 GitHub PR merges "Merge pull request #N from <owner>/<branch>". */
+export function mergeSubjectBranch(subject) {
+  const s = String(subject ?? "");
+  return /Merge branch '([^']+)'/i.exec(s)?.[1]
+    ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(s)?.[1]
+    ?? /^Merge pull request #\d+ from [^/\s]+\/(\S*[^\s.,:;)])/.exec(s)?.[1]
+    ?? null;
+}
+
 /** readMergedUnits() minus the git calls: HEAD sha + the two `git log` outputs -> units. */
 function buildMergedUnits(head, raw, numstatRaw) { return drainSync(mergedUnitsSteps(head, raw, numstatRaw)); }
 function* mergedUnitsSteps(head, raw, numstatRaw) {
@@ -1049,12 +1073,27 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
   yield;
   const numstat = parseNumstat(numstatRaw);
   yield;
+  // Mainline = the first-parent chain from HEAD. usa-54: a back-merge's 2nd parent is always default-branch history (the
+  // master tip it pulled in), wherever the back-merge sits: a `git pull` merge on master, or "Merge origin/master into
+  // unit-x" on a branch that was later fast-forwarded. So each back-merge's 2nd-parent first-parent chain is mainline too;
+  // otherwise unit merges made on master then (or on another clone) would read as side commits and be dropped.
   const mainline = new Set();
-  for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  const starts = [head];
+  for (const c of commits.values()) if (c.parents.length >= 2 && BACK_MERGE_RE.test(c.subject)) starts.push(c.parents[1]);
+  while (starts.length) {
+    for (let c = commits.get(starts.pop()); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
+  }
   const units = [];
+  // usa-54 (idea-861): only first-parent merges on HEAD's mainline are units (what `git log --first-parent --merges` lists).
+  // The full log is still read because the side walk below needs the merged branch's own commits for review rounds,
+  // lane code and first-commit time. A merge found on some unit's merged side (a back-merge of main into a feature branch,
+  // a branch-to-branch merge) is recorded in `excluded` so the ledger re-fold can mark its stale row. A merge that is
+  // neither on mainline nor on a walked side (log truncated at MAX_COMMITS) is skipped but NOT marked: unknown != excluded.
+  const excluded = new Map(); // sha -> reason
   for (const c of commits.values()) {
-    if (c.parents.length < 2) continue;
+    if (c.parents.length < 2 || !mainline.has(c.sha)) continue;
     if (units.length % 300 === 299) yield;
+    if (BACK_MERGE_RE.test(c.subject)) { excluded.set(c.sha, "back-merge"); continue; }
     const side = [];
     const seen = new Set();
     const stack = [c.parents[1]];
@@ -1065,7 +1104,9 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       const k = commits.get(sha);
       if (!k) continue;
       side.push(k);
-      stack.push(...k.parents);
+      if (k.parents.length >= 2) excluded.set(k.sha, "not-first-parent");
+      // A back-merge's 2nd parent is default-branch history, not this unit's work: don't walk (or exclude) what's behind it.
+      stack.push(...(k.parents.length >= 2 && BACK_MERGE_RE.test(k.subject) ? k.parents.slice(0, 1) : k.parents));
     }
     const mergeParsed = parseSubjectReviewRounds(c.subject);
     let maxR = mergeParsed.maxR;
@@ -1081,11 +1122,12 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
     const rounds = maxR > 0 ? maxR : fixCount;
-    // usa-44: also the hand-typed "Merge unit-<name>: ..." form some leads used (11-19..11-20); the name is the branch.
-    const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? /^Merge (unit-[A-Za-z0-9._-]*[A-Za-z0-9])(?=[:\s,]|$)/.exec(c.subject)?.[1] ?? null;
+    const branch = mergeSubjectBranch(c.subject);
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
+  // A unit's sha is never excluded (mainline and side are disjoint), so the two sets never overlap.
+  units.excluded = excluded;
   return units;
 }
 
@@ -1177,6 +1219,7 @@ function readSquadReposUncached(home) {
  * per hit on the owner's loop). Only the synchronous getUsage() contract (tests, no server caller) keeps spawning. */
 function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = {}) {
   const out = [];
+  const excluded = new Map();
   for (const r of readSquadRepos(home, now)) {
     const key = normRepoKey(r.root);
     const t = now();
@@ -1192,7 +1235,9 @@ function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = 
       const lane = laneOf(u);
       out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
     }
+    for (const [sha, why] of hc?.units?.excluded ?? []) excluded.set(sha, why);
   }
+  out.excluded = excluded; // usa-54: non-unit merges across every repo, for the ledger re-fold
   return out;
 }
 
@@ -1332,6 +1377,7 @@ function agentV2(st, agentId) {
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
     unitRef: primaryUnitRef(st),
+    unitSecondary: secondaryUnitRefs(st), // usa-58: other units this run demonstrably worked in (>= SECONDARY_UNIT_CALLS calls)
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1519,17 +1565,29 @@ const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === 
 
 /** Worker runs bucketed by worktree unit name and by lane, in agent order. heap-stall-1114: attributeImplementer() filtered all
  * ~4k agent runs once per merged unit (~0.8 s of every /usage request); getUsage() now builds this once per request. */
+const isWorktreeCwd = (cwd) => /\/worktrees\//i.test(normalizeWorktreeCwd(cwd));
+/** usa-55: workers whose worktree is this unit: exact name first; the `unit-`-less alias only when no exact worktree exists. */
+const workersOfUnit = (index, want) => { const exact = index.byUnit.get(want) ?? []; return exact.length ? exact : (index.byAlias?.get(want) ?? []); };
+/** usa-55: a worker whose own worktree is a merged unit (exact or `unit-`-aliased) is owned by the worktree path, not byRef. */
+const ownsMergedWorktree = (index, a) => { const n = unitNameOfCwd(a.cwd); return !!index.mergedNames?.has(n) || (isWorktreeCwd(a.cwd) && !!index.mergedNames?.has(`unit-${n}`)); };
 function indexWorkers(agents) {
   const byUnit = new Map();
+  const byAlias = new Map(); // usa-55: `unit-<worktree name>` -> workers in a unit-less-named worktree
   const byLane = new Map();
+  const bySecondary = new Map(); // usa-58: unit name -> implementer runs that also worked in that unit's worktree
   const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
-    getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
+    const wt = unitNameOfCwd(a.cwd);
+    getOrSet(byUnit, wt, () => []).push(a);
+    // usa-55: some lanes (storybook) name the worktree `sb2-x` but the merged branch `unit-sb2-x`. Alias ONLY real worktree cwds
+    // (never a main checkout like .../VibeSquad), kept apart from exact matches so it can never outrank or pollute them.
+    if (wt && !wt.startsWith("unit-") && isWorktreeCwd(a.cwd)) getOrSet(byAlias, `unit-${wt}`, () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
     if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
+    for (const n of a.unitSecondary ?? []) getOrSet(bySecondary, n, () => []).push(a);
   }
-  return { byUnit, byLane, byRef };
+  return { byUnit, byAlias, byLane, byRef, bySecondary };
 }
 
 /** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
@@ -1545,22 +1603,42 @@ function pickImplementer(cands) {
   return null;
 }
 
+/** usa-55: several implementer profiles worked one unit's worktree (Implement + Work Order + Mechanical fixes...). Credit the
+ * primary one: the costliest run that did work (ties: earliest created). The coverage gap was mostly this ambiguity. */
+function pickPrimaryImplementer(cands) {
+  const worked = cands.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : cands;
+  const created = (x) => (x.createdAt ?? Infinity);
+  return pool.slice().sort((x, y) => ((y.costUsd ?? 0) - (x.costUsd ?? 0))
+    || (created(x) === created(y) ? 0 : created(x) < created(y) ? -1 : 1)
+    || String(x.agentId ?? "").localeCompare(String(y.agentId ?? "")))[0] ?? null;
+}
+
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
+  return resolveImplementer(unit, agents, index).implementer;
+}
+
+/** usa-55: `{ implementer, miss }` from ONE decision path, so the miss reason can never drift from the attribution. */
+function resolveImplementer(unit, agents, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
+  const hit = (implementer) => ({ implementer, miss: null });
+  const miss = (reason) => ({ implementer: null, miss: reason });
+  if (!agents.some((a) => a.role === "worker" && sameSquad(unit, a))) return miss("other-repo-unmapped");
+  let evidenceMiss = null;
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
-    const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
-    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return cwdMatches[0];
+    const cwdMatches = workersOfUnit(index, want).filter((a) => sameSquad(unit, a));
+    if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return hit(cwdMatches[0]);
     if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length > 0) return pickImplementer(impls); // usa-44: zero-turn runs never spent anything; null = several implementer profiles (ambiguous)
+      if (impls.length > 0) return hit(pickImplementer(impls) ?? pickPrimaryImplementer(impls)); // usa-44: zero-turn runs never spent anything
     }
     // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
     // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
     // Squad) that is not before the run was created, so a later follow-up run is never credited to an earlier merge (R1 M1).
     const refs = (index.byRef?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
-      && !index.mergedNames?.has(unitNameOfCwd(a.cwd)) // a run whose own worktree is a merged unit is owned by the byUnit path
+      && !ownsMergedWorktree(index, a) // a run whose own worktree is a merged unit is owned by the worktree path
       && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
     if (refs.length) {
       const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
@@ -1569,17 +1647,53 @@ function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
         return !first || first.sha === unit.sha;
       });
       const picked = pickImplementer(mine);
-      if (picked) return picked;
-      return null; // evidence names this unit but another merge owns it (or it is ambiguous): never fall back to the lane guess (R1 M2)
+      if (picked) return hit(picked);
+      return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // never fall back to the lane guess (R1 M2)
     }
-    if (cwdMatches.length === 1) return cwdMatches[0]; // unchanged legacy behaviour: a lone non-implementer worktree run
-    if (cwdMatches.length > 1) return null;
-  }
-  if (!unit.lane || mergedAtMs === null) return null;
+    // usa-58: no primary-evidence run. A run that implemented this unit as its 2nd/3rd unit is credited (identity only: its cost
+    // stays with its primary unit, `shared`), under the same one-merge-per-run rule as above.
+    const secondary = (index.bySecondary?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !ownsMergedWorktree(index, a)
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (secondary.length && cwdMatches.length === 0) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = secondary.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
+      if (picked) return { implementer: picked, miss: null, shared: true };
+      return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // like the primary refs path: never fall to the lane guess (full cost, double count)
+    }
+    if (cwdMatches.length === 1) return hit(cwdMatches[0]); // unchanged legacy behaviour: a lone non-implementer worktree run
+    if (cwdMatches.length > 1) return miss("no-implementer-in-worktree");
+    if (!unit.lane) evidenceMiss = "no-worker-cwd-match";
+  } else if (!unit.lane) return miss("no-branch");
+  if (!unit.lane || mergedAtMs === null) return miss(evidenceMiss ?? "no-lane-implementer");
   const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
-  if (laneWorkers.length === 1) return laneWorkers[0];
+  if (laneWorkers.length === 1) return hit(laneWorkers[0]);
   const laneImpls = laneWorkers.filter(isImplementerWorker);
-  return laneImpls.length === 1 ? laneImpls[0] : null;
+  return laneImpls.length === 1 ? hit(laneImpls[0]) : miss("no-lane-implementer");
+}
+
+/** usa-55: enumerated reasons a merged unit has no implementer (set by resolveImplementer). */
+export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match", "ledger-archived-no-agent", "ledger-archived-unattributed"];
+
+/** usa-55: attributed/total over the raw merged units (ledger-folded rows are added later), split by lane, repo and miss reason. */
+function buildAttributionCoverage(merged) {
+  const tally = (key) => {
+    const m = {};
+    for (const u of merged) {
+      const e = (m[key(u) ?? "none"] ??= { attributed: 0, total: 0 });
+      e.total += 1;
+      if (u.implementerAgentId) e.attributed += 1;
+    }
+    return m;
+  };
+  const attributed = merged.filter((u) => u.implementerAgentId).length;
+  const byMiss = {};
+  for (const u of merged) if (!u.implementerAgentId) byMiss[u.attributionMiss ?? "unknown"] = (byMiss[u.attributionMiss ?? "unknown"] ?? 0) + 1;
+  return { attributed, total: merged.length, rate: merged.length ? Math.round((attributed / merged.length) * 1000) / 1000 : null, byLane: tally((u) => u.lane), byRepo: tally((u) => u.repo), byMiss };
 }
 
 /** handoff entries (type "handoff") from the vs-log dirs under home (logs and teams), deduped (same entry lands in both). */
@@ -2114,7 +2228,7 @@ function providerFamily(provider) {
 function attributeReviewerAgent(unit, implementer, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
   const isRev = (a) => a.jobKind === "reviewer" && sameSquad(unit, a);
-  let revs = typeof unit.unit === "string" && unit.unit ? (index?.byUnit.get(unit.unit.toLowerCase()) ?? []).filter(isRev) : [];
+  let revs = typeof unit.unit === "string" && unit.unit ? workersOfUnit(index ?? {byUnit:new Map()}, unit.unit.toLowerCase()).filter(isRev) : [];
   if (!revs.length && unit.lane && mergedAtMs !== null && implementer) {
     revs = (index?.byLane.get(unit.lane) ?? []).filter((a) => isRev(a) && !unitNameOfCwd(a.cwd) && a.createdAt !== null && a.createdAt >= (implementer.createdAt ?? 0) && a.createdAt <= mergedAtMs);
   }
@@ -2162,13 +2276,14 @@ function buildByWorkflow(merged, agentById) {
       wfSources: new Set(),
       units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
-      fixAfterMergeCount: 0, knownCostUnits: 0,
+      fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
     }));
     g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
     if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
     g.reviewRoundsSum += u.reviewRounds ?? 0;
     const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
     g.costUsd += cost;
     g.inputTokens += u.inputTokens ?? 0;
     g.outputTokens += u.outputTokens ?? 0;
@@ -2188,12 +2303,12 @@ function buildByWorkflow(merged, agentById) {
       firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
       avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
       costUsd: g.costUsd,
-      costPerUnit: g.units ? g.costUsd / g.units : null,
+      costPerUnit: g.costUnits ? g.costUsd / g.costUnits : null,
       costPer100Loc: totalLoc > 0 ? (g.costUsd / totalLoc) * 100 : null,
-      tokensPerUnit: g.units ? Math.round(((g.inputTokens + g.outputTokens) / g.units) * 100) / 100 : 0,
+      tokensPerUnit: g.costUnits ? Math.round(((g.inputTokens + g.outputTokens) / g.costUnits) * 100) / 100 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
       fixAfterMergeRate: g.units ? Math.round((g.fixAfterMergeCount / g.units) * 1000) / 1000 : 0,
-      costCoverage: g.units ? Math.round((g.knownCostUnits / g.units) * 1000) / 1000 : 0,
+      costCoverage: g.costUnits ? Math.round((g.knownCostUnits / g.costUnits) * 1000) / 1000 : 0,
     };
   }).sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
 }
@@ -2279,8 +2394,9 @@ function buildSavings(merged, totals, lanes, agents, rows = []) {
 function cohortOf(units) {
   const n = units.length;
   if (!n) return { units: 0, firstTryPassRate: null, avgReviewRounds: null, costPerUnit: null, tokensPerUnit: null, avgUnitCycleMs: null, fixAfterMergeRate: null };
-  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0;
+  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0, costN = 0;
   for (const u of units) {
+    if (!u.implementerShared) costN += 1; // usa-58: shared credits have no cost: kept out of the cost/token averages
     if ((u.reviewRounds ?? 0) <= 1) firstTry += 1;
     rounds += u.reviewRounds ?? 0;
     cost += Number.isFinite(u.costUsd) ? u.costUsd : 0;
@@ -2292,8 +2408,8 @@ function cohortOf(units) {
     units: n,
     firstTryPassRate: round2(firstTry / n),
     avgReviewRounds: round2(rounds / n),
-    costPerUnit: round2(cost / n),
-    tokensPerUnit: round2(tokens / n),
+    costPerUnit: costN ? round2(cost / costN) : null,
+    tokensPerUnit: costN ? round2(tokens / costN) : null,
     avgUnitCycleMs: cycCount ? Math.round(cycSum / cycCount) : null,
     fixAfterMergeRate: round2(fix / n),
   };
@@ -2414,20 +2530,35 @@ export function readUsageLedger(home) {
  * test runner (isForbiddenRealHome). Returns the number of new lines appended.
  * usa-42 re-fold: a unit already in the ledger without a cost (written while its implementer's agent log was missing, e.g. the
  * forge cutover before runner/agents-archive was imported) is superseded by appending the fresh record once that record has a
- * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent. */
-export function syncUsageLedger(home, snapshot, now = Date.now) {
+ * cost (readUsageLedger keeps the last line per sha). Units that already have a cost are never rewritten, so this is idempotent.
+ * usa-54 re-fold: `excluded` (Map sha -> reason, from mergedUnitsSteps) marks a stale unit row that turned out not to be a unit
+ * (back-merge, branch-to-branch merge) by appending a copy with `excluded: <reason>`; rows are never deleted. A unit row
+ * written with `unit: null` (a GitHub PR merge before the subject parse) gets the branch the fresh record names (a row that
+ * already has a cost keeps every other field). Both only fire while the newest row still differs, so re-runs append nothing. */
+export function syncUsageLedger(home, snapshot, now = Date.now, { excluded = null } = {}) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return 0;
   const todayUtc = new Date(now()).toISOString().slice(0, 10);
   const existing = readUsageLedger(dir);
   const keys = new Set(existing.map((r) => `${r.kind}\u0000${r.sha ?? r.unit ?? r.day ?? ""}`));
   const costless = new Set(existing.filter((r) => r.kind === "unit" && r.sha && ledgerCostMissing(r)).map((r) => r.sha));
+  const unitBySha = new Map(existing.filter((r) => r.kind === "unit" && r.sha).map((r) => [r.sha, r]));
   const lines = [];
+  if (excluded?.size) {
+    for (const r of unitBySha.values()) {
+      const why = excluded.get(r.sha);
+      if (why && r.excluded !== why) lines.push(JSON.stringify({ ...r, excluded: why }) + "\n");
+    }
+  }
   for (const rec of snapshot) {
     if (rec.kind === "day" && typeof rec.day === "string" && rec.day >= todayUtc) continue; // in-progress day: skip until it completes
     const key = `${rec.kind}\u0000${rec.sha ?? rec.unit ?? rec.day ?? ""}`;
     if (keys.has(key)) {
       if (rec.kind === "unit" && costless.has(rec.sha) && !ledgerCostMissing(rec)) { costless.delete(rec.sha); lines.push(JSON.stringify(rec) + "\n"); }
+      else if (rec.kind === "unit" && rec.unit && unitBySha.get(rec.sha)?.unit == null) {
+        const old = unitBySha.get(rec.sha);
+        lines.push(JSON.stringify(ledgerCostMissing(old) ? rec : { ...old, unit: rec.unit }) + "\n"); // a costed row keeps its numbers
+      }
       continue;
     }
     keys.add(key);
@@ -3164,6 +3295,8 @@ export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
 export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
+  resolveImplementer,
+  indexWorkers,
   buildPlanScores,
   buildBurstCohorts,
   usageSteps,
@@ -3252,7 +3385,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
   yield;
-  const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now, { spawn: !noSyncGit });
+  const mergedSrc = git ? readMergedUnits(git) : null;
+  const mergedRawAll = mergedSrc ? mergedSrc.map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now, { spawn: !noSyncGit });
+  const mergedExcluded = (mergedSrc ?? mergedRawAll).excluded ?? new Map(); // usa-54: sha -> reason, for the ledger re-fold
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
   const mergedByLane = new Map();
@@ -3281,7 +3416,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
-    const implementer = attributeImplementer(u, agents, workerIndex);
+    const { implementer: found, miss: attributionMiss, shared } = resolveImplementer(u, agents, workerIndex);
+    const implementer = found;
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
@@ -3301,11 +3437,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
+      attributionMiss: implementer ? null : attributionMiss,
       reviewerAgentId: reviewer ? reviewer.agentId : null,
-      costUsd: implementer ? implementer.costUsd : null,
-      inputTokens: implementer ? implementer.inputTokens : 0,
-      outputTokens: implementer ? implementer.outputTokens : 0,
-      turns: implementer ? implementer.turns : 0,
+      implementerShared: !!shared, // usa-58: the run's primary unit owns its cost; this merge is credited identity only
+      costUsd: implementer && !shared ? implementer.costUsd : null,
+      inputTokens: implementer && !shared ? implementer.inputTokens : 0,
+      outputTokens: implementer && !shared ? implementer.outputTokens : 0,
+      turns: implementer && !shared ? implementer.turns : 0,
       reviewerFamily,
       workflowMode: workflow.mode,
       wfSource: workflow.source,
@@ -3313,6 +3451,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     };
   }
   yield;
+  const attributionCoverage = buildAttributionCoverage(merged);
 
   // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
   // of its merged units; reviewer = PASS-line rate; lead (plan done) and Buddy (handoff accepted) leave no reliable log signal
@@ -3448,14 +3587,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
 
   yield;
   // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
-  if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now); // a filtered view would archive partial data
+  if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now, { excluded: mergedExcluded }); // a filtered view would archive partial data
   yield;
   const ledger = readUsageLedger(homeDir);
   const rawShas = new Set(merged.map((u) => u.sha));
   const rawDays = new Set(rows.map((r) => r.day));
   // Fold only when the raw source is present but partial: units when git returned a (non-empty) bounded log whose older
   // merges fell off MAX_COMMITS, days when agent logs were pruned (respect the since/until day filter like rows do).
-  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !rawShas.has(r.sha) && (!squad || r.squad === squad)) : [];
+  // usa-54: a row the re-fold marked `excluded` (a back-merge / branch-to-branch merge, not a unit) stays in the file but never folds.
+  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !r.excluded && !rawShas.has(r.sha) && (!squad || r.squad === squad)) : [];
   const foldedDays = squad ? [] : ledger.filter((r) => r.kind === "day" && r.day && !rawDays.has(r.day) && (!since || r.day >= since) && (!until || r.day <= until));
   for (const r of foldedUnits) {
     merged.push({
@@ -3464,6 +3604,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
+      attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
       implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
@@ -3531,6 +3673,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     laneRole: lrRows,
     coordination: split(lrRows),
     merged: { units: merged, perLane },
+    attributionCoverage,
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms,

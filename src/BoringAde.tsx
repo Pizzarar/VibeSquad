@@ -29,6 +29,8 @@ import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
 import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
+import { ProjectTabs } from "./ProjectTabs";
+import { useStorybookPresent } from "./StorybookView";
 import { UsageDashboard } from "./UsageDashboard";
 
 export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
@@ -425,6 +427,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
   const inboxCount = useInboxCards().length;
+  const storybookPresent = useStorybookPresent(view?.team.id ?? null);
   // R13-1: a ref popover's "Open in Inbox" (Normal) flips to the overview's Idea Inbox tab; the list flashes the card.
   const focusedInboxCard = useFocusedInboxCard();
   useEffect(() => {
@@ -1034,18 +1037,21 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         </div>
         {banners}
         <header className="boring-topbar" data-testid="boring-topbar">
-          <nav className="boring-topbar-title boring-breadcrumb" data-testid="boring-breadcrumb" aria-label="Breadcrumb">
-            {crumbs.map((c, i) => (
-              <span key={c.key} className="boring-crumb-seg">
-                {i > 0 && <span className="boring-crumb-sep" aria-hidden="true">›</span>}
-                {i === crumbs.length - 1 ? (
-                  <span className="boring-crumb-cur" data-testid={`boring-crumb-${c.key}`} aria-current="page">{c.label}</span>
-                ) : (
-                  <button type="button" className="boring-crumb-btn" data-testid={`boring-crumb-${c.key}`} onClick={() => onCrumb(c.key)}>{c.label}</button>
-                )}
-              </span>
-            ))}
-          </nav>
+          <div className="boring-topbar-lead">
+            <nav className="boring-topbar-title boring-breadcrumb" data-testid="boring-breadcrumb" aria-label="Breadcrumb">
+              {crumbs.map((c, i) => (
+                <span key={c.key} className="boring-crumb-seg">
+                  {i > 0 && <span className="boring-crumb-sep" aria-hidden="true">›</span>}
+                  {i === crumbs.length - 1 ? (
+                    <span className="boring-crumb-cur" data-testid={`boring-crumb-${c.key}`} aria-current="page">{c.label}</span>
+                  ) : (
+                    <button type="button" className="boring-crumb-btn" data-testid={`boring-crumb-${c.key}`} onClick={() => onCrumb(c.key)}>{c.label}</button>
+                  )}
+                </span>
+              ))}
+            </nav>
+            {view && storybookPresent && <ProjectTabs projectId={view.team.id} name={view.team.name} active="code" />}
+          </div>
           {mode === "chat" && inLane && (
             <div className="boring-topbar-switcher">
               <button type="button" className={`boring-switch-pill ${!onWorker && topRole === "brainstorm" ? "on" : ""}`} data-testid="boring-top-brainstorm" onClick={() => currentPin && selectedLaneId && pickRole(currentPin, selectedLaneId, "brainstorm")}>

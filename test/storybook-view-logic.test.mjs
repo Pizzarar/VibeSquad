@@ -140,3 +140,21 @@ describe("storybookLogic", () => {
     assert.equal(L.interpretRefresh(404, {}).error, L.NO_STORYBOOK);
   });
 });
+
+// The known-missing probe (StorybookView.tsx) must notify subscribers when a probe resolves, so a consumer that read the
+// cache at render (the phone drawer's "Open Storybook" entry) re-renders once the HEAD request lands — otherwise a slow
+// host link leaves the entry visible for a project with no Storybook (UX R21 m1).
+test("StorybookView probe notify path: subscribe/notify re-renders consumers when a probe resolves", () => {
+  const s = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
+  assert.ok(s.includes("const probeSubs = new Set<() => void>();"), "probe subscriber set");
+  assert.ok(s.includes("const probeEmit = () => probeSubs.forEach((f) => f());"), "probe notify");
+  assert.ok(s.includes('probe.set(projectId, "missing"); probeEmit();'), "404 resolves → notify (missing)");
+  assert.ok(s.includes('probe.set(projectId, "present"); probeEmit();'), "2xx resolves → notify (present)");
+  assert.ok(s.includes("probe.delete(projectId); probeEmit();"), "non-ok / network error → notify (retry)");
+  assert.ok(s.includes("export function useStorybookMissing"), "missing consumer hook");
+  assert.ok(s.includes("export function useStorybookPresent"), "present consumer hook");
+  assert.ok(s.includes('probe.get(projectId) === "missing"'), "missing hook reads missing status");
+  assert.ok(s.includes('probe.get(projectId) === "present"'), "present hook reads present status");
+  assert.ok(s.includes("probeSubs.add(cb)") && s.includes("probeSubs.delete(cb)"), "hooks subscribe via useSyncExternalStore");
+  assert.ok(s.includes("useSyncExternalStore("), "uses useSyncExternalStore");
+});

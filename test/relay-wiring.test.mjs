@@ -2,7 +2,8 @@
 // real auth.mjs + API middleware. A relayed device goes through the same authenticate / owner-proof / agent-header gates
 // as a LAN device, is never loopback or the local owner, is cut the moment it is revoked (UI, CLI, out-of-process
 // edit, cascade), and the host key can be rotated under a running host. No network: in-memory fake relay.
-// Run: node --test --import ./test/setup/hermetic.mjs test/relay-wiring.test.mjs
+// Run: node --test test/relay-wiring.test.mjs
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";

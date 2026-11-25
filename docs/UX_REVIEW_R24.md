@@ -1,6 +1,6 @@
 # VibeSquad UX review, round 24: @desk B1 re-review, Normal-mode Back/Forward follows the URL
 
-Date: 2026-11-25 · Build: `desk-b1-popstate` @ `544261c4` · BASE: `master` @ `da83b675` · Previous round: `docs/UX_REVIEW_R22.md` (FAIL 0/2/1) · Spec: `docs/PLAN_DESK_NAV_HISTORY.md` B1 done-checks.
+Date: 2026-11-25 · Build: `desk-b1-popstate` @ `544261c4` · BASE: `master` @ `da83b675` · Previous round: `docs/UX_REVIEW_R22_desk-b1.md` (FAIL 0/2/1) · Spec: `docs/PLAN_DESK_NAV_HISTORY.md` B1 done-checks.
 
 **Verdict: FAIL 0/1/1**
 

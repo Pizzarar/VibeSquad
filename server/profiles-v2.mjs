@@ -13,8 +13,10 @@
 // (loadProfiles, providers-catalog, agent-duties) only read `profiles`.
 //
 // This module is pure except migrateProfilesFile() / loadRoles(), which take an explicit path (tests use temp dirs).
-// Spawn hook (P5c, server/spawn-route.mjs) builds roles LIVE from the v1 profiles (buildRolesFromProfiles) and does not
-// read stored `roles` until P5d's role editor ships (P5b review M). Not wired into the UI (P5d).
+// Spawn routing (server/spawn-route.mjs liveRoles) reads the stored `roles` once the file is v2 (P5d: the Settings role
+// editor's first save migrates it) and builds them live from the v1 profiles before that.
+//
+// `modes[p].effort: null` = explicitly cleared (provider default); an omitted effort takes the ROLE_TABLE fallback.
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import {
   DEFAULT_PACK_PROFILES,
@@ -207,8 +209,10 @@ function normalizeMode(v, fb) {
   const m = {};
   const modeId = str(v.modeId) ?? fb?.modeId;
   if (modeId) m.modeId = modeId;
-  const effort = str(v.effort) ?? fb?.effort;
+  // Omitted = the fallback's effort; present but blank/null = explicitly cleared (kept as null so it survives a reload).
+  const effort = Object.hasOwn(v, "effort") ? (str(v.effort) ?? null) : fb?.effort;
   if (effort) m.effort = effort;
+  else if (effort === null) m.effort = null;
   if (isObj(v.featureValues)) m.featureValues = clone(v.featureValues);
   if (typeof v.prompt === "string") m.prompt = v.prompt;
   const extras = cleanExtras(v.mcpExtras);

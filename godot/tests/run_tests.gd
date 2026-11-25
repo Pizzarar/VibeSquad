@@ -11,6 +11,7 @@ const Export := preload("res://addons/vs_playtest/export_plugin.gd")
 const Transport := preload("res://addons/vs_playtest/transport.gd")
 const LogCapture := preload("res://addons/vs_playtest/log_capture.gd")
 const Dock := preload("res://addons/vs_playtest/dock.gd")
+const Settings := preload("res://addons/vs_playtest/settings.gd")
 
 ## B2b fixtures: never real tokens.
 const DEV_TOKEN := "Tk3n_B2b-test0123456789abcdefGHIJKLmnopqrstu"
@@ -93,6 +94,7 @@ func _initialize() -> void:
 	_test_private_write_failures()
 	_test_pinned_state_single_read()
 	await _test_role_warning()
+	await _test_hotkeys()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -1203,10 +1205,26 @@ func _test_role_warning() -> void:
 		on._refresh_pairing()
 		for i in 3:
 			await process_frame
-		var rc: Dictionary = mock.calls[0] if not mock.calls.is_empty() else {}
+		check(_auth_calls(mock) == 0, "role[%s]: no auth/status call before the dock opens" % c[0])
+		on.open_dock()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: first dock open makes exactly one auth/status call" % c[0])
+		on.close_dock()
+		on.open_dock()
+		on.start_capture()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: reopen / capture does not repeat the call" % c[0])
+		var rc: Dictionary = {}
+		for mc: Dictionary in mock.calls:
+			if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+				rc = mc
+				break
 		check(on._dock.pair_state == Dock.PAIR_PAIRED and str(rc.get("url", "")) == "https://forge.tail1234.ts.net:4180/__vibesquad/auth/status" and _has_header(rc.get("headers", PackedStringArray()), "x-vs-device-token"), "role[%s]: GET auth/status over https with the device token" % c[0])
 		check(on._dock._role_warn.visible == c[2], "role[%s]: warning visible == %s" % [c[0], str(c[2])])
 		on.queue_free()
+	await _test_role_deferral(dpath, cpath)
 	# a fresh transport accepts an owner-playtest pairing redeem
 	var t := Transport.new()
 	var mock2 := MockHttp.new()
@@ -1228,3 +1246,118 @@ func _test_role_warning() -> void:
 		for f in DirAccess.get_files_at(d):
 			DirAccess.remove_absolute(d.path_join(f))
 		DirAccess.remove_absolute(d)
+
+
+## idea-878 review: F3 capture as the first trigger, and a re-pair in the open dock re-checks the role at once.
+func _test_role_deferral(dpath: String, cpath: String) -> void:
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	var mock := MockHttp.new()
+	on._transport.http_fn = Callable(mock, "handle")
+	on._transport.sleep_fn = func(_s: float) -> void: pass
+	on._transport.device_token_path = dpath
+	on._transport.ca_cert_path = cpath
+	on._transport.server_url = "https://forge.tail1234.ts.net:4180"
+	mock.queue = [MockHttp.json(200, {"role": "owner-playtest"})]
+	on._refresh_pairing()
+	await process_frame
+	check(_auth_calls(mock) == 0, "role-defer(a): no call before the first capture")
+	on.start_capture()
+	for i in 3:
+		await process_frame
+	check(_auth_calls(mock) == 1, "role-defer(a): F3 capture as first trigger makes exactly one call")
+	on.start_capture()
+	on.open_dock()
+	for i in 3:
+		await process_frame
+	check(_auth_calls(mock) == 1, "role-defer(a): repeat capture / dock open makes no further call")
+	# (b) dock open + checked; unpair; pair a different device with the dock still open
+	mock.calls.clear()
+	on.unpair()
+	check(on._dock.pair_state == Dock.PAIR_UNPAIRED, "role-defer(b): unpaired")
+	await _fetch_ca(on._transport, mock)
+	on._pending_code = "123456"
+	on._pending_fp = CA_FP_FULL
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN_2, "role": "owner", "allowedTeams": null, "hostId": "h"}), MockHttp.json(200, {"role": "owner"})]
+	var before := _auth_calls(mock)
+	on.open_dock()
+	await on._on_ca_confirmed(true)
+	for i in 3:
+		await process_frame
+	check(on._dock.visible and on._dock.pair_state == Dock.PAIR_PAIRED and _auth_calls(mock) - before == 1, "role-defer(b): pairing in the open dock makes exactly one new auth/status call, no reopen")
+	on.close_dock()
+	on.queue_free()
+	await process_frame
+
+
+func _auth_calls(mock: MockHttp) -> int:
+	var n := 0
+	for mc: Dictionary in mock.calls:
+		if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+			n += 1
+	return n
+
+
+func _key_event(code: Key, mods: Dictionary = {}) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.pressed = true
+	e.shift_pressed = mods.get("shift", false)
+	e.ctrl_pressed = mods.get("ctrl", false)
+	e.alt_pressed = mods.get("alt", false)
+	return e
+
+
+func _test_hotkeys() -> void:
+	var saved_dock: Variant = ProjectSettings.get_setting("vs_playtest/hotkey_dock") if ProjectSettings.has_setting("vs_playtest/hotkey_dock") else null
+	var saved_bug: Variant = ProjectSettings.get_setting("vs_playtest/hotkey_bug") if ProjectSettings.has_setting("vs_playtest/hotkey_bug") else null
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", null)
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", null)
+	# (1) defaults
+	check(Settings.get_str(Settings.HOTKEY_DOCK) == "F4" and Settings.get_str(Settings.HOTKEY_BUG) == "F3", "hotkeys: unset settings resolve to F4/F3")
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	check(on._hotkey_dock == KEY_F4 and on._hotkey_bug == KEY_F3, "hotkeys: unset settings -> KEY_F4/KEY_F3")
+	# (3) behaviour with the defaults
+	on.grab_fn = func() -> Image: return null
+	on.register_adapter(FullAdapter.new())
+	on._input(_key_event(KEY_F4))
+	check(on._dock.visible, "hotkeys: F4 opens the dock")
+	on._input(_key_event(KEY_F4))
+	check(not on._dock.visible, "hotkeys: F4 again closes the dock")
+	on._input(_key_event(KEY_F8))
+	on._input(_key_event(KEY_F9))
+	check(not on._dock.visible and not on._capturing, "hotkeys: F8/F9 are ignored by default")
+	# L1: modifiers are not swallowed
+	for m in [{"shift": true}, {"ctrl": true}, {"alt": true}]:
+		on._input(_key_event(KEY_F4, m))
+		on._input(_key_event(KEY_F3, m))
+	check(not on._dock.visible and not on._capturing, "hotkeys: Shift/Ctrl/Alt+F3/F4 are ignored")
+	on._input(_key_event(KEY_F3))
+	await process_frame
+	check(on._capturing, "hotkeys: F3 starts a capture")
+	on._overlay.pick_done.emit(false, Vector2.ZERO)
+	await process_frame
+	check(not on._capturing, "hotkeys: capture cancelled")
+	on.queue_free()
+	# (2) a saved override survives register_all() and is picked up by _ready()
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", "F6")
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", "F7")
+	Settings.register_all()
+	check(Settings.get_str(Settings.HOTKEY_DOCK) == "F6" and Settings.get_str(Settings.HOTKEY_BUG) == "F7", "hotkeys: saved override survives register_all()")
+	var ov: Node = AutoloadScript.new()
+	ov.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(ov)
+	await process_frame
+	check(ov._hotkey_dock == KEY_F6 and ov._hotkey_bug == KEY_F7, "hotkeys: _ready() uses the saved override")
+	ov._input(_key_event(KEY_F6))
+	check(ov._dock.visible, "hotkeys: overridden dock key works")
+	ov._input(_key_event(KEY_F4))
+	check(ov._dock.visible, "hotkeys: default key no longer toggles after override")
+	ov.queue_free()
+	ProjectSettings.set_setting("vs_playtest/hotkey_dock", saved_dock)
+	ProjectSettings.set_setting("vs_playtest/hotkey_bug", saved_bug)

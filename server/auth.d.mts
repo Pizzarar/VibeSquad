@@ -19,6 +19,9 @@ export function netConfig(): {
 export function hasDistIndex(rootDir?: string): boolean;
 export function getAuthStatus(rootDir?: string): {
   ok: boolean;
+  hostLabel: string;
+  headless: boolean;
+  restartRequest: { id: string | null; state: string; windowAt: string | null; deadlineAt: string | null; summary: string } | null;
   port: number;
   meshnetIp: string | null;
   meshnetHost: string;

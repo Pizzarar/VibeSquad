@@ -3,6 +3,7 @@
 // posts (lead handoff, Buddy restart) all go through fetchWithLocalToken() in server/local-token.mjs, which wraps the
 // E4b proveLocalServer(). Threat note: docs/lanes/android-app/E4B_THREAT_NOTE.md (P4, rogue loopback listener).
 // Attacker cases are marked "attacker:".
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
@@ -10,9 +11,9 @@ import { join, resolve } from "node:path";
 import { after, describe, test } from "node:test";
 
 const rootDir = resolve(import.meta.dirname, "..");
-// hermetic.mjs gives this process an empty VIBESQUAD_HOME; the token file lands there via auth.getLocalToken().
+// hermetic.mjs (imported above) gives this process an empty VIBESQUAD_HOME; the token file lands there via auth.getLocalToken().
 const home = process.env.VIBESQUAD_HOME;
-assert.ok(home, "run with --import ./test/setup/hermetic.mjs");
+assert.ok(home, "import ./setup/hermetic.mjs");
 process.env.PASEO_HOME = join(home, "paseo");
 process.env.PASEO_DAEMON = "127.0.0.1:1";
 const auth = await import("../server/auth.mjs");

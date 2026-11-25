@@ -30,7 +30,7 @@ Read the files once. You do not need to understand every line. You are checking 
 
 The Lead is a second chat. Start it yourself: click **FULL** at the top right of the Squad page (the default page only shows Teams), then in the header click **+ NEW AGENT**, pick a Lead profile in **PROFILE** (role: lead), then click **Spawn agent**. Your Buddy can also start one for you through VibeSquad (no extra tool to install). Handing a plan on does not start a Lead by itself: the Buddy's **⇄ Handoff** button starts a fresh Buddy from its summary, and once a plan has been handed to a Lead the Buddy offers **↻ Restart from summary**. When a Buddy has been working on one topic, **✓ Hand off plan & close topic** hands that topic's plan on and closes the chat.
 
-![A Brainstorm chat with the Buddy's panel on the right: Topic, Hand off plan & close topic, Park to card, a token meter, Handoff, Summary and Inbox](../assets/screenshots/04-buddy-chat.png) VibeSquad shows the Lead as "RUNS THE WORK" (in **FULL** view, or in the Team's rail on the default page). Open the Lead's chat and type:
+![A Brainstorm (Buddy) chat: its header (Brainstorm · @main-game) above its messages, a WORKING NOW card and a Plan / Tasks list](../assets/screenshots/04-buddy-chat.png) VibeSquad shows the Lead as "RUNS THE WORK" (in **FULL** view, or in the Team's rail on the default page). Open the Lead's chat and type:
 
 > You are the Lead. Read AGENTS.md, then LEAD_RULES.md, then PLAN.md. Do not write code yourself. Split the plan into small jobs. For each job, give: what it is, what is out of scope, and what proof you expect. Show me the list and wait for my yes.
 
@@ -90,9 +90,9 @@ A Lead that is stuck on a decision only you can make sets the `needs-you` flag o
 
 ## Watch the Lead's context
 
-A Lead that runs long gets slow and costly. When it is heavy, it should write a handoff and a fresh Lead takes over. VibeSquad shows the Lead's token count against its limits and offers **Initiate Handoff / Spawn Successor**. See [Handoff](../Concepts/Handoff.md).
+A Lead that runs long gets slow and costly. When it is heavy, it should write a handoff and a fresh Lead takes over. Once the Lead passes about 150k tokens VibeSquad puts a **NEEDS YOU** bar on it (with **Clear** and **Snooze** choices) telling it to wrap up and hand off. To start the handoff yourself, open the **⋯** (More actions) menu on the Lead and pick **Spawn successor**, or in FULL view press **Initiate Handoff / Spawn Successor**. See [Handoff](../Concepts/Handoff.md).
 
-![The Lead selected in the team panel on the right: its token meter (97k / 150k, 250k auto, 300k cap), a NEEDS YOU alert and the Initiate Handoff / Spawn Successor button](../assets/screenshots/05-lead-handoff.png)
+![The Lead's chat: its header (Main Game · Lead 75) with a NEEDS YOU bar asking for the owner's OK, above its timeline](../assets/screenshots/05-lead-handoff.png)
 
 ## Next
 

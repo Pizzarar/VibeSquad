@@ -1,4 +1,5 @@
 // Every Squad gets its hidden Bug Runner lane (G1) and agents can file into their own Squad's bug lane (G2).
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

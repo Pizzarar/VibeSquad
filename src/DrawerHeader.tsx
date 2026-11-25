@@ -23,6 +23,7 @@ import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBa
 import { AGENT_TYPE_LABEL, isHubLaneId, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType, Member } from "./teams";
 import { agentDisplayName } from "./identity";
+import { roleNameFor, shortModel, useProfiles } from "./profiles";
 import type { Entry } from "./Timeline";
 import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
@@ -706,6 +707,20 @@ export function DrawerHeader({
 }: DrawerHeaderProps) {
   const cfg = useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, stagedSwitch, onStageSwitch });
   const { staged, effectiveProv, effectiveProvider, providerSelect, providerSwitchBtn, modeSelect, thinkingSelect, modelControl, activeModeLabel, stagedThinking, modelError, reloadError, setReloadError } = cfg;
+  const { roles: storedRoles } = useProfiles();
+  const labelsOf = (agent.labels ?? {}) as Record<string, string>;
+  const roleName = roleNameFor(labelsOf.profile, storedRoles) ?? roleNameFor(labelsOf.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
+  const modelName = shortModel(staged?.model ?? agent.model);
+  const roleModel = roleName && modelName ? `${roleName} · ${modelName}` : roleName || modelName || "";
+  const roleModelChip = roleModel ? (
+    <span
+      className="role-model-chip"
+      data-testid="drawer-role-model"
+      title={`${roleName ? `${roleName} · ` : ""}${staged?.model ?? agent.model ?? modelName}${staged ? " (staged switch)" : ""}`}
+    >
+      {roleModel}
+    </span>
+  ) : null;
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);
@@ -1139,6 +1154,7 @@ export function DrawerHeader({
         <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
           <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
             <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
+            {roleModelChip}
             <span className="prov-pill" style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}>
               {effectiveProv.symbol} {effectiveProv.name}
             </span>
@@ -1175,6 +1191,7 @@ export function DrawerHeader({
       <span className="drawer-head-compact-title">
         <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agentDisplayName(agent, { isHubLaneId })}</AgentTitleEdit>
       </span>
+      {roleModelChip}
     </>
   );
 

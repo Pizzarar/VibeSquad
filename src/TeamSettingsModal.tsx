@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { getUserName, loadDesktopStatus, loadUpdaterStatus, loadUserName, saveLanEnabled, saveRemoteEnabled, saveUpdateChannel, saveUserName, useConfigWarnings, useDesktopStatus, useExposedIpsStore, useLanEnabled, useRemoteEnabled, useUpdaterStatus } from "./userName";
 import { RunnerSettingsSection } from "./RunnerSettingsSection";
 import { PairDeviceModal } from "./PairDeviceModal";
+import { LadderEditorSection, RoleEditorSection } from "./RoleEditors";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -118,6 +120,22 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
 
 /** The groups of this editor. The Settings home renders them in separate sections; the modal shows all. */
 /** Desktop-only: the Windows login entry that starts the server + runner with no window. Default on; this is the off-switch. */
+/** P5d C2: after migration the legacy profile list is a collapsed, read-only reference; on v1 it renders as before. */
+function LegacyWrap({ readOnly, count, children }: { readOnly: boolean; count: number; children: ReactNode }) {
+  if (!readOnly) return <>{children}</>;
+  return (
+    <details className="re-legacy" data-testid="legacy-profiles-details">
+      <summary data-testid="legacy-profiles-summary">
+        <span className="field-label">LEGACY AGENT PROFILES · read-only · {count} profiles</span>
+        <span className="muted small re-legacy-copy" data-testid="legacy-profiles-subtitle">
+          Kept for older profile names until they&apos;re retired. Edit Roles and Tier Ladder above.
+        </span>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 function StartAtLoginRow() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [error, setError] = useState("");
@@ -189,7 +207,10 @@ export function TeamSettingsModal({
   const [base, setBase] = useState(snapshotTeams);
   const [teams, setTeams] = useState<TeamDef[]>(() => JSON.parse(JSON.stringify(base.teams)));
   const [msg, setMsg] = useDraft("settings:msg");
-  const { profiles, installedProviders } = useProfiles();
+  const { profiles, installedProviders, schemaVersion } = useProfiles();
+  // P5d C2: once profiles.json is v2 (a role was saved), the legacy editor is read-only: the server 409s role-changing writes.
+  const legacyReadOnly = (schemaVersion ?? 0) >= 2;
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [selectedProfileName, setSelectedProfileName] = useState<string>(() => profiles[0]?.name ?? "Lead - Claude");
   const activeProfile = profiles.find((p) => p.name === selectedProfileName) ?? profiles[0];
   const [draftProfile, setDraftProfile] = useState<Profile | null>(() => (activeProfile ? { ...activeProfile } : null));
@@ -201,6 +222,7 @@ export function TeamSettingsModal({
   const handleSelectProfile = (name: string) => {
     setSelectedProfileName(name);
     setProfileDirty(false);
+    setProfileSaveError(null);
     const found = profiles.find((p) => p.name === name);
     if (found) {
       setDraftProfile({ ...found });
@@ -236,8 +258,11 @@ export function TeamSettingsModal({
         setFeaturesJson(next.featureValues ? JSON.stringify(next.featureValues) : "{}");
       }
       setMsg(`Seeded ${res.profiles.length} default pack profiles to ~/.vibesquad/profiles.json`);
+      setProfileSaveError(null);
     } catch (e) {
-      setMsg(`Seed default pack error: ${e}`);
+      const text = String((e as Error)?.message ?? e);
+      setProfileSaveError(text);
+      setMsg(`Seed default pack error: ${text}`);
     }
   };
 
@@ -275,9 +300,13 @@ export function TeamSettingsModal({
       });
       setSelectedProfileName(draftProfile.name);
       setProfileDirty(false);
+      setProfileSaveError(null);
       setMsg(`Saved profile "${draftProfile.name}" to ~/.vibesquad/profiles.json`);
     } catch (e) {
-      setMsg(`Profile save error: ${e}`);
+      // P5d C2: a 409 (profiles.json migrated by a role save, maybe in another tab) says which role and where to edit it.
+      const text = String((e as Error)?.message ?? e);
+      setProfileSaveError(text);
+      setMsg(`Profile save error: ${text}`);
     }
   };
 
@@ -586,12 +615,21 @@ export function TeamSettingsModal({
       {show("runner") && embedded && !isHostMode && (
         <div className="muted small" data-testid="runner-settings-remote">Runner settings live on the host machine; this device is connected remotely.</div>
       )}
-      {show("profiles") && <section className="ts-team" data-testid="profiles-settings-section" data-setting-id="profiles">
-        <div className="ts-scale-head" style={{ marginBottom: 8 }}>
+      {show("profiles") && <RoleEditorSection />}
+      {show("profiles") && <LadderEditorSection />}
+      {show("profiles") && <section
+        className={`ts-team${legacyReadOnly ? " re-legacy-ro" : ""}`}
+        data-testid="profiles-settings-section"
+        data-setting-id="profiles"
+        data-readonly={legacyReadOnly ? "true" : undefined}
+      >
+        <LegacyWrap readOnly={legacyReadOnly} count={profiles.length}>
+        {!legacyReadOnly && <div className="ts-scale-head" style={{ marginBottom: 8 }}>
           <div>
-            <div className="field-label">AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
-            <div className="muted small">
-              Every spawn path (New Agent, Handoff, Brainstorm restart, Inbox topic, Digest) reads this store.
+            <div className="field-label">LEGACY AGENT PROFILES (~/.vibesquad/profiles.json · {profiles.length} profiles)</div>
+            <div className="muted small" data-testid="legacy-profiles-subtitle">
+              Spawns that ask for an old profile name (like &quot;Implement - Sonnet&quot;) use these. Until you save a role above,
+              the Roles editor shows roles built from these profiles; the first role save makes this list read-only.
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -612,7 +650,7 @@ export function TeamSettingsModal({
               + New Profile
             </button>
           </div>
-        </div>
+        </div>}
         <div
           data-testid="settings-profile-roster"
           style={{
@@ -677,7 +715,12 @@ export function TeamSettingsModal({
           })}
         </div>
         {draftProfile && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <fieldset
+            className="re-legacy-form"
+            disabled={legacyReadOnly}
+            data-testid="settings-profile-form"
+            style={{ display: "flex", flexDirection: "column", gap: 8 }}
+          >
             <div className="row2">
               <Field label="PROFILE">
                 <select
@@ -779,7 +822,7 @@ export function TeamSettingsModal({
                 />
               </Field>
             </div>
-            <Field label="NOTES (PROJECT-NEUTRAL SYSTEM PROMPT LAYER)">
+            <Field label="NOTES (added to the prompt, shared across projects)">
               <textarea
                 rows={4}
                 value={draftProfile.notes}
@@ -795,13 +838,21 @@ export function TeamSettingsModal({
                 ⚠ {w}
               </div>
             ))}
-            <div>
-              <button type="button" className="btn ok small" data-testid="save-profile-btn" onClick={onSaveProfile}>
-                Save profile ({draftProfile.name})
-              </button>
-            </div>
+            {!legacyReadOnly && (
+              <div>
+                <button type="button" className="btn ok small" data-testid="save-profile-btn" onClick={onSaveProfile}>
+                  Save profile ({draftProfile.name})
+                </button>
+              </div>
+            )}
+          </fieldset>
+        )}
+        {profileSaveError && (
+          <div className="stat-alert small" role="alert" data-testid="settings-profile-save-error">
+            {profileSaveError}
           </div>
         )}
+        </LegacyWrap>
       </section>}
       {show("teams") && <>
       {teams.map((t, i) => (

@@ -26,6 +26,19 @@ test("gemini rungs and opencode keeps the profile model", () => {
   assert.deepEqual([o.model, o.effort], [undefined, "high"]); // rung without a model leaves the spawn's model alone
 });
 
+test("R7: mechanical opencode spawn runs DeepSeek Flash; tierA keeps the profile model; claude/gemini rungs unchanged", () => {
+  const ladder = DEFAULT_STAKES_LADDER; // not the machine's override file
+  const dsp = { model: "deepseek/deepseek-v4-pro", thinkingOptionId: "high" };
+  const m = resolveStakesRoute("opencode", dsp, "mechanical", false, { ladder });
+  assert.deepEqual([m.model, m.effort, m.reason, m.apply], ["deepseek/deepseek-flash", undefined, "ladder", true]); // effort: profile's
+  const t = resolveStakesRoute("opencode", dsp, "tierA-invariant", false, { ladder });
+  assert.deepEqual([t.model, t.effort], [undefined, "high"]);
+  assert.equal(resolveStakesRoute("opencode", dsp, "normal", false, { ladder }).model, "deepseek/deepseek-v4-pro");
+  assert.equal(resolveStakesRoute("opencode", dsp, "mechanical", { model: true }, { ladder }).apply, false); // explicit model wins
+  assert.deepEqual(DEFAULT_STAKES_LADDER.claude.mechanical, { model: "claude-sonnet-5-5", effort: "low" });
+  assert.deepEqual(DEFAULT_STAKES_LADDER["antigravity-cli"].mechanical, { model: "gemini-3.8-flash" });
+});
+
 test("missing / unknown stakes = normal = profile unchanged", () => {
   for (const s of [undefined, "", "bogus", "normal"]) {
     const r = resolveStakesRoute("claude", claudeProfile, s, false);

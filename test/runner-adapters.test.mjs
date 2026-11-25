@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
-import { RunnerBackend, toAgent, reduceTurn } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, toAgent, reduceTurn, newFoldState, feedFoldLine } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../runner/adapters/acp.mjs';
 import { priceFor, estimateCostUsd } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
@@ -627,4 +627,136 @@ test('opencode: an idle gap clears a stale error, so a later non-zero exit with 
   assert.equal(e.code, 1);
   assert.equal(e.error, undefined);   // Turn 1's stale error must not leak into Turn 2's crash
   assert.equal(e.upstream, undefined);
+});
+
+// --- K2b (docs/lanes/perfection/K2B.md): ACP /compact boundary ---
+const settle = async () => { for (let i = 0; i < 4; i++) await tick(); };
+const turnTypes = (tl, from) => tl.slice(from).map((e) => e.type).filter((t) => ['compacted', 'usage', 'turn_done'].includes(t));
+
+test('K2b agy: a bare /compact ending in end_turn -> synthesized compacted before turn_done; meter = the summary, the summarizer usage_update held back', async () => {
+  const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-neon-low', [
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 150000, size: 1048576 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+    // the probe: /compact's usage_update reads ABOVE the pre-compact size (it is the summarizer call's prompt)
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 152000, size: 1048576 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 3000, cachedReadTokens: 147000, outputTokens: 4000 } } }); },
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 41000, size: 1048576 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+  ]);
+  await settle();
+  const n0 = runner.timeline(id).length;
+  runner.send(id, '/compact');
+  await settle();
+  const tl = runner.timeline(id);
+  assert.deepEqual(turnTypes(tl, n0), ['compacted', 'usage', 'turn_done']);
+  const c = tl.slice(n0).find((e) => e.type === 'compacted');
+  assert.deepEqual([c.before, c.after, c.trigger, c.synthesized], [150000, 4000, 'manual', true]);
+  const u = tl.slice(n0).find((e) => e.type === 'usage');
+  assert.deepEqual([u.contextTokens, u.inputTokens, u.outputTokens, u.estimated, u.compacted], [4000, 150000, 4000, true, true]);
+  assert.ok(!tl.slice(n0).some((e) => e.type === 'usage' && e.contextTokens === 152000));
+  assert.ok(tl.slice(n0).find((e) => e.type === 'turn_done').costUsd > 0);
+  // The next real turn's reading replaces the estimate; its delta baseline is unknown, so no context-delta estimate.
+  const n1 = runner.timeline(id).length;
+  runner.send(id, 'what was the last number?');
+  await settle();
+  const after = runner.timeline(id).slice(n1).filter((e) => e.type === 'usage');
+  assert.deepEqual(after.map((e) => [e.contextTokens, !!e.estimated]), [[41000, false]]);
+});
+
+test('K2b agy: no boundary for "/compact <focus>", a cancelled /compact, or a /compact behind the first-turn system text; the held usage_update is applied', async () => {
+  const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-neon-low', [
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }),
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 9000, size: 1048576 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'cancelled' } }),
+  ]);
+  await settle();
+  runner.send(id, '/compact keep the plan');
+  await settle();
+  runner.send(id, '/compact');
+  await settle();
+  const tl = runner.timeline(id);
+  assert.equal(tl.filter((e) => e.type === 'compacted').length, 0);
+  assert.ok(tl.some((e) => e.type === 'usage' && e.contextTokens === 9000 && !e.compacted));
+
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1 } });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S' } });
+    if (m.method === 'session/prompt') child.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5 } } });
+  });
+  const r2 = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': fakeAdapter(spawnImpl, 'antigravity-cli') } });
+  const id2 = r2.create({ provider: 'antigravity-cli', cwd: '.', prompt: '/compact', systemPrompt: 'You are a Buddy.' });
+  await settle();
+  assert.match(spawnImpl.last.written.find((m) => m.method === 'session/prompt').params.prompt[0].text, /^You are a Buddy\.\n\n\/compact$/);
+  assert.equal(r2.timeline(id2).filter((e) => e.type === 'compacted').length, 0);
+});
+
+test('K2b r1 (Review-Sonnet m1): agy /compact without PromptResponse.usage -> after = the summarizing call this turn wrote to the transcript; none -> unmeasured, no usage', async () => {
+  const home = tmp();
+  const dir = path.join(home, '.gemini', 'antigravity-cli', 'brain', 'S', '.system_generated', 'logs');
+  mkdirSync(dir, { recursive: true });
+  const tr = path.join(dir, 'transcript.jsonl');
+  const planner = (inp, cache, out) => JSON.stringify({ type: 'PLANNER_RESPONSE', input_tokens: inp, cache_read_tokens: cache, output_tokens: out });
+  process.env.VS_AGY_HOME = home;
+  try {
+    writeFileSync(tr, planner(3000, 147000, 500) + '\n'); // the pre-compact turn's last call (150.5k): never read as `after`
+    const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-neon-low', [
+      (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }),
+      (c, m) => { appendFileSync(tr, planner(2000, 149000, 3500) + '\n'); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+      (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }), // wrote nothing this turn
+    ]);
+    await settle();
+    let n0 = runner.timeline(id).length;
+    runner.send(id, '/compact');
+    await settle();
+    let tl = runner.timeline(id).slice(n0);
+    assert.deepEqual(turnTypes(tl, 0), ['compacted', 'usage', 'turn_done']);
+    const c = tl.find((e) => e.type === 'compacted');
+    assert.deepEqual([c.after, c.afterSource, c.unmeasured], [3500, 'transcript', undefined]);
+    const u = tl.find((e) => e.type === 'usage');
+    assert.deepEqual([u.contextTokens, u.estimated, u.compacted, u.inputTokens], [3500, true, true, undefined]);
+    assert.equal(runner.status(id).usage.compacted, true, 'the runner fold keeps the estimate flag');
+
+    n0 = runner.timeline(id).length;
+    runner.send(id, '/compact');
+    await settle();
+    tl = runner.timeline(id).slice(n0);
+    assert.deepEqual(turnTypes(tl, 0), ['compacted', 'turn_done'], 'no measure: no usage (the meter keeps its value, compact-step: still-over)');
+    const c2 = tl.find((e) => e.type === 'compacted');
+    assert.deepEqual([c2.after, c2.afterSource, c2.unmeasured], [undefined, undefined, true]);
+  } finally { delete process.env.VS_AGY_HOME; }
+});
+
+test('K2b r1: a usage event marked compacted (the post-compact estimate) reaches the agent as lastUsage.compactEstimate; a real reading clears it', () => {
+  const st = newFoldState();
+  feedFoldLine(st, JSON.stringify({ type: 'created', provider: 'antigravity-cli', cwd: '.', ts: 1 }));
+  feedFoldLine(st, JSON.stringify({ type: 'usage', contextTokens: 4000, estimated: true, compacted: true, ts: 2 }));
+  assert.equal(st.usage.compacted, true);
+  assert.equal(toAgent({ id: 'rn-e', provider: 'antigravity-cli', cwd: '.', meta: {}, status: 'idle', usage: st.usage }).lastUsage.compactEstimate, true);
+  feedFoldLine(st, JSON.stringify({ type: 'usage', contextTokens: 41000, ts: 3 }));
+  const a = toAgent({ id: 'rn-e', provider: 'antigravity-cli', cwd: '.', meta: {}, status: 'idle', usage: st.usage });
+  assert.equal(a.lastUsage.compactEstimate, undefined);
+  assert.equal(a.lastUsage.contextWindowUsedTokens, 41000);
+});
+
+test('K2b opencode: the opencode/compaction completed marker -> one compacted (not synthesized); codex end_turn on /compact -> none', async () => {
+  const { runner, id } = usageHarness('opencode', 'deepseek/deepseek-flash', [
+    (c, m) => { upd(c, { sessionUpdate: 'usage_update', used: 17793, size: 100000 }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }); },
+    (c, m) => {
+      upd(c, { sessionUpdate: 'session_info_update', _meta: { 'opencode/compaction': { status: 'started' } } });
+      upd(c, { sessionUpdate: 'session_info_update', _meta: { 'opencode/compaction': { status: 'completed', reason: 'manual' } } });
+      c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+    },
+  ]);
+  await settle();
+  runner.send(id, '/compact');
+  await settle();
+  const cs = runner.timeline(id).filter((e) => e.type === 'compacted');
+  assert.equal(cs.length, 1);
+  assert.deepEqual([cs[0].before, cs[0].trigger, cs[0].synthesized], [17793, 'manual', undefined]);
+
+  const { runner: r3, id: id3 } = usageHarness('codex', 'gpt-x', [
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }),
+    (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }),
+  ]);
+  await settle();
+  r3.send(id3, '/compact');
+  await settle();
+  assert.equal(r3.timeline(id3).filter((e) => e.type === 'compacted').length, 0);
 });

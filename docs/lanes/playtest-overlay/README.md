@@ -33,7 +33,7 @@ Implemented runtime debug bridge — Thanks to godot-mcp-runtime by Erodenn
 
 Installed machine-wide in the VS-managed tools directory (`%LOCALAPPDATA%\VibeSquad\tools\godot-mcp-runtime`), pinned to `3b8a4f31`. It is registered in Claude user scope as `godot-runtime` (`claude mcp get godot-runtime`), with `GODOT_PATH` set to the real console `.exe`. Sessions started before the install need a restart to see it. To upgrade, re-clone at a new pinned commit, rebuild, and update this file and `CREDITS.md`.
 
-VS does not inject this server per agent. The runner only knows the `playwright` extra (`runner/adapters/claude.mjs`). Runner agents run with `--strict-mcp-config`, so they only see it if a `godot-runtime` extra is added later.
+Runner agents run with `--strict-mcp-config`, so they only see this server through the opt-in `godot-runtime` extra (`runner/adapters/claude.mjs`, same as `playwright`): label an agent `vs.mcp=godot-runtime` (comma list, e.g. `playwright,godot-runtime`) or give a profile `mcpExtras:["godot-runtime"]`. The runner reuses the owner's own `mcpServers["godot-runtime"]` entry from the runner host's `~/.claude.json` (for an agent on forge, the ssh stdio bridge entry below). There is no default: if the entry is absent the server is not added and the agent's stream gets one `warning:` stderr line. The ACP adapter (opencode) has no extras hook and only gets the vibesquad server.
 
 On another machine, do the manual recipe: install as above, then `claude mcp add --scope user godot-runtime -e GODOT_PATH=<exe> -e GODOT_MCP_DISABLE_ELICITATION=true -- node <tools-dir>/godot-mcp-runtime/dist/index.js`.
 
@@ -41,7 +41,7 @@ On another machine, do the manual recipe: install as above, then `claude mcp add
 
 When the VS server runs on a remote host (forge) and the game runs on the dev PC:
 
-- **Report URL.** Set `vs_playtest/server_url` to `https://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS). The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the MagicDNS name.
+- **Report URL.** Set `vs_playtest/server_url` to `https://<forge mesh host>:<VS port>`. The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the mesh host name. Copy the exact address from the Pair Device dialog (Playtest role).
 - **Remote is https only.** Plain http is refused for a remote `server_url`; the token and the pairing code never ride on it. The one exception is the `GET /ca.crt` bootstrap fetch, which carries nothing secret. The device token is only sent over TLS pinned to the VS CA the owner confirmed, never the system trust store.
 - **Owner pairing** (the game on the dev PC becomes a Playtest device; a Playtest code gives the least-privilege `owner-playtest` role, report/thread only):
   1. Set `vs_playtest/server_url` to the https URL above.
@@ -129,3 +129,8 @@ The `get_scene_tree` and `set_node_properties` tools edit `.tscn` files on disk.
 - If `godot` on this PC is a `.cmd` shim, `GODOT_PATH` must point at the real `.exe`, or the server fails with ENOENT.
 - Leftovers after detach, by design: `.mcp/.gdignore`, screenshots under `.mcp/godot-runtime/`, and a `.mcp/` line in `.gitignore`.
 - Addon install and API: `godot/addons/vs_playtest/README.md`.
+
+## Playtest addon hotkey defaults
+- Dock `F4`, bug capture `F3` (project settings `vs_playtest/hotkey_dock`, `vs_playtest/hotkey_bug`).
+- Reason: the old defaults `F8` and `F9` are Godot 4.7 editor shortcuts (Stop running project, Suspend/Resume embedded game). Plain `F4` is unbound in the editor and `F3` is only "find next" in the script editor.
+- Existing projects keep their saved setting. Only the default changed.
