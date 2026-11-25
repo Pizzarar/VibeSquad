@@ -609,7 +609,7 @@ const PROFILE_NAME_BY_ID = new Map(DEFAULT_PACK_PROFILES.map((p) => [p.id, p.nam
 /** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
-  if (typeof m.role === "string" && m.role) st.role = m.role;
+  if (typeof m.role === "string" && m.role) st.role = m.role.replace(/^(?:former|old|retired)-/i, ""); // usa-56: retired roles ("former-lead") fold into the live role at the source
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
