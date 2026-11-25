@@ -1664,14 +1664,18 @@ export function App() {
   const [navGen, setNavGen] = useState(0);
   // B1: a one-shot flag armed by onPop and cleared once the pop has settled (see urlSync.ts); while armed the URL sync never pushState()s.
   const popArm = useRef<PopArm | null>(null);
-  const [popSettledGen, setPopSettledGen] = useState(0); // re-runs the URL sync after BoringAde's navGen effect has applied the popped URL
-  const onPopSettled = useCallback((representable: boolean) => {
-    if (popArm.current && !representable) popArm.current = { ...popArm.current, giveUp: true };
-    setPopSettledGen((g) => g + 1);
+  const [popSettledGen, setPopSettledGen] = useState(0); // the sync run triggered by this bump (BoringAde's navGen effect has applied the popped URL) ends the pop
+  const popGenRef = useRef(0);
+  const onPopSettled = useCallback(() => {
+    if (!popArm.current) return;
+    popGenRef.current += 1;
+    popArm.current = { settleGen: popGenRef.current };
+    setPopSettledGen(popGenRef.current);
   }, []);
+  useEffect(() => { if (vibe !== "boring") popArm.current = null; }, [vibe]); // BoringApp unmounted: nothing will report the settle
   useEffect(() => {
     const onPop = () => {
-      if (getPref("app.vibe") === "boring") popArm.current = { url: location.search || "", giveUp: false }; // only Normal re-derives over several renders
+      if (getPref("app.vibe") === "boring") popArm.current = { settleGen: Infinity }; // only Normal re-derives over several renders
       const u = parseUrlState(location.search);
       if (u.team) setTeamId(u.team);
       const act = popAction(location.search);
@@ -1865,7 +1869,7 @@ export function App() {
   }, [activeTeamId, urlAgentId]);
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
-    const d = urlSyncDecision({ next, current: location.search || "", pop: popArm.current, storybookReplace: takeStorybookReplace });
+    const d = urlSyncDecision({ next, current: location.search || "", pop: popArm.current, settledGen: popSettledGen, storybookReplace: takeStorybookReplace });
     popArm.current = d.pop;
     if (d.write) history[d.replace ? "replaceState" : "pushState"](null, "", `${location.pathname}${next}${location.hash}`);
   }, [activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, popSettledGen]);

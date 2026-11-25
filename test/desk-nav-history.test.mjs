@@ -249,9 +249,22 @@ test("B1: a pop to a known-but-unpinned agent clears the stale lane/worker selec
 test("B1 M1: App's URL-sync is gated by a state-based pop flag, not a time window", () => {
   const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
   assert.doesNotMatch(app, /popReplaceUntil|Date\.now\(\) \+ 1000/, "no time window");
-  assert.match(app, /popArm\.current = \{ url: location\.search/, "onPop arms the one-shot flag");
+  assert.match(app, /popArm\.current = \{ settleGen: Infinity \}/, "onPop arms the one-shot flag (ended by onPopSettled, not URL equality)");
+  assert.doesNotMatch(app, /pop\.url|giveUp/, "no raw popped-URL comparison");
+  assert.match(app, /vibe !== "boring"\) popArm\.current = null/, "no BoringApp, no arm");
   assert.match(app, /urlSyncDecision\(\{[^}]*takeStorybookReplace/, "takeStorybookReplace stays consumed through the decision");
   assert.match(app, /onPopSettled=\{onPopSettled\}/, "BoringAde reports the settle");
+});
+
+test("B1: every Normal path of BoringApp's navGen effect ends in the settle report (finally -> pending -> onPopSettled)", () => {
+  const i = src.indexOf("if (!navGen || typeof location");
+  const eff = src.slice(i, src.indexOf("}, [navGen]);", i));
+  assert.match(eff, /try \{[\s\S]*\} finally \{[^}]*setPopPending\(true\)/, "pending set in finally");
+  assert.equal((eff.match(/\breturn\b/g) ?? []).length, 2, "only the pre-try guard and the in-try `no landing` return exist; the latter passes through finally");
+  assert.ok(eff.indexOf("try {") < eff.indexOf("if (!land) return;"), "the no-landing return is inside the try");
+  const j = src.indexOf("if (popPending)");
+  assert.ok(j > src.indexOf("setBoringShownAgent(urlAgent)"), "settle reported after the shown agent is reported");
+  assert.match(src.slice(j, j + 120), /setPopPending\(false\); onPopSettled\?\.\(\)/);
 });
 
 test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox", () => {

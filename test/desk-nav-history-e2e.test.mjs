@@ -160,22 +160,90 @@ test("B1 e2e: pop to an unknown agent, then a user navigation, still pushes", as
   await context.close();
 });
 
-// (4) urlSyncDecision: takeStorybookReplace is still honored outside a pop, consumed only when a write happens, and the pop flag clears.
-test("B1: urlSyncDecision honors takeStorybookReplace and clears the pop flag", async () => {
+// (a)-(d) R24/Gemini: the pop ends when BoringAde reports the settle, not when URLs match. Each case: land on a pop whose settled URL differs
+// from the popped one, then a user nav must push exactly once (and `?team=gone` / non-canonical order are not special-cased).
+async function mixedChat(page, take) {
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); // pushes a mixed team=efi&agent=demo-aud entry (B2) then ?team=efi
+  await page.waitForTimeout(900);
+  await take();
+}
+test("B1 e2e (a,d): Back onto a mixed team=A&agent=<B's agent> entry: 0 pushes while settling; 3 clicks then push 3 entries", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await mixedChat(page, take);
+  await page.goBack();
+  await page.waitForTimeout(900);
+  const back = await take();
+  assert.equal(pushes(back), 0, `mixed pop: 0 pushState (got ${JSON.stringify(back.h)})`);
+  assert.match(back.url, /agent=demo-aud/);
+  const len0 = back.hlen;
+  const urls = [];
+  const names = (await page.locator(".boring-sidebar .boring-needs-open").allTextContents()).map((x) => x.trim()).filter((x) => x && !/Audit - token scout/.test(x) && /· VibeSquad/.test(x)); // same-project rows: one push each (cross-project picks push a mixed entry first, B2)
+  assert.ok(names.length >= 3, `demo has >=3 other Needs-you rows (${JSON.stringify(names)})`);
+  await page.evaluate(() => { window.__u = []; const o = history.pushState.bind(history); history.pushState = (...a) => { window.__u.push(String(a[2])); return o(...a); }; });
+  let pushed = 0;
+  for (let i = 0; i < 3; i++) {
+    await page.locator(".boring-sidebar .boring-needs-open", { hasText: names[i].slice(0, 20) }).first().click();
+    await page.waitForTimeout(700);
+    const s = await take();
+    pushed += pushes(s);
+    urls.push(s.url);
+  }
+  const trail = await page.evaluate(() => window.__u.map((u) => u.replace(/^.*\?/, "?")));
+  const end = await page.evaluate(() => history.length);
+  assert.equal(pushed, 3, `3 clicks after a mixed pop each push (>=1 entry; same-project) - got ${pushed}: ${JSON.stringify(urls)}`);
+  assert.equal(end - len0, pushed - 1, "history.length = before + pushes - 1: the one Forward entry (?team=efi) was dropped by the first push");
+  for (let i = trail.length - 2; i >= 0; i--) { await page.goBack(); await page.waitForTimeout(500); assert.equal(await page.evaluate(() => location.search), trail[i], `Back walks the pushed trail in order (${i})`); }
+  await context.close();
+});
+
+test("B1 e2e (b,c): Back to ?team=gone and to a non-canonical ?agent=..&team=.. entry: the next user nav pushes", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  for (const popped of ["?demo=&team=gone", "?demo=&agent=demo-aud&team=vibesquad"]) {
+    const { context, page, take } = await openChat("dark");
+    await page.evaluate((u) => { history.pushState(null, "", u); history.pushState(null, "", "?demo=&team=vibesquad"); }, popped);
+    await take();
+    await page.goBack();
+    await page.waitForTimeout(900);
+    const pop = await take();
+    assert.equal(pushes(pop), 0, `${popped}: 0 pushState while popping (got ${JSON.stringify(pop.h)})`);
+    await page.locator(".boring-sidebar .boring-needs-open", { hasNotText: "Audit - token scout" }).first().click();
+    await page.waitForTimeout(900);
+    const nav = await take();
+    assert.ok(pushes(nav) >= 1, `${popped}: the next user navigation pushes (got ${JSON.stringify(nav.h)})`);
+    await context.close();
+  }
+});
+
+// (4)/(e) urlSyncDecision: takeStorybookReplace still honored, and the pop ends on the settle run only — never on URL equality.
+test("B1: urlSyncDecision ends a pop on the settle run, never on URL equality; takeStorybookReplace honored", async () => {
   const { transformSync } = await import("rolldown/utils");
   const { readFileSync } = await import("node:fs");
   const code = transformSync("urlSync.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code;
   const { urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   let taken = 0;
   const sb = (v) => () => { taken++; return v; };
-  assert.deepEqual(urlSyncDecision({ next: "?a", current: "?b", pop: null, storybookReplace: sb(true) }), { write: true, replace: true, pop: null });
-  assert.deepEqual(urlSyncDecision({ next: "?a", current: "?b", pop: null, storybookReplace: sb(false) }), { write: true, replace: false, pop: null });
-  assert.equal(taken, 2, "consumed on each write");
-  assert.equal(urlSyncDecision({ next: "?a", current: "?a", pop: null, storybookReplace: sb(true) }).write, false);
-  assert.equal(taken, 2, "not consumed when nothing is written");
-  const arm = { url: "?p", giveUp: false };
-  assert.deepEqual(urlSyncDecision({ next: "?stale", current: "?p", pop: arm, storybookReplace: sb(false) }), { write: true, replace: true, pop: arm }, "stale render: replace, stay armed");
-  assert.deepEqual(urlSyncDecision({ next: "?p", current: "?stale", pop: arm, storybookReplace: sb(false) }), { write: true, replace: true, pop: null }, "reached the popped URL: replace, clear");
-  assert.equal(urlSyncDecision({ next: "?p", current: "?p", pop: arm, storybookReplace: sb(false) }).pop, null, "settled: clear");
-  assert.deepEqual(urlSyncDecision({ next: "?x", current: "?p", pop: { ...arm, giveUp: true }, storybookReplace: sb(false) }), { write: true, replace: true, pop: null }, "unrepresentable: replace in place, clear");
+  const D = (o) => urlSyncDecision({ settledGen: 0, storybookReplace: sb(false), ...o });
+  // no pop: normal pushes, storybook replace honored and consumed only on a write
+  assert.deepEqual(D({ next: "?a", current: "?b", pop: null, storybookReplace: sb(true) }), { write: true, replace: true, pop: null });
+  assert.deepEqual(D({ next: "?a", current: "?b", pop: null }), { write: true, replace: false, pop: null });
+  const t0 = taken;
+  assert.equal(D({ next: "?a", current: "?a", pop: null, storybookReplace: sb(true) }).write, false);
+  assert.equal(taken, t0, "not consumed when nothing is written");
+  const arm = { settleGen: 3 };
+  // before the settle: never push, never clear — even when next === current (mixed pop render 1, Gemini M2) or next === the popped URL
+  for (const [next, current] of [["?x", "?p"], ["?p", "?p"], ["?p", "?stale"]]) {
+    const d = D({ next, current, pop: arm, settledGen: 2 });
+    assert.equal(d.replace, true); assert.deepEqual(d.pop, arm, `armed before settle (${next} / ${current})`);
+    assert.equal(d.write, next !== current);
+  }
+  // settle run: replace if different, then clear unconditionally (healed URL, unknown team, canonicalised order, unknown agent)
+  assert.deepEqual(D({ next: "?healed", current: "?popped", pop: arm, settledGen: 3 }), { write: true, replace: true, pop: null });
+  assert.deepEqual(D({ next: "?same", current: "?same", pop: arm, settledGen: 3 }), { write: false, replace: true, pop: null });
+  // a pop write drains a stale Storybook one-shot so the next user nav pushes
+  const before = taken;
+  D({ next: "?x", current: "?p", pop: arm, settledGen: 2 });
+  assert.equal(taken, before + 1, "drained during a pop write");
 });

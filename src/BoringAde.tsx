@@ -403,8 +403,8 @@ type Props = {
   banners?: ReactNode;
   /** App's URL routing generation: bumps on popstate so BoringAde re-derives mode + selection from the URL (B1). */
   navGen?: number;
-  /** Called at the end of the navGen effect: representable = the popped URL maps to a chat/Overview here (false: unknown agent, team gone). */
-  onPopSettled?: (representable: boolean) => void;
+  /** Called when the navGen effect has applied (or given up on) the popped URL — on every path. App ends its pop-in-flight flag on the render this triggers. */
+  onPopSettled?: () => void;
 };
 
 
@@ -555,28 +555,32 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
+  const [popPending, setPopPending] = useState(false);
   // B1: Back/Forward re-derive mode + selection from the URL, even when the active agent is unchanged (App's openAgent no-ops).
   useEffect(() => {
     if (!navGen || typeof location === "undefined") return;
-    const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
-    if (!land) { onPopSettled?.(false); return; }
-    if (land.teamId && land.teamId !== view?.team.id) onSelectSquad(land.teamId);
-    if (land.mode === "chat") {
-      if (land.sel) {
-        setSelectedLaneId(land.sel.laneId);
-        if (land.sel.role === "worker") setSelectedWorkerId(land.agentId);
-        else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
-        if (land.view) revealAgent(land.view, land.sel, land.agentId);
+    try {
+      const land = boringLandingFromUrl(allViews, location.search, (id) => agents.has(id));
+      if (!land) return;
+      if (land.teamId && land.teamId !== view?.team.id) onSelectSquad(land.teamId);
+      if (land.mode === "chat") {
+        if (land.sel) {
+          setSelectedLaneId(land.sel.laneId);
+          if (land.sel.role === "worker") setSelectedWorkerId(land.agentId);
+          else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
+          if (land.view) revealAgent(land.view, land.sel, land.agentId);
+        } else {
+          // A known-but-unpinned agent has no sidebar row: clear the stale lane/worker so the chat target falls back to the URL agent.
+          setSelectedLaneId(null);
+          setSelectedWorkerId(null);
+        }
+        setMode("chat");
       } else {
-        // A known-but-unpinned agent has no sidebar row: clear the stale lane/worker so the chat target falls back to the URL agent.
-        setSelectedLaneId(null);
-        setSelectedWorkerId(null);
+        setMode("project");
       }
-      setMode("chat");
-    } else {
-      setMode("project");
+    } finally {
+      setPopPending(true); // every path ends in the settle below: unknown agent / team gone / known landing alike
     }
-    onPopSettled?.(true);
   }, [navGen]);
   // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
   useEffect(() => {
@@ -636,6 +640,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   });
   useEffect(() => setBoringShownAgent(urlAgent), [urlAgent]);
   useEffect(() => () => setBoringShownAgent(undefined), []);
+  // B1: the pop has settled once the landing's mode/selection are rendered AND the effect above has reported the shown agent (same flush).
+  useEffect(() => { if (popPending) { setPopPending(false); onPopSettled?.(); } }, [popPending]);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 
