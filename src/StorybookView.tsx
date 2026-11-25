@@ -72,13 +72,31 @@ export function useStorybookTarget(): Target {
 
 /** Known-missing probe for the ⋯ menu (UX R18 m6): true once a project is known to have no Storybook (404), so the item can hide. */
 const missing = new Map<string, boolean>();
+// A probe can resolve after the ⋯ menu / phone drawer first reads it (slow host): notify subscribers so consumers re-render
+// (same subscribe/notify shape as the `target` store above).
+const missingSubs = new Set<() => void>();
+const missingEmit = () => missingSubs.forEach((f) => f());
 export function probeStorybook(projectId: string): boolean {
   if (!missing.has(projectId)) {
     missing.set(projectId, false);
     // Only a definite 404 means "no Storybook"; network errors / 5xx are forgotten so the next menu build retries.
-    void fetch(api(projectId), { method: "HEAD" }).then((r) => { if (r.status === 404) missing.set(projectId, true); else if (!r.ok) missing.delete(projectId); }).catch(() => { missing.delete(projectId); });
+    void fetch(api(projectId), { method: "HEAD" }).then((r) => {
+      if (r.status === 404) { missing.set(projectId, true); missingEmit(); }
+      else if (!r.ok) { missing.delete(projectId); missingEmit(); }
+    }).catch(() => { missing.delete(projectId); missingEmit(); });
   }
   return missing.get(projectId) === true;
+}
+
+/** Subscribe to the known-missing probe and re-render when it resolves (useStorybookTarget pattern). */
+export function useStorybookMissing(projectId: string | null): boolean {
+  const isMissing = useSyncExternalStore(
+    (cb) => { missingSubs.add(cb); return () => { missingSubs.delete(cb); }; },
+    () => (projectId ? missing.get(projectId) === true : false),
+    () => false,
+  );
+  useEffect(() => { if (projectId) probeStorybook(projectId); }, [projectId]);
+  return isMissing;
 }
 
 // ── data ─────────────────────────────────────────────────────────────────────────

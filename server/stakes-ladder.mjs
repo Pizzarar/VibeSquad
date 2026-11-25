@@ -142,7 +142,7 @@ export function stakesTier(stakes) {
   return null;
 }
 
-function cleanRung(rung) {
+export function cleanRung(rung) {
   if (!rung || typeof rung !== "object" || Array.isArray(rung)) return null;
   const clean = {};
   if (typeof rung.model === "string" && rung.model.trim()) clean.model = migrateModelId(rung.model.trim());

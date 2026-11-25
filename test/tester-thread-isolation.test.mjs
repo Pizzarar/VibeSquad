@@ -64,6 +64,16 @@ const backend = {
   async sendAgentPrompt(id, text, opts) {
     prompts.push({ id, text, opts });
   },
+  // L1: the runner event stream; like the real backend, a new subscriber gets the roster first.
+  subscribeEvents(fn) {
+    streamListeners.add(fn);
+    fn({ kind: "roster", agents: AGENTS });
+    return () => streamListeners.delete(fn);
+  },
+};
+const streamListeners = new Set();
+const emitRunner = (ev) => {
+  for (const fn of [...streamListeners]) fn(ev);
 };
 const verifyAgent = async ({ id, token }) => {
   const a = AGENTS.find((x) => x.id === id);
@@ -409,5 +419,92 @@ describe("L2: inbox merge never folds a foreign card into a tester card", () => 
     const t = cardById(owner);
     assert.ok(t.text.includes("owner other") && t.text.includes("B into owner"));
     assert.equal("testerDeviceId" in t, false);
+  });
+});
+
+describe("L1: tester SSE never carries the shared intake agent's timeline activity (review rn-b4d883e5fad2)", () => {
+  /** Open GET /runner/events through the real middleware; the stream stays open until close(). */
+  function openStream(opts) {
+    const req = mkReq({ url: "/__vibesquad/runner/events", ...opts });
+    const { res } = mkRes();
+    res.on = () => res; // the stream only registers a close handler; req's close drives cleanup here
+    mw(req, res, () => {});
+    const events = () =>
+      res.body
+        .split("\n")
+        .filter((l) => l.startsWith("data: "))
+        .map((l) => JSON.parse(l.slice(6)));
+    return { res, events, close: () => req.emit("close") };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 30));
+  const kinds = (s) => s.events().map((e) => e.kind);
+
+  test("A gets nothing when the owner or tester B talks to intake; a tick (seq only) when a reply lands on A's card; owner stream unchanged", async () => {
+    const A = openStream({ headers: bearer(alice) });
+    const B = openStream({ headers: bearer(bob) });
+    const O = openStream({ local: true, headers: ownerLocal() });
+    const P = openStream({ headers: bearer(playtestDev) });
+    try {
+      await tick();
+      assert.equal(A.res.statusCode, 200, A.res.body);
+      assert.deepEqual(kinds(A), ["roster"]);
+      const aBase = A.events().length;
+      const bBase = B.events().length;
+
+      // owner chats to the intake agent: the runner emits input/output timeline events
+      const o = await call({ url: "/__vibesquad/runner/agents/rn-efibuddy/input", method: "POST", local: true, headers: ownerLocal(), body: { text: "OWNER-CHAT again" } });
+      assert.equal(o.status, 200, o.body);
+      emitRunner({ kind: "timeline", agentId: "rn-efibuddy", seq: 6, type: "input" });
+      emitRunner({ kind: "timeline", agentId: "rn-efibuddy", seq: 7, type: "output" });
+      // tester B talks to intake (both routes): stored under B's device only, plus the runner's raw timeline events
+      assert.equal((await say(bob, { teamId: "efi", text: "B-SSE-1" })).status, 200);
+      assert.equal((await call({ url: "/__vibesquad/runner/agents/rn-efibuddy/input", method: "POST", headers: bearer(bob), body: { text: "B-SSE-2" } })).status, 200);
+      emitRunner({ kind: "timeline", agentId: "rn-efibuddy", seq: 8, type: "input" });
+      emitRunner({ kind: "timeline", agentId: "rn-efibuddy", seq: 9, type: "output" });
+      // the intake Buddy replies to B's card
+      assert.equal((await reply({ cardId: bCard, text: "B-SSE reply" })).status, 200);
+      await tick();
+
+      assert.equal(A.events().length, aBase, `A saw: ${JSON.stringify(A.events().slice(aBase))}`);
+      assert.ok(!A.res.body.includes('"timeline"') && !A.res.body.includes('"seq":6'), A.res.body);
+      const bTicks = B.events().slice(bBase);
+      assert.deepEqual(bTicks.map((e) => e.kind), ["tester-thread", "tester-thread", "tester-thread"], "B gets one tick per line on its own thread, nothing else");
+      assert.ok(bTicks.every((e) => Object.keys(e).sort().join() === "kind,seq" && Number.isSafeInteger(e.seq)), JSON.stringify(bTicks));
+      assert.ok(!B.res.body.includes('"timeline"'), "no raw timeline for B either");
+
+      // owner stream: raw runner events as before, never a tester-thread tick
+      assert.equal(O.res.statusCode, 200, O.res.body);
+      const t = O.events().filter((e) => e.kind === "timeline");
+      assert.deepEqual(t.map((e) => e.seq), [6, 7, 8, 9]);
+      assert.deepEqual(t[0], { kind: "timeline", agentId: "rn-efibuddy", seq: 6, type: "input" });
+      assert.ok(!O.events().some((e) => e.kind === "tester-thread"));
+      // owner-playtest device: still refused the runner stream outright (unchanged)
+      assert.equal(P.res.statusCode, 403, P.res.body);
+
+      // a reply lands on A's card: A gets exactly one content-free tick whose seq matches A's thread
+      const r = await reply({ cardId: aCard, text: "A-SSE reply" });
+      assert.equal(r.status, 200, r.body);
+      await tick();
+      const aNew = A.events().slice(aBase);
+      assert.deepEqual(aNew, [{ kind: "tester-thread", seq: r.json().seq }]);
+      assert.ok(!A.res.body.includes("A-SSE reply") && !A.res.body.includes("rn-efibuddy\",\"seq"), "no text, no agentId on the tick");
+      assert.equal(B.events().length, bBase + 3, "B never sees A's tick");
+    } finally {
+      for (const s of [A, B, O, P]) s.close();
+    }
+    // closed streams unsubscribe: a later reply writes nothing
+    const after = A.res.body;
+    assert.equal((await reply({ cardId: aCard, text: "after close" })).status, 200);
+    await tick();
+    assert.equal(A.res.body, after);
+  });
+
+  test("createTesterEventFilter drops every raw timeline event, allowed agent or not", async () => {
+    const runnerApi = await import("../server/runner-api.mjs");
+    const teams = runnerApi.testerTeamRecords({ allowedTeams: ["efi"] }, TEAMS);
+    const filter = runnerApi.createTesterEventFilter(() => teams);
+    filter({ kind: "roster", agents: AGENTS });
+    for (const type of ["input", "output", "tool_call", "meta"]) assert.deepEqual(filter({ kind: "timeline", agentId: "rn-efibuddy", seq: 1, type }), [], type);
+    assert.deepEqual(filter({ kind: "tester-thread", seq: 1 }), [], "a backend event can never forge a tester tick");
   });
 });

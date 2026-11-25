@@ -68,6 +68,9 @@ function reachability({ registry, hooks }) {
 // #7 collisions. Only registry-style kinds take part; text/lore/voice-card ids intentionally repeat their speaker's id.
 const ID_KINDS = ["trader", "squad", "enemy", "location", "room", "item", "skill", "contract", "recipe", "quest_step"];
 const NAME_KINDS = ["trader", "squad", "enemy", "location", "room", "item"];
+// Kinds whose names read as people: a word shared between two of them is a real naming clash. A word shared with an
+// item/room is category overlap ("Scav" vs "Scav Boots", "Barrel" vs "Barrel Fire"), not an ambiguous person.
+const CHARACTER_KINDS = ["trader", "squad", "enemy"];
 const normName = (s) => String(s).trim().toLowerCase().replace(/\s+/g, " ").replace(/^(?:the|a|an) /, "");
 const tokens = (s) => normName(s).split(/[^a-z0-9']+/).filter(Boolean);
 const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0); // code-unit order: host-independent
@@ -85,7 +88,9 @@ function collisions({ registry }) {
     es.sort(byRef);
     out.push(F("#7", "warn", es[0], `id "${id}" is used by ${es.map((e) => e.kind).join(" + ")} (${es.map((e) => e.display).join(" / ")})`));
   }
-  // display collisions: identical names (alias-aware), or a one-word name that is a whole word of another entity's name
+  // display collisions: identical names (alias-aware), or a one-word character name that is a whole word of another
+  // character's name. The word-subset clause is character-only so same-kind item chains (Coffee/Coffee Beans),
+  // item-vs-room aliases (Barrel/Barrel Fire) and character-vs-item theme overlap (Scav/Scav Boots) stay quiet.
   const named = registry.all().filter((e) => NAME_KINDS.includes(e.kind));
   const names = (e) => [...new Set([e.display, ...e.aliases.filter((a) => a !== e.id)].map(normName).filter(Boolean))];
   const exact = new Map();
@@ -104,6 +109,7 @@ function collisions({ registry }) {
     const hits = named.filter((e) => !owners.includes(e) && names(e).some((n) => tokens(n).length > 1 && tokens(n).includes(w)));
     if (!hits.length || seen.has(w)) continue;
     const all = [...owners, ...hits].sort(byRef);
+    if (!all.every((e) => CHARACTER_KINDS.includes(e.kind))) continue;
     out.push(F("#7", "info", all[0], `word "${w}" is a name and also part of another name: ${all.map((e) => `${e.kind} ${e.id} (${e.display})`).join(", ")}`));
   }
   return out;

@@ -1,6 +1,7 @@
 // E4a (PLAN_ANDROID_END_STATE.md): headless `vs pair` / `vs devices list` / `vs devices revoke <id|--all>`.
 // The revoke runs in a *separate process* from the server (SSH into a headless home PC), so the server must not keep
 // trusting its in-memory device list: a token revoked on disk is refused on its very next request.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";

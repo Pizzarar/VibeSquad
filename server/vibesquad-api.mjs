@@ -12,9 +12,12 @@ import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
 import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
+import { abortRestartRequest, createRestartRequest, formatRequestStatus, readRestartRequest, syncRepoRoot } from "./restart-request.mjs";
+import { isHubLane } from "./lane-pure.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
+import { assertLegacyProfilesWritable, handleRolesApi } from "./roles-api.mjs";
 import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -28,7 +31,7 @@ import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { foldersOf, isTeamAsleep, patchTeamsRegistryAsync, readTeamsConfig, resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateFoldersBody, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
-import { isServerSideFsError } from "./file-lock.mjs";
+import { isServerSideFsError, withFileLock } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
@@ -545,6 +548,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
     return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
   }
   if (path === "/__vibesquad/local-image") return true; // file contents
+  if (path === "/__vibesquad/restart-host") return true; // H2 (idea-74): restart request state is owner-only, GET included
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
   if (isTerminalsPath(path)) return true; // live shells and script logs
   if (isGitPath(path)) return true; // diffs are file contents (writes are owner-gated as non-GET)
@@ -1325,6 +1329,75 @@ function sendCaughtError(req, res, e, what, { fallback = 500, rootDir = REPO_ROO
   return true;
 }
 
+// ---- H2 (idea-74, docs/PLAN_HEADLESS_HOST_74.md): phone "Restart Host (Server & Runner)" -------------------------------
+export const RESTART_HOST_REASON_MAX = 200;
+const RESTART_HOST_DEFAULT_REASON = "phone cockpit restart";
+/** The tip a phone restart asks for: the short HEAD of the checkout the runtime syncs from (what runtimeLagAsync compares), else "HEAD". */
+export function resolveRestartTip({ repoRoot = syncRepoRoot(), timeoutMs = 5000 } = {}) {
+  if (!repoRoot) return Promise.resolve("HEAD");
+  return new Promise((resolve) => {
+    execFile("git", ["-C", repoRoot, "rev-parse", "--short", "HEAD"], { windowsHide: true, timeout: timeoutMs }, (err, out) => {
+      const sha = String(out ?? "").trim();
+      resolve(!err && /^[0-9a-f]{7,40}$/i.test(sha) ? sha : "HEAD");
+    });
+  });
+}
+/** Where restart-feedback lines for an owner request are logged: the vibesquad Squad's hub lane, else the first hub lane (cli ownerHubLane). */
+function ownerHubLaneOf(rootDir) {
+  let teams = [];
+  try { teams = loadTeamsRegistry(rootDir); } catch { teams = []; }
+  const order = [...(Array.isArray(teams) ? teams : [])].sort((a, b) => (a.id === "vibesquad" ? -1 : b.id === "vibesquad" ? 1 : 0));
+  for (const t of order) {
+    const hub = (t.lanes ?? []).find((l) => isHubLane(t, l));
+    if (hub) return { team: t.id, lane: hub.id };
+  }
+  return { team: "", lane: "" };
+}
+/** 400 for a POST body the phone never sends: { mode?: "urgent" | "window", reason?: string } only. */
+function restartHostBody(body) {
+  const bad = (m) => Object.assign(new Error(m), { status: 400 });
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw bad("body must be a JSON object");
+  for (const k of Object.keys(body)) if (k !== "mode" && k !== "reason") throw bad(`unknown field: ${k}`);
+  const mode = body.mode === undefined ? "urgent" : body.mode;
+  if (mode !== "urgent" && mode !== "window") throw bad('mode must be "urgent" or "window"');
+  if (body.reason !== undefined && typeof body.reason !== "string") throw bad("reason must be a string");
+  const reason = String(body.reason ?? "").trim();
+  if (reason.length > RESTART_HOST_REASON_MAX) throw bad(`reason is at most ${RESTART_HOST_REASON_MAX} characters`);
+  if (reason && mode === "window") throw bad("reason is only for an urgent restart (a window restart waits for the next restart window)");
+  return { mode, reason };
+}
+/**
+ * GET/POST/DELETE /__vibesquad/restart-host. Owner only for every method: the route is a gated read (isGatedRead) and every
+ * write is owner-gated in gated(), and this re-checks so no future gate change opens it. POST only ever records a request
+ * through createRestartRequest (the coordinated drain: the server loop asks leads, waits, then fires vs restart once); it
+ * never restarts anything itself. DELETE aborts an open, not yet fired request.
+ */
+async function handleRestartHost(req, res, { owner, rootDir, home = undefined, resolveTip = resolveRestartTip } = {}) {
+  if (!owner) return sendJson(res, 403, { ok: false, error: "forbidden: restart-host is owner-only" });
+  try {
+    if (req.method === "GET") {
+      const request = readRestartRequest(home);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    if (req.method === "POST") {
+      const { mode, reason } = restartHostBody(await readBody(req));
+      const urgent = mode !== "window";
+      const tip = await resolveTip();
+      const request = createRestartRequest(home, { tip, requestedBy: "owner", ...ownerHubLaneOf(rootDir), urgent, ...(urgent ? { reason: reason || RESTART_HOST_DEFAULT_REASON } : {}) });
+      console.warn(`[vibesquad] restart-host: owner ${urgent ? "urgent" : "window"} request ${request.id} (tip ${request.tip}) is ${request.state}`);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    if (req.method === "DELETE") {
+      const request = abortRestartRequest(home, { by: "owner", reason: "phone cockpit cancel" });
+      console.warn(`[vibesquad] restart-host: owner aborted ${request.id}`);
+      return sendJson(res, 200, { ok: true, request, status: formatRequestStatus(request) });
+    }
+    return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  } catch (e) {
+    return sendCaughtError(req, res, e, "restart-host", { fallback: 409, rootDir }); // an open request / nothing to abort is 409
+  }
+}
+
 // ---- idea-249 (fix round): a non-owner caller (agent, read-only device) never gets a host path ----
 /** The owner (app, phone, owner shell) per the resolved caller; an agent, a read-only device or an unresolved request is not. */
 const ownerRequest = (req) => callerOf(req)?.kind === "owner";
@@ -1574,7 +1647,8 @@ async function handleProfiles(req, res) {
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
-      const saved = saveProfiles(body);
+      // P5d: same lock as the roles editor's profiles.json writes; once migrated a write that changes a role is a 409.
+      const saved = await withFileLock(getProfilesPath(), () => saveProfiles(body, undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(saved.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1586,6 +1660,7 @@ async function handleProfiles(req, res) {
     return res.end();
   } catch (e) {
     if (sendServerFsError(res, e, "profiles")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1598,7 +1673,7 @@ async function handleProfilesImport(req, res) {
   try {
     const body = await readCleanBody(req);
     if (body.mode === "default") {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       syncProfilesToPaseo(seeded.profiles);
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
@@ -1630,7 +1705,7 @@ async function handleProfilesImport(req, res) {
       finalProfiles = existing;
     }
     if (!finalProfiles.length) {
-      const seeded = seedDefaultPack();
+      const seeded = await withFileLock(getProfilesPath(), () => seedDefaultPack(undefined, { beforeWrite: assertLegacyProfilesWritable }));
       return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         mode: "default",
@@ -1639,7 +1714,7 @@ async function handleProfilesImport(req, res) {
         warningsByProfile: {},
       });
     }
-    const saved = saveProfiles({ profiles: finalProfiles });
+    const saved = await withFileLock(getProfilesPath(), () => saveProfiles({ profiles: finalProfiles }, undefined, { beforeWrite: assertLegacyProfilesWritable }));
     return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
       ok: true,
       mode: "paseo",
@@ -1649,6 +1724,7 @@ async function handleProfilesImport(req, res) {
     });
   } catch (e) {
     if (sendServerFsError(res, e, "profiles import")) return; // idea-249: an fs fault names the host path; log it, answer generic
+    if (e?.status === 409) return sendJson(res, 409, { ok: false, error: String(e.message) }); // P5d legacy read-only
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -2687,6 +2763,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/restart-runner": // owner-only (same guard as Unstick): park live turns cleanly, then restart the runner
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
         return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "restart-runner")); // idea-249
+      case "/__vibesquad/restart-host": // H2 (idea-74): owner-only coordinated server+runner restart (gated read + in-handler check)
+        return handleRestartHost(req, res, { owner, rootDir });
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":
@@ -2715,6 +2793,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handlePushTest(req, res);
       case "/__vibesquad/profiles":
         return handleProfiles(req, res);
+      case "/__vibesquad/roles":
+        return handleRolesApi(req, res, {
+          sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir),
+          readBody: readCleanBody,
+          serverError: (r, e) => sendServerFsError(r, e, "roles") || sendServerError(r, e, "roles"),
+        });
       case "/__vibesquad/profiles/import":
         return handleProfilesImport(req, res);
       case "/__vibesquad/profiles/diff":

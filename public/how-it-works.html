@@ -231,12 +231,12 @@
       <div>
         <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">04 / The app</div>
         <h2 class="font-display text-3xl font-bold text-white">Two looks, and a phone you can pair</h2>
-        <p class="text-slate-400 text-sm mt-1">Chosen on first launch, switchable any time in Settings.</p>
+        <p class="text-slate-400 text-sm mt-1">Normal is the default; the old Psycho look is a legacy toggle in Settings.</p>
       </div>
       <div class="grid md:grid-cols-2 gap-4">
         <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
           <h3 class="font-display text-lg font-bold text-white mb-2">Normal vs Psycho</h3>
-          <p class="text-sm text-slate-300"><strong class="text-cyan-300">Normal</strong> is a plain layout: a sidebar of projects, a centered chat and project cards. <strong class="text-purple-300">Psycho</strong> is the pixel-art Vibespace office. The Phone Cockpit labels Normal as <em>Corpo</em> (<code class="text-cyan-300">src/PhoneCockpit.tsx:273</code>), and Settings search also finds it under "corpo" (<code class="text-cyan-300">src/prefs.ts:113</code>). The CRT button in this page's header is only a taste of Psycho.</p>
+          <p class="text-sm text-slate-300"><strong class="text-cyan-300">Normal</strong> is the default: a sidebar of projects, a centered chat and project cards. <strong class="text-purple-300">Psycho</strong>, the pixel-art Vibespace office, is now a legacy toggle under <strong>Settings &rarr; About &rarr; Legacy: Psycho mode</strong> (<code class="text-cyan-300">src/SettingsHome.tsx:415</code>, <code class="text-cyan-300">src/prefs.ts:471</code>). The CRT button in this page's header is only a taste of Psycho.</p>
         </div>
         <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
           <h3 class="font-display text-lg font-bold text-white mb-2">Pairing a phone</h3>
@@ -245,7 +245,7 @@
             <li>The window shows the CA SHA-256 fingerprint to compare with the phone. Other devices stay off by default (loopback only) until you turn on remote access.</li>
             <li>Every paired device has a <strong>Revoke</strong> button that signs it out at once.</li>
             <li>The <code class="text-cyan-300">vs</code> CLI, MCP tools and the desktop proxy check an HMAC proof from the local server (<code class="text-cyan-300">GET /__vibesquad/local-proof</code>) before sending the local token (<code class="text-cyan-300">server/local-token.mjs:51-66</code>; desktop proxy: <code class="text-cyan-300">src-tauri/src/local_proof.rs:258</code>, <code class="text-cyan-300">:230-276</code>).</li>
-            <li>On a paired phone, the Host drawer holds a <strong>VIBE</strong> toggle (Psycho / Corpo), a <strong>PROVIDER</strong> switch (Claude / Gemini), the pinned <strong>TEAMS</strong> list and <strong>Settings</strong> (<code class="text-cyan-300">src/PhoneCockpit.tsx:250-330</code>).</li>
+            <li>On a paired phone, the Host drawer shows a health line, a <strong>PROVIDER</strong> switch (&#10038; Claude / &#9670; Gemini), the pinned <strong>TEAMS</strong> list and <strong>&#9881; Settings</strong> (<code class="text-cyan-300">src/PhoneCockpit.tsx:270-300</code>).</li>
             <li>An end-to-end encrypted relay exists but is <strong>off by default</strong>: it only starts if you hand-edit a <code class="text-cyan-300">wss://</code> endpoint into your settings file. No hosted relay ships. When one is running, Pair a Device also offers a relay link, <code class="text-cyan-300">vibesquad://pair#hostId=&amp;pub=&amp;relay=&amp;code=</code>, with everything in the fragment (<code class="text-cyan-300">server/relay-link.mjs:35-50</code>, <code class="text-cyan-300">src/PairDeviceModal.tsx:473</code>). The phone pins the PC's relay key on first use (<code class="text-cyan-300">src/remoteRelayConnect.ts:83-127</code>); <code class="text-cyan-300">vs host-key rotate</code> replaces it and revokes paired devices unless <code class="text-cyan-300">--keep-devices</code> is passed (<code class="text-cyan-300">cli/vs.mjs:2330-2360</code>).</li>
           </ul>
         </div>

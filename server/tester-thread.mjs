@@ -22,6 +22,32 @@ export function getTesterThreadPath(baseHome) {
   return join(home, "tester-threads.json");
 }
 
+/**
+ * L1 (review rn-b4d883e5fad2): in-process listeners per device id. A tester's SSE stream subscribes to its own device id and
+ * gets a content-free tick ({ seq }) after each line stored under it, never the intake agent's raw timeline activity.
+ */
+const threadListeners = new Map();
+/** Call `cb({ seq })` after each line appended to `deviceId`'s thread; returns the unsubscribe function. */
+export function onTesterThreadLine(deviceId, cb) {
+  if (!validDeviceId(deviceId) || typeof cb !== "function") return () => {};
+  let set = threadListeners.get(deviceId);
+  if (!set) threadListeners.set(deviceId, (set = new Set()));
+  set.add(cb);
+  return () => {
+    set.delete(cb);
+    if (!set.size && threadListeners.get(deviceId) === set) threadListeners.delete(deviceId);
+  };
+}
+const notifyThreadLine = (deviceId, seq) => {
+  for (const cb of [...(threadListeners.get(deviceId) ?? [])]) {
+    try {
+      cb({ seq });
+    } catch {
+      /* one broken stream never blocks the store or the other listeners */
+    }
+  }
+};
+
 const validDeviceId = (id) => typeof id === "string" && id.length > 0 && id.length <= 200 && !["__proto__", "constructor", "prototype"].includes(id);
 const devicesOf = (data) => (data && typeof data === "object" && data.devices && typeof data.devices === "object" && !Array.isArray(data.devices) ? data.devices : {});
 
@@ -53,6 +79,7 @@ export async function appendTesterThreadLine(deviceId, line, baseHome) {
     },
     { fallback: {} },
   );
+  if (stored) notifyThreadLine(deviceId, stored.seq);
   return stored;
 }
 
