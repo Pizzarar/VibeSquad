@@ -1,0 +1,13 @@
+import { createRequire } from "node:module";
+const { chromium } = createRequire("/tmp/pwtool/")("playwright-core");
+const [port, w, h, theme, shot, dsf="1"] = process.argv.slice(2);
+const b = await chromium.launch({ executablePath: "/usr/bin/chromium-browser", args: ["--no-sandbox"] });
+const ctx = await b.newContext({ viewport: { width: +w, height: +h }, deviceScaleFactor: +dsf, colorScheme: theme });
+await ctx.addInitScript(`localStorage.setItem("vs.vibePicked","1");localStorage.setItem("vs.prefs.v1",JSON.stringify({"app.theme":"${theme}"}));`);
+const page = await ctx.newPage(); const errs=[]; page.on("pageerror",e=>errs.push(e.message));
+await page.goto(`http://127.0.0.1:${port}/?demo=1&riff=1&team=vibesquad`);
+await page.waitForSelector('[data-testid="boring-needs-you-item"]'); await page.evaluate(()=>document.fonts.ready); await page.waitForTimeout(1200);
+const r = await page.evaluate(()=>({ sel: document.querySelectorAll(".boring-sidebar .on, .boring-sidebar [aria-current]").length, hdr: document.querySelector('[data-testid="boring-needs-you"]').innerText.split("\n").slice(0,2).join(" "), more: [...document.querySelectorAll('[data-testid="boring-needs-you"] button')].map(b=>b.innerText).filter(t=>/more|Done/.test(t)), rows: document.querySelectorAll('[data-testid="boring-needs-you-item"]').length, sb: document.querySelector(".boring-sidebar").getBoundingClientRect().width }));
+console.log(JSON.stringify({errs,...r}));
+await page.screenshot({ path: shot });
+await b.close();
