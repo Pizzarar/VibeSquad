@@ -151,6 +151,7 @@ stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { ret
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
+stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const useCrunchMode = () => false;`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const setCrunchMode = async () => true;`);
 stub("projectOrderActions.mjs", `export const projectOrder = { drop: async () => true, move: async () => true, setMain: async () => true }; export const knownFolderNames = (f) => new Set(f.map((x) => x.name));`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
@@ -1107,10 +1108,13 @@ test("D3a fix: provider/model/mode/thinking + Shift+Tab live in ONE shared hook 
   assert.ok(!psycho.includes("e.shiftKey && e.key === \"Tab\""), "no duplicate Shift+Tab logic in DrawerHeader");
   assert.match(psycho, /useAgentConfig\(\{/);
   assert.match(normal, /useAgentConfig\(\{/);
-  assert.match(normal, /cfg\.providerSelect/);
-  assert.match(normal, /cfg\.modelControl/);
-  assert.match(normal, /cfg\.modeSelect/);
-  assert.match(normal, /cfg\.thinkingSelect/);
+  // B16: the controls render in the composer bar (fed from the lifted hook), no longer in the header menu
+  const composer = d3src("Composer.tsx");
+  assert.match(composer, /boringConfig\.providerSelect/);
+  assert.match(composer, /boringConfig\.modelControl/);
+  assert.match(composer, /boringConfig\.modeSelect/);
+  assert.match(composer, /boringConfig\.thinkingSelect/);
+  assert.doesNotMatch(normal, /cfg\.providerSelect/);
   // staged switch + active flag are threaded through from AgentDrawer to the Normal header
   assert.match(d3src("AgentDrawer.tsx"), /<BoringAgentHeader[\s\S]*?stagedSwitch=\{stagedSwitch\}[\s\S]*?active=\{active\}/);
 });
@@ -2359,7 +2363,10 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(drawer, /const boringChat = vibe === "boring" && !chatOnly;/);
-  assert.match(drawer, /\{boringChat && <BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>\}/);
+  assert.match(drawer, /<div className="boring-convo-col">/);
+  assert.match(drawer, /<BoringWorkingNow agent=\{agent\} members=\{working\} subs=\{extraSubs\} attention=\{att\} \/>[\s\S]*?<div className="drawer-shell">/); // B15: full-width strip above the shell
+  assert.match(drawer, /\{!boringChat && permCards\}/);
+  assert.match(drawer, /const permCards = agent\.pendingPermissions\?\.map/);
   assert.match(drawer, /className=\{boringChat \? "drawer boring-drawer" : "drawer"\}/);
   assert.match(drawer, /style=\{boringChat \? \(boringChatVars\(agent\) as CSSProperties\) : undefined\}/);
   const i = css.indexOf("/* ---- B13d:");

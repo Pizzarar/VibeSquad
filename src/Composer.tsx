@@ -12,6 +12,8 @@ import { formatSize, stageFiles, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { SecretInputPopover } from "./SecretInputPopover";
 import { ComposerMore } from "./ComposerMore";
+import { BoringComposerBar } from "./BoringComposerBar";
+import type { useAgentConfig } from "./useAgentConfig";
 import { composerKeyAction, usePref } from "./prefs";
 import {
   filterListing,
@@ -167,6 +169,8 @@ type ComposerProps = {
   queuedItems?: QueuedTurnItem[];
   onSendQueuedNow?: () => void;
   onCancelQueued?: () => void;
+  /** B16: Normal mode only. When set, the two-row composer bar replaces ComposerMore. */
+  boringConfig?: ReturnType<typeof useAgentConfig>;
 };
 
 export function Composer({
@@ -186,6 +190,7 @@ export function Composer({
   queuedItems,
   onSendQueuedNow,
   onCancelQueued,
+  boringConfig,
 }: ComposerProps) {
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -664,7 +669,7 @@ export function Composer({
           }}
         />
       )}
-      <div className="composer-row">
+      <div className={boringConfig ? "composer-row boring-composer-row" : "composer-row"}>
         <textarea
           ref={taRef}
           value={draft}
@@ -691,6 +696,30 @@ export function Composer({
             e.target.value = "";
           }}
         />
+        {boringConfig ? (
+          <BoringComposerBar
+            providerSelect={boringConfig.providerSelect}
+            modelControl={boringConfig.modelControl}
+            thinkingSelect={boringConfig.thinkingSelect}
+            modeSelect={boringConfig.modeSelect}
+            providerSwitchBtn={boringConfig.providerSwitchBtn}
+            stagedHint={boringConfig.staged ? `Switching to ${boringConfig.effectiveProv.name} on your next message` : null}
+            isBs={isBs}
+            inboxParking={inboxParking}
+            running={agent.status === "running"}
+            sendDisabled={busy || [draft.trim(), imgs.images.length, atts.items.length, ctx.items.length].every((v) => !v)}
+            interruptDisabled={busy || [draft.trim(), imgs.images.length, atts.items.length, ctx.items.length].every((v) => !v)}
+            interruptTitle={`Interrupt current turn and send (${sendKey === "ctrl-enter" ? "Ctrl+Shift+Enter" : "Ctrl+Enter"})`}
+            sendTitle={agent.status === "running" ? "Queue for after current turn (or click Send this now to steer)" : undefined}
+            onAttach={() => fileInput.current?.click()}
+            onSecret={() => setSecretOpen((v) => !v)}
+            onPark={() => (draft.trim() ? onParkToInbox(draft, true) : onToggleInboxPopover())}
+            onStop={() => stopAgent(agent.id).catch((e) => atts.setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
+            onInterrupt={onInterrupt}
+            onSend={send}
+          />
+        ) : (
+          <>
         <ComposerMore
           items={[
             { key: "attach", label: "📎 Attach file or image", title: "Attach file or image", testid: "composer-attach-btn", onSelect: () => fileInput.current?.click() },
@@ -740,6 +769,8 @@ export function Composer({
           >
             <span className="emoji-glyph">⚡ </span>Interrupt &amp; send
           </button>
+        )}
+          </>
         )}
       </div>
     </footer>
