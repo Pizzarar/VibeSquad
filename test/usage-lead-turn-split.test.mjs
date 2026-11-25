@@ -229,3 +229,19 @@ test('usa-43 R1: M1 titles with wait/watch substrings, L1 echo/compound, L2 list
   assert.equal(r.loop.turns, 0);
   assert.equal(r.other.turns, 6);
 });
+
+test('usa-56: former-lead / former-brainstorm fold into lead / brainstorm per (team, lane, role); pooled totals unchanged', () => {
+  const home = tmp();
+  const N = LEAD_LONG_TURN_MIN + 5;
+  writeAgent(home, 'rn-l1', runOf('alpha', 'usage', 'lead', N));
+  writeAgent(home, 'rn-l2', runOf('alpha', 'usage', 'former-lead', N));
+  writeAgent(home, 'rn-b1', runOf('alpha', 'usage', 'brainstorm', N));
+  writeAgent(home, 'rn-b2', runOf('alpha', 'usage', 'former-brainstorm', N));
+  const l = getUsage({ home, git: noGit }).leadLongTurns;
+  const sum = (r) => r.productive.turns + r.waiting.turns + r.loop.turns + r.other.turns;
+  assert.deepEqual(l.byLaneRole.map((r) => [r.teamId, r.lane, r.role]), [['alpha', 'usage', 'brainstorm'], ['alpha', 'usage', 'lead']]);
+  assert.ok(!l.byLaneRole.some((r) => /former/.test(r.role)));
+  for (const r of l.byLaneRole) assert.equal(sum(r), 10, 'two runs pooled into one row');
+  assert.equal(l.byLaneRole.reduce((t, r) => t + sum(r), 0), 20, 'total long-tail turns unchanged');
+  assert.equal(sum(l.pooled), 10);
+});

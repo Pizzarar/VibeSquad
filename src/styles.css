@@ -6584,6 +6584,11 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .usage-ready { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-ready-pill { align-self: flex-start; color: var(--cyan-t); border: 1px solid var(--cyan-t); border-radius: 999px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-variant-numeric: tabular-nums; }
 .usage-ready-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }
+/* usa-56: plans grid scrolls inside its own box on narrow widths (no page-level horizontal scroll) */
+@media (max-width: 640px) {
+  .usage-plan-rows { overflow-x: auto; max-width: 100%; }
+  .usage-plan-rows > * { min-width: 520px; }
+}
 
 /* ---- Desk Psycho U2: cross-squad Needs-you spine in the left sidebar (BoringInbox, src/BoringInbox.tsx) ------------------------
    PC-98 Hypnospace chrome: 1-2px bevels on panel/well fills. Dim text = var(--muted) colour, fully opaque; muted/panel is >= 4.5:1 in
