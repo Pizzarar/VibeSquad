@@ -136,3 +136,56 @@ Still open from earlier rounds (pre-existing, not counted): R30 L2/L5. At 1280 t
 
 ## Verdict
 R34 M1, M2 and M3 are fixed, as are L1, L2, L3 and L5. The container measure is aligned at every size, theme and ctx state, and `container-type` did not break any overlay. The fix round adds **M4**: the in-pane `Start Brainstorm` collapses the split, so dormant lanes still cannot be started next to the current agent. **FAIL 0/1/6** (M4; N2-N6 + L4). The M4 fix is S and lives in one `BoringAde.tsx` hunk.
+
+---
+
+# R34 r3: fix tip `481bdb31`
+
+Scope: `git diff 4e36a9f7^..481bdb31` (`BoringAde.tsx`, `BoringPanePicker.tsx`, `pinFocus.ts`, `App.tsx`, `boring.css`). `f0f0c39b` merged origin/master and is not reviewed here.
+
+Evidence: I rebuilt `dist` from `481bdb31` (`vite build`) and drove it with Playwright on Chromium at `?demo=1&riff=1&team=vibesquad&agent=demo-impl-1`. Viewports were 1280x720, 2560x1440 and 3200x1800@1.2 (4K at 120%), in dark and light, with the ctx panel open and collapsed. Each scenario ran in a fresh context. Shots are in `artifacts/boring-b17/ux-r34r3/` (untracked, as in earlier rounds): `chat-ctxopen-*`, `chat-ctxcollapsed-*`, `split-picker-*`, `split-wiki-card-*`, `split-bugs-card-*`, `split-switch-bs-*`, `split-wiki-start-*` and `m4-start-*`. `node --test test/bor-b17-deadspace.test.mjs` passes 8/8.
+
+## Status vs R34 r2
+
+| r2 | Status | Evidence |
+|---|---|---|
+| **M4** In-pane Start collapses the split | **Still open for every Start.** Fixed for Switch to Brainstorm and the quick-jumps. | **Start Brainstorm (wiki card), live, at all 6 viewport/theme combos:** a DOM timeline shows `[0ms split=true card=true agent=demo-impl-1]`, then `[83ms split=false card=false agent=demo-bs-wiki-…]`. The crumb becomes `VibeSquad›wiki›Brainstorm` and the left agent (`Implement - drawer crash`) is replaced (`m4-start-wiki-brainstorm-dark-2560x1440.png`, `split-wiki-start-*`). **Start Brainstorm on the Bugs card** does the same at 95ms (`m4-start-_bugs-open-dark-2560x1440.png`). **Switch to Brainstorm** (dormant Bug Chaser Lead pill) keeps the split: `Bug Chaser›Brainstorm` opens on the right. The **quick-jump** `UI Bois · Lead idle` from the Bugs card also keeps the split, with `UI Bois›Lead` on the right. **Start RiffBot** cannot be reached in the demo (RiffBot is running), but by code it takes the same `spinUpPin` path, so it folds the same way. **Start Overlord** (`BoringAde.tsx:699`) opens via `openAgentInTab(id,"right")` after the spawn resolves and does not go through pinFocus. By code it is OK, but I could not verify it live. |
+| N2 Card never names the lane | **Fixed** | The card head shows `wiki` / `Bugs` / `Bug Chaser` (`boring-empty-lane`), and the crumb is `VibeSquad›wiki` while the right pane is active (`split-wiki-card-light-3200x1800.png`). |
+| M2 (Gemini r3) Right card is pane-local | **Fixed** | Wiki card on the right, then a click in `boring-pane-left`: the card still says `wiki` and the crumb follows the left pane (`Desk›Worker`, with `boring-worker-demo-impl-1` the only selected row). Clicking back into the right pane restores the crumb to `VibeSquad›wiki`. Same at all 6 combos. |
+| N3 Strip labels | **Mostly fixed**, with a residual (N7) | The strip reads `Overlord`, `RiffBot`, and `Bug Runner · triage — Bug Chaser · Pick the batch…` (no lane repeated). `Review - Gemini · retry` gets `st-err` (red dot) while the other needs get `st-attn`. The residual is N7. |
+| N4 Strip is scoped to the current project | Open (code unchanged). Not reproducible in today's demo: the sidebar shows **Needs you 5** and the strip has 5 needs items. | `pickerStrip` still calls `needsYouRows([view], …)` (`BoringAde.tsx:724`). |
+| N5 Esc drops focus to body | **Fixed** | Esc → `activeElement = boring-split-toggle`, and the next Tab goes to `boring-details-toggle`. The `Close split` button also returns focus to `boring-split-toggle`. |
+| N6 Duplicate max-width | **Fixed** | The computed `max-width` of `.boring-pp-agent` is `min(100%, 640px)`. |
+| L4 Pane ~60% empty below the grid | Open (not addressed) | `split-picker-light-3200x1800.png` |
+
+## D2 (lead decision): cap 1680, user bubble right-aligned to the 960 prose measure
+
+Measured in CSS px (left, right):
+
+| Viewport | ctx | user row | prose | `pre` |
+|---|---|---|---|---|
+| 2560x1440 | open | 786–1426 | 524–1484 | 497–2002 |
+| 2560x1440 | collapsed | 932–1572 | 670–1630 | 643–2280 |
+| 4K@120% | open | 1040–1680 | 778–1738 | 751–2388 |
+| 4K@120% | collapsed | 1252–1892 | 990–1950 | 963–2600 |
+| 1280x720 | both | right edge within 13px of prose | | |
+
+**It reads well.** At 4K the bubble now sits above the reply it prompted, instead of ~1000px away at the column edge. The eye no longer zig-zags, and tool/diff blocks still use the 1637px block width (`chat-ctxopen-dark-3200x1800.png`). At ≥2560 the bubble's right edge stops **58px short** of the prose right edge, because the formula measures from the column's left edge and ignores the avatar gutter. This is cosmetic, and it is N8. The 1680 cap with ctx collapsed at 4K still leaves wide gutters, as recorded in r2. That is the lead's call, and prose is unaffected.
+
+## Regression pass
+- **Column alignment:** the lane's browser test (composer / perm card / pinned todo edges at every size, cap 1680) passes. `pre` stays inset ~27px from the prose left at every size, the same as in r2.
+- **Popovers:** the header `⋯` menu (`boring-agent-menu`) and the `msg:-1` ref popover hit themselves and are in the viewport at 1280 and at 4K. The timeline context menu does the same at 4K. No page errors in any run.
+
+## New findings
+
+| # | Sev | Finding | Job hurt | Evidence | Fix | Files | Effort |
+|---|---|---|---|---|---|---|---|
+| M4 (reopened) | **Major** | **Start Brainstorm / Start Bugs (and, by code, Start RiffBot) on the right card still fold the split and replace the left agent.** The r3 wiring (`spinUpPin(…, "right")` → `show(id,"right")`) is correct in isolation, but it never runs. `spinUpPin` first sets the pinFocus `focus` with `agentId: null, held: leftActiveId`. `quickStart` then upserts the new Buddy into the store (`pinActions.ts:140`, before it returns). `subscribePaseo(reconcile)` (`pinFocus.ts:140`) fires, and `reconcilePinFocus` returns `follow`, with `open = active(leftActiveId) !== live && !inLane`, which is true (`pinFocusLogic.ts:31`). So `reconcile` calls `show(d.agentId)` **without `into`** (`pinFocus.ts:132`), which hits `toggleSplit()` + `openAgent()`. When `spinUpPin` gets to `show(id, into)`, `f.agentId === id` already, so it is skipped. The same race happens in production, because the daemon push or `onSpawned` lands before the promise resolves. Test 5 (`r3: Start Brainstorm from the right pane keeps the split`) only regex-matches the source; no browser test clicks Start. | Split: start a dormant lane next to the current agent | DOM timeline above; `m4-start-*`, `split-wiki-start-*` at all 6 combos | Carry the target through the focus: store `into` on `focus` in `spinUpPin`, and have `reconcile` call `show(d.agentId, f.into)`. Or, for `into === "right"`, skip the pinFocus focus entirely, since Boring does not use the sky focus, and just `openAgentInTab(id,"right")` after `openPin` resolves. Add a **browser** test: demo, split, wiki Buddy pill, Start, then assert `boring-chat-split` is present, the right pane holds `demo-bs-wiki-*`, and the left pane is still `demo-impl-1` (the demo fakes the spawn, so this runs headless). Repeat for the Bugs card. | `pinFocus.ts` (`spinUpPin`, `reconcile`), `test/bor-b17-deadspace.test.mjs` | S |
+| N7 | Minor | The strip shows a **`Lead · Lane`** chip for a lead with no lane label (demo `demo-lead-vs`, `★ VIBESQUAD ord1`, a lane-less Squad lead). Clicking it lands on crumb `Desk›Lead`. `Lane` is a placeholder word, not a name. | Pick an agent | `split-picker-dark-1280x720.png`, strip row 6. `memberTitle` falls back to `n ?? "Lane"` (`BoringAde.tsx:733`). | When `laneName` is null, fall back to `m.agent.title` (or `Lead · Desk` to match the crumb). | `BoringAde.tsx` | XS |
+| N8 | Minor | At ≥2560 the D2 user bubble ends 58px short of the prose right edge (1426 vs 1484 at 2560, 1680 vs 1738 at 4K). The formula `(100% − col)/2 + col − prose` ignores the avatar/name gutter that offsets prose from the column's left edge. It is close enough to read as "beside the reply", but it misses by one avatar width. | none (polish) | D2 table | Subtract the prose's left inset (e.g. `− var(--tl-gutter)`), or align on the prose box. | `boring.css:1554` | XS |
+
+## Owner decisions
+None new. D2 as applied reads well (see above).
+
+## Verdict
+N2, N5, N6 and the Gemini M2 pane-locality are fixed, and so is most of N3. Switch to Brainstorm and the quick-jumps now keep the split. **M4 is still open for every Start action:** live, Start Brainstorm on the wiki and Bugs cards folds the split within ~90ms and replaces the left agent, because pinFocus `reconcile` follows the new Buddy without the `"right"` target. Its test only regex-checks the source. **FAIL 0/1/4** (M4; N4, N7, N8, L4). The fix is S, in `pinFocus.ts`, plus one headless browser test.
