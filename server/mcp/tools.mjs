@@ -379,7 +379,8 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   let spawn = {};
   let profile = null;
   // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
-  // After the EXP6 verdict the same pick applies the EXP6_WINNER default (DSP); a swap never targets a capped arm (idea-703).
+  // After the EXP6 verdict the same pick applies the EXP6_WINNER default (Sonnet since B0 = no swap); a swap never targets a
+  // capped arm (idea-703). ctx.exp6Winner overrides the winner (tests / B2 seam); unset = EXP6_WINNER.
   let ab = null;
   let pickedProfile = profileName;
   // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
@@ -390,7 +391,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     const abTeam = clean(ctx.identity.team) || clean(args.labels?.team);
     ab = await decideArm({
       profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
-      endIso: ctx.env?.VS_EXP6_END,
+      endIso: ctx.env?.VS_EXP6_END, winner: ctx.exp6Winner,
       verdictProbe: () => readPerfectionVerdict({ home: ctx.env?.VIBESQUAD_HOME }),
       capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),

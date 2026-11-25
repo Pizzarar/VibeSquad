@@ -46,8 +46,9 @@ test("stakes gating, pin opt-out, wf pin, lead, other profiles are untouched", a
   assert.equal(await decideArm(base({ asLead: true, listAgents: skew })), null);
   assert.equal(await decideArm(base({ profile: "Review - Gemini", listAgents: skew })), null);
   assert.equal(await decideArm(base({ stakes: "normal", listAgents: skew })).then((r) => r.swapped), true);
-  // Closed: the alternation no longer applies (no counts read); the EXP6_WINNER default does (see the D1 tests below).
-  assert.equal((await decideArm(base({ verdictProbe: async () => true, listAgents: async () => { throw new Error("not read"); } }))).mode, "default");
+  // Closed: the alternation no longer applies (no counts read); the winner default does (see the D1/B0 tests below).
+  assert.equal((await decideArm(base({ verdictProbe: async () => true, winner: "dsp", listAgents: async () => { throw new Error("not read"); } }))).mode, "default");
+  assert.equal(await decideArm(base({ verdictProbe: async () => true, listAgents: async () => { throw new Error("not read"); } })), null);
 });
 
 test("count or verdict-probe failure fails open", async () => {
@@ -118,11 +119,31 @@ test("verdict probe: reads the given home, case-insensitive, cached by mtime+siz
   assert.equal(readPerfectionVerdict({ home }), false);
 });
 
-// ---- D1 (PLAN_EXP6_DSP_DEFAULT): post-verdict default -> EXP6_WINNER; caps checked at the swap (idea-703) ----
-const closed = (extra = {}) => base({ verdictProbe: async () => true, ...extra });
+// ---- D1 (PLAN_EXP6_DSP_DEFAULT): post-verdict default -> winner; caps checked at the swap (idea-703) ----
+// Since B0 EXP6_WINNER is "sonnet" (no swap); the D1 tests pin winner "dsp" to keep the swap path (B2 seam) covered.
+const closed = (extra = {}) => base({ verdictProbe: async () => true, winner: "dsp", ...extra });
+const closedLive = (extra = {}) => base({ verdictProbe: async () => true, ...extra }); // the shipped EXP6_WINNER
 
-test("D1 closed: normal Implement - Sonnet / Worker alias -> DSP; DSP request untouched", async () => {
-  assert.equal(EXP6_WINNER, "dsp");
+// ---- B0 (PLAN_PER_BEST_USE_1125): EXP6_WINNER -> sonnet, normal implementers stay on Sonnet ----
+test("B0 closed: normal Implement - Sonnet / Worker stay as asked (no swap); DSP request kept; pin still pins", async () => {
+  assert.equal(EXP6_WINNER, "sonnet");
+  let probed = 0;
+  const capProbe = async () => { probed++; return {}; };
+  for (const profile of ["Implement - Sonnet", "Worker", "Work Order - DSP"]) {
+    for (const stakes of ["", "normal"]) assert.equal(await decideArm(closedLive({ profile, stakes, capProbe })), null, `${profile}/${stakes}`);
+  }
+  // End date passed (no verdict) closes it the same way.
+  assert.equal(await decideArm(base({ endIso: "2026-11-22T00:00:00Z" })), null);
+  assert.equal(await decideArm(closedLive({ labels: { ab: "pin" } })), null);
+  // Capped Sonnet: EXP6 does not move it to DSP (that is the spawn failover chain's job); no cap read needed.
+  assert.equal(await decideArm(closedLive({ capProbe: async () => ({ claude: { reason: "cap" } }) })), null);
+  assert.equal(await decideArm(closedLive({ capProbe: async () => { throw new Error("disk"); } })), null);
+  assert.equal(probed, 0, "no swap -> the cap probe is never read");
+  // tierA / mechanical untouched.
+  for (const stakes of ["tierA-invariant", "tierA-security", "mechanical"]) assert.equal(await decideArm(closedLive({ stakes })), null, stakes);
+});
+
+test("D1 closed (winner=dsp): normal Implement - Sonnet / Worker alias -> DSP; DSP request untouched", async () => {
   const r = await decideArm(closed());
   assert.deepEqual([r.mode, r.arm, r.requestedArm, r.swapped, r.profile], ["default", "dsp", "sonnet", true, "Work Order - DSP"]);
   assert.equal((await decideArm(closed({ stakes: "normal" }))).profile, "Work Order - DSP");
@@ -132,10 +153,10 @@ test("D1 closed: normal Implement - Sonnet / Worker alias -> DSP; DSP request un
   assert.equal(await decideArm(closed({ profile: "Implement" })), null);
   assert.equal(await decideArm(closed({ profile: "Work Order - DSP" })), null);
   // End date passed (no verdict) closes it the same way.
-  assert.equal((await decideArm(base({ endIso: "2026-11-22T00:00:00Z" }))).profile, "Work Order - DSP");
+  assert.equal((await decideArm(base({ endIso: "2026-11-22T00:00:00Z", winner: "dsp" }))).profile, "Work Order - DSP");
 });
 
-test("D1 closed: tierA-*, mechanical, pins, lead, other profiles unchanged", async () => {
+test("D1 closed (winner=dsp): tierA-*, mechanical, pins, lead, other profiles unchanged", async () => {
   for (const stakes of ["tierA-invariant", "tierA-security", "mechanical"]) assert.equal(await decideArm(closed({ stakes })), null, stakes);
   assert.equal(await decideArm(closed({ profile: "Implement - Opus" })), null);
   assert.equal(await decideArm(closed({ profile: "Mechanical - DSF" })), null);
@@ -179,6 +200,10 @@ test("readArmCaps reads the caller home's capped-providers.json", async () => {
   assert.equal(armCapped("dsp", await readArmCaps({ env: { VIBESQUAD_HOME: home } })), true);
 });
 
+const LIVE = { VS_EXP6_END: "2999-01-01T00:00:00Z" };
+// spawn_worker with the D1 swap path forced on (ctx.exp6Winner seam); the shipped default is Sonnet since B0.
+const ctxDsp = (agents, logs, over = {}) => ctxWith(agents, logs, { exp6Winner: "dsp", ...over });
+
 function closedHome(caps) {
   const home = mkdtempSync(join(tmpdir(), "exp6-closed-"));
   mkdirSync(join(home, "logs"));
@@ -187,9 +212,38 @@ function closedHome(caps) {
   return home;
 }
 
-test("spawn_worker after verdict: normal Implement - Sonnet spawns as Work Order - DSP and logs exp6-default", async () => {
+test("B0 spawn_worker after verdict: normal Implement - Sonnet / Worker stay on Sonnet (claude), no ab, no metric", async () => {
+  for (const [asked, label] of [["Implement - Sonnet", "Implement - Sonnet"], ["Worker", null]]) {
+    for (const extra of [{ stakes: "normal" }, {}, { labels: { ab: "pin" } }]) {
+      const logs = [];
+      const { ctx, creates } = ctxWith([ag("sonnet"), ag("sonnet"), ag("sonnet")], logs, { env: { VIBESQUAD_HOME: closedHome(), ...LIVE } });
+      const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, ...extra });
+      if (label) assert.equal(creates[0].labels.profile, label, asked);
+      assert.notEqual(creates[0].labels.profile, "Work Order - DSP", asked);
+      assert.equal(creates[0].config.provider, "claude", asked);
+      assert.equal(res.ab, undefined, asked);
+      assert.equal(logs.length, 0, asked);
+    }
+  }
+  // A Work Order - DSP request stays DSP (Work Order profile kept, never swapped to Sonnet).
+  const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: closedHome(), ...LIVE } });
+  const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Work Order - DSP", stakes: "normal" });
+  assert.deepEqual([creates[0].labels.profile, creates[0].config.provider, res.ab], ["Work Order - DSP", "opencode", undefined]);
+});
+
+test("B0 spawn_worker after verdict, claude capped: Implement - Sonnet is not swapped by EXP6 (failover chain decides)", async () => {
   const logs = [];
-  const { ctx, creates } = ctxWith([ag("dsp"), ag("dsp"), ag("dsp")], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+  const env = { VIBESQUAD_HOME: closedHome({ claude: { reason: "cli cap", updatedAt: new Date().toISOString() } }), ...LIVE };
+  const { ctx, creates } = ctxWith([], logs, { env });
+  const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
+  assert.equal(creates[0].labels.profile, "Implement - Sonnet");
+  assert.equal(res.ab, undefined);
+  assert.equal(logs.length, 0);
+});
+
+test("spawn_worker after verdict (winner=dsp): normal Implement - Sonnet spawns as Work Order - DSP and logs exp6-default", async () => {
+  const logs = [];
+  const { ctx, creates } = ctxDsp([ag("dsp"), ag("dsp"), ag("dsp")], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
   const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
   assert.equal(creates[0].labels.profile, "Work Order - DSP");
   assert.equal(creates[0].config.provider, "opencode");
@@ -199,7 +253,7 @@ test("spawn_worker after verdict: normal Implement - Sonnet spawns as Work Order
   assert.match(logs[0].text, /^exp6-default: Implement - Sonnet -> Work Order - DSP wf=dsp lane=feat$/);
 });
 
-test("spawn_worker after verdict: tierA/mechanical/pin keep the requested profile, no metric", async () => {
+test("spawn_worker after verdict (winner=dsp): tierA/mechanical/pin keep the requested profile, no metric", async () => {
   for (const [args, want] of [
     [{ profile: "Implement - Sonnet", stakes: "tierA-invariant" }, "Implement - Sonnet"],
     [{ profile: "Implement - Opus", stakes: "tierA-security" }, "Implement - Opus"],
@@ -208,7 +262,7 @@ test("spawn_worker after verdict: tierA/mechanical/pin keep the requested profil
     [{ profile: "Implement - Sonnet", labels: { ab: "pin" } }, "Implement - Sonnet"],
   ]) {
     const logs = [];
-    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const { ctx, creates } = ctxDsp([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", ...args });
     assert.equal(creates[0].labels.profile, want, JSON.stringify(args));
     assert.equal(res.ab, undefined);
@@ -216,10 +270,10 @@ test("spawn_worker after verdict: tierA/mechanical/pin keep the requested profil
   }
 });
 
-test("spawn_worker after verdict, deepseek capped (idea-703): Implement - Sonnet stays Sonnet, no swap, cap noted", async () => {
+test("spawn_worker after verdict (winner=dsp), deepseek capped (idea-703): Implement - Sonnet stays Sonnet, no swap, cap noted", async () => {
   const logs = [];
   const env = { VIBESQUAD_HOME: closedHome({ deepseek: { reason: "cli cap", updatedAt: new Date().toISOString() } }), VS_EXP6_END: "2999-01-01T00:00:00Z" };
-  const { ctx, creates } = ctxWith([], logs, { env });
+  const { ctx, creates } = ctxDsp([], logs, { env });
   const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
   assert.equal(creates[0].labels.profile, "Implement - Sonnet");
   assert.equal(creates[0].config.provider, "claude");
@@ -241,20 +295,20 @@ test("readArmCaps: a corrupt or wrong-shape cap file throws, so decideArm keeps 
   assert.deepEqual(await readArmCaps({ env: { VIBESQUAD_HOME: ok } }), {});
 });
 
-test("spawn_worker after verdict: corrupt cap file keeps Implement - Sonnet on claude", async () => {
+test("spawn_worker after verdict (winner=dsp): corrupt cap file keeps Implement - Sonnet on claude", async () => {
   const home = closedHome();
   writeFileSync(join(home, "capped-providers.json"), "{ torn");
-  const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: home, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+  const { ctx, creates } = ctxDsp([], [], { env: { VIBESQUAD_HOME: home, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
   const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
   assert.equal(creates[0].labels.profile, "Implement - Sonnet");
   assert.equal(creates[0].config.provider, "claude");
   assert.equal(res.ab.capped, true);
 });
 
-test("spawn_worker after verdict: Worker alias -> Work Order - DSP (opencode)", async () => {
+test("spawn_worker after verdict (winner=dsp): Worker alias -> Work Order - DSP (opencode)", async () => {
   for (const [asked, label] of [["Worker", "Work Order - DSP"]]) {
     const logs = [];
-    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const { ctx, creates } = ctxDsp([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
     assert.equal(creates[0].labels.profile, label, asked);
     assert.equal(creates[0].config.provider, "opencode", asked);
@@ -265,7 +319,7 @@ test("spawn_worker after verdict: Worker alias -> Work Order - DSP (opencode)", 
 
 test("spawn_worker: a throwing writeLog never fails the spawn", async () => {
   for (const writeLog of [async () => { throw new Error("log down"); }, () => { throw new Error("sync throw"); }]) {
-    const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const { ctx, creates } = ctxDsp([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     ctx.writeLog = writeLog;
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
     assert.equal(res.id, "a1");
@@ -291,7 +345,7 @@ test("D1b decideArm: closed + normal Planner - Sonnet / Spec - Opus / Senior Rea
 test("D1b spawn_worker: closed + normal planning/spec profiles keep the requested profile, no metric", async () => {
   for (const p of PLANNING) {
     const logs = [];
-    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" }, loadProfiles: async () => [...USER_PROFILES, ...PLANNING] });
+    const { ctx, creates } = ctxDsp([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" }, loadProfiles: async () => [...USER_PROFILES, ...PLANNING] });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: p.name, stakes: "normal" });
     assert.equal(creates[0].labels.profile, p.name);
     assert.equal(creates[0].config.provider, p.provider, p.name);
@@ -304,7 +358,7 @@ test("D1b spawn_worker: closed + normal planning/spec profiles keep the requeste
 test("D1b spawn_worker: closed + role name implement/Implement keeps today's route (Implement role on claude), no swap", async () => {
   for (const asked of ["implement", "Implement"]) {
     const logs = [];
-    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const { ctx, creates } = ctxDsp([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
     assert.equal(creates[0].labels.profile, "Implement", asked);
     assert.equal(creates[0].config.provider, "claude", asked);
@@ -314,13 +368,13 @@ test("D1b spawn_worker: closed + role name implement/Implement keeps today's rou
   }
 });
 
-test("D1b spawn_worker: Implement - Sonnet and Worker still -> DSP; capped deepseek keeps Sonnet for both", async () => {
+test("D1b spawn_worker (winner=dsp): Implement - Sonnet and Worker still -> DSP; capped deepseek keeps Sonnet for both", async () => {
   for (const asked of ["Implement - Sonnet", "Worker"]) {
-    const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const { ctx, creates } = ctxDsp([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
     assert.deepEqual([creates[0].labels.profile, creates[0].config.provider, res.ab.swapped], ["Work Order - DSP", "opencode", true], asked);
     const capHome = closedHome({ deepseek: { reason: "cli cap", updatedAt: new Date().toISOString() } });
-    const c2 = ctxWith([], [], { env: { VIBESQUAD_HOME: capHome, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const c2 = ctxDsp([], [], { env: { VIBESQUAD_HOME: capHome, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const r2 = await callTool(c2.ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
     assert.deepEqual([c2.creates[0].labels.profile, c2.creates[0].config.provider, r2.ab.swapped, r2.ab.capped], ["Implement - Sonnet", "claude", false, true], asked);
   }

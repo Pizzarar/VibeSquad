@@ -16,9 +16,13 @@ const WF_TO_ARM = { sonnet: EXP6_ARMS["implement - sonnet"], dsp: EXP6_ARMS["wor
 
 // Post-experiment default (PLAN_EXP6_DSP_DEFAULT D1): EXP6 closed with `@per EXP6 verdict change` (2026-11-23, E2 read:
 // DSP within 10 pts first-try at ~45-57% lower $/unit). Once the experiment is closed, a stakes=normal implementer spawn
-// asking for the Sonnet implementer resolves to the winner. Set by hand, never parsed from verdict text: the D3 guard
-// (re-read >=2026-12-07) reverts by setting this to "sonnet" (requests then keep their profile) or "" (no default at all).
-export const EXP6_WINNER = "dsp";
+// asking for the Sonnet implementer resolves to the winner. Set by hand, never parsed from verdict text.
+// B0 (PLAN_PER_BEST_USE_1125, 2026-11-25): "sonnet". Routing is judged on best use (first-try PASS first, $ only as a
+// tiebreak) and DSP won EXP6 only on $ (.62 vs .67 first-try), so normal implementers stay on Sonnet: a Sonnet/Worker
+// request is already the winner arm (no swap) and a `Work Order - DSP` request is never a default source (kept as asked;
+// DSP also stays in the failover chains). "dsp" re-enables the swap (cap-checked, idea-703); "" = no default at all.
+// B2 replaces this with the per-kind table from the EXP10 read.
+export const EXP6_WINNER = "sonnet";
 // Spawn names that mean "the normal implementer" -> the winner-arm name to use instead: only the profile EXP6 measured
 // (`Implement - Sonnet`) and the `Worker` alias that resolves to it. No role names (D1b, Buddy fix-forward): the
 // `implement` role also carries the legacy Planner/Spec/Senior Reasoning names (LEGACY_PROFILE_ROLES), and EXP6 never
