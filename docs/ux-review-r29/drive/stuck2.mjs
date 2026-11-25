@@ -1,0 +1,20 @@
+// R24 probe: after Back onto a mixed entry, record 3 further clicks, then walk Back / Forward
+import { open, state } from "./lib.mjs";
+const [port, w, h, zoom, theme, out] = [+process.argv[2], +process.argv[3], +process.argv[4], +process.argv[5], process.argv[6], process.argv[7]];
+const { browser, page, errs } = await open(port, { w, h, zoom, theme }, "?demo=&team=vibesquad");
+const tag = `${theme}-${w}`;
+const step = async (n, shot) => { await page.waitForTimeout(700); const s = await state(page); if (shot && out) await page.screenshot({ path: `${out}/${tag}-trail-${n}.png` }); console.log(`${n.padEnd(12)} ${s.url.padEnd(40)} ${s.chat ? "chat" : "ov"}:${s.crumb} len=${s.hlen} :: ${s.hist}`); return s; };
+const needs = (t) => page.locator(".boring-sidebar .boring-needs-open", { hasText: t }).first().click();
+await needs("Audit - token scout"); await step("chat");
+await page.keyboard.press("Control+k"); await page.waitForTimeout(400); await page.keyboard.type("UI Lab"); await page.waitForTimeout(400); await page.keyboard.press("Enter");
+await step("pick-uilab");
+await page.goBack(); await step("back(mixed)");
+await needs("Review - Sonnet"); await step("1-review");
+await page.locator(".boring-sidebar .boring-project-row", { hasText: "Main Game Project" }).first().click(); await step("2-proj-efi");
+await needs("Review - Gemini"); await step("3-gemini");
+await page.goBack(); await step("back-1", true);
+await page.goBack(); await step("back-2", true);
+await page.goForward(); await step("fwd-1");
+await page.goForward(); await step("fwd-2", true);
+console.log("pageerrors=" + errs.length);
+await browser.close();

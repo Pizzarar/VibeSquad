@@ -122,3 +122,56 @@ test("Art Painter role spawn starts the Art Director role partner (role names pa
   assert.match(creates[1].initialPrompt, /Painter is agent rn-1/);
   assert.equal(out.partner, "rn-2");
 });
+
+// H1 (R1 fix, idea-974): a role-name spawn's caller provider/model are named in vs.route-override so the spawn hook can
+// tell them from a filled-in default; the role route pre-fills THAT provider's rung. Old names never get the label.
+test("H1: role spawn + caller provider/model stamps vs.route-override and pre-fills the caller provider's rung", async () => {
+  {
+    const { ctx, creates } = ctxFor();
+    await spawn(ctx, { profile: "Review", provider: "claude", model: "claude-sonnet-5-5", stakes: "tierA-invariant" });
+    const req = creates[0];
+    assert.equal(req.labels["vs.route-override"], "provider=claude model=claude-sonnet-5-5");
+    assert.equal(req.env.VS_ROUTE_OVERRIDE, "provider=claude model=claude-sonnet-5-5"); // Paseo: the hook sees env only
+    assert.deepEqual([req.config.provider, req.config.model, req.config.thinkingOptionId], ["claude", "claude-sonnet-5-5", "high"]);
+    assert.equal(req.labels.profile, "Review");
+  }
+  {
+    const { ctx, creates } = ctxFor();
+    await spawn(ctx, { profile: "Review", provider: "claude", stakes: "tierA-invariant" });
+    const req = creates[0];
+    assert.equal(req.labels["vs.route-override"], "provider=claude");
+    assert.deepEqual([req.config.provider, req.config.model, req.config.thinkingOptionId], ["claude", "claude-opus-5-5", "high"]);
+    assert.equal(req.labels["vs.profile-derived"], "model,thinking"); // the rung is not the caller's model
+  }
+  {
+    const { ctx, creates } = ctxFor();
+    await spawn(ctx, { profile: "Review", model: "claude-sonnet-5-5" });
+    assert.equal(creates[0].labels["vs.route-override"], "model=claude-sonnet-5-5");
+    assert.equal(creates[0].config.provider, "claude");
+  }
+});
+
+test("H1: no override = no label; a caller-forged vs.route-override is stripped; old names never get it", async () => {
+  {
+    const { ctx, creates } = ctxFor();
+    await spawn(ctx, { profile: "Review", labels: { "vs.route-override": "provider=claude" } });
+    assert.equal(creates[0].labels["vs.route-override"], undefined);
+    assert.equal(creates[0].config.provider, "antigravity-cli");
+    assert.equal(creates[0].env.VS_ROUTE_OVERRIDE, undefined);
+  }
+  {
+    const { ctx, creates } = ctxFor();
+    await spawn(ctx, { profile: "Review - Gemini", provider: "claude" });
+    assert.equal(creates[0].labels["vs.route-override"], undefined);
+  }
+});
+
+test("Gemini L2: Implement + explicit provider keeps role: true on result.ab, so result.ab.provider is reported", async () => {
+  const { ctx, creates } = ctxFor();
+  const res = await spawn(ctx, { profile: "Implement", provider: "antigravity-cli" });
+  assert.equal(res.ab?.reason, "override");
+  assert.equal(res.ab?.provider, "antigravity-cli");
+  assert.equal(creates[0].labels.profile, "Implement");
+  assert.equal(creates[0].labels["vs.route-override"], "provider=antigravity-cli");
+  assert.equal(creates[0].config.model, "gemini-4-neon");
+});

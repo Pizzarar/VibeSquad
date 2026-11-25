@@ -41,13 +41,19 @@ for (const f of [C, A, O]) for (const s of [...CAP_SETS]) CAP_SETS.push([...s, f
 // in provider-failover.mjs / stakes-ladder.mjs cannot move the oracle together with the code under test.
 export const TODAY_FIXTURE = JSON.parse(readFileSync(new URL("../fixtures/route-golden-today-b634cc9a.json", import.meta.url), "utf8"));
 
-/** Today's route for a profile name (b634cc9a, pinned): the failover walk, then the old stakes ladder on the landed profile. */
+// Deliberate route changes since b634cc9a, applied as explicit literal deltas on top of the pinned rows (the fixture
+// itself stays byte-for-byte): R7 (docs/PLAN_PER_ROLES_LADDER_1125.md, 2026-11-25) mechanical stakes on opencode run
+// DeepSeek Flash instead of keeping the landed profile's v4-pro (32 rows; provider, effort and mode unchanged).
+const R7_OPENCODE_MECHANICAL_MODEL = "deepseek/deepseek-flash";
+
+/** Today's route for a profile name (b634cc9a, pinned + the deltas above): the failover walk, then the stakes ladder on the landed profile. */
 export function today(name, caps, stakes) {
   const byCaps = TODAY_FIXTURE.index[name];
   if (!byCaps) throw new Error(`no pinned golden row for ${name}`);
   const capKey = [C, A, O].filter((f) => caps.includes(f)).join(",");
   const i = byCaps[capKey]?.[stakes === undefined ? "(none)" : stakes];
   if (i === undefined) throw new Error(`no pinned golden row for ${name} caps=[${caps}] stakes=${stakes}`);
-  const [provider, model, effort, modeId] = TODAY_FIXTURE.rows[i];
+  const [provider, pinnedModel, effort, modeId] = TODAY_FIXTURE.rows[i];
+  const model = stakes === "mechanical" && provider === O ? R7_OPENCODE_MECHANICAL_MODEL : pinnedModel;
   return { provider, model, effort, modeId };
 }

@@ -1205,10 +1205,26 @@ func _test_role_warning() -> void:
 		on._refresh_pairing()
 		for i in 3:
 			await process_frame
-		var rc: Dictionary = mock.calls[0] if not mock.calls.is_empty() else {}
+		check(_auth_calls(mock) == 0, "role[%s]: no auth/status call before the dock opens" % c[0])
+		on.open_dock()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: first dock open makes exactly one auth/status call" % c[0])
+		on.close_dock()
+		on.open_dock()
+		on.start_capture()
+		for i in 3:
+			await process_frame
+		check(_auth_calls(mock) == 1, "role[%s]: reopen / capture does not repeat the call" % c[0])
+		var rc: Dictionary = {}
+		for mc: Dictionary in mock.calls:
+			if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+				rc = mc
+				break
 		check(on._dock.pair_state == Dock.PAIR_PAIRED and str(rc.get("url", "")) == "https://forge.tail1234.ts.net:4180/__vibesquad/auth/status" and _has_header(rc.get("headers", PackedStringArray()), "x-vs-device-token"), "role[%s]: GET auth/status over https with the device token" % c[0])
 		check(on._dock._role_warn.visible == c[2], "role[%s]: warning visible == %s" % [c[0], str(c[2])])
 		on.queue_free()
+	await _test_role_deferral(dpath, cpath)
 	# a fresh transport accepts an owner-playtest pairing redeem
 	var t := Transport.new()
 	var mock2 := MockHttp.new()
@@ -1230,6 +1246,58 @@ func _test_role_warning() -> void:
 		for f in DirAccess.get_files_at(d):
 			DirAccess.remove_absolute(d.path_join(f))
 		DirAccess.remove_absolute(d)
+
+
+## idea-878 review: F3 capture as the first trigger, and a re-pair in the open dock re-checks the role at once.
+func _test_role_deferral(dpath: String, cpath: String) -> void:
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	var mock := MockHttp.new()
+	on._transport.http_fn = Callable(mock, "handle")
+	on._transport.sleep_fn = func(_s: float) -> void: pass
+	on._transport.device_token_path = dpath
+	on._transport.ca_cert_path = cpath
+	on._transport.server_url = "https://forge.tail1234.ts.net:4180"
+	mock.queue = [MockHttp.json(200, {"role": "owner-playtest"})]
+	on._refresh_pairing()
+	await process_frame
+	check(_auth_calls(mock) == 0, "role-defer(a): no call before the first capture")
+	on.start_capture()
+	for i in 3:
+		await process_frame
+	check(_auth_calls(mock) == 1, "role-defer(a): F3 capture as first trigger makes exactly one call")
+	on.start_capture()
+	on.open_dock()
+	for i in 3:
+		await process_frame
+	check(_auth_calls(mock) == 1, "role-defer(a): repeat capture / dock open makes no further call")
+	# (b) dock open + checked; unpair; pair a different device with the dock still open
+	mock.calls.clear()
+	on.unpair()
+	check(on._dock.pair_state == Dock.PAIR_UNPAIRED, "role-defer(b): unpaired")
+	await _fetch_ca(on._transport, mock)
+	on._pending_code = "123456"
+	on._pending_fp = CA_FP_FULL
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN_2, "role": "owner", "allowedTeams": null, "hostId": "h"}), MockHttp.json(200, {"role": "owner"})]
+	var before := _auth_calls(mock)
+	on.open_dock()
+	await on._on_ca_confirmed(true)
+	for i in 3:
+		await process_frame
+	check(on._dock.visible and on._dock.pair_state == Dock.PAIR_PAIRED and _auth_calls(mock) - before == 1, "role-defer(b): pairing in the open dock makes exactly one new auth/status call, no reopen")
+	on.close_dock()
+	on.queue_free()
+	await process_frame
+
+
+func _auth_calls(mock: MockHttp) -> int:
+	var n := 0
+	for mc: Dictionary in mock.calls:
+		if str(mc.get("url", "")).ends_with("/__vibesquad/auth/status"):
+			n += 1
+	return n
 
 
 func _key_event(code: Key, mods: Dictionary = {}) -> InputEventKey:

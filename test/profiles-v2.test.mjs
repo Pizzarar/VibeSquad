@@ -59,8 +59,8 @@ const P5A_ROLES = {
   "Art Painter - Opus": "art-painter",
 };
 const P5B_ROLES = {
-  "Spec - Opus": "implement",
-  "Planner - Sonnet": "implement",
+  "Spec - Opus": "planner",
+  "Planner - Sonnet": "planner",
   "Implement - Opus": "implement",
   "Senior Reasoning - DSP": "implement",
   "Mechanical - DSF": "work-order",
@@ -111,7 +111,7 @@ test("migration of the real pack: v2 written by node (no BOM), backup = original
   assert.equal(rolesBefore.source, "v1");
   const res = migrateProfilesFile(f);
   assert.equal(res.ok, true, res.error);
-  assert.deepEqual([res.changed, res.fromVersion, res.roleCount, res.unmapped], [true, 1, 8, []]);
+  assert.deepEqual([res.changed, res.fromVersion, res.roleCount, res.unmapped], [true, 1, 9, []]);
   assert.equal(res.backupPath, `${f}.bak-p5`);
   assert.ok(readFileSync(res.backupPath).equals(FIXTURE_BYTES), "backup is the original bytes");
   const raw = readFileSync(f);
@@ -246,7 +246,7 @@ test("migrated real-pack roles: sources, prompts, tools, and routing identical t
       }
     }
   }
-  assert.equal(n, (8 + 21) * 8 * (STAKES_VALUES.length + 1));
+  assert.equal(n, (9 + 21) * 8 * (STAKES_VALUES.length + 1));
 });
 
 test("user edits flow into the role: a changed mode, custom profiles kept but unmapped, renamed alias profile found", () => {
@@ -287,7 +287,7 @@ test("migration guards: newer schema refused, bad JSON untouched, missing file, 
   // dry run: reports, writes nothing
   copyFileSync(FIXTURE, f);
   const dry = migrateProfilesFile(f, { dryRun: true });
-  assert.deepEqual([dry.ok, dry.changed, dry.dryRun, dry.roleCount], [true, true, true, 8]);
+  assert.deepEqual([dry.ok, dry.changed, dry.dryRun, dry.roleCount], [true, true, true, 9]);
   assert.ok(readFileSync(f).equals(FIXTURE_BYTES));
   assert.equal(existsSync(`${f}.bak-p5`), false);
   // an older, different .bak-p5 is never overwritten
@@ -308,10 +308,10 @@ test("CLI: --path required value, dry run and real run report, unknown args refu
   const out = [];
   assert.equal(migrateCli(["--bogus"], (l) => out.push(l)), 2);
   assert.equal(migrateCli(["--path", f, "--dry-run"], (l) => out.push(l)), 0);
-  assert.match(out.at(-1), /would migrate .* v1 -> v2: 8 roles$/);
+  assert.match(out.at(-1), /would migrate .* v1 -> v2: 9 roles$/);
   assert.ok(readFileSync(f).equals(FIXTURE_BYTES));
   assert.equal(migrateCli([`--path=${f}`], (l) => out.push(l)), 0);
-  assert.match(out.at(-1), /migrated .* v1 -> v2: 8 roles, backup .*profiles\.json\.bak-p5$/);
+  assert.match(out.at(-1), /migrated .* v1 -> v2: 9 roles, backup .*profiles\.json\.bak-p5$/);
 });
 
 test("normalizeRoles: defaults fill gaps, provider aliases fold, bad fields fall back, user roles kept, stable", () => {
@@ -394,7 +394,7 @@ test("P5c L4: a schemaVersion 2 body without a roles object (or an empty one) is
   for (const roles of [undefined, null, [], "x", {}]) {
     const res = migrateProfilesData({ version: 1, schemaVersion: 2, ...(roles === undefined ? {} : { roles }), profiles: list });
     assert.deepEqual([res.ok, res.changed, res.fromVersion], [true, true, 2], `roles=${JSON.stringify(roles)}`);
-    assert.equal(Object.keys(res.data.roles).length, 8);
+    assert.equal(Object.keys(res.data.roles).length, 9);
   }
   const good = migrateProfilesData(migrateProfilesData({ profiles: list }).data);
   assert.deepEqual([good.ok, good.changed], [true, false], "a real v2 body stays idempotent");
@@ -402,7 +402,7 @@ test("P5c L4: a schemaVersion 2 body without a roles object (or an empty one) is
   const f = join(dir, "profiles.json");
   writeFileSync(f, JSON.stringify({ version: 1, schemaVersion: 2, profiles: list }), "utf8");
   const r = migrateProfilesFile(f);
-  assert.deepEqual([r.ok, r.changed, r.roleCount], [true, true, 8]);
+  assert.deepEqual([r.ok, r.changed, r.roleCount], [true, true, 9]);
   assert.equal(migrateProfilesFile(f).reason, "already-v2");
 });
 
@@ -420,4 +420,27 @@ test("P5c L1: the migrate CLI prints FAIL <reason> backup=<path>, never a raw st
   assert.match(out.at(-1), /^migrate-profiles-v2: FAIL .* path=.*profiles\.json backup=none$/);
   assert.doesNotMatch(out.at(-1), /\n\s+at /);
   assert.ok(readFileSync(f).equals(FIXTURE_BYTES), "the file is untouched");
+});
+
+test("R1 planner role: Planner - Sonnet / Spec - Opus map to it; a v2 file migrated before it fills it from its own profiles", (t) => {
+  assert.equal(legacyProfileRole("Planner - Sonnet").role, "planner");
+  assert.equal(legacyProfileRole("Spec - Opus").role, "planner");
+  const pack = DEFAULT_PACK_PROFILES.find((p) => p.name === "Planner - Sonnet");
+  const built = buildRolesFromProfiles([]).roles.planner;
+  assert.deepEqual([built.name, built.tier, built.providers], ["Planner", "mid", ROLE_TABLE.planner.providers]);
+  assert.equal(built.prompt, pack.notes);
+  assert.equal(built.modes.claude.from, "Planner - Sonnet");
+  // A v2 body written before planner existed: loadRoles builds planner from the file's own (edited) profile.
+  const list = JSON.parse(readFileSync(FIXTURE, "utf8")).profiles;
+  const v2 = migrateProfilesData({ profiles: [...list, { ...pack, notes: "my planner notes" }] }).data;
+  delete v2.roles.planner;
+  const dir = tmp(t);
+  const f = join(dir, "profiles.json");
+  writeFileSync(f, JSON.stringify(v2), "utf8");
+  const loaded = loadRoles(f);
+  assert.equal(loaded.source, "v2");
+  assert.equal(loaded.roles.planner.prompt, "my planner notes");
+  assert.equal(loaded.roles.lead.prompt, v2.roles.lead.prompt, "stored roles still win");
+  // without the profiles list a missing role falls back to the table defaults (empty prompt), as before
+  assert.equal(normalizeRoles({}).planner.prompt, "");
 });

@@ -454,6 +454,17 @@ function primaryUnitRef(st) {
   return worked;
 }
 
+/** usa-58: a run that implemented several units in turn (one session, `cd <worktree B>` after finishing A) is credited ONE primary
+ * unit by primaryUnitRef; the rest of its units used to miss as no-worker-cwd-match. Units it ran >= SECONDARY_UNIT_CALLS tool
+ * calls inside (real worktree activity, not a prose mention) are its secondary units. Only used as a last resort, see resolveImplementer. */
+const SECONDARY_UNIT_CALLS = 5;
+function secondaryUnitRefs(st) {
+  if (!st.unitWorked || st.unitWorkedOverflow) return [];
+  const primary = primaryUnitRef(st);
+  if (!primary) return []; // no primary unit: the run's cost sits on no merge, so it must not be credited to a secondary one either
+  return [...st.unitWorked].filter(([n, c]) => c >= SECONDARY_UNIT_CALLS && n !== primary && /^unit-/.test(n)).map(([n]) => n);
+}
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -1366,6 +1377,7 @@ function agentV2(st, agentId) {
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
     unitRef: primaryUnitRef(st),
+    unitSecondary: secondaryUnitRefs(st), // usa-58: other units this run demonstrably worked in (>= SECONDARY_UNIT_CALLS calls)
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
     lastTs: st.lastTs ?? null,
@@ -1562,6 +1574,7 @@ function indexWorkers(agents) {
   const byUnit = new Map();
   const byAlias = new Map(); // usa-55: `unit-<worktree name>` -> workers in a unit-less-named worktree
   const byLane = new Map();
+  const bySecondary = new Map(); // usa-58: unit name -> implementer runs that also worked in that unit's worktree
   const byRef = new Map(); // usa-44: unit name -> main-checkout implementer runs whose single primary unit evidence names it
   for (const a of agents) {
     if (a.role !== "worker") continue;
@@ -1572,8 +1585,9 @@ function indexWorkers(agents) {
     if (wt && !wt.startsWith("unit-") && isWorktreeCwd(a.cwd)) getOrSet(byAlias, `unit-${wt}`, () => []).push(a);
     getOrSet(byLane, a.lane, () => []).push(a);
     if (a.unitRef) getOrSet(byRef, a.unitRef, () => []).push(a);
+    for (const n of a.unitSecondary ?? []) getOrSet(bySecondary, n, () => []).push(a);
   }
-  return { byUnit, byAlias, byLane, byRef };
+  return { byUnit, byAlias, byLane, byRef, bySecondary };
 }
 
 /** usa-44: pick one run among candidates that share a unit. Runs that never completed a turn spent nothing: set them aside
@@ -1636,6 +1650,21 @@ function resolveImplementer(unit, agents, index) {
       if (picked) return hit(picked);
       return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // never fall back to the lane guess (R1 M2)
     }
+    // usa-58: no primary-evidence run. A run that implemented this unit as its 2nd/3rd unit is credited (identity only: its cost
+    // stays with its primary unit, `shared`), under the same one-merge-per-run rule as above.
+    const secondary = (index.bySecondary?.get(want) ?? []).filter((a) => sameSquad(unit, a) && isImplementerWorker(a)
+      && !ownsMergedWorktree(index, a)
+      && (a.createdAt === null || a.createdAt === undefined || mergedAtMs === null || a.createdAt <= mergedAtMs));
+    if (secondary.length && cwdMatches.length === 0) {
+      const list = index.mergesByName?.get(`${unit.squad ?? ""}|${want}`);
+      const mine = secondary.filter((a) => {
+        const first = list?.find((m) => a.createdAt === null || a.createdAt === undefined || m.ms >= a.createdAt);
+        return !first || first.sha === unit.sha;
+      });
+      const picked = pickImplementer(mine);
+      if (picked) return { implementer: picked, miss: null, shared: true };
+      return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // like the primary refs path: never fall to the lane guess (full cost, double count)
+    }
     if (cwdMatches.length === 1) return hit(cwdMatches[0]); // unchanged legacy behaviour: a lone non-implementer worktree run
     if (cwdMatches.length > 1) return miss("no-implementer-in-worktree");
     if (!unit.lane) evidenceMiss = "no-worker-cwd-match";
@@ -1648,7 +1677,7 @@ function resolveImplementer(unit, agents, index) {
 }
 
 /** usa-55: enumerated reasons a merged unit has no implementer (set by resolveImplementer). */
-export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match"];
+export const ATTRIBUTION_MISS_REASONS = ["no-branch", "no-lane-implementer", "ambiguous-implementers", "no-implementer-in-worktree", "evidence-claimed-by-other-merge", "other-repo-unmapped", "no-worker-cwd-match", "ledger-archived-no-agent", "ledger-archived-unattributed"];
 
 /** usa-55: attributed/total over the raw merged units (ledger-folded rows are added later), split by lane, repo and miss reason. */
 function buildAttributionCoverage(merged) {
@@ -2247,13 +2276,14 @@ function buildByWorkflow(merged, agentById) {
       wfSources: new Set(),
       units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
-      fixAfterMergeCount: 0, knownCostUnits: 0,
+      fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
     }));
     g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
     if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
     g.reviewRoundsSum += u.reviewRounds ?? 0;
     const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
+    if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
     g.costUsd += cost;
     g.inputTokens += u.inputTokens ?? 0;
     g.outputTokens += u.outputTokens ?? 0;
@@ -2273,12 +2303,12 @@ function buildByWorkflow(merged, agentById) {
       firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
       avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
       costUsd: g.costUsd,
-      costPerUnit: g.units ? g.costUsd / g.units : null,
+      costPerUnit: g.costUnits ? g.costUsd / g.costUnits : null,
       costPer100Loc: totalLoc > 0 ? (g.costUsd / totalLoc) * 100 : null,
-      tokensPerUnit: g.units ? Math.round(((g.inputTokens + g.outputTokens) / g.units) * 100) / 100 : 0,
+      tokensPerUnit: g.costUnits ? Math.round(((g.inputTokens + g.outputTokens) / g.costUnits) * 100) / 100 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
       fixAfterMergeRate: g.units ? Math.round((g.fixAfterMergeCount / g.units) * 1000) / 1000 : 0,
-      costCoverage: g.units ? Math.round((g.knownCostUnits / g.units) * 1000) / 1000 : 0,
+      costCoverage: g.costUnits ? Math.round((g.knownCostUnits / g.costUnits) * 1000) / 1000 : 0,
     };
   }).sort((a, b) => b.units - a.units || a.workflowMode.localeCompare(b.workflowMode));
 }
@@ -2364,8 +2394,9 @@ function buildSavings(merged, totals, lanes, agents, rows = []) {
 function cohortOf(units) {
   const n = units.length;
   if (!n) return { units: 0, firstTryPassRate: null, avgReviewRounds: null, costPerUnit: null, tokensPerUnit: null, avgUnitCycleMs: null, fixAfterMergeRate: null };
-  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0;
+  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0, costN = 0;
   for (const u of units) {
+    if (!u.implementerShared) costN += 1; // usa-58: shared credits have no cost: kept out of the cost/token averages
     if ((u.reviewRounds ?? 0) <= 1) firstTry += 1;
     rounds += u.reviewRounds ?? 0;
     cost += Number.isFinite(u.costUsd) ? u.costUsd : 0;
@@ -2377,31 +2408,51 @@ function cohortOf(units) {
     units: n,
     firstTryPassRate: round2(firstTry / n),
     avgReviewRounds: round2(rounds / n),
-    costPerUnit: round2(cost / n),
-    tokensPerUnit: round2(tokens / n),
+    costPerUnit: costN ? round2(cost / costN) : null,
+    tokensPerUnit: costN ? round2(tokens / costN) : null,
     avgUnitCycleMs: cycCount ? Math.round(cycSum / cycCount) : null,
     fixAfterMergeRate: round2(fix / n),
   };
 }
 
+const BURST_DEFS = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
+const BURST_STAKES_ORDER = ["normal", "tierA-security", "tierA-invariant", "mechanical", "unknown"];
+
+/** One burst cell: units + the usa-51 metrics, nulled (`insufficient`) under PLAN_SCORE_MIN_N units. */
+function burstCell(def, us) {
+  const insufficient = us.length < PLAN_SCORE_MIN_N;
+  const c = cohortOf(us);
+  return { key: def.key, label: def.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
+}
+function burstIndex(u) {
+  const n = u.dispatchBurstSize;
+  return !Number.isFinite(n) || n < 1 ? -1 : BURST_DEFS.findIndex((d) => d.test(n));
+}
+
 /** usa-51: merged units bucketed by dispatchBurstSize (1 solo, 2-3, 4+). A null/invalid burst counts toward `unjoined`.
- * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5). */
+ * A bucket under PLAN_SCORE_MIN_N units keeps its count but nulls the metrics (`insufficient`, shown as n<5).
+ * usa-59: `byStakes` / `byLane` cross-split the same buckets by the implementer's stakes label / the unit's lane. Each row is
+ * `{ key, units, buckets: [3 cells, same shape as `buckets`] }` over joined units only; empty rows are dropped. */
 export function buildBurstCohorts(merged) {
-  const defs = [{ key: "1", label: "Solo (1)", test: (n) => n === 1 }, { key: "2-3", label: "2\u20133", test: (n) => n >= 2 && n <= 3 }, { key: "4+", label: "4+", test: (n) => n >= 4 }];
-  const groups = defs.map(() => []);
+  const groups = BURST_DEFS.map(() => []);
+  const byStakes = new Map(), byLane = new Map();
   let unjoined = 0;
+  const add = (map, key, i, u) => { if (!map.has(key)) map.set(key, BURST_DEFS.map(() => [])); map.get(key)[i].push(u); };
   for (const u of merged) {
-    const n = u.dispatchBurstSize;
-    if (!Number.isFinite(n) || n < 1) { unjoined += 1; continue; }
-    groups[defs.findIndex((d) => d.test(n))].push(u);
+    const i = burstIndex(u);
+    if (i < 0) { unjoined += 1; continue; }
+    groups[i].push(u);
+    add(byStakes, typeof u.stakes === "string" && u.stakes ? u.stakes : "unknown", i, u);
+    add(byLane, typeof u.lane === "string" && u.lane ? u.lane : "unknown", i, u);
   }
-  const buckets = defs.map((d, i) => {
-    const us = groups[i];
-    const insufficient = us.length < PLAN_SCORE_MIN_N;
-    const c = cohortOf(us);
-    return { key: d.key, label: d.label, units: us.length, insufficient, firstTryPassRate: insufficient ? null : c.firstTryPassRate, avgReviewRounds: insufficient ? null : c.avgReviewRounds, fixAfterMergeRate: insufficient ? null : c.fixAfterMergeRate, costPerUnit: insufficient ? null : c.costPerUnit };
-  });
-  return { buckets, unjoined, minN: PLAN_SCORE_MIN_N };
+  const rows = (map, order) => [...map.entries()].map(([key, g]) => ({ key, units: g.reduce((t, x) => t + x.length, 0), buckets: BURST_DEFS.map((d, i) => burstCell(d, g[i])) }))
+    .sort(order);
+  const rank = (k) => { const i = BURST_STAKES_ORDER.indexOf(k); return i < 0 ? BURST_STAKES_ORDER.length : i; };
+  return {
+    buckets: BURST_DEFS.map((d, i) => burstCell(d, groups[i])), unjoined, minN: PLAN_SCORE_MIN_N,
+    byStakes: rows(byStakes, (a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)),
+    byLane: rows(byLane, (a, b) => b.units - a.units || a.key.localeCompare(b.key)),
+  };
 }
 
 /** Last ≤10 merged units (recent) vs the preceding ≤10 (prior); delta = recent - prior per metric. */
@@ -3385,7 +3436,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
-    const { implementer, miss: attributionMiss } = resolveImplementer(u, agents, workerIndex);
+    const { implementer: found, miss: attributionMiss, shared } = resolveImplementer(u, agents, workerIndex);
+    const implementer = found;
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
@@ -3407,10 +3459,11 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerAgentId: implementer ? implementer.agentId : null,
       attributionMiss: implementer ? null : attributionMiss,
       reviewerAgentId: reviewer ? reviewer.agentId : null,
-      costUsd: implementer ? implementer.costUsd : null,
-      inputTokens: implementer ? implementer.inputTokens : 0,
-      outputTokens: implementer ? implementer.outputTokens : 0,
-      turns: implementer ? implementer.turns : 0,
+      implementerShared: !!shared, // usa-58: the run's primary unit owns its cost; this merge is credited identity only
+      costUsd: implementer && !shared ? implementer.costUsd : null,
+      inputTokens: implementer && !shared ? implementer.inputTokens : 0,
+      outputTokens: implementer && !shared ? implementer.outputTokens : 0,
+      turns: implementer && !shared ? implementer.turns : 0,
       reviewerFamily,
       workflowMode: workflow.mode,
       wfSource: workflow.source,
@@ -3571,6 +3624,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
+      attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
       implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,

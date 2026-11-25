@@ -55,6 +55,7 @@ import {
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
 import { findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
 import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
+import { isHiddenRole } from "../server/role-route.mjs";
 import { loadTierLadder } from "../server/stakes-ladder.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
@@ -304,6 +305,7 @@ export function parseArgs(argv) {
     "json",
     "notes",
     "roles",
+    "aliases",
     "dryRun",
     "noForce",
     "killBackground",
@@ -538,7 +540,7 @@ const USAGE = `vs — VibeSquad team log, live roster, profiles, handoff packet,
 Usage:
   vs whoami [--agent <id>] [--lane <lane>] [--json]
   vs who [lead|brainstorm|buddy|workers|all] [--team <team>] [--lane <lane>] [--json]
-  vs profiles [--roles] [--role <role>] [--name <name>] [--notes] [--json]  (no filter: roles + tier ladder, then old names as aliases)
+  vs profiles [--roles] [--aliases] [--role <role>] [--name <name>] [--notes] [--json]  (no filter: roles + tier ladder; spawn by role name, stakes picks the model; --aliases also lists the old model-named profiles)
   vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
   vs log handoff|done "<text>" --plan docs/PLAN_<x>.md [--pass]  (plan lifecycle for @usage: stored as plan=<path> on the entry; --pass only on done, when the whole plan passed; text naming a PLAN path auto-fills it)
@@ -1467,8 +1469,10 @@ function commandProfiles(flags) {
   const wantName = flags.name ? String(flags.name).trim().toLowerCase() : "";
   const includeNotes = Boolean(flags.notes);
 
-  // P5c (idea-77): the 8 roles (built live from the profiles, as the spawn hook routes them) + the tier ladder. Old
-  // profile names stay listed as aliases (Workaround until P5f). Filtered and --json output keep today's profile shape.
+  // P5c (idea-77) + R1 (PLAN_PER_ROLES_LADDER_1125): the roles (built live from the profiles, as the spawn hook routes
+  // them) + the tier ladder. Old model-named profiles are hidden aliases (one count line; --aliases lists them) until R5.
+  // Hidden roles (work-order) still route but are left out of the text listing; --json keeps them with hidden=true.
+  // Filtered (--role/--name) and --json output keep today's profile shape.
   const roles = liveRoles(profiles);
   const roleRows = Object.entries(roles).map(([key, r]) => ({
     key,
@@ -1476,13 +1480,15 @@ function commandProfiles(flags) {
     label: roleProfileLabel(key, roles),
     tier: r.tier,
     providers: [...(r.providers ?? [])],
+    ...(isHiddenRole(key, roles) ? { hidden: true } : {}),
   }));
+  const listedRows = roleRows.filter((r) => !r.hidden);
   if (flags.roles) {
     if (flags.json) {
       process.stdout.write(JSON.stringify({ roles: roleRows, ladder: loadTierLadder() }, null, 2) + "\n");
       return 0;
     }
-    writeRoleRows(roleRows);
+    writeRoleRows(listedRows);
     return 0;
   }
 
@@ -1513,31 +1519,43 @@ function commandProfiles(flags) {
   }
 
   const unfiltered = !wantRole && !wantName;
+  let shown = matched;
   if (unfiltered) {
-    writeRoleRows(roleRows);
-    process.stdout.write("\nAliases (old profile names, routed as today until P5f):\n");
+    writeRoleRows(listedRows);
+    if (!flags.aliases) {
+      // Roles only: custom (non-legacy) profiles are still spawnable by name, so they stay listed; old names are counted.
+      const legacy = matched.filter((p) => aliasOf(p));
+      shown = matched.filter((p) => !aliasOf(p));
+      if (shown.length) process.stdout.write("\nCustom profiles:\n");
+      for (const p of shown) writeProfileRow(p, "", includeNotes);
+      process.stdout.write(`\n${legacy.length} legacy alias${legacy.length === 1 ? "" : "es"} hidden (--aliases)\n`);
+      return 0;
+    }
+    process.stdout.write("\nAliases (old profile names, routed as today until R5):\n");
   }
 
-  if (matched.length === 0) {
+  if (shown.length === 0) {
     process.stdout.write("NONE\n");
     return unfiltered ? 0 : 1;
   }
 
-  for (const p of matched) {
-    const id = p.id || "-";
-    const mode = p.modeId || "default";
-    const alias = unfiltered && aliasOf(p) ? ` · alias of ${aliasOf(p)}` : "";
-    process.stdout.write(`${p.name} · ${id} · ${p.provider}/${p.model} · mode=${mode}${alias}\n`);
-    if (includeNotes && p.notes) {
-      process.stdout.write(`  notes: ${p.notes}\n`);
-    }
-  }
+  for (const p of shown) writeProfileRow(p, unfiltered && aliasOf(p) ? ` · alias of ${aliasOf(p)}` : "", includeNotes);
   return 0;
+}
+
+/** One `vs profiles` profile line (+ notes line with --notes). */
+function writeProfileRow(p, suffix, includeNotes) {
+  const id = p.id || "-";
+  const mode = p.modeId || "default";
+  process.stdout.write(`${p.name} · ${id} · ${p.provider}/${p.model} · mode=${mode}${suffix}\n`);
+  if (includeNotes && p.notes) {
+    process.stdout.write(`  notes: ${p.notes}\n`);
+  }
 }
 
 /** `vs profiles` roles block: one line per role (label, default tier, provider order), then the tier ladder. */
 function writeRoleRows(roleRows) {
-  process.stdout.write("Roles (spawn with profile=<label>; stakes tierA-* -> top, mechanical -> cheap):\n");
+  process.stdout.write("Roles (spawn with profile=<label>; stakes picks the model: tierA-* -> top, mechanical -> cheap; provider/model to override):\n");
   for (const r of roleRows) {
     process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · providers=${r.providers.join(">")}\n`);
   }
