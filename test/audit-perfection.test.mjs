@@ -294,3 +294,11 @@ test('newModelFindings logs a warning when live probe fails and falls back to st
   assert.match(warnings[0], /static/);
   assert.match(warnings[0], /timed out/);
 });
+
+test('newModelFindings checks a gpt-* model under the openai provider instead of skipping it', async () => {
+  const ladder = { openai: { top: { model: 'gpt-5-top' } } };
+  const catalog = { openai: { provider: 'openai', models: [{ id: 'gpt-5-top' }, { id: 'gpt-6-new' }] } };
+  const findings = await newModelFindings({ catalog, ladder });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].key, 'new-model:openai/gpt-6-new');
+});
