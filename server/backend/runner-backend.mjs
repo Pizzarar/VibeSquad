@@ -501,7 +501,8 @@ async function injectedPrefix(role, cwd) {
  */
 export function reduceTurn(t, e) {
   const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
-  if (e.type === "input") { t.awaiting = true; return null; }
+  // A fresh prompt opens a new awaited turn: a failure/cancel flag left from an already-closed turn is not this one's.
+  if (e.type === "input") { if (!inTurn) { t.errored = false; t.error = undefined; t.cancelled = false; } t.awaiting = true; return null; }
   if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
   if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
   if (e.type === "status" && e.status && e.resume === true) {
@@ -510,6 +511,13 @@ export function reduceTurn(t, e) {
     t.status = STATUS[e.status] ?? e.status;
     t.queued = undefined;
     if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; }
+    return null;
+  }
+  if (e.type === "status" && e.status === "parked" && (e.queued === true || (t.queued && !t.errored))) {
+    // idea-868: the runner parked an idle process whose next prompt still waits in its family queue (to free a live slot).
+    // Nothing ran and nothing ended: that prompt's turn is still owed, so the turn state (queued, awaiting) stays as it is.
+    // The runner tags such a park `queued: true`; an untagged one (older runner) is read the same way while the log says
+    // queued and no error came in. _failJob's park (error, then parked) is a real end: the queued prompt failed to start.
     return null;
   }
   if (e.type === "status" && e.status) {

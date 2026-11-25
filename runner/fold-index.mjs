@@ -79,7 +79,8 @@ export function foldEvent(st, e) {
     st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined;
     st.lastStatus = { status: e.status, resume: e.resume, ts: e.ts };
     st.lastState = e.status;
-    if (e.status !== 'queued') { st.pending = []; if (e.status !== 'parked') st.park = null; }
+    // idea-868: a park tagged `queued: true` freed a queued agent's process: its queued inputs are still owed (not delivered).
+    if (e.status !== 'queued') { if (!(e.status === 'parked' && e.queued === true)) st.pending = []; if (e.status !== 'parked') st.park = null; }
   }
   else if (e.type === 'parked') st.park = { seq: e.seq, ts: e.ts, sessionId: e.sessionId, prompt: e.systemPrompt != null };
   else if (e.type === 'park-drain-refused') st.refused = { drain: e.drain, work: e.work };

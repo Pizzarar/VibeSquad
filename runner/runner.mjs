@@ -43,6 +43,24 @@ export function droppedSteerSeqs(events) {
   return dropped;
 }
 
+// idea-869: a slash command (`/compact`, `/compact <focus>`, `/clear`) only works as a turn's WHOLE text: the CLI parses the
+// prompt's first token. Joined to other text (either side) it reaches the model as plain text. A path ("/home/x") is not one.
+const SLASH_RE = /^\s*\/[A-Za-z][\w:.-]*(?=\s|$)/;
+export const isSlashText = (text) => typeof text === 'string' && SLASH_RE.test(text);
+
+// idea-869: texts (in order) grouped into turns: plain texts join with a blank line (one turn, as a coalesced queue job always
+// did), a slash command is always a turn of its own. Returns [{ text, slash }].
+export function turnGroups(texts) {
+  const out = [];
+  for (const text of texts) {
+    const slash = isSlashText(text);
+    const last = out.at(-1);
+    if (!last || slash || last.slash) out.push({ text, slash });
+    else last.text = `${last.text}\n\n${text}`;
+  }
+  return out;
+}
+
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
   for (const [name, v] of [['model', model], ['permissionMode', meta.permissionMode]]) {
@@ -771,7 +789,7 @@ export class Runner {
     if (prompt) this.store.append(id, 'input', { text: prompt });
     // Over a cap the agent still exists (its log says queued, N ahead) and starts when its turn comes: never refused.
     const job = {
-      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta),
+      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta), ...(isSlashText(prompt) ? { slash: true } : {}),
       run: () => {
         this._makeRoom(id, { owner: job.owner === true }); // a coalesced owner send makes the queued create an owner job
         const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
@@ -880,6 +898,7 @@ export class Runner {
         }
         if (data.status === 'idle') {
           entry.inflight = 0;
+          entry.slashTurn = false; // idea-869: the slash-command turn (if it was one) is over
           entry.turns++;
           entry.idleProgress = entry.progress;
           turnEnded = true;
@@ -1126,8 +1145,12 @@ export class Runner {
     // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
     // idea-146/312: a runtime wake into the live process that held its slot for that work (job.inPlace) needs a turn slot only;
     // FIFO behind a queued job that waits for a LIVE slot would deadlock (that job waits on this agent's slot, this turn on it).
-    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j));
-    if (!familyQueued && this._fits(job)) {
+    // A job that waits only for its own agent's open turn to end (idea-869) holds nobody else up.
+    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j) && !this._waitsOnOwnTurn(j));
+    // idea-869: one agent's jobs run in order: never ahead of an earlier job of the same agent, never into its open turn when
+    // the job must be a turn of its own (ownTurn).
+    const sameAgent = this.queue.some((j) => j.id === job.id);
+    if (!familyQueued && !sameAgent && !this._waitsOnOwnTurn(job) && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
     }
@@ -1135,11 +1158,17 @@ export class Runner {
     if (job.digest) this._pump(); // only queued owner jobs (budget spent) may be ahead of it: its own reserve may still fit
   }
 
+  // idea-869: a job that must be a turn of its own (a slash command's later messages, the next of several jobs of one agent)
+  // waits while its agent's current turn is open; it is never steered into that turn.
+  _waitsOnOwnTurn(job) { return job.ownTurn === true && this.live.get(job.id)?.inflight > 0; }
+
   // Owner jobs sit ahead of non-owner jobs of the same family (FIFO within each group). A digest sits after every queued
   // owner/digest job of its family and ahead of the first plain job of ANY family, so it also wins a freed live-process
-  // slot (the maxLive ceiling is shared across families). Everything else appends FIFO.
+  // slot (the maxLive ceiling is shared across families). Everything else appends FIFO. Never ahead of a job of the same
+  // agent (idea-869: its jobs run in send order).
   _enqueue(job) {
     job.ahead = -1;
+    job.logged = undefined; // announced afresh at its new place
     let idx = -1;
     if (job.owner) {
       idx = this.queue.findIndex((j) => j.family === job.family && !j.owner);
@@ -1148,6 +1177,8 @@ export class Runner {
       this.queue.forEach((j, i) => { if (j.family === job.family && this._rank(j) <= 1) floor = i + 1; });
       idx = this.queue.findIndex((j, i) => i >= floor && this._rank(j) === 2);
     }
+    const lastSame = this.queue.findLastIndex((j) => j.id === job.id);
+    if (idx !== -1 && idx <= lastSame) idx = lastSame + 1 < this.queue.length ? lastSame + 1 : -1;
     if (idx === -1) this.queue.push(job);
     else this.queue.splice(idx, 0, job);
     this._announceQueue();
@@ -1162,14 +1193,17 @@ export class Runner {
       // family -> highest rank that did not fit. An owner that did not fit (its over-cap budget is spent) still lets a
       // digest try its own reserve; a digest or plain job that did not fit blocks every later non-owner job of its family.
       const blocked = new Map();
+      const held = new Set(); // idea-869: agents with a job left in the queue earlier in this pass: their later jobs wait for it
       for (let i = 0; i < this.queue.length;) {
         const job = this.queue[i];
+        if (held.has(job.id) || this._waitsOnOwnTurn(job)) { held.add(job.id); i++; continue; } // waits on its own agent only: blocks no one else
         const b = blocked.get(job.family);
-        if (b !== undefined && (b > 0 || this._rank(job) === 0)) { i++; continue; }
-        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
+        if (b !== undefined && (b > 0 || this._rank(job) === 0)) { held.add(job.id); i++; continue; }
+        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); held.add(job.id); i++; continue; }
         this.queue.splice(i, 1);
         try { job.run(); } catch (err) { this._failJob(job, err); }
         i = 0; // running it may have changed what fits (a park, a new turn): rescan from the head
+        held.clear();
       }
     } finally { this._pumping = false; }
     this._announceQueue();
@@ -1190,13 +1224,19 @@ export class Runner {
   }
 
   // Tells each queued agent where it stands: a `queued` status event with `ahead` (same-family jobs in front), only when it changed.
+  // idea-869: one line per agent (its first job), and none for a job that waits on its own agent's open turn: that agent's log
+  // must keep saying running until the turn's idle (its next job is announced then, if it still has to wait).
   _announceQueue() {
     const seen = {};
+    const told = new Set();
     for (const job of this.queue) {
       const ahead = seen[job.family] ?? 0;
       seen[job.family] = ahead + 1;
-      if (job.ahead === ahead) continue;
       job.ahead = ahead;
+      const first = !told.has(job.id);
+      told.add(job.id);
+      if (!first || this._waitsOnOwnTurn(job) || job.logged === ahead) continue;
+      job.logged = ahead;
       try { this.store.append(job.id, 'status', { status: 'queued', ahead, family: job.family }); } catch { /* log gone */ }
     }
   }
@@ -1331,7 +1371,16 @@ export class Runner {
     clearTimeout(entry.parkTimer);
     this._clearArchive(entry);
     this.store.append(id, 'parked', { sessionId: entry.sessionId, systemPrompt: entry.systemPrompt ?? null });
-    this.store.append(id, 'status', { status: 'parked' });
+    // idea-868: a park that only frees the live slot of an agent whose next prompt waits in the queue (_makeRoom) is tagged
+    // `queued: true` (the server must not read it as a turn end; the fold keeps the pending inputs) and the log goes back to
+    // `queued`, so status() still says queued and a runner restart re-enqueues that prompt (recoverQueued).
+    const waiting = this.queue.find((j) => j.id === id);
+    this.store.append(id, 'status', { status: 'parked', ...(waiting ? { queued: true } : {}) });
+    if (waiting) {
+      const ahead = Number.isInteger(waiting.ahead) && waiting.ahead >= 0 ? waiting.ahead : 0;
+      waiting.logged = ahead;
+      this.store.append(id, 'status', { status: 'queued', ahead, family: waiting.family });
+    }
     this.live.delete(id);
     entry.handle.kill();
     this._reapAfterEnd(id, entry, 'park');
@@ -1490,6 +1539,14 @@ export class Runner {
     };
   }
 
+  // idea-869: the unstarted inputs of `plan` (_unstartedPlan, same fold) one by one, for turnGroups: a slash command among them
+  // must stay a turn of its own. plan.text keeps its full-read shape (idea-307's legacy-spec invariant); this falls back to it.
+  _pendingTexts(id, plan) {
+    const inputs = this._fold(id)?.pending;
+    const texts = Array.isArray(inputs) ? inputs.map((e) => e.text) : [];
+    return texts.length && texts.join('\n\n') === plan.text ? texts : [plan.text];
+  }
+
   // A lead/Buddy whose replacement was spawned while it sat queued is superseded, whatever became of the replacement (it may have
   // exited, been archived or itself retired by the time of a restart). Reviving the old one would make `vs who lead` CONFLICT.
   // Superseded = any NEWER agent (created later; id breaks a tie) in the same team + lane + role family (lead/former-lead,
@@ -1553,8 +1610,11 @@ export class Runner {
     const rank = (p) => (p.plan.owner ? 0 : isDigestMeta(p.plan.spec.meta) ? 1 : 2);
     plans.sort((a, b) => rank(a) - rank(b) || a.plan.ts - b.plan.ts);
     for (const { id, plan } of plans) {
-      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: plan.text, images: [], run: () => this._deliverJob(job) };
-      this._admit(job);
+      // idea-869: one job per turn group, in input order (a queued /compact stays its own turn after the restart too).
+      turnGroups(this._pendingTexts(id, plan)).forEach((g, i) => {
+        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => this._deliverJob(job), ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}) };
+        this._admit(job);
+      });
     }
     lap('admit');
     return plans.map((p) => p.id);
@@ -1783,6 +1843,7 @@ export class Runner {
     const fresh = entry.inflight === 0;
     if (fresh) {
       entry.inflight = 1;
+      entry.slashTurn = isSlashText(text); // idea-869: a slash-command turn takes no steer; later sends queue behind it (send)
       entry.lastEvent = Date.now();
       entry.quiet = false;
       this._turnStarted(entry);
@@ -1790,7 +1851,7 @@ export class Runner {
     try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) {
       // The turn never opened: give back its slot and any over-cap owner/digest mark _noteOverCap took for it (marks are
       // only taken for a fresh turn, so this releases exactly that one; every deliver path comes through here).
-      if (fresh) { entry.inflight = 0; this._releaseOverCap(entry, 1); }
+      if (fresh) { entry.inflight = 0; entry.slashTurn = false; this._releaseOverCap(entry, 1); }
       throw err;
     }
   }
@@ -1808,19 +1869,24 @@ export class Runner {
     if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
     // Coalesce into a job still waiting in this process's queue first (a queued create or send): one entry, one turn.
-    const queued = this.queue.find((j) => j.id === id && (j.kind === 'send' || j.kind === 'create'));
+    // idea-869: only into the agent's LAST queued job, and never when either side is a slash command (`/compact` joined to a
+    // wake, or a wake joined to `/compact`, reaches the CLI as plain text): that send becomes its own job behind the others.
+    const mine = this.queue.filter((j) => j.id === id);
+    const tail = mine.at(-1);
+    const slash = isSlashText(text);
+    const queued = tail && (tail.kind === 'send' || tail.kind === 'create') && !tail.slash && !slash ? tail : null;
     let spec = null;
     let pending = null; // inputs queued before a runner restart that this send must carry along (they never ran)
-    if (!live && !queued) {
+    if (!live && !mine.length) {
       pending = this._unstartedPlan(id); // checked even when the agent has a session: those inputs are not in the session yet
       if (pending?.supersededBy) throw new Error(`agent ${id} is superseded by ${pending.supersededBy}; send to the successor`);
       spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? pending?.spec ?? null;
     }
-    if (!live?.handle && !spec && !queued) throw new Error(`agent ${id} is not running`);
+    if (!live?.handle && !spec && !mine.length) throw new Error(`agent ${id} is not running`);
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
     const owner = opts.owner === true;
-    const family = live?.family ?? queued?.family ?? providerFamily(spec.provider);
+    const family = live?.family ?? tail?.family ?? providerFamily(spec.provider);
 
     // Texts join in order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     if (queued) {
@@ -1841,15 +1907,26 @@ export class Runner {
     if (live) live.bgStopNotice = null;
     if (bgStopNotice) this.store.append(id, 'bg-stop-notice', { text: bgStopNotice });
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
-    const lead = [spec?.drainNotice, bgStopNotice, pending?.text].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
-    const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
-      run: () => this._deliverJob(job),
-      ...(opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
-      ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
-    };
-    if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
-    else this._admit(job);
+    const lead = [spec?.drainNotice, bgStopNotice, ...(pending ? this._pendingTexts(id, pending) : [])].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
+    // idea-869: one job per turn: plain texts join as always, a slash command is a job of its own (images ride with this text).
+    // A job behind another job of this agent, or sent while its open turn is a slash command's, must be a turn of its own.
+    const groups = turnGroups([...lead, text]);
+    const behind = mine.length > 0 || (live?.inflight > 0 && live.slashTurn === true);
+    const jobs = groups.map((g, i) => {
+      const job = {
+        id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: g.text, images: i === groups.length - 1 ? images : [],
+        run: () => this._deliverJob(job),
+        ...(g.slash ? { slash: true } : {}),
+        ...(i > 0 || behind ? { ownTurn: true } : {}),
+        ...(i === 0 && opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
+        ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
+      };
+      return job;
+    });
+    const [first, ...rest] = jobs;
+    if (live?.inflight > 0 && !behind) first.run(); // steering a running turn: it already holds its slot
+    else this._admit(first);
+    for (const job of rest) this._admit(job); // queued behind `first` (same agent): each waits for the turn before it to end
     return this.queuePosition(id);
   }
 
@@ -1866,6 +1943,7 @@ export class Runner {
     if (this.queue.some((j) => j.id === id)) return drop('queued');
     if (!live?.handle) return drop('not-running');
     if (!(live.inflight > 0)) return drop('idle');
+    if (live.slashTurn === true) return drop('slash-turn'); // idea-869: a slash command's turn takes no other text
     if (typeof live.handle.steerable === 'function' && !live.handle.steerable()) return drop('turn-ending');
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     // The input's seq rides along (inputSeq) so every steer_dropped names the input it drops; the fresh-session primer skips those.
