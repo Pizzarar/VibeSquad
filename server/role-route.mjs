@@ -328,6 +328,8 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
   const capped = cappedSet(caps);
   const modelFam = !exProvider && exModel ? routeProviderFamily(exModel) : "";
   let provider;
+  /** R10: the walk chose `provider` (an uncapped family), so the capped ones before it were really walked past. */
+  let walked = false;
   if (exProvider || (modelFam && (rungs[modelFam] || order.includes(modelFam)))) {
     provider = exProvider ? routeProviderFamily(exProvider) || exProvider : modelFam;
     if (capped.has(provider)) reasons.push("explicit-capped");
@@ -336,8 +338,9 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     if (!provider) {
       provider = order[0];
       if (order.length) reasons.push("all-capped");
-    } else if (provider !== order[0]) {
-      reasons.push("failover");
+    } else {
+      walked = true;
+      if (provider !== order[0]) reasons.push("failover");
     }
   }
   if (legacy) reasons.push("legacy-name");
@@ -382,8 +385,9 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     legacy: legacy?.name ?? null,
     alias: legacy?.alias ?? null,
     hop: hop?.name ?? null,
-    // R10: the walk order and the capped families walked past before `provider` (label family=/why=failover).
+    // R10: the walk order and the capped families walked past before `provider` (label family=/why=failover). An
+    // explicit provider/model or an all-capped route walked nothing: [].
     walk: [...order],
-    skipped: provider && order.includes(provider) ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p)) : [],
+    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p)) : [],
   };
 }

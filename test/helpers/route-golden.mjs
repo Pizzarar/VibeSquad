@@ -74,7 +74,14 @@ export function today(name, caps, stakes) {
 // role's own order claude > Gemini), every other stakes value -> mechanical (cheap rung, Gemini Flash > Claude Haiku >
 // opencode). All capped = the walk's first family. Literal rows, not computed from the ladder under test.
 export const A2_REROUTED_NAMES = Object.freeze(["Work Order - DSP", "Mechanical - DSF", "Coder"]);
-const A2_TOP = { [C]: row(C, "claude-opus-5-5", "high", "auto"), [A]: row(A, "gemini-4-neon", "high", "accept-edits") };
+// R10 (PLAN_PER_ROLES_LADDER_1125): the Implement role walks agy-claude (Claude on the antigravity-cli runner, its own
+// quota family) just before direct claude on the top rung. CAP_SETS never cap agy-claude, so tierA reroutes land there.
+export const AGY = "agy-claude";
+const A2_TOP = {
+  [AGY]: row(A, "claude-opus-5-5-high", "high", "accept-edits"),
+  [C]: row(C, "claude-opus-5-5", "high", "auto"),
+  [A]: row(A, "gemini-4-neon", "high", "accept-edits"),
+};
 const A2_CHEAP = { [A]: row(A, "gemini-3.8-flash", "medium", "accept-edits"), [C]: row(C, "claude-haiku-5-5", "low", "auto") };
 
 /** True when the hook reroutes this old name (opencode capped). */
@@ -84,6 +91,6 @@ export const a2Rerouted = (name, caps) => A2_REROUTED_NAMES.includes(name) && ca
 export function todayHook(name, caps, stakes) {
   if (!a2Rerouted(name, caps)) return today(name, caps, stakes);
   const tierA = typeof stakes === "string" && stakes.startsWith("tierA-");
-  const [rungs, order] = tierA ? [A2_TOP, [C, A]] : [A2_CHEAP, [A, C]];
+  const [rungs, order] = tierA ? [A2_TOP, [AGY, C, A]] : [A2_CHEAP, [A, C]];
   return { ...rungs[order.find((f) => !caps.includes(f)) ?? order[0]] };
 }
