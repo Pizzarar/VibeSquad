@@ -108,12 +108,12 @@ const IGNORED_CATALOG_MODEL_RE = /^gemini-pro-orchestrator(?:-|$)/i;
 const MODEL_OWNER_RE = [
   [/^(?:anthropic\/)?claude(?:-|$)/i, 'claude'],
   [/^(?:google\/)?gemini(?:-|$)/i, 'antigravity-cli'],
-  [/^(?:openai\/)?(?:gpt|o[134]|codex)(?:-|$)/i, 'codex'],
+  [/^(?:openai\/)?(?:gpt|o[134]|codex)(?:-|$)/i, ['codex', 'openai']],
   [/^(?:deepseek\/)?deepseek(?:-|$)/i, 'opencode'],
 ];
 
 function modelOwnerProvider(modelId) {
-  for (const [re, fam] of MODEL_OWNER_RE) if (re.test(modelId)) return fam;
+  for (const [re, fam] of MODEL_OWNER_RE) if (re.test(modelId)) return Array.isArray(fam) ? fam : [fam];
   return null;
 }
 
@@ -187,7 +187,7 @@ export async function newModelFindings({ baseHome, catalog, readCatalog = defaul
       if (!norm) continue;
       if (IGNORED_CATALOG_MODEL_RE.test(norm)) continue;
       const owner = modelOwnerProvider(norm);
-      if (owner && owner !== fam) continue;
+      if (owner && !owner.includes(fam)) continue;
       const normLower = norm.toLowerCase();
       if (onLadder.has(normLower)) continue;
       const dedupeKey = `${fam}/${normLower}`;
