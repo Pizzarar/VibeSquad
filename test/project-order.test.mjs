@@ -157,8 +157,10 @@ test("r1: the Main menu has no Move items; the drag cancels on Escape; the chevr
   assert.match(ade, /\[v\.team\.id\]: !open \}\)\), v\.team\.name/, "Main chevron negates the shown state, not projectIsOpen");
   assert.ok(!/className="boring-drag-grip" role=/.test(ade), "pointer-only grip is not a fake button");
   const css = src("boring.css"), block = css.slice(css.indexOf("PLAN_PROJECT_ORDER O2"), css.indexOf("end PLAN_PROJECT_ORDER O2"));
-  assert.match(block, /\.boring-main-pin \{ flex: 0 0 auto; border: 1px solid var\(--accent\)/, "Main takes its room: never shrinks below its full header, no inner scroll");
-  assert.ok(!/\.boring-main-pin \{[^}]*(overflow|flex: 0 1|max-height)/.test(block));
+  assert.match(block, /\.boring-main-pin \{ flex: 0 1 auto; min-height: 58px; overflow-y: auto; border: 1px solid var\(--accent\)/, "shrinks + scrolls inside to keep the footer, never below its header");
+  assert.match(block, /\.boring-main-pin:has\(\.boring-project-block\.open\) \{ min-height: 220px; \}/, "expanded floor");
+  assert.match(block, /\.boring-main-pin \.boring-project-block\.open \{ background: transparent; border: 0; border-radius: 0; padding: 0 9px;/, "no open-card chrome in the pin: header does not jump on expand");
+  assert.ok(!/max-height/.test(block));
   assert.ok(!/max-height: 40%/.test(block));
   assert.match(block, /\.boring-drag-grip \{ position: absolute; left: -8px;/, "grip sits in the row's left padding, clear of the 16px chevron");
   assert.ok(!/boring-project-row\.on\) \.boring-drag-grip/.test(block), "not shown on the selected row without hover");
