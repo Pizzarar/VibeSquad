@@ -26,8 +26,9 @@ const ALLOWLIST = new Map([
   ],
 ]);
 
-// scripts/test-child-env.mjs KEEP_ENV: opt-in knobs a developer passes on purpose.
-const KEEP_ENV = /^(VS_TEST_.*|VS_BENCH|VS_SMOKE|VS_ALLOW_REAL_HOME)$/;
+// scripts/test-child-env.mjs LIVE_ENV / KEEP_ENV (case-insensitive there too): opt-in knobs a developer passes on purpose.
+const LIVE_ENV = /^(VS_|VIBESQUAD_|PASEO_)/i;
+const KEEP_ENV = /^(VS_TEST_|VS_BENCH$|VS_SMOKE$|VS_ALLOW_REAL_HOME$)/i;
 
 /** Blank out // and block comments, keeping newlines so reported line numbers stay right. */
 function stripComments(src) {
@@ -37,7 +38,7 @@ function stripComments(src) {
 }
 
 function firstImport(src) {
-  const m = src.match(/^import\s+[^\n]*$/m);
+  const m = stripComments(src).match(/^import\s+[^\n]*$/m);
   return m ? m[0] : "";
 }
 
@@ -50,21 +51,30 @@ function inheritedEnvReads(src) {
   const code = stripComments(src);
   const owned = new Set();
   const reads = [];
-  for (const m of code.matchAll(/process\.env\.([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
-    const name = m[1];
-    const before = code.slice(Math.max(0, m.index - 12), m.index);
-    const after = code.slice(m.index + m[0].length);
-    if (/^\s*(\?\?=|\|\|=|&&=|=)(?!=)/.test(after) || /\bdelete\s*$/.test(before)) owned.add(name);
+  const note = (name, index, len) => {
+    const before = code.slice(Math.max(0, index - 12), index);
+    const after = code.slice(index + len);
+    // Only plain `=` / delete REPLACE the inherited value; `??=`, `||=`, `&&=` read it (and keep it when set).
+    if (/^\s*=(?![=>])/.test(after) || /\bdelete\s*$/.test(before)) owned.add(name);
     else reads.push(name);
+  };
+  for (const m of code.matchAll(/process\.env\.([A-Za-z_$][A-Za-z0-9_$]*)/g)) note(m[1], m.index, m[0].length);
+  for (const m of code.matchAll(/process\.env\[\s*["'`]([^"'`]+)["'`]\s*\]/g)) note(m[1], m.index, m[0].length);
+  for (const m of code.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*process\.env\b/g)) {
+    for (const part of m[1].split(",")) {
+      const name = part.split(/[:=]/)[0].trim();
+      if (name) reads.push(name);
+    }
   }
-  return [...new Set(reads)].filter((n) => /^(VS_|VIBESQUAD_|PASEO_)/.test(n) && !KEEP_ENV.test(n) && !owned.has(n));
+  return [...new Set(reads)].filter((n) => LIVE_ENV.test(n) && !KEEP_ENV.test(n) && !owned.has(n));
 }
 
-/** True when the file spawns the vs CLI (bin/vs or cli/vs.mjs), whose child inherits process.env unless the test rebuilds it. */
+/** True when the file spawns the vs CLI (bin/vs or cli/vs.mjs, joined or as separate path segments), whose child inherits process.env. */
 function spawnsVsCli(src) {
   const code = stripComments(src);
   const spawns = /\b(?:spawnSync|spawn|execFileSync|execFile|execSync|exec)\s*\(/.test(code);
-  const vsEntry = /(?:cli[\\/]vs\.mjs|bin[\\/]vs\b|["'`]\.\.\/cli\/vs\.mjs["'`]|["'`]vs["'`])/.test(src);
+  const vsEntry =
+    /(?:cli[\\/]vs\.mjs|bin[\\/]vs\b|["'`]cli["'`]\s*,\s*["'`]vs\.mjs["'`]|["'`]bin["'`]\s*,\s*["'`]vs["'`]|["'`]vs["'`])/.test(code);
   return spawns && vsEntry;
 }
 
@@ -96,4 +106,36 @@ test("every env-sensitive test file preloads the hermetic env", () => {
       `If a file must see the raw env, add it to ALLOWLIST above with a one-line reason.\n` +
       offenders.join("\n"),
   );
+});
+
+test("guard matchers: env reads", () => {
+  const reads = (c) => inheritedEnvReads(c);
+  assert.deepEqual(reads("const a = process.env.VS_LANE;"), ["VS_LANE"]);
+  assert.deepEqual(reads("process.env.VS_LANE = 'x'; use(process.env.VS_LANE);"), []);
+  assert.deepEqual(reads("delete process.env.VS_LANE; use(process.env.VS_LANE);"), []);
+  // ??= / ||= / &&= keep or read the inherited value, so they do not own the var
+  for (const op of ["??=", "||=", "&&="]) assert.deepEqual(reads(`process.env.VS_LANE ${op} 'x';`), ["VS_LANE"], op);
+  assert.deepEqual(reads(`const a = process.env["VS_LANE"]; const b = process.env['VIBESQUAD_HOME'];`), ["VS_LANE", "VIBESQUAD_HOME"]);
+  assert.deepEqual(reads(`process.env["VS_LANE"] = "x"; use(process.env["VS_LANE"]);`), []);
+  assert.deepEqual(reads(`const { VS_LANE, PASEO_X: px, VS_TEAM = "t", PATH } = process.env;`), ["VS_LANE", "PASEO_X", "VS_TEAM"]);
+  assert.deepEqual(reads("const a = process.env.PATH; const b = process.env.VS_TEST_DUMP; const c = process.env.vs_smoke;"), []);
+  assert.deepEqual(reads("const a = process.env.vs_lane;"), ["vs_lane"]);
+  assert.deepEqual(reads("// process.env.VS_LANE\n"), []);
+});
+
+test("guard matchers: vs CLI spawns", () => {
+  assert.equal(spawnsVsCli('spawnSync(process.execPath, [join(root, "cli/vs.mjs")]);'), true);
+  assert.equal(spawnsVsCli('spawnSync(process.execPath, [path.join(root, "cli", "vs.mjs")]);'), true);
+  assert.equal(spawnsVsCli('execFileSync(path.resolve(root, "bin", "vs"), []);'), true);
+  assert.equal(spawnsVsCli('execFileSync(join(root, "bin/vs"), []);'), true);
+  assert.equal(spawnsVsCli('const p = join(root, "cli", "vs.mjs");'), false, "no spawn call");
+  assert.equal(spawnsVsCli('// cli/vs.mjs\nspawnSync("git", ["status"]);'), false, "comment only");
+  assert.equal(spawnsVsCli('/* bin/vs */ spawn("git", []);'), false, "block comment only");
+});
+
+test("guard matchers: first import", () => {
+  assert.equal(preloadsHermetic('import "./setup/hermetic.mjs";\nimport test from "node:test";'), true);
+  assert.equal(preloadsHermetic("// import \"./setup/hermetic.mjs\";\nimport test from \"node:test\";"), false);
+  assert.equal(preloadsHermetic('/* import "./setup/hermetic.mjs"; */\nimport test from "node:test";'), false);
+  assert.equal(preloadsHermetic('import test from "node:test";\nimport "./setup/hermetic.mjs";'), false, "must be first");
 });
