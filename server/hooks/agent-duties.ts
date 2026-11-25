@@ -50,7 +50,7 @@ import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover, s
 import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
 import { liveQuotaUsage } from "../limits-read.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
-import { migrateModelId } from "../model-ids.mjs";
+import { AGY_CLAUDE_FAMILY, migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import {
   ROUTE_OVERRIDE_ENV,
@@ -1887,6 +1887,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         thinkingOptionId: s.thinkingOptionId ?? agent.thinkingOptionId ?? s.config?.thinkingOptionId ?? null,
       };
       let diffs = profileFieldDiffs(actual, profile);
+      // R10: one runner provider, two quota families (antigravity-cli runs Gemini and agy-claude): a family clash is a
+      // provider clash (refuse, as for any off-route provider), never a model patch that silently swaps the quota family.
+      // Only when the agent's model is known (a blank model is a fill, not a clash).
+      if (!diffs.some((d) => d.field === "provider") && actual.provider && actual.model && profile.provider) {
+        const callerFam = spawnFamily(String(actual.provider), String(actual.model));
+        const profileFam = spawnFamily(String(profile.provider), String(profile.model ?? ""));
+        if (callerFam && profileFam && callerFam !== profileFam) {
+          diffs = [{ field: "provider", caller: callerFam, profile: profileFam }, ...diffs];
+        }
+      }
       // The stakes ladder picked this model/effort on purpose (explicit-override pattern, brainstorm.mjs hasCallerOverride).
       if (laddered) diffs = diffs.filter((d) => d.field !== "model" && d.field !== "thinking");
       if (!diffs.length) return;
@@ -2171,10 +2181,23 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           explicitCapped: boolean;
           override: { provider: string; model: string; hopped: boolean; modelDropped: boolean } | null;
         } | null = null;
+        // R10 (@per): agy-claude takes routed spawns only. A caller's own (not spawn_worker-derived) Claude model or effort
+        // that differs from the agy rung, on a spawn that would have kept it before R10 (claude caller provider), pins
+        // direct claude: the route is then exactly the pre-R10 one, so "explicit beats the ladder" is unchanged.
+        const callerEffortRaw = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
+        const pinDirectClaude = <T extends { profile: any; route: any; override: any } | null>(hit: T, name: string, args: Record<string, any>): T => {
+          if (!hit || hit.override || hit.route?.provider !== AGY_CLAUDE_FAMILY) return hit;
+          if (spawnFamily(provider, rawCallerModel) !== "claude") return hit;
+          const rungBase = String(hit.profile?.model ?? "").replace(/-(?:low|medium|high)$/i, "");
+          const exModel = Boolean(rawCallerModel) && normalizeProviderFamily(rawCallerModel) === "claude" && rawCallerModel !== rungBase;
+          const exEffort = Boolean(callerEffortRaw) && callerEffortRaw !== String(hit.profile?.thinkingOptionId ?? "");
+          if (!exModel && !exEffort) return hit;
+          return ((roleSpawnProfile(name, { ...args, directClaude: true }) as T) ?? hit);
+        };
         if (requestedProfileName && !profileMatch?.explicit) {
           const roles = liveRoles(loadStoredProfiles());
           if (roleNameHit(requestedProfileName, roles)) {
-            roleRoute = roleSpawnProfile(requestedProfileName, {
+            const args = {
               stakes: stakesRaw,
               caps: cappedFamilies(usageList, [provider]),
               roles,
@@ -2182,7 +2205,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               override: routeOverride,
               // R1: an R0 implementer arm pick (spawn_worker stamps vs.arm) routes the role onto that arm's provider first.
               ...armRouteFor(requestedProfileName, reqLabels["vs.arm"]),
-            });
+            };
+            roleRoute = pinDirectClaude(roleSpawnProfile(requestedProfileName, args), requestedProfileName, args);
           }
         }
         // A2 (idea-986): an old name that pins DeepSeek (Work Order - DSP, Mechanical - DSF, alias Coder) runs as a role
@@ -2197,12 +2221,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             stakes: stakesRaw,
           });
           if (reroute) {
-            roleRoute = roleSpawnProfile(reroute.role, {
+            const args = {
               stakes: reroute.stakes,
               caps: cappedFamilies(usageList, [provider]),
               roles: liveRoles(loadStoredProfiles()),
               explicitModel: rawCallerModel,
-            });
+            };
+            roleRoute = pinDirectClaude(roleSpawnProfile(reroute.role, args), reroute.role, args);
             if (roleRoute) {
               legacyRerouted = true;
               // As a failover relabel: a label-less spawn still carries the old name at agent.created, so

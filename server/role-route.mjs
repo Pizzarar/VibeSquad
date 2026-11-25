@@ -273,6 +273,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  * @param {Iterable<string>|Record<string, boolean>} [input.caps] capped/over-quota providers (any alias)
  * @param {object} [input.ladder]       tier ladder (role names); default DEFAULT_TIER_LADDER. Pass loadTierLadder().
  * @param {object} [input.stakesLadder] old per-stakes ladder (legacy names); default DEFAULT_STAKES_LADDER. Pass loadStakesLadder().
+ * @param {boolean} [input.directClaude] R10: never walk agy-claude (a caller's explicit Claude model/effort pins direct claude)
  * @param {object} [opts]           {roles, legacy, hops, aliases} table overrides (tests, P5b)
  * @returns {null | {provider, model, effort, modeId, tier, reason, reasons, capped, stakes, role, legacy, alias, hop}}
  *   hop = the legacy profile name the walk landed on (legacy names only, else null).
@@ -282,7 +283,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  *   or "explicit-capped" (an explicit provider, or a model naming its own family, on a capped provider: the resolver
  *   only reports it; P5c lets the cap win for profile spawns, as agent-duties.ts does today).
  */
-export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadder } = {}, opts = {}) {
+export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
   const ex = explicit && typeof explicit === "object" ? explicit : {};
   const exProvider = nonEmpty(ex.provider);
   const exModel = nonEmpty(ex.model);
@@ -319,7 +320,7 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
   // (top/mid; no Haiku on agy, so cheap stays direct). Leads and Buddies stay direct claude. Role names only: legacy
   // names replay today's routing. The pool (>= AGY_CLAUDE_FAILOVER_THRESHOLD) or `vs cap add agy-claude` caps it.
   const ci = order.indexOf("claude");
-  if (!legacy && !AGY_CLAUDE_EXCLUDED_ROLES.has(found?.key) && ci >= 0 && !order.includes(AGY_CLAUDE_FAMILY) && rungs[AGY_CLAUDE_FAMILY]?.[tier]?.model) {
+  if (!legacy && !directClaude && !AGY_CLAUDE_EXCLUDED_ROLES.has(found?.key) && ci >= 0 && !order.includes(AGY_CLAUDE_FAMILY) && rungs[AGY_CLAUDE_FAMILY]?.[tier]?.model) {
     order.splice(ci, 0, AGY_CLAUDE_FAMILY);
   }
 

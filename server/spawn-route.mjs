@@ -106,10 +106,11 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * from `vs.arm` via exp6-arm.mjs armProvider). Only a family already in the role's provider list moves to the front; the
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
+ * `directClaude` (R10): the walk skips agy-claude (resolveRoute), so the route is exactly the pre-R10 one.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override } = {}) {
+export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override, directClaude = false } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
@@ -133,7 +134,7 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   }
   const found = roleNameHit(hint, table);
   const rungs = ladder ?? loadTierLadder();
-  const base = { role: found.key, stakes, caps, ladder: rungs };
+  const base = { role: found.key, stakes, caps, ladder: rungs, directClaude: Boolean(directClaude) };
   const ovModelRaw = String(override?.model ?? "").trim();
   // R10: an override of antigravity-cli + a Claude id is the agy-claude family (own cap/pool), so the cap check and
   // failover hop judge agy-claude, never Gemini.
