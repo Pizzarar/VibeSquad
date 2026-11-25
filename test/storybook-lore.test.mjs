@@ -69,6 +69,52 @@ test("a boss backtick id that is not an enemy is skipped (no dangling-subject fa
   assert.deepEqual(fs, []);
 });
 
+test("a map_vibe describes a dangling location: fact skipped, no phantom contradiction", async () => {
+  // The heading points at a location id that is not in the data; the boss line still names the real map's boss.
+  // Canonicalising the describes target must skip the fact instead of comparing "harbor_ward" against "harbor_district".
+  const fs = await run((f) => {
+    f["docs/PLAN_MAP_VIBES.md"] = f["docs/PLAN_MAP_VIBES.md"].replace("(`harbor_district`)", "(`harbor_ward`)");
+  });
+  assert.deepEqual(fs, []);
+});
+
+// Minimal entity builder for the direct-registry tests (the check runs over a registry, not the fixture).
+const ent = (id, kind, line, links = []) => ({ id, kind, display: id, aliases: [], links, source: { path: `data/${kind}.json`, line }, data: {} });
+
+test("differing-source pick is insertion-order independent (sort by src path/line)", () => {
+  const enemy = ent("boss_x", "enemy", 1);
+  const locA = ent("loc_a", "location", 1);
+  const locB = ent("loc_b", "location", 2);
+  const a = ent("look:a", "lore", 10, [{ rel: "describes", kind: "enemy", id: "boss_x" }, { rel: "seen_at", kind: "location", id: "loc_a" }]);
+  const b = ent("look:b", "lore", 20, [{ rel: "describes", kind: "enemy", id: "boss_x" }, { rel: "seen_at", kind: "location", id: "loc_b" }]);
+  const c = ent("look:c", "lore", 30, [{ rel: "describes", kind: "enemy", id: "boss_x" }, { rel: "seen_at", kind: "location", id: "loc_b" }]);
+  for (const e of [a, b, c]) e.data = { lore_kind: "enemy_look" };
+  const runWith = (rows) => {
+    const registry = makeRegistry([enemy, locA, locB, ...rows]);
+    const fs = checks.find((x) => x.id === "#12").run({ registry });
+    for (const f of fs) assert.equal(validateFinding(f).ok, true, JSON.stringify(f));
+    assert.equal(fs.length, 1, JSON.stringify(fs));
+    return fs[0];
+  };
+  const one = runWith([a, b, c]);
+  const two = runWith([a, c, b]);
+  assert.deepEqual(one, two);
+  assert.deepEqual(one.source, { path: "data/lore.json", line: 20 });
+});
+
+test("message reports the real value count (three, not two)", () => {
+  const enemy = ent("boss_x", "enemy", 1, [
+    { rel: "boss_of", kind: "location", id: "loc_a" },
+    { rel: "boss_of", kind: "location", id: "loc_b" },
+    { rel: "boss_of", kind: "location", id: "loc_c" },
+  ]);
+  const registry = makeRegistry([enemy, ent("loc_a", "location", 1), ent("loc_b", "location", 2), ent("loc_c", "location", 3)]);
+  const fs = checks.find((x) => x.id === "#12").run({ registry });
+  assert.equal(fs.length, 1, JSON.stringify(fs));
+  assert.match(fs[0].msg, /has 3 boss location values/);
+  assert.deepEqual(fs[0].severity, "warn");
+});
+
 test("deterministic: two runs over the same mutated fixture agree", async () => {
   const mutate = (f) => locs(f, (l) => { l.find((x) => x.id === "sealed_vault").boss = { enemy_id: "boss_dockmaster" }; });
   assert.deepEqual(await run(mutate), await run(mutate));

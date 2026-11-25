@@ -108,7 +108,9 @@ function collectFacts(registry) {
     if (!bossId) continue;
     const locs = (l.links ?? []).filter((x) => x.rel === "describes" && x.kind === "location");
     if (locs.length !== 1) continue; // a map is one location; anything else is a band/aggregate, not a single slot
-    add({ kind: "enemy", id: bossId }, "boss_of", { kind: "location", id: locs[0].id }, "lore", l.source, l);
+    const locId = canonId(registry, "location", locs[0].id);
+    if (!locId) continue; // dangling ref: #1's job, not a lore fact
+    add({ kind: "enemy", id: bossId }, "boss_of", { kind: "location", id: locId }, "lore", l.source, l);
   }
   return facts;
 }
@@ -141,11 +143,13 @@ export function runLore({ registry }) {
     });
     // warn when every distinct value has structured (link) support; info once a value leans only on the lore parse
     const allStructural = [...byVal.values()].every((fs) => fs.some((f) => f.how === "link"));
-    // deterministic source: the first fact that asserts a differing value, so the pointer lands on a conflicting claim
-    const differing = vals.find(([vk]) => vk !== vals[0][0])?.[1]?.[0];
+    // deterministic source: the first fact that asserts a differing value, so the pointer lands on a conflicting claim.
+    // Sort by source location first so the pick does not depend on registry/insertion order.
+    const bySource = (a, b) => cmpStr(a.src?.path ?? "", b.src?.path ?? "") || ((a.src?.line ?? 0) - (b.src?.line ?? 0));
+    const differing = vals.find(([vk]) => vk !== vals[0][0])?.[1]?.slice().sort(bySource)[0];
     const src = differing?.src ?? subjEnt?.source ?? g[0].src;
     const subjLabel = label(registry, subj.kind, subj.id);
-    out.push(finding(allStructural ? "warn" : "info", subjEnt, `${subjLabel} (${subj.kind}:${subj.id}) has two ${SLOT_LABEL[slot] ?? slot} values: ${parts.join(" vs ")}`, src));
+    out.push(finding(allStructural ? "warn" : "info", subjEnt, `${subjLabel} (${subj.kind}:${subj.id}) has ${vals.length} ${SLOT_LABEL[slot] ?? slot} values: ${parts.join(" vs ")}`, src));
   }
   return out;
 }
