@@ -228,7 +228,7 @@ test('spawn_worker: profile -> provider/model/mode, inherits team+lane, role=wor
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const out = await callTool(ctx, 'spawn_worker', { title: 'Do it', profile: 'Implement - Sonnet', prompt: 'go', labels: { role: 'brainstorm', lane: 'evil' } });
-  assert.deepEqual({ ...out, ab: undefined }, { id: 'rn-new', title: 'Do it', ab: undefined });
+  assert.deepEqual({ ...out, ab: undefined, route: undefined }, { id: 'rn-new', title: 'Do it', ab: undefined, route: undefined });
   const [, req] = runnerBackend.calls[0];
   assert.deepEqual([req.config.provider, req.config.model, req.config.modeId, req.config.cwd], ['claude', 'claude-sonnet-5-5', 'auto', '/work']);
   assert.equal(req.initialPrompt, 'go');
@@ -388,7 +388,7 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x' }, ctx);
-  assert.deepEqual({ ...spawned, ab: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined });
+  assert.deepEqual({ ...spawned, ab: undefined, route: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined, route: undefined });
   assert.equal(runnerBackend.calls[0][1].labels.role, 'worker');
   assert.deepEqual(await runAgentVerb('send', { _: ['rn-1', 'hello', 'there'] }, ctx), { id: 'rn-1', sent: true });
   assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'hello there']);
@@ -459,7 +459,7 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
       (s) => { out += s; },
     );
     assert.equal(code, 0);
-    assert.deepEqual({ ...JSON.parse(out), ab: undefined }, { id: 'rn-new', title: 'Sub job', ab: undefined });
+    assert.deepEqual({ ...JSON.parse(out), ab: undefined, route: undefined }, { id: 'rn-new', title: 'Sub job', ab: undefined, route: undefined });
     assert.deepEqual(seen, [{ agentId: 'rn-work1', token: FAKE_TOKEN, team: 'efi', lane: 'own', role: 'worker' }]);
     const req = runnerBackend.calls[0][1];
     assert.deepEqual(

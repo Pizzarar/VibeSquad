@@ -201,9 +201,12 @@ function ArtifactSha({ label, sha, testId }: { label: string; sha?: Fingerprint 
 export function PairDeviceModal({
   onClose,
   initialPair = null,
+  initialRole = "owner",
 }: {
   onClose: () => void;
   initialPair?: PairStartResponse | null;
+  /** Test seam: renders the modal pre-selected to a role. Production callers omit it (defaults to "owner"). */
+  initialRole?: DeviceRole;
 }) {
   const [pair, setPair] = useState<PairStartResponse | null>(initialPair);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
@@ -234,7 +237,7 @@ export function PairDeviceModal({
   const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // E6c: DEVICE ACCESS ROLE. A tester invite is never auto-minted: switching role or toggling a Squad clears the old code.
-  const [role, setRole] = useState<DeviceRole>("owner");
+  const [role, setRole] = useState<DeviceRole>(initialRole);
   const [squads, setSquads] = useState<Array<{ id: string; name?: string }>>([]);
   const [testerTeams, setTesterTeams] = useState<string[]>([]);
 
@@ -414,6 +417,10 @@ export function PairDeviceModal({
     activeQrSvg,
   } = resolvePairModalUrls({ pair, meta, networkMode, useIpMode });
 
+  // P1 (pto v1.2b): the Godot dock's server URL. Prefer the Meshnet host for remote;
+  // fall back to LAN only when no Meshnet host/IP exists. Same host/port data the rest of the dialog uses.
+  const playtestServerUrl = host ? `https://${host}:${port}` : lanIp ? `https://${lanIp}:${port}` : "";
+
   const fp = pair?.caFingerprint?.short ? pair.caFingerprint : meta?.caFingerprint;
   const installerSha = pair?.desktopInstallerSha256?.short ? pair.desktopInstallerSha256 : meta?.desktopInstallerSha256;
   const apkSha = pair?.androidApkSha256?.short ? pair.androidApkSha256 : meta?.androidApkSha256;
@@ -536,6 +543,102 @@ export function PairDeviceModal({
           )}
         </div>
 
+        {isPlaytestRole && (
+          <div
+            className="preview"
+            style={{ marginBottom: 0, border: "1px solid var(--cyan)" }}
+            data-testid="playtest-panel"
+          >
+            <div className="field-label" style={{ color: "var(--cyan-t)" }}>🎮 GODOT PLAYTEST DOCK</div>
+
+            <div className="field-label" style={{ marginTop: 10 }}>SERVER URL</div>
+            {playtestServerUrl ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+                <code style={{ color: "var(--cyan-t)", fontWeight: 700, wordBreak: "break-all" }} data-testid="playtest-server-url">
+                  {playtestServerUrl}
+                </code>
+                <button type="button" className="btn ok small" onClick={() => copyText("playtest-url", playtestServerUrl)}>
+                  {copied === "playtest-url" ? "✓ Copied" : "Copy URL"}
+                </button>
+              </div>
+            ) : (
+              <div className="muted small" style={{ marginTop: 2 }}>No LAN or Meshnet address detected.</div>
+            )}
+
+            <div className="field-label" style={{ marginTop: 10 }}>CA SHA-256 FINGERPRINT</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+              <code style={{ color: "var(--cyan-t)", fontWeight: 700 }} data-testid="playtest-fingerprint">
+                {fp?.short ?? "generating…"}
+              </code>
+              {fp?.full && (
+                <button type="button" className="btn ghost small" onClick={() => setShowFullFp((v) => !v)}>
+                  {showFullFp ? "Hide full" : "Full hex"}
+                </button>
+              )}
+            </div>
+            {showFullFp && fp?.full && (
+              <div style={{ marginTop: 4, wordBreak: "break-all" }}>
+                <code className="small">{fp.full}</code>
+              </div>
+            )}
+
+            <div className="field-label" style={{ marginTop: 10 }}>6-DIGIT CODE</div>
+            {pair && remainingSec > 0 ? (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    marginTop: 2,
+                    padding: "8px 12px",
+                    background: "var(--well)",
+                    border: "1px solid var(--cyan)",
+                  }}
+                >
+                  <code
+                    style={{ fontSize: 24, fontWeight: 700, letterSpacing: 6, color: "var(--cyan-t)" }}
+                    data-testid="pairing-code-display"
+                  >
+                    {pair.code}
+                  </code>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button type="button" className="btn ok small" onClick={() => copyText("code", pair.code)}>
+                      {copied === "code" ? "✓ Copied Code" : "Copy Code"}
+                    </button>
+                    <button type="button" className="btn ghost small" disabled={busy} onClick={mintCurrent}>
+                      {busy ? "…" : "↻ New Code"}
+                    </button>
+                  </div>
+                </div>
+                <div className="small" style={{ marginTop: 4 }}>
+                  Expires in{" "}
+                  <b style={{ color: remainingSec < 60 ? "var(--pink-t)" : "var(--cyan-t)" }}>
+                    {mins}:{String(secs).padStart(2, "0")}
+                  </b>
+                </div>
+              </>
+            ) : (
+              <div className="muted small" style={{ marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span>{busy ? "Generating 6-digit pairing code…" : "Pairing code expired."}</span>
+                <button type="button" className="btn ok small" disabled={busy} onClick={mintCurrent}>
+                  {busy ? "…" : "↻ New Code"}
+                </button>
+              </div>
+            )}
+
+            <div className="field-label" style={{ marginTop: 10 }}>STEPS</div>
+            <ol className="muted small" style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li>In Godot, press F4 to open the VS dock and paste the URL.</li>
+              <li>Confirm the fingerprint matches.</li>
+              <li>Type the 6-digit code.</li>
+            </ol>
+          </div>
+        )}
+
+        {!isPlaytestRole && (
         <div className="na-grid">
           <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="preview" style={{ marginBottom: 0 }}>
@@ -698,7 +801,9 @@ export function PairDeviceModal({
             </div>
           </div>
         </div>
+        )}
 
+        {!isPlaytestRole && (
         <div
           className="preview"
           style={{
@@ -826,7 +931,9 @@ export function PairDeviceModal({
             </div>
           </div>
         </div>
+        )}
 
+        {!isPlaytestRole && (
         <div className="preview" style={{ marginBottom: 0 }}>
           <div className="field-label">ACTIVE SERVER ADDRESSES (HOME LAN + MESHNET)</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 4 }} data-testid="pair-server-addresses">
@@ -855,6 +962,7 @@ export function PairDeviceModal({
             Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
           </div>
         </div>
+        )}
 
         {pair?.requiresApproval && (
           <div className="preview pair-pending" data-testid="pair-pending">

@@ -91,7 +91,8 @@ export function foldEvent(st, e) {
       if (typeof e.text === 'string') st.pending.push({ text: e.text, owner: e.owner, ts: e.ts });
     }
   }
-  else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
+  // K2b: `compacted` marks the ACP adapter's post-compact ESTIMATE (no real reading until the next turn); the crossing re-arm ignores it.
+  else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd, ...(e.compacted ? { compacted: true } : {}) };
   else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
   else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
   else if (e.type === 'session') {

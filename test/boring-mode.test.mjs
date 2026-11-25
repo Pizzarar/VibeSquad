@@ -1465,7 +1465,10 @@ test("Desk R2 Needs you: hub-lane items read 'Desk'; real legacy lead titles are
   assert.match(who.m, /75$/);
   assert.equal(needsYouRows([v], NOW).find((r) => r.item.id === "o").lane, "Desk");
   const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
-  assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
+  assert.ok(testids(t, "boring-needs-where").some((n) => {
+    const lane = [].concat(n.props.children).find((c) => c?.props?.className === "boring-needs-lane");
+    return /Desk/.test([].concat(lane?.props?.children ?? []).join(""));
+  }));
 });
 
 test("Desk R2 Needs you: a running agent with no update for 10m+ (and no tool in flight) is listed as stalled (R4-1: back in Needs you)", () => {

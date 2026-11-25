@@ -156,6 +156,19 @@ FILES["docs/narrative/QUEST_AUDIT.md"] = `# Quest audit
 Popper's ask reads "Clear the harbor." (data/questlines.json:${lineIn(QL, '"story": "Clear the harbor."')}).
 `;
 
+// F4 additive fixture: data/art_manifest.json (tiny, so art_slot entities + coverage findings are exercised).
+FILES["data/art_manifest.json"] = JSON.stringify({
+  meta: { version: 1 },
+  slots: {
+    "enemy.scav": { kind: "enemy_portrait", batch: "B1", status: "PIPELINE", path: "res://art/pipeline/enemy_portrait/x_enemy.scav.png" },
+    "enemy.boss_dockmaster": { kind: "enemy_portrait", batch: "B1", status: "PLACEHOLDER", path: "res://art/enemy_portrait/boss_dockmaster.png", candidates: ["res://art/enemy_portrait/boss_dockmaster.png"] },
+    "sprite.scav": { kind: "raid_sprite", batch: "B2", status: "PIPELINE", path: "res://art/pipeline/raid_sprite/x_sprite.scav.png" },
+    "trader.popper": { kind: "trader_portrait", batch: "B1", status: "PIPELINE", path: "res://art/pipeline/trader_portrait/x_trader.popper.png" },
+    "squad.doc": { kind: "squad_portrait", batch: "B1", status: "PIPELINE", path: "res://art/pipeline/squad_portrait/x_squad.doc.png" },
+    "item.scrap_metal": { kind: "item_icon", batch: "B9", status: "COMMISSIONED", path: "res://art/item_icon/scrap_metal.png" },
+  },
+}, null, 2);
+
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" };
 export const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: { ...process.env, ...ENV } }).trim();
 

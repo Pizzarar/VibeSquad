@@ -701,9 +701,9 @@ html[data-vibe="boring"][data-theme="light"] {
   --border: #dad6ce; --border-strong: #c2bdb2;
   --text-1: #1d1a24; --text-2: #4a4558; --text-3: #5e5868;
   --accent: #6d4bc9; --focus: #6d4bc9; --on-accent: #ffffff;
-  --st-run: #147a74; --st-attn: #8a5700; --st-err: #c22a52; --st-done: #3a64c9; --st-ok: #1f7a4c;
+  --st-run: #147a74; --st-attn: #8a5700; --st-err: #b9264e; --st-done: #3a64c9; --st-ok: #1f7a4c;
   --living-warm: #bd520c; --living-coral: #c23a3a; --living-prime: #b85a00; --living-on-prime: #ffffff;
-  --st-run-bg: #16857f1a; --st-attn-bg: #a86a001a; --st-err-bg: #c22a521a; --st-done-bg: #3a64c91a;
+  --st-run-bg: #16857f1a; --st-attn-bg: #a86a001a; --st-err-bg: #b9264e1a; --st-done-bg: #3a64c91a;
 }
 /* Alias the legacy styles.css tokens that the B5/B6 rules use onto the flat semantic ones. */
 html[data-vibe="boring"],
@@ -1245,6 +1245,17 @@ html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: clamp
 html[data-vibe="boring"] .boring-needs-reason { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 /* R7-1: neutral placeholder while a deep link waits for the roster. */
 html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #888); font-size: 14px; }
+
+/* Des8 B3 (idea-740 m3, docs/UX_REVIEW_R16.md:50): the Needs-you title elides first and the muted
+   "Lane · Project" location stays. `who` is the flexible filler (zero flex-basis so line-breaking ignores
+   its content) with a readable floor; the location has flex-basis 100% so it is always its own muted line
+   under the title (3-line rows: title, location, reason); it is bounded (lane elides first, the project keeps
+   its name, ellipsis only if the project alone exceeds the row). */
+html[data-vibe="boring"] .boring-needs-main { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-who { flex: 1 1 0; min-width: min(20ch, 100%); max-width: none; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { display: flex; flex: 0 0 100%; max-width: 100%; min-width: 0; overflow: hidden; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-lane { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* idea-257: optional 2-pane split in the chat column (src/panes.ts). Grid only, no width media queries. */
 html[data-vibe="boring"] .boring-chat-column:has(.boring-chat-split) { max-width: 100%; }

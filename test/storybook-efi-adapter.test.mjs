@@ -163,6 +163,66 @@ test("hooks: spawnWindow + killTargetLocations from data", () => {
   assert.deepEqual(killTargetLocations(reg, "nope"), []);
 });
 
+test("art slots (F4): manifest slots -> art_slot entities (production state, links); no findings", async () => {
+  const loaded = await efiAdapter.load(makeReader(fake.clone, fake.sha), fake.sha);
+  const art = loaded.entities.filter((e) => e.kind === "art_slot");
+  assert.equal(art.length, 6);
+  const byId = new Map(art.map((e) => [e.id, e]));
+  // status -> production: PIPELINE -> ai-draft, PLACEHOLDER -> placeholder, COMMISSIONED -> final
+  assert.equal(byId.get("enemy.scav").production, "ai-draft");
+  assert.equal(byId.get("enemy.boss_dockmaster").production, "placeholder");
+  assert.equal(byId.get("item.scrap_metal").production, "final");
+  assert.deepEqual(byId.get("enemy.scav").data, { artKind: "enemy_portrait", slot: "portrait", status: "PIPELINE", batch: "B1", path: "res://art/pipeline/enemy_portrait/x_enemy.scav.png", candidates: null, target: { kind: "enemy", id: "scav" } });
+  // portraits link to their character, sprites to their enemy; non-character art (item_icon) links to nothing
+  assert.ok(byId.get("enemy.scav").links.some((l) => l.rel === "portrait" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(byId.get("sprite.scav").links.some((l) => l.rel === "sprite" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(byId.get("squad.doc").links.some((l) => l.rel === "portrait" && l.kind === "squad" && l.id === "doc"));
+  assert.equal(byId.get("item.scrap_metal").links.length, 0);
+  assert.equal(byId.get("item.scrap_metal").data.slot, "other");
+  // the adapter emits no findings: art coverage is the F2 audit's job (registry-audit.test.mjs)
+  assert.equal("findings" in loaded, false);
+});
+
+const withManifest = (manifest) => ({ sha: "abcdef12", exists: async () => false, listTree: async () => [], readFile: async (p) => (p === "data/art_manifest.json" ? manifest : null) });
+
+test("art slots (F4): malformed manifest JSON warns, no art_slot entities", async () => {
+  const r = await efiAdapter.load(withManifest("{ not json"), "abcdef12");
+  assert.ok(r.warnings.some((w) => /unparsable data\/art_manifest\.json/.test(w)));
+  assert.equal(r.entities.filter((e) => e.kind === "art_slot").length, 0);
+});
+
+test("art slots (F4): non-object or array slots import nothing and warn", async () => {
+  for (const slots of ['"x"', "[1,2]", "null", "5"]) {
+    const r = await efiAdapter.load(withManifest(`{"slots": ${slots}}`), "abcdef12");
+    assert.equal(r.entities.filter((e) => e.kind === "art_slot").length, 0, slots);
+  }
+  const r = await efiAdapter.load(withManifest('{"slots": [1]}'), "abcdef12");
+  assert.ok(r.warnings.some((w) => /no slots object/.test(w)));
+});
+
+test("art slots (F4): status MISSING -> production missing; unknown/absent status -> production null; non-object slot value tolerated", async () => {
+  const m = JSON.stringify({ slots: { "enemy.a": { kind: "enemy_portrait", status: "MISSING" }, "enemy.b": { kind: "enemy_portrait", status: "WEIRD" }, "enemy.c": { kind: "enemy_portrait" }, "enemy.d": "oops" } });
+  const r = await efiAdapter.load(withManifest(m), "abcdef12");
+  const by = new Map(r.entities.filter((e) => e.kind === "art_slot").map((e) => [e.id, e]));
+  assert.equal(by.get("enemy.a").production, "missing");
+  assert.equal(by.get("enemy.b").production, null);
+  assert.equal(by.get("enemy.c").production, null);
+  assert.equal(by.get("enemy.d").production, null);
+});
+
+test("art slots (F4): links only to targets that exist at this sha (retired character / unknown enemy sprite -> no link)", async () => {
+  const loaded = await efiAdapter.load(makeReader(fake.clone, fake.sha), fake.sha);
+  const m = JSON.stringify({ slots: { "trader.retired_guy": { kind: "trader_portrait", status: "PIPELINE" }, "sprite.ghost_enemy": { kind: "raid_sprite", status: "PIPELINE" }, "sprite.prop.crate": { kind: "raid_sprite", status: "PIPELINE" } } });
+  const files = new Map([["data/art_manifest.json", m]]);
+  const r = await efiAdapter.load({ ...makeReader(fake.clone, fake.sha), readFile: async (p) => files.get(p) ?? (await makeReader(fake.clone, fake.sha).readFile(p)) }, fake.sha);
+  const by = new Map(r.entities.filter((e) => e.kind === "art_slot").map((e) => [e.id, e]));
+  assert.equal(by.get("trader.retired_guy").links.length, 0);
+  assert.equal(by.get("sprite.ghost_enemy").links.length, 0);
+  assert.equal(by.get("sprite.prop.crate").links.length, 0);
+  assert.equal(loaded.entities.filter((e) => e.kind === "art_slot").length, 6);
+  assert.equal(validateSnapshot({ ...snap, entities: r.entities }).ok, true);
+});
+
 test("CSV without a current_text column warns instead of throwing", async () => {
   const reader = { sha: "abcdef12", exists: async () => false, listTree: async () => [], readFile: async (p) => (p === "docs/review/text_review.csv" ? "group,file,line\nG,a.gd,3\n" : null) };
   const r = await efiAdapter.load(reader, reader.sha);
