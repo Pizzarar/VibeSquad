@@ -271,6 +271,16 @@ test("B1 M1: App owns the pop alone: popActive armed in onPop, ended only by inp
   assert.doesNotMatch(app, /app\.vibe"\) === "boring"\) popActive/, "armed in every vibe/screen: nothing depends on BoringApp");
 });
 
+test("B1 R29: a vs:select-agent notification click ends any active pop before openAgent (pushes, never overwrites the popped entry)", () => {
+  const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.match(app, /const stopPop = useCallback\(\(\) => \{ popActive\.current = false; popDisarm\.current\?\.\(\); popDisarm\.current = null; \}, \[\]\);/, "one shared disarm path");
+  assert.match(app, /const end = stopPop;/, "the input handler uses the same disarm path");
+  const sw = app.slice(app.indexOf('data.type === "vs:select-agent"'));
+  assert.ok(sw.length > 0, "SW handler present");
+  const stop = sw.indexOf("stopPop()"), open = sw.indexOf("openAgent(data.agentId)");
+  assert.ok(stop >= 0 && open > stop, "stopPop() runs before openAgent in the vs:select-agent branch");
+});
+
 test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox", () => {
   const rp = readFileSync(resolve(import.meta.dirname, "..", "src", "RefPopover.tsx"), "utf8");
   const openInbox = rp.slice(rp.indexOf("const openInbox"), rp.indexOf("const onKeyDown"));

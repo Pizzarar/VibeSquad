@@ -1619,6 +1619,13 @@ export function App() {
     return () => window.removeEventListener(OPEN_USAGE_EVENT, onOpenUsage);
   }, []);
 
+  // B1: App owns the pop alone. onPop sets popActive; while it is set every URL-sync write is replace-if-differs (never a pushState()).
+  // A pop ends only on the first capture-phase pointerdown / keydown (or a vs:select-agent notification click, via stopPop), or is
+  // retargeted by a newer pop; reaching the popped URL never ends it. Nothing depends on BoringApp being mounted (Storybook, phone, Psycho).
+  const popActive = useRef(false);
+  const popDisarm = useRef<(() => void) | null>(null);
+  const stopPop = useCallback(() => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; }, []);
+
   // Deep-link handling on startup (?agent=<id>&focus=needs-you) + service worker notificationclick messages.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1639,6 +1646,7 @@ export function App() {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "vs:select-agent") {
+        stopPop(); // a notification click is a new navigation: end any active pop so the URL sync pushes instead of overwriting the popped entry
         if (typeof data.agentId === "string" && data.agentId) {
           openAgent(data.agentId);
         }
@@ -1662,16 +1670,11 @@ export function App() {
   const activeAgentId = useSyncExternalStore(subscribePanes, () => getPanes().leftActiveId);
   // B1: bump a navigation generation on popstate; BoringAde re-derives its mode + selection from the URL when it changes.
   const [navGen, setNavGen] = useState(0);
-  // B1: App owns the pop alone. onPop sets popActive; while it is set the URL sync never pushState()s (it replaces, and ends the
-  // pop with a no-op when the screen reaches the popped URL). The first real user input (capture-phase pointerdown / keydown) ends it too,
-  // so nothing depends on BoringApp being mounted (Storybook, phone, Psycho) and a double pop just retargets.
-  const popActive = useRef(false);
-  const popDisarm = useRef<(() => void) | null>(null);
   useEffect(() => {
     const onPop = () => {
       popActive.current = true;
       popDisarm.current?.(); // a second pop retargets: drop the previous input listeners, arm fresh ones
-      const end = () => { popActive.current = false; popDisarm.current?.(); popDisarm.current = null; };
+      const end = stopPop;
       window.addEventListener("pointerdown", end, { capture: true, once: true });
       window.addEventListener("keydown", end, { capture: true, once: true });
       popDisarm.current = () => { window.removeEventListener("pointerdown", end, true); window.removeEventListener("keydown", end, true); };

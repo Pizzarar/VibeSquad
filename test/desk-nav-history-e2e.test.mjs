@@ -290,8 +290,9 @@ test("B1 e2e: go(-2) over a mixed entry, Forward x2, Back x3 never pushes and ne
   await context.close();
 });
 
-// urlSyncDecision: takeStorybookReplace honored; the pop never pushes and ends on reaching the popped URL.
-test("B1: urlSyncDecision never pushes while a pop target is set; takeStorybookReplace honored", async () => {
+// urlSyncDecision: takeStorybookReplace honored; while a pop is active every write is replace-if-differs (the pop ends only on the
+// first capture-phase pointerdown/keydown or a newer pop, never on reaching the popped URL).
+test("B1: urlSyncDecision never pushes while a pop is active; takeStorybookReplace honored", async () => {
   const { transformSync } = await import("rolldown/utils");
   const { readFileSync } = await import("node:fs");
   const code = transformSync("urlSync.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8"), { lang: "ts" }).code;
