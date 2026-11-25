@@ -1263,8 +1263,8 @@ function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = 
       repoHeadCheck.set(key, hc);
     }
     for (const u of hc?.units ?? []) {
-      const lane = laneOf(u);
-      out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
+      const lane = laneOf(u, r.teams);
+      out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null, scopeTeams: r.teams });
     }
     for (const [sha, why] of hc?.units?.excluded ?? []) excluded.set(sha, why);
   }
@@ -1367,17 +1367,40 @@ export const pooledMergedTestHooks = {
   inflight: () => pooledRefresh.size,
 };
 
+/** usa-61: resolve a lane code/id inside a Squad scope. Returns { lane } (exactly one distinct lane across the scoped Squads),
+ * { ambiguous: true } (the code means different lanes in the scope), or { lane: null } (no scoped Squad knows it; `elsewhere`
+ * says another Squad does). A map without per-Squad data (injected test laneCodes) resolves flat, as before. */
+export function resolveLaneCode(codes, code, teams) {
+  const key = String(code ?? "").toLowerCase();
+  if (!key) return { lane: null, elsewhere: false };
+  if (!codes.byTeam) return { lane: codes.get(key) ?? null, elsewhere: false };
+  const found = new Set();
+  let elsewhere = false;
+  for (const [teamId, tm] of codes.byTeam) {
+    const l = tm.get(key);
+    if (!l) continue;
+    if (!teams?.length || teams.includes(teamId)) found.add(l); else elsewhere = true;
+  }
+  if (found.size === 1) return { lane: [...found][0], elsewhere };
+  return found.size ? { lane: null, ambiguous: true, elsewhere } : { lane: null, elsewhere };
+}
+
 /** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
 function readLaneCodes(home) {
   const map = new Map();
+  map.byTeam = new Map(); // usa-61: teamId -> Map(code|id -> lane id); the flat map above is last-Squad-wins, so scoped lookups use this
   try {
     const own = home ? join(home, "teams.json") : null;
     const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(gitRepoRoot());
     const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-    for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
-      if (!l?.id) continue;
-      map.set(String(l.id).toLowerCase(), l.id);
-      if (l.code) map.set(String(l.code).toLowerCase(), l.id);
+    for (const team of t.teams ?? []) {
+      const tm = getOrSet(map.byTeam, String(team?.id ?? ""), () => new Map());
+      for (const l of team.lanes ?? []) {
+        if (!l?.id) continue;
+        map.set(String(l.id).toLowerCase(), l.id);
+        tm.set(String(l.id).toLowerCase(), l.id);
+        if (l.code) { map.set(String(l.code).toLowerCase(), l.id); tm.set(String(l.code).toLowerCase(), l.id); }
+      }
     }
   } catch { /* no teams.json */ }
   return map;
@@ -3525,7 +3548,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
 
   // merged units; cost per merged unit = lane cost / lane merged units. Lane via the (@code) tag -> teams.json lane code/id.
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
-  const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
+  // usa-61: the (@code tag resolves inside the repo's own Squads (not the flat last-Squad-wins map); a code that means
+  // different lanes there is ambiguous -> no lane (the backfill below may still find real evidence). An unmapped tag stays raw.
+  const laneOf = (u, teams) => {
+    if (!u.code) return null;
+    const r = resolveLaneCode(codes, u.code, teams);
+    return r.ambiguous ? null : (r.lane ?? (r.elsewhere ? null : u.code));
+  };
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
   yield;
   const mergedSrc = git ? readMergedUnits(git) : null;
@@ -3563,16 +3592,22 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   for (const r of readUsageLedger(home)) if (r.kind === "unit" && r.sha && typeof r.lane === "string" && r.lane) ledgerLaneBySha.set(r.sha, r);
   const backfillLane = (u, implementer) => {
     if (u.lane) return { lane: u.lane, laneSource: "subject" };
-    const runLane = typeof implementer?.lane === "string" && implementer.lane ? (codes.get(implementer.lane.toLowerCase()) ?? implementer.lane) : null;
-    if (runLane) return { lane: runLane, laneSource: "run" };
-    const pre = /^unit-([a-z0-9]+)-/i.exec(typeof u.unit === "string" ? u.unit : "")?.[1]?.toLowerCase();
-    const preLane = pre ? codes.get(pre) : null;
-    if (preLane) return { lane: preLane, laneSource: "unit-prefix" };
+    const scope = u.scopeTeams?.length ? u.scopeTeams : null; // the unit's repo Squads; null = injected git / unscoped: unique codes only
+    const rl = typeof implementer?.lane === "string" ? implementer.lane : "";
+    if (rl && rl.toLowerCase() !== "unknown" && !(scope && implementer.team && !scope.includes(implementer.team))) {
+      const r = resolveLaneCode(codes, rl, scope);
+      if (r.lane) return { lane: r.lane, laneSource: "run" };
+      if (!r.ambiguous && !r.elsewhere) return { lane: rl, laneSource: "run" }; // a label no Squad maps: the run's own claim
+    }
+    const pre = /^unit-([a-z0-9]+)-/i.exec(typeof u.unit === "string" ? u.unit : "")?.[1];
+    const pr = pre ? resolveLaneCode(codes, pre, scope) : null;
+    if (pr?.lane) return { lane: pr.lane, laneSource: "unit-prefix" };
     const row = ledgerLaneBySha.get(u.sha);
     if (row) return { lane: row.lane, laneSource: row.laneSource && row.laneSource !== "none" ? row.laneSource : "ledger" };
     return { lane: null, laneSource: "none" };
   };
   const merged = [];
+  const fixUnits = new Set();
   for (const u of mergedRaw) {
     if (merged.length % 200 === 199) yield;
     merged.push(mergedUnitV2(u));
@@ -3587,13 +3622,11 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
-    let fixAfterMerge = false;
-    if (isFixUnit && u.lane && mergedAtMs !== null) {
-      fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
-    }
+    const fixAfterMerge = false; // usa-61: computed after the loop, once every unit's lane is backfilled
+    if (isFixUnit) fixUnits.add(u.sha);
     const burst = dispatchBurstFor(dispatchIndex, implementer);
     // usa-60: review outcomes + fix rounds. reviewRounds stays max(subject `review rN`, verdict count): VS numbers don't move.
-    const { branchShas, ...unitRest } = u;
+    const { branchShas, scopeTeams, ...unitRest } = u;
     const { verdicts, reviewRounds: outRounds, firstReviewVerdict: outFirst, reviewSource } = reviewOutcomeOf(u);
     const fixSpawns = unitFixSpawns(u, verdicts, workerIndex, mergedAtMs);
     const fixProfiles = [];
@@ -3631,6 +3664,10 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       wfSource: workflow.source,
       unitCycleMs, fixAfterMerge,
     };
+  }
+  for (const u of merged) {
+    if (!fixUnits.has(u.sha) || !u.lane || u.mergedAtMs === null) continue;
+    u.fixAfterMerge = merged.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAtMs !== null && p.mergedAtMs < u.mergedAtMs && u.mergedAtMs - p.mergedAtMs <= FIX_AFTER_MERGE_WINDOW_MS);
   }
   yield;
   const mergedByLane = new Map(); // usa-60: the enriched units (reviewRounds includes verdict counts), not the raw git rows

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { clearUsageCache, getUsage } from '../server/providers-catalog.mjs';
+import { clearUsageCache, getUsage, resolveLaneCode } from '../server/providers-catalog.mjs';
 
 const tmpDirs = [];
 after(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
@@ -60,4 +60,42 @@ test('usa-61: laneSource per unit: subject > run > unit-prefix > ledger > none; 
   assert.ok(!lanes.includes('unit-prefix'));
   assert.equal(u.attributionCoverage.byLane.none?.total ?? 0, 1, 'only the no-evidence unit stays unlaned');
   assert.ok(u.attributionCoverage.byLane.usage.total >= 2);
+});
+
+const teamsJson = (h, repo) => fs.writeFileSync(path.join(h, 'teams.json'), JSON.stringify({ teams: [
+  { id: 'alpha', paths: repo ? [repo] : [], lanes: [{ id: 'ui-bois', code: 'ui' }, { id: 'bug-chaser', code: 'bug' }] },
+  { id: 'beta', paths: [], lanes: [{ id: 'ui', code: 'ui' }, { id: 'bug-runner', code: 'bug' }, { id: 'solo', code: 'sol' }] },
+] }));
+
+test('usa-61 regression: two Squads sharing a code -> unscoped lookup leaves ambiguous codes unknown, unique codes resolve', () => {
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-usa61b-'));
+  tmpDirs.push(h);
+  teamsJson(h, null);
+  const merges = [
+    { m: 'a', b: 'e', unit: 'unit-ui-thing', ms: T0 + 30 * MIN },
+    { m: 'b', b: 'f', unit: 'unit-sol-thing', ms: T0 + 20 * MIN },
+    { m: 'c', b: 'g', unit: 'unit-x', ms: T0 + 10 * MIN, tag: ' (@bug)' },
+  ];
+  clearUsageCache();
+  const u = getUsage({ home: h, git: gitFor(merges), usageReview: { suppressSchedule: true } });
+  const by = Object.fromEntries(u.merged.units.map((m) => [m.unit, m]));
+  assert.deepEqual([by['unit-ui-thing'].lane, by['unit-ui-thing'].laneSource], [null, 'none'], 'ambiguous prefix is never guessed');
+  assert.deepEqual([by['unit-sol-thing'].lane, by['unit-sol-thing'].laneSource], ['solo', 'unit-prefix'], 'unique code resolves');
+  assert.equal(by['unit-x'].lane, null, 'ambiguous (@bug tag is not last-Squad-wins');
+  assert.equal(by['unit-x'].laneSource, 'none');
+});
+
+test('usa-61 regression: scoped lookup resolves a shared code inside the repo Squads only (pooled path resolver)', () => {
+  const codes = new Map();
+  codes.byTeam = new Map([
+    ['alpha', new Map([['ui', 'ui-bois'], ['ui-bois', 'ui-bois'], ['bug', 'bug-chaser']])],
+    ['beta', new Map([['ui', 'ui'], ['bug', 'bug-runner'], ['sol', 'solo']])],
+  ]);
+  assert.deepEqual(resolveLaneCode(codes, 'ui', ['alpha']), { lane: 'ui-bois', elsewhere: true }, 'alpha repo: its own ui, beta noted as elsewhere');
+  assert.deepEqual(resolveLaneCode(codes, 'ui', ['beta']), { lane: 'ui', elsewhere: true });
+  assert.equal(resolveLaneCode(codes, 'ui', ['alpha', 'beta']).ambiguous, true, 'repo shared by both Squads: ambiguous, not last-wins');
+  assert.equal(resolveLaneCode(codes, 'bug', null).ambiguous, true, 'unscoped + shared code: ambiguous');
+  assert.equal(resolveLaneCode(codes, 'sol', ['alpha']).lane, null, 'a code only another Squad owns is not borrowed');
+  assert.equal(resolveLaneCode(codes, 'sol', ['alpha']).elsewhere, true);
+  assert.equal(resolveLaneCode(codes, 'sol', null).lane, 'solo', 'unique across all Squads resolves');
 });
