@@ -15,24 +15,24 @@ function safeLaneId(laneId) {
   return String(laneId || "vibesquad").trim().replace(/[^A-Za-z0-9_-]+/g, "-") || "vibesquad";
 }
 
-function artifactDir(teamId, laneId, rootDir) {
+// `baseDir` (idea-932): an explicit checkout/worktree to hold the artifacts instead of the lane's registry project dir.
+function artifactDir(teamId, laneId, rootDir, baseDir) {
   const safeLane = safeLaneId(laneId);
-  return join(briefRootFor(teamId, safeLane, rootDir), "docs", "lanes", safeLane);
+  return join(baseDir || briefRootFor(teamId, safeLane, rootDir), "docs", "lanes", safeLane);
 }
 
 /**
  * Folder holding a lane's durable SPEC.md + TASKS.json artifacts. Safe-slugs the lane id and
  * resolves the lane's project dir (or rootDir in dev, when no project dir resolves).
  */
-export function laneArtifactDir(teamId, laneId, rootDir) {
-  const safeLane = safeLaneId(laneId);
-  return join(briefRootFor(teamId, safeLane, rootDir), "docs", "lanes", safeLane);
+export function laneArtifactDir(teamId, laneId, rootDir, baseDir) {
+  return artifactDir(teamId, laneId, rootDir, baseDir);
 }
 
 /** Reads docs/lanes/<lane>/SPEC.md. Never throws: a missing or unreadable file yields exists: false. */
-export function readLaneSpec(teamId, laneId, rootDir) {
+export function readLaneSpec(teamId, laneId, rootDir, baseDir) {
   const safeLane = safeLaneId(laneId);
-  const fullPath = join(artifactDir(teamId, laneId, rootDir), "SPEC.md");
+  const fullPath = join(artifactDir(teamId, laneId, rootDir, baseDir), "SPEC.md");
   const exists = existsSync(fullPath);
   let content = "";
   if (exists) {
@@ -46,9 +46,9 @@ export function readLaneSpec(teamId, laneId, rootDir) {
 }
 
 /** Writes docs/lanes/<lane>/SPEC.md (UTF-8, no BOM), creating the folder as needed. */
-export function writeLaneSpec(teamId, laneId, content, rootDir) {
+export function writeLaneSpec(teamId, laneId, content, rootDir, baseDir) {
   const safeLane = safeLaneId(laneId);
-  const dir = artifactDir(teamId, laneId, rootDir);
+  const dir = artifactDir(teamId, laneId, rootDir, baseDir);
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, "SPEC.md");
   const text = String(content ?? "");
@@ -60,9 +60,9 @@ export function writeLaneSpec(teamId, laneId, content, rootDir) {
  * Reads docs/lanes/<lane>/TASKS.json. A missing or malformed file yields an empty units list
  * rather than throwing, so callers can treat it as a fresh board.
  */
-export function readLaneTasks(teamId, laneId, rootDir) {
+export function readLaneTasks(teamId, laneId, rootDir, baseDir) {
   const safeLane = safeLaneId(laneId);
-  const fullPath = join(artifactDir(teamId, laneId, rootDir), "TASKS.json");
+  const fullPath = join(artifactDir(teamId, laneId, rootDir, baseDir), "TASKS.json");
   const exists = existsSync(fullPath);
   let units = [];
   let updatedAt = "";
@@ -80,12 +80,12 @@ export function readLaneTasks(teamId, laneId, rootDir) {
 }
 
 /** Merges or appends one unit, writes TASKS.json (2-space indent), and returns the unit + full list. */
-export function upsertLaneTask(teamId, laneId, unitPatch, rootDir) {
+export function upsertLaneTask(teamId, laneId, unitPatch, rootDir, baseDir) {
   const safeLane = safeLaneId(laneId);
   const id = String(unitPatch?.id ?? "").trim();
   if (!id) throw new Error("task set needs a unit id");
 
-  const dir = artifactDir(teamId, laneId, rootDir);
+  const dir = artifactDir(teamId, laneId, rootDir, baseDir);
   mkdirSync(dir, { recursive: true });
   const fullPath = join(dir, "TASKS.json");
 
