@@ -1,0 +1,7 @@
+?demo=&team=vibesquad                    -> ?demo=&team=vibesquad len=2 
+?demo=&team=vibesquad&tab=inbox          -> ?demo=&team=vibesquad&tab=inbox len=2 
+?demo=&team=vibesquad&tab=standup        -> ?demo=&team=vibesquad&tab=standup len=2 
+?demo=&team=efi&slot=overlord            -> ?demo=&team=efi&slot=overlord len=2 
+?demo=&team=efi&slot=riffbot             -> ?demo=&team=efi&slot=riffbot len=2 
+?demo=&team=vibesquad&slot=bugs          -> ?demo=&team=vibesquad&slot=bugs len=2 
+?demo=&team=efi&agent=demo-lead-ui       -> ?demo=&team=efi&agent=demo-lead-ui len=2 

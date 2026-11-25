@@ -1,0 +1,12 @@
+import { open, state } from "./lib.mjs";
+const port = +process.argv[2];
+const { browser, page } = await open(port, { w: 1920, h: 1080, theme: "dark" }, "?demo=&team=efi");
+const s = async (l) => { await page.waitForTimeout(700); const x = await state(page); console.log(`${l.padEnd(10)} ${x.url} tab=${x.tab} crumb=${x.crumb} on=${x.on.length} len=${x.hlen} :: ${x.hist}`); };
+await page.getByTestId("boring-tab-feed").click(); await s("efi feed");
+await page.keyboard.press("Control+j"); await s("ctrl+j");
+await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Review - Sonnet" }).first().click(); await s("needs row");
+await page.goBack(); await s("back");
+await page.goBack(); await s("back2");
+await page.goBack(); await s("back3");
+await page.goForward(); await s("fwd");
+await browser.close();

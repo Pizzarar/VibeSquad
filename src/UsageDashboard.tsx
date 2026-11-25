@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildQualityByModel, buildQualitySummary, QUALITY_MIN_N, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -365,6 +365,8 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const allProfiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
   const profiles = useMemo(() => filterProfilesByKind(allProfiles, kindFilter), [allProfiles, kindFilter]);
   const workflows = useMemo(() => sortWorkflows(data?.byWorkflow), [data]);
+  const qualitySummary = useMemo(() => buildQualitySummary(data?.merged?.units), [data]);
+  const qualityByModel = useMemo(() => buildQualityByModel(data?.merged?.units), [data]);
 
   const review = data?.usageReview;
   const running = Boolean(review?.inFlight) || reviewBusy;
@@ -715,7 +717,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                     <tr key={p.key} data-profile={p.profile} data-role={p.role} data-model={p.model ?? undefined} data-stakes={p.stakes ?? undefined} data-kind={p.jobKind ?? undefined}>
                       <td>
                         {profileModelLabel(p)}
-                        {formatFamilySuffix(p.byFamily) && <span className="small muted"> ({formatFamilySuffix(p.byFamily)})</span>}
+                        {formatFamilySuffix(p.byFamily) && <span className="small muted" title="Per quota family; $/unit (implementerCostUsd) includes implementer runs whose unit never merged, so it is an upper bound"> ({formatFamilySuffix(p.byFamily)})</span>}
                       </td>
                       <td>{p.stakes ? <span className="usage-stakes" data-stakes={p.stakes}>{p.stakes}</span> : <span className="muted">–</span>}</td>
                       <td className="muted">{profileKindLabel(p)}</td>
@@ -818,7 +820,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </Collapse>
       )}
 
-      {(data.savings || workflows.length > 0 || data.burstCohorts) && (
+      {(data.savings || workflows.length > 0 || data.burstCohorts || qualityByModel.length > 0) && (
         <Collapse id="workflows" testid="usage-workflows-collapse" summary={workflowSummary(data.savings, workflows.length)}>
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">
@@ -831,6 +833,11 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-label small">Model routing saved</div>
                 <div className="usage-cohort-value">{usdText(data.savings.routingSavingsUsd)}{data.savings.routingSavingsPct !== null && <small> · {pctText(data.savings.routingSavingsPct)}</small>}</div>
                 <div className="small muted">vs all-Opus {usdText(data.savings.soloOpusBaselineUsd)}</div>
+              </div>
+              <div className="usage-saving-card" data-testid="usage-saving-quality">
+                <div className="usage-cohort-label small">Quality (1st-try PASS)</div>
+                <div className="usage-cohort-value">{pctText(qualitySummary.firstTryPassRate)}{qualitySummary.knownReviewUnits > 0 && <small> · n={qualitySummary.knownReviewUnits}</small>}</div>
+                <div className="small muted">fix-after-merge {pctText(qualitySummary.fixAfterMergeRate)} of {qualitySummary.totalUnits} merged</div>
               </div>
               <div className="usage-saving-card" data-testid="usage-saving-context">
                 <div className="usage-cohort-label small">Brief/split context saved</div>
@@ -847,6 +854,38 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-value">{usdText(data.savings.costPer100Loc)}</div>
                 <div className="small muted">{usdText(data.savings.costPerMergedUnit)}/unit · {data.savings.totalLocChanged.toLocaleString()} LOC</div>
               </div>
+            </div>
+          )}
+          {qualityByModel.length > 0 && (
+            <div data-testid="usage-quality-section">
+              <div className="usage-sub">Quality by implementer model (sorted by 1st-try PASS %, $/unit tiebreak)</div>
+              <div className="usage-table-wrap">
+                <table className="usage-table" data-testid="usage-quality-by-model">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th className="num">Units</th>
+                      <th className="num" title="Excludes merged units with reviewSource=none">1st-try PASS %</th>
+                      <th className="num" title="Review fix rounds divided by all merged units of this model">Fix rounds/unit (all units)</th>
+                      <th className="num" title="Over all merged units of this model">Fix-after-merge % (all units)</th>
+                      <th className="num" title="Excludes shared implementer credits">$/unit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {qualityByModel.map((m) => (
+                      <tr key={m.model} data-model={m.model} className={m.lowN ? "muted" : undefined} data-low-n={m.lowN ? "1" : undefined}>
+                        <td>{m.model}</td>
+                        <td className="num" data-label="Units">{m.units}</td>
+                        <td className="num" data-label="1st-try PASS %">{pctText(m.firstTryPassRate)} <span className="muted">(n={m.firstTryKnown}{m.lowN ? ", low n" : ""})</span></td>
+                        <td className="num" data-label="Fix rounds/unit">{m.fixRoundsPerUnit.toFixed(2)}</td>
+                        <td className={`num${m.fixAfterMergeRate >= HIGH_FIX_RATE ? " usage-high" : ""}`} data-label="Fix-after-merge %">{pctText(m.fixAfterMergeRate)}</td>
+                        <td className="num" data-label="$/unit">{usdText(m.costPerUnit)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="small muted" data-testid="usage-quality-note">PASS % excludes units with no review record; $/unit excludes shared implementer credits; fix rounds and fix-after-merge use all merged units; "low n" = fewer than {QUALITY_MIN_N} reviewed units, ranked last.</div>
             </div>
           )}
           {data.burstCohorts && (
@@ -899,7 +938,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                     <tr key={w.workflowMode} data-workflow={w.workflowMode}>
                       <td>
                         {w.workflowMode}
-                        {formatFamilySuffix(w.byFamily) && <span className="small muted"> ({formatFamilySuffix(w.byFamily)})</span>}
+                        {formatFamilySuffix(w.byFamily) && <span className="small muted" title="Per quota family; $/unit (implementerCostUsd) includes implementer runs whose unit never merged, so it is an upper bound"> ({formatFamilySuffix(w.byFamily)})</span>}
                         {lowCostCoverage(w.costCoverage) && (
                           <span className="usage-estimate usage-low-coverage" title={`Cost known for ${pctText(w.costCoverage)} of units; non-Claude cost may be missing`}>low cost data</span>
                         )}

@@ -130,7 +130,7 @@ writeFileSync(join(dir, "projectOrder.mjs"), transformSync("projectOrder.ts", re
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
-stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {};`);
+stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {}; export const setBoringLandedGen = () => {};`);
 stub("pinFocusLogic.mjs", `export const boringDeepLinkPending = (a) => !a.rosterLoaded && !!a.activeAgentId; export const boringUrlAgent = (a) => (!a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId);`);
 stub(
   "pins.mjs",
@@ -908,6 +908,11 @@ const wk = (id, status = "idle", tone = null, title = id.toUpperCase()) => ({ ag
 test("D2 breadcrumb: Project › Lane › Agent from selection, never the 'Conversation' fallback", () => {
   assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "chat", laneLabel: "UI Lab", agentLabel: "Lead" }), [{ key: "project", label: "VibeSquad" }, { key: "lane", label: "UI Lab" }, { key: "agent", label: "Lead" }]);
   assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: "UI Lab", agentLabel: "Lead" }).map((c) => c.label), ["VibeSquad", "Overview"]);
+  // U1 r2 (UX R33 m1): the Overview page names the sub-tab on screen.
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "overview" }).map((c) => c.label), ["VibeSquad", "Overview"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "inbox" }).map((c) => c.label), ["VibeSquad", "Idea Inbox"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: null, agentLabel: null, tab: "feed" }).map((c) => c.label), ["VibeSquad", "Standup Feed"]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "chat", laneLabel: "UI Lab", agentLabel: "Lead", tab: "inbox" }).map((c) => c.label), ["VibeSquad", "UI Lab", "Lead"], "the tab only names the Overview page");
   assert.deepEqual(boringBreadcrumb({ project: "", mode: "chat", laneLabel: null, agentLabel: null }).map((c) => c.label), ["No project"]);
   assert.ok(!readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8").includes('"Conversation"'));
 });

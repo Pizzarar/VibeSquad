@@ -1,0 +1,20 @@
+== notif from chat (dark 1920@1)
+  audit chat         ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=1 len=3  :: pushState ?demo=&team=vibesquad&agent=demo-aud
+  notif UI Lab       ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=1 len=4  :: pushState ?demo=&team=efi&agent=demo-lead-ui
+  back               ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=1 len=4  :: POP ?demo=&team=vibesquad&agent=demo-aud
+  fwd                ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=1 len=4  :: POP ?demo=&team=efi&agent=demo-lead-ui
+  pageerrors=0
+== notif on cold load (dark 1920@1)
+  cold vs inbox      ?demo=&team=vibesquad&tab=inbox | ov[Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=1 len=2
+  notif UI Lab       ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=1 len=3  :: pushState ?demo=&team=efi&agent=demo-lead-ui
+  back               ?demo=&team=vibesquad&tab=inbox | ov[Idea Inbox (1)] crumb=VibeSquad›Idea Inbox on=1 len=3  :: POP ?demo=&team=vibesquad&tab=inbox
+  pageerrors=0
+== notif after back (dark 1920@1)
+  audit chat         ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=1 len=3  :: pushState ?demo=&team=vibesquad&agent=demo-aud
+  Lead 75            ?demo=&team=efi&agent=demo-lead-efi | chat crumb=Main Game Project›Main Game›Lead on=1 len=4  :: pushState ?demo=&team=efi&agent=demo-lead-efi
+  back (pop)         ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=1 len=4  :: back  | POP ?demo=&team=vibesquad&agent=demo-aud
+  notif UI Lab       ?demo=&team=efi&agent=demo-lead-ui | chat crumb=Main Game Project›UI Lab›Lead on=1 len=4  :: pushState ?demo=&team=efi&agent=demo-lead-ui
+  back               ?demo=&team=vibesquad&agent=demo-aud | chat crumb=VibeSquad›Desk›Worker on=1 len=4  :: POP ?demo=&team=vibesquad&agent=demo-aud
+  back2              ?demo=&team=vibesquad | ov[Overview] crumb=VibeSquad›Overview on=1 len=4  :: POP ?demo=&team=vibesquad
+  pageerrors=0
+fails=0

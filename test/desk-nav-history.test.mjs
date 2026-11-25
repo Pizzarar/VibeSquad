@@ -21,6 +21,10 @@ globalThis.__defaultWindow = { addEventListener() {}, removeEventListener() {} }
 globalThis.window = globalThis.__defaultWindow;
 globalThis.location = { search: "" }; // BoringApp's B1 effect reads location.search on navGen
 globalThis.__agents = new Map();
+// U1: the real parseUrlState (slot/tab keys), extracted from CommandPalette.tsx so the stub cannot drift from it.
+const palSrc = readFileSync(resolve(import.meta.dirname, "..", "src", "CommandPalette.tsx"), "utf8");
+const parseStart = palSrc.indexOf("export function parseUrlState");
+const realParseUrlState = transformSync("parseUrlState.ts", palSrc.slice(parseStart, palSrc.indexOf("\n}\n", parseStart) + 3), { lang: "ts" }).code;
 const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }`;
 writeFileSync(
   join(dir, "react-hooks.mjs"),
@@ -38,7 +42,7 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? []; export const useFocusedInboxCard = () => globalThis.__focusedInboxCard ?? null;`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
-stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); }; export const parseUrlState = (search) => { const p = new URLSearchParams(search); return { team: p.get("team") || null, agent: p.get("agent") || null }; };`);
+stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); }; ` + realParseUrlState);
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
@@ -53,7 +57,7 @@ writeFileSync(join(dir, "condenseReason.mjs"), transformSync("condenseReason.ts"
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
-stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {};`);
+stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {}; export const setBoringLandedGen = () => {};`);
 stub("pinFocusLogic.mjs", `export const boringDeepLinkPending = (a) => !a.rosterLoaded && !!a.activeAgentId; export const boringUrlAgent = (a) => (!a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId);`);
 stub(
   "pins.mjs",
@@ -98,6 +102,7 @@ const squad = (over = {}) => ({
   running: 0,
   ...over,
 });
+const efiSquad = () => squad({ team: { id: "efi", name: "Main Game Project" }, pins: [] });
 
 const reset = () => {
   hs.slots = [];
@@ -201,10 +206,11 @@ test("B1: navGen bump with ?agent= lands in chat even though the active agent is
 test("B1: navGen bump with a team (no agent) for another project calls onSelectSquad and shows its Overview", () => {
   reset();
   const view = squad();
-  render(props(view));
+  const views = [view, efiSquad()]; // U2 m3: "another project" is a known view (an unknown ?team= is a gone team)
+  render(props(view, { views }));
   globalThis.location = { search: "?team=efi" };
-  render(props(view, { navGen: 1 }));
-  const t = render(props(view, { navGen: 1 }));
+  render(props(view, { views, navGen: 1 }));
+  const t = render(props(view, { views, navGen: 1 }));
   assert.ok(globalThis.__calls.some((c) => c[0] === "onSelectSquad" && c[1] === "efi"), "switches to the URL team");
   assert.ok(byId(t, "boring-project-view"));
   assert.equal(byType(t, "AgentDrawer"), null);
@@ -256,11 +262,12 @@ test("B1: a pop to a known-but-unpinned agent clears the stale lane/worker selec
 test("B1: a remount with navGen>0 does not re-land (the effect ignores its initial-mount value)", () => {
   reset();
   const view = squad();
+  const views = [view, efiSquad()]; // U2 m3: efi is a known view
   globalThis.location = { search: "?team=efi" };
-  const t = render(props(view, { navGen: 3 })); // mounts with navGen 3
+  const t = render(props(view, { views, navGen: 3 })); // mounts with navGen 3
   assert.equal(globalThis.__calls.filter((c) => c[0] === "onSelectSquad").length, 0, "no stale re-landing on mount");
   assert.ok(byId(t, "boring-project-view"));
-  render(props(view, { navGen: 4 })); // a real pop after mount still lands
+  render(props(view, { views, navGen: 4 })); // a real pop after mount still lands
   assert.ok(globalThis.__calls.some((c) => c[0] === "onSelectSquad" && c[1] === "efi"), "a later pop re-lands");
 });
 
@@ -291,4 +298,111 @@ test("B1 M2: RefPopover no longer replaceStates the chat entry for Open in Inbox
   const openInbox = rp.slice(rp.indexOf("const openInbox"), rp.indexOf("const onKeyDown"));
   assert.doesNotMatch(openInbox, /history\.replaceState/, "the R14 replaceState workaround is deleted");
   assert.match(openInbox, /focusInboxCard\(cardId\)/, "Normal branch just focuses the card; App's URL sync pushes ?team=");
+});
+
+// ── U1 (docs/PLAN_DESK_URL_COMPLETE.md; idea-997 + idea-895): the empty Desk slot and the Overview sub-tab follow the URL ──────────
+test("U1: boringLandingFromUrl maps ?slot= to the empty Desk slot and ?tab= to the Overview sub-tab; unknown values -> plain Overview", () => {
+  const v = [squad()];
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=overlord"), { mode: "slot", teamId: "vs", slot: "overlord" });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=bugs"), { mode: "slot", teamId: "vs", slot: "bugs" });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&tab=inbox"), { mode: "project", teamId: "vs", tab: "inbox" });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&tab=standup"), { mode: "project", teamId: "vs", tab: "standup" });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=nope&tab=bogus"), { mode: "project", teamId: "vs", tab: null });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&tab=feed"), { mode: "project", teamId: "vs", tab: null }, "the URL says standup, not the internal feed key");
+  assert.equal(boringLandingFromUrl(v, "?team=vs&agent=ade-bs&slot=overlord&tab=inbox").mode, "chat", "an agent wins over slot and tab");
+  assert.equal(boringLandingFromUrl(v, "?slot=overlord"), null, "no team: nothing to route (as before)");
+});
+
+// U2 (UX R33 r2 m3): a ?team= that is not a known view never lends its slot/tab to the project App falls back to.
+test("U2: boringLandingFromUrl ignores ?slot= / ?tab= when ?team= is not a known view (fallback project's plain Overview)", () => {
+  const v = [squad()];
+  for (const q of ["?team=gone", "?team=gone&slot=overlord", "?team=gone&tab=inbox", "?team=gone&slot=bugs&tab=standup"]) {
+    assert.deepEqual(boringLandingFromUrl(v, q), { mode: "project", teamId: null, tab: null }, q);
+  }
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=overlord"), { mode: "slot", teamId: "vs", slot: "overlord" }, "a known team keeps its slot");
+  assert.equal(boringLandingFromUrl(v, "?team=gone&agent=ade-bs").mode, "chat", "an agent still lands in its own project");
+});
+
+// U2 (idea-983 / R33 m2 / idea-971): source contracts for the history edge races.
+test("U2: load arms the pop; the URL sync waits for BoringApp to land the latest pop; a popped ?sb= entry is not closed by its own landing", () => {
+  const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.match(app, /const popActive = useRef\(true\);/, "the load is a landing: canonicalization replaces");
+  assert.match(app, /if \(popActive\.current && !popDisarm\.current\) armPop\(\);/, "the load's landing is ended by the first input, like a pop");
+  assert.match(app, /if \(vibe === "boring" && landed !== undefined && landed < popGen\.current\) return;/, "no write before BoringApp landed the latest pop");
+  assert.match(app, /boringScreen, boringLanded\]\);/, "the landing re-runs the sync");
+  assert.match(app, /if \(popActive\.current && new URLSearchParams\(location\.search\)\.get\("sb"\)\) return;\n    closeStorybook\("replace"\);/, "sbNav keeps a popped ?sb= entry");
+  assert.match(src, /setLandedGen\(navGen\);\n    pendingUrl0\.current = null;/, "BoringApp marks the pop landed with that landing's state (also when nothing routes)");
+  assert.ok(src.indexOf("setBoringLandedGen(landedGen)") > src.indexOf("setBoringScreenKeys({ team: screenTeam"), "landed is published after the shown agent / screen keys");
+  // Safety (B1's settle-gate lesson): the gate opens on its own. Off outside Normal and while BoringApp is unmounted (undefined), and a
+  // mounted BoringApp marks every pop landed before any early return, so `landed < popGen` lasts at most one render.
+  assert.match(src, /useEffect\(\(\) => \(\) => setBoringLandedGen\(undefined\), \[\]\);/, "unmount (Storybook, Psycho, phone) turns the gate off");
+  assert.ok(src.indexOf("setLandedGen(navGen);") < src.indexOf("if (!land) return;"), "a no-route pop is still marked landed");
+  assert.match(src, /const \[landedGen, setLandedGen\] = useState\(navGen\);/, "a (re)mount starts landed at the current pop");
+});
+
+const tabOn = (t) => ["overview", "inbox", "feed"].find((k) => /\bon\b/.test(byId(t, `boring-tab-${k}`)?.props.className ?? ""));
+const noOverlord = (over = {}) => squad({ zones: { ...squad().zones, overlord: zone(null) }, ...over });
+
+test("U1: a reload at ?slot=overlord mounts on the Start Overlord card; at ?tab=inbox|standup on that sub-tab; unknown values on Overview", () => {
+  reset();
+  globalThis.location = { search: "?team=vs&slot=overlord" };
+  let t = render(props(noOverlord()));
+  assert.equal(byId(t, "boring-project-view"), null, "not the Overview");
+  assert.ok(byId(t, "boring-empty-card"), "the empty Desk slot card");
+  assert.equal(byId(t, "boring-empty-cta").props.children, "Start Overlord");
+  for (const [q, want] of [["?team=vs&tab=inbox", "inbox"], ["?team=vs&tab=standup", "feed"], ["?team=vs&tab=bogus", "overview"], ["?team=vs&slot=nope", "overview"]]) {
+    reset();
+    globalThis.location = { search: q };
+    t = render(props(squad()));
+    assert.ok(byId(t, "boring-project-view"), `${q}: Overview`);
+    assert.equal(tabOn(t), want, `${q}: sub-tab`);
+  }
+});
+
+test("U1: a pop (navGen) re-lands the empty slot card and the sub-tab the URL names; ?team= alone is the Overview tab", () => {
+  reset();
+  const view = noOverlord();
+  render(props(view));
+  const pop = (search, gen) => { globalThis.location = { search }; render(props(view, { navGen: gen })); return render(props(view, { navGen: gen })); };
+  let t = pop("?team=vs&slot=overlord", 1);
+  assert.equal(byId(t, "boring-empty-cta")?.props.children, "Start Overlord", "Back/Forward to ?slot=overlord shows the card");
+  t = pop("?team=vs&tab=inbox", 2);
+  assert.ok(byId(t, "boring-project-view"));
+  assert.equal(tabOn(t), "inbox");
+  t = pop("?team=vs&tab=standup", 3);
+  assert.equal(tabOn(t), "feed");
+  t = pop("?team=vs", 4);
+  assert.equal(tabOn(t), "overview", "the plain ?team= entry is the Overview tab, whatever tab was showing");
+  assert.equal(globalThis.__calls.filter((c) => c[0] === "onSelectSquad").length, 0, "same project: no squad switch");
+});
+
+test("U1: the sub-tab resets on project change (and stays reset); Open-in-Inbox lands on the Idea Inbox tab", () => {
+  reset();
+  const vs = squad();
+  const efi = squad({ team: { id: "efi", name: "Main Game Project" } });
+  globalThis.location = { search: "?team=vs&tab=inbox" };
+  let t = render({ ...props(vs), views: [vs, efi] });
+  assert.equal(tabOn(t), "inbox");
+  t = render({ ...props(efi), views: [vs, efi] }); // App switched the project (sidebar row, Ctrl+K, pop): its Overview tab
+  assert.equal(tabOn(t), "overview", "a project switch resets the sub-tab");
+  t = render({ ...props(vs), views: [vs, efi] });
+  assert.equal(tabOn(t), "overview", "the reset sticks: coming back to the first project (its row, Ctrl+K) shows its Overview tab");
+  // Open in Inbox (ref popover, R13-1): focusInboxCard flips to the Overview's Idea Inbox tab of the shown project.
+  reset();
+  globalThis.__focusedInboxCard = "card-7";
+  try {
+    render(props(efi));
+    t = render(props(efi));
+    assert.ok(byId(t, "boring-project-view"));
+    assert.equal(tabOn(t), "inbox", "Open in Inbox lands on tab=inbox");
+  } finally { globalThis.__focusedInboxCard = null; }
+});
+
+test("U1 wiring: BoringApp publishes the slot/tab keys (team-tagged); App's sync reads them live and lists the render value as a dep", () => {
+  assert.match(src, /setBoringScreenKeys\(\{ team: screenTeam, slot: urlSlot, tab: urlTab \}\)/);
+  assert.match(src, /useEffect\(\(\) => \(\) => setBoringScreenKeys\(undefined\), \[\]\)/, "unmount clears the keys (App keeps the URL's own)");
+  assert.match(src, /const urlSlot = mode === "chat" && !agent && selectedLaneId \? LANE_SLOT\[selectedLaneId\] \?\? null : null;/);
+  const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
+  assert.match(app, /urlSyncScreen\(\{ boring: vibe === "boring", live: getBoringScreenKeys\(\), rendered: boringScreen, team: activeTeamId \|\| null, kept: parseUrlState\(location\.search\) \}\)/);
+  assert.match(app, /\}, \[activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded\]\);/);
 });
