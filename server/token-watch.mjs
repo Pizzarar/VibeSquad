@@ -16,7 +16,7 @@ import {
 import { listWatches } from "./watch-sets.mjs";
 import { appendVsLogEntry, performBrainstormRestart } from "./brainstorm.mjs";
 import { BUDDY_COMPACT_FOCUS, canCompact, createCompactor, isIdleForCompact } from "./compact-step.mjs";
-import { COMPACTED_AT, compactBusy, compactNotAttempted, createCrossingTracker, lifeCapMetric } from "./compact-crossing.mjs";
+import { COMPACTED_AT, compactBusy, compactNotAttempted, createCrossingTracker, isDeadForCompact, lifeCapMetric } from "./compact-crossing.mjs";
 import { createWorkerContextGuard, lastAssistantMessage } from "./worker-context-guard.mjs";
 
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
@@ -199,8 +199,10 @@ export function startTokenWatcher({
         try {
           appendVsLogEntry({ teamId, laneId, agent: agent.id, type: "metric", text: lifeCapMetric({ kind: "buddy", id: agent.id, count: plan.count, cap: plan.cap, used }) });
         } catch { /* logging never blocks the restart */ }
-      } else if (plan.action === "compact" && (isIdleForCompact(agent) || isMidTurn(agent))) {
-        // An errored / closed Buddy has no turn to compact in: it skips to the restart below (G1: it still restarts, any provider).
+      } else if (plan.action === "compact" && !isDeadForCompact(agent)) {
+        // An errored / closed / lost Buddy has no turn to compact in: it skips to the restart below (G1: it still restarts, any
+        // provider). A deny-list like the lead path's (lead-handoff evaluateLead): a queued / starting / parked Buddy enters here and
+        // defers at the idle check below (an allow-list let it fall through to the restart and lose its queued turn).
         // The Buddy updates its brief first (the warn nudge); a Buddy that jumped past the warn gets it now and is compacted once idle.
         if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
           await sendBriefNudge(agent, labels);

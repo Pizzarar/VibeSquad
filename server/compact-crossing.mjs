@@ -44,6 +44,11 @@ export function isDeadForCompact(agent) {
   return Boolean(agent?.lost) || DEAD_FOR_COMPACT.has(String(agent?.status ?? "").trim().toLowerCase());
 }
 
+/** K2b: the agent's meter is the ACP adapter's post-compact estimate (runner-backend usageFields), not a real reading. */
+export function isCompactEstimate(agent) {
+  return agent?.lastUsage?.compactEstimate === true;
+}
+
 /** True for a busy skip: the caller defers to the next idle evaluation (no handoff step, no stamp). */
 export function compactBusy(res) {
   return res?.outcome === "skipped" && res.reason === "busy";
@@ -86,7 +91,9 @@ export function createCrossingTracker({ lifeCap = COMPACT_LIFE_CAP, rearmRatio =
 
   function decide(agent, used, stages) {
     const st = state(agent, stages);
-    if (st.stage > 0 && used < rearmLine(st.stage, stages)) {
+    // K2b: only a real meter reading re-arms. The ACP adapter's post-compact estimate (the summary size) would re-arm before the
+    // next turn's reading shows whether the compaction shrank the session; a failed one would then burn the life cap.
+    if (st.stage > 0 && !isCompactEstimate(agent) && used < rearmLine(st.stage, stages)) {
       return { action: "rearm", count: st.count, labels: { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "" } };
     }
     let cap = 0;
