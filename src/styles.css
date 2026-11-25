@@ -6356,6 +6356,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .phone-lane-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .phone-lane-state { font-size: 0.8rem; opacity: 0.7; white-space: nowrap; }
 .phone-health-line { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.phone-host-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 6px; border-radius: 8px; border: 1px solid currentColor; opacity: 0.75; }
+.phone-host-block { display: flex; flex-direction: column; gap: 2px; padding: 0 0 4px 18px; }
 .phone-seg-group { display: flex; flex-direction: column; gap: 4px; }
 .phone-seg-row { display: flex; gap: 6px; }
 .phone-seg-btn {

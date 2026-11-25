@@ -22,11 +22,20 @@ export function effectiveSurface(surface: PhoneSurface, buddyLaneId: string | nu
   return surface === "buddy" && !buddyLaneId ? "overlord" : surface;
 }
 
-/** `Home PC · Online` / `Home PC · Reconnecting…` / `Home PC · Offline`, from the runner connection state. */
-export function hostHealthLine(runnerConn: "up" | "down" | string, hostLabel = "Home PC"): { text: string; tone: "ok" | "warn" | "bad" } {
-  if (runnerConn === "up") return { text: `${hostLabel} · Online`, tone: "ok" };
-  if (runnerConn === "down") return { text: `${hostLabel} · Offline`, tone: "bad" };
-  return { text: `${hostLabel} · Reconnecting…`, tone: "warn" };
+/** Restart states that show in the host line (H1): queued -> "Restart queued"; requested/draining/ready -> "Draining for restart…"; firing -> "Restarting host…". Anything else (done/aborted/none) is quiet. */
+const RESTART_LINES: Record<string, string> = { queued: "Restart queued", requested: "Draining for restart…", draining: "Draining for restart…", ready: "Draining for restart…", firing: "Restarting host…" };
+export function restartStateLabel(restartState?: string | null): string | null {
+  return (restartState && RESTART_LINES[restartState]) || null;
+}
+
+/** `Home PC · Online` / `· Reconnecting…` / `· Offline`, from the runner connection state; an active restart window overrides the text. */
+export function hostHealthLine(runnerConn: "up" | "down" | string, hostLabel = "Home PC", restartState?: string | null): { text: string; tone: "ok" | "warn" | "bad" } {
+  const label = hostLabel || "Home PC";
+  const restart = restartStateLabel(restartState);
+  if (restart) return { text: `${label} · ${restart}`, tone: "warn" };
+  if (runnerConn === "up") return { text: `${label} · Online`, tone: "ok" };
+  if (runnerConn === "down") return { text: `${label} · Offline`, tone: "bad" };
+  return { text: `${label} · Reconnecting…`, tone: "warn" };
 }
 
 /**
