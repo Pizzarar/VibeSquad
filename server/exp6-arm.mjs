@@ -23,6 +23,8 @@ export const EXP6_DEFAULT_END = "2026-11-27T00:00:00Z";
 export const ARMS = {
   sonnet: { profile: "Implement - Sonnet", wf: "sonnet", provider: "claude" },
   neon: { profile: "Implement - Gemini (trial)", wf: "neon", provider: "antigravity-cli" },
+  // R8 (PLAN_PER_ROLES_LADDER_1125 Amend 11-25): opt-in cheap-tier arm on Gemini; model comes from the ladder, never named here.
+  flash: { profile: null, wf: "flash", provider: "antigravity-cli", tier: "cheap", optIn: true },
 };
 /** The live arm set for stakes=normal implementer spawns (order = tie-break order). [] turns the alternation off. */
 export const IMPLEMENTER_ARMS = ["sonnet", "neon"];
@@ -47,7 +49,8 @@ const ROLE_ARM_SOURCES = { implement: "sonnet" };
 const roleArmKey = (name) => String(name ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
 // Provider families whose cap blocks picking that arm. Keys as readCappedProviders normalizes them (claude,
 // antigravity-cli) plus the raw spellings a hand-written cap map may use. The `wf` arms of other spawns are unaffected.
-export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: ["antigravity-cli", "antigravity", "agy", "gemini"], dsp: ["opencode", "deepseek"] };
+const AGY_CAP_FAMILIES = ["antigravity-cli", "antigravity", "agy", "gemini"];
+export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP_FAMILIES, flash: AGY_CAP_FAMILIES, dsp: ["opencode", "deepseek"] };
 
 /**
  * Live `vs cap` map (capped-providers.json, expired caps dropped) for the spawn caller's VibeSquad home. Lazy import:
@@ -74,7 +77,7 @@ export function armCapKey(wf, capped) {
   const keys = Array.isArray(capped) ? capped : Object.keys(capped ?? {});
   for (const k of keys) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
-    if (fams.includes(fam) || (wf === "neon" && fam.startsWith("gemini-"))) return fam;
+    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) return fam;
   }
   return "";
 }
@@ -98,6 +101,11 @@ export function armOfProfile(name) {
 /** Provider family a `vs.arm` label value routes a role-name spawn onto ("" = no arm / unknown). */
 export function armProvider(wf) {
   return ARMS[String(wf ?? "").trim().toLowerCase()]?.provider ?? "";
+}
+
+/** Ladder tier a `vs.arm` label value routes a role-name spawn onto ("" = role default tier). */
+export function armTier(wf) {
+  return ARMS[String(wf ?? "").trim().toLowerCase()]?.tier ?? "";
 }
 
 /** EXP6 history: open until a verdict is logged or the end date passes. `endIso` is VS_EXP6_END (or the default). */
@@ -178,12 +186,35 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   if (asLead || !norm(lane)) return null;
   if ((norm(stakes) || "normal") !== "normal") return null;
   const requested = armOfProfile(profile);
-  const set = (Array.isArray(arms) ? arms : []).filter((wf) => ARMS[wf]);
-  if (!requested || set.length < 2 || !set.includes(requested.wf)) return null;
+  if (!requested) return null;
   const roleSpawn = requested.role === true;
   const keep = (reason, extra = {}) => ({ mode: "arm", arm: requested.wf, requestedArm: requested.wf, swapped: false, reason, counts: null, profile: String(profile), ...(roleSpawn ? { role: true } : {}), ...extra });
-  if (norm(labels.ab) === "pin") return keep("pin");
-  if (norm(labels.wf)) return keep("wf");
+  const abVal = norm(labels.ab);
+  const wfVal = norm(labels.wf);
+  // R8: opt-in arms (e.g. flash) never join IMPLEMENTER_ARMS; requested via labels.ab or labels.wf, still cap-checked.
+  const optInKey = abVal === "pin" ? "" : (ARMS[abVal]?.optIn ? abVal : (ARMS[wfVal]?.optIn ? wfVal : ""));
+  if (optInKey) {
+    const optInArm = ARMS[optInKey];
+    if (!roleSpawn && !optInArm.profile) return keep("fail-open");
+    let capKey = "";
+    try {
+      const caps = capProbe ? await capProbe() : {};
+      capKey = armCapKey(optInKey, caps);
+    } catch {
+      return keep("fail-open"); // unreadable caps: never swap onto a possibly dead provider (idea-703)
+    }
+    if (capKey) return keep(`capped:${capKey}`, { capped: true });
+    const swapped = optInArm.wf !== requested.wf;
+    const profileOut = swapped && !roleSpawn ? optInArm.profile : String(profile);
+    return {
+      mode: "arm", arm: optInArm.wf, requestedArm: requested.wf, swapped, reason: "opt-in", counts: null, profile: profileOut,
+      ...(roleSpawn ? { role: true, provider: optInArm.provider, ...(optInArm.tier ? { tier: optInArm.tier } : {}) } : {}),
+    };
+  }
+  const set = (Array.isArray(arms) ? arms : []).filter((wf) => ARMS[wf]);
+  if (set.length < 2 || !set.includes(requested.wf)) return null;
+  if (abVal === "pin") return keep("pin");
+  if (wfVal) return keep("wf");
   let capped;
   try {
     const caps = capProbe ? await capProbe() : {};
