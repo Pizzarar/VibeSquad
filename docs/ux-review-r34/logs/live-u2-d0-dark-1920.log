@@ -1,0 +1,36 @@
+== ?team=team-forgewirk&agent=rn-7527ce836fe2 (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=team-forgewirk&agent=rn-7527ce836fe2
+  load  KEPT ?team=team-forgewirk&agent=rn-7527ce836fe2 | chat crumb=ForgeWirk›Forge Sim›Worker on=[] len=2  :: replaceState ?team=efi&agent=rn-7527ce836fe2 | replaceState ?team=team-forgewirk&agent=rn-7527ce836fe2
+  reload KEPT ?team=team-forgewirk&agent=rn-7527ce836fe2 | chat crumb=ForgeWirk›Forge Sim›Worker on=[] len=2  :: 
+  pageerrors=0 
+== ?team=site&agent=rn-8b756e01c830 (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=site&agent=rn-8b756e01c830
+  load  KEPT ?team=site&agent=rn-8b756e01c830 | chat crumb=rosserlogic.tech›Site Polish›Lead on=["boring-worker-row:Lead31m ago"] len=2  :: 
+  reload KEPT ?team=site&agent=rn-8b756e01c830 | chat crumb=rosserlogic.tech›Site Polish›Lead on=["boring-worker-row:Lead32m ago"] len=2  :: 
+  pageerrors=0 
+== ?agent=rn-7527ce836fe2 (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=team-forgewirk&agent=rn-7527ce836fe2
+  load  KEPT ?team=team-forgewirk&agent=rn-7527ce836fe2 | chat crumb=ForgeWirk›Forge Sim›Worker on=[] len=2  :: replaceState ?team=efi&agent=rn-7527ce836fe2 | replaceState ?team=team-forgewirk&agent=rn-7527ce836fe2
+  reload KEPT ?team=team-forgewirk&agent=rn-7527ce836fe2 | chat crumb=ForgeWirk›Forge Sim›Worker on=[] len=2  :: 
+  pageerrors=0 
+== ?team=team-forgewirk&slot=riffbot (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=team-forgewirk&agent=rn-cb080e0198d5
+  load  LOST ?team=team-forgewirk&agent=rn-cb080e0198d5 | chat crumb=ForgeWirk›Desk›RiffBot on=[] len=2  :: replaceState ?team=efi | replaceState ?team=team-forgewirk | replaceState ?team=team-forgewirk&slot=riffbot | replaceState ?team=team-forgewirk&agent=rn-cb080e0198d5
+  reload LOST ?team=team-forgewirk&agent=rn-cb080e0198d5 | chat crumb=ForgeWirk›Desk›RiffBot on=[] len=2  :: 
+  pageerrors=0 
+== ?team=site&slot=overlord (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=site&agent=rn-53c8a5d063f3
+  load  LOST ?team=site&agent=rn-53c8a5d063f3 | chat crumb=rosserlogic.tech›Desk›Overlord on=["boring-mate:★ Overlordidle 4h"] len=2  :: replaceState ?team=site&agent=rn-53c8a5d063f3
+  reload LOST ?team=site&agent=rn-53c8a5d063f3 | chat crumb=rosserlogic.tech›Desk›Overlord on=["boring-mate:★ Overlordidle 4h"] len=2  :: 
+  pageerrors=0 
+== ?team=site&tab=inbox (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=site&tab=inbox
+  load  KEPT ?team=site&tab=inbox | ov[tab=Idea Inbox (1030)] crumb=rosserlogic.tech›Idea Inbox on=["boring-project-row:rosserlogic.tech"] len=2  :: 
+  reload KEPT ?team=site&tab=inbox | ov[tab=Idea Inbox (1030)] crumb=rosserlogic.tech›Idea Inbox on=["boring-project-row:rosserlogic.tech"] len=2  :: 
+  pageerrors=0 
+== ?team=team-forgewirk&tab=standup (dark 1920x1080@1) firstProject=Escape From Idle1
+  urls seen     ?team=team-forgewirk&tab=standup
+  load  KEPT ?team=team-forgewirk&tab=standup | ov[tab=Standup Feed (100)] crumb=ForgeWirk›Standup Feed on=[] len=2  :: replaceState ?team=efi | replaceState ?team=team-forgewirk | replaceState ?team=team-forgewirk&tab=standup
+  reload KEPT ?team=team-forgewirk&tab=standup | ov[tab=Standup Feed (100)] crumb=ForgeWirk›Standup Feed on=[] len=2  :: 
+  pageerrors=0 
+LOST=2/7
