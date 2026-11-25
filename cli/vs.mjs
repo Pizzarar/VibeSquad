@@ -2742,33 +2742,41 @@ function specLine(unit) {
   return `- ${unit.id} [${unit.status}] goal="${unit.goal ?? ""}" files=[${files}] doneCheck="${unit.doneCheck ?? ""}"`;
 }
 
-// idea-932: the registry resolves a lane to its project's MAIN checkout, so `vs task set` run from a unit worktree
-// wrote there while the agent (and git) looked at the worktree's own TASKS.json. When cwd is a linked worktree of
-// that same project, target the worktree itself.
-export function laneArtifactBase(identity, rootDir, cwd = process.cwd()) {
-  // idea-1056: resolve from the caller's cwd. A linked worktree of the lane's project (compared by realpath, so
-  // symlinks/case/trailing slashes don't defeat the match) or of an unresolvable registry project targets the worktree.
-  try {
-    const real = (p) => {
-      try {
-        return fs.realpathSync(path.resolve(p));
-      } catch {
-        return path.resolve(p);
-      }
-    };
-    const main = laneWorkingDir(identity.team.id, identity.lane, rootDir);
-    const mainOfCwd = resolveWorktreeRootPath(cwd);
-    if (!mainOfCwd) return undefined;
-    if (main && real(main) !== real(mainOfCwd)) return undefined;
-    let dir = path.resolve(cwd);
-    for (let i = 0; i < 12; i++) {
-      try {
-        if (fs.statSync(path.join(dir, ".git")).isFile()) return dir;
-      } catch {}
-      const up = path.dirname(dir);
-      if (up === dir) break;
-      dir = up;
+// idea-932 / idea-1056: the registry resolves a lane to its project's MAIN checkout (or, unresolved, rootDir), so
+// `vs task set` run from a unit worktree wrote there while the agent (and git) looked at the worktree's own
+// TASKS.json. When cwd is a linked worktree of the SAME repo as that target (compared by git common dir, so symlinks,
+// bind mounts and moved clones still match; a different repo or a non-git target never does), use the worktree.
+// An explicit/test rootDir that is not a git repo therefore always wins and can never redirect writes into this repo.
+function gitPaths(dir) {
+  const r = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"], {
+    cwd: dir,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (r.status !== 0) return null;
+  const [gitDir, commonDir, top] = String(r.stdout).split(/\r?\n/).map((l) => l.trim());
+  if (!gitDir || !commonDir || !top) return null;
+  // realpathSync.native so Windows short names / casing compare equal.
+  const real = (p) => {
+    try {
+      return fs.realpathSync.native(path.resolve(p));
+    } catch {
+      return path.resolve(p);
     }
+  };
+  return { gitDir: real(gitDir), commonDir: real(commonDir), top: real(top) };
+}
+
+export function laneArtifactBase(identity, rootDir, cwd = process.cwd()) {
+  try {
+    const target = laneWorkingDir(identity.team.id, identity.lane, rootDir) || rootDir;
+    if (!target) return undefined;
+    const here = gitPaths(cwd);
+    // Linked worktrees only: a plain checkout has gitDir === commonDir, and submodules live under /.git/modules/.
+    if (!here || here.gitDir === here.commonDir || !here.gitDir.replace(/\\/g, "/").includes("/worktrees/")) return undefined;
+    const there = gitPaths(target);
+    if (!there || there.commonDir !== here.commonDir) return undefined;
+    return here.top;
   } catch {}
   return undefined;
 }
