@@ -4,11 +4,11 @@
 //    so the runner polls it after turns (see createAgyUsagePoller).
 // Records land in <runner home>/limits.jsonl, append-only, one line each:
 //   { at, provider, window: "5h"|"weekly", usedPct (0-100), resetsAt (ISO), source: "provider"|"estimate", agentId }
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnNoShell, killTree } from './spawn.mjs';
-import { isForbiddenRealHome, underTestRunner } from '../server/test-guard.mjs';
+import { isForbiddenRealHome, isForbiddenRealUserHome, underTestRunner } from '../server/test-guard.mjs';
 
 // Claude's unifiedWindows keys -> our window ids. Add 'five_hour' here is already mapped, so a plan with a 5h window just works.
 const CLAUDE_WINDOWS = { five_hour: '5h', seven_day: 'weekly' };
@@ -115,17 +115,25 @@ export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild, env = proc
 // "no agy agent mid-turn" guard. Only the sign-in files are copied in (fresh each poll); the scratch home is removed afterwards.
 const AGY_STATE_REL = path.join('.gemini', 'antigravity-cli');
 const AGY_AUTH_FILES = ['antigravity-oauth-token', 'settings.json', 'installation_id'];
+// The token is copied byte-for-byte and discarded: safe while Google does not rotate refresh tokens (a rotation would stale the real file).
 export function makeAgyIsolatedHome({ realHome = os.homedir(), tmpBase = os.tmpdir() } = {}) {
+  if (isForbiddenRealUserHome(realHome)) return null; // a test must never copy the developer's real sign-in into /tmp
   const src = path.join(realHome, AGY_STATE_REL);
   if (!existsSync(path.join(src, AGY_AUTH_FILES[0]))) return null; // not signed in: nothing to poll
   const home = mkdtempSync(path.join(tmpBase, 'vs-agy-usage-'));
+  const cleanup = () => { try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ } };
   const dst = path.join(home, AGY_STATE_REL);
-  mkdirSync(dst, { recursive: true });
-  for (const f of AGY_AUTH_FILES) { try { copyFileSync(path.join(src, f), path.join(dst, f)); } catch { /* optional file */ } }
+  try {
+    mkdirSync(dst, { recursive: true, mode: 0o700 });
+    for (const f of AGY_AUTH_FILES) {
+      try { copyFileSync(path.join(src, f), path.join(dst, f)); chmodSync(path.join(dst, f), 0o600); }
+      catch (e) { if (f === AGY_AUTH_FILES[0]) throw e; /* settings/installation_id are optional */ }
+    }
+  } catch { cleanup(); return null; } // no half-built scratch home (and no token copy) is left behind
   return {
     home,
     env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache') },
-    cleanup: () => { try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ } },
+    cleanup,
   };
 }
 

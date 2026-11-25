@@ -386,3 +386,17 @@ test("idea-705: a deepseek-keyed cap stops provider opencode (and the reverse), 
   writeFileSync(path, JSON.stringify({ capped: { deepseek: { reason: "Insufficient Balance", updatedAt: new Date().toISOString() } } }));
   assert.equal(isProviderOverQuota("opencode", [], 90, { useDiskCaps: true, cappedProvidersPath: path }).overQuota, true);
 });
+
+test("review Bug3 (idea-705): usageProviders entries keyed deepseek stop opencode (the agent-duties/spawn-route/brainstorm shape), and the reverse", async () => {
+  const { isProviderOverQuota, normalizeProviderFamily } = await import("../server/provider-failover.mjs");
+  const ex = (id) => [{ id, status: "exhausted", usedPct: 100 }];
+  assert.equal(isProviderOverQuota("opencode", ex("deepseek")).overQuota, true);
+  assert.equal(isProviderOverQuota("opencode/deepseek-v4-pro", ex("deepseek")).overQuota, true);
+  assert.equal(isProviderOverQuota("deepseek", ex("opencode")).overQuota, true);
+  assert.equal(isProviderOverQuota("claude", ex("deepseek")).overQuota, false);
+  assert.equal(isProviderOverQuota("antigravity-cli", ex("deepseek")).overQuota, false);
+  assert.equal(isProviderOverQuota("opencode", [{ id: "deepseek", status: "ok", usedPct: 10 }]).overQuota, false, "a healthy kin entry is not a cap");
+  assert.equal(normalizeProviderFamily("deepseek"), "deepseek", "stored keys are not rewritten");
+  assert.equal(isProviderOverQuota("constructor", []).overQuota, false, "prototype keys are not families");
+  assert.equal(isProviderOverQuota("toString", [], 90, { cappedProviders: ["x"] }).overQuota, false);
+});

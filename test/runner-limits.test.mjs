@@ -1,7 +1,7 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, existsSync, mkdirSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import os from 'node:os';
@@ -294,4 +294,26 @@ test('idea-701: runAgyUsageIsolated spawns agy with the scratch HOME, removes it
   assert.equal(existsSync(env.HOME), false, 'scratch home removed');
   await assert.rejects(runAgyUsageIsolated(), /refusing to spawn the real agy/);
   assert.deepEqual(await createAgyUsagePoller({ store: new LimitStore(path.join(tmp(), 'l.jsonl')) })('x'), [], 'default poller swallows the refusal');
+});
+
+test('review Bug3: makeAgyIsolatedHome never copies the developer real home sign-in under a test runner', () => {
+  const base = tmp();
+  assert.equal(makeAgyIsolatedHome({ tmpBase: base }), null, 'default realHome is the real home: refused');
+  assert.equal(makeAgyIsolatedHome({ realHome: os.userInfo().homedir, tmpBase: base }), null);
+  assert.deepEqual(readdirSync(base), [], 'nothing was created');
+});
+
+test('review Bug3: scratch home is private (0700/0600) and a failed token copy leaves no scratch dir behind', { skip: process.platform === 'win32' }, () => {
+  const real = tmp(); const base = tmp();
+  const st = path.join(real, '.gemini', 'antigravity-cli'); mkdirSync(st, { recursive: true });
+  writeFileSync(path.join(st, 'antigravity-oauth-token'), 't');
+  const iso = makeAgyIsolatedHome({ realHome: real, tmpBase: base });
+  assert.equal(statSync(path.join(iso.home, '.gemini', 'antigravity-cli')).mode & 0o077, 0);
+  assert.equal(statSync(path.join(iso.home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')).mode & 0o077, 0);
+  iso.cleanup();
+  // The token path is a directory: existsSync passes, copyFileSync throws -> the required copy fails -> no home, no leak.
+  const real2 = tmp(); const base2 = tmp();
+  mkdirSync(path.join(real2, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'), { recursive: true });
+  assert.equal(makeAgyIsolatedHome({ realHome: real2, tmpBase: base2 }), null);
+  assert.deepEqual(readdirSync(base2), []);
 });

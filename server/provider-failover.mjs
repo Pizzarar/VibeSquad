@@ -160,11 +160,16 @@ function extractUsageList(usageProviders) {
   return [];
 }
 
+/** idea-705: a `vs cap set deepseek` key is the same cap as provider `opencode` (every opencode profile is DeepSeek). Read-side only; stored keys stay as written. */
+const CAP_KIN = Object.assign(Object.create(null), { opencode: ["opencode", "deepseek"], deepseek: ["deepseek", "opencode"] });
+const capKin = (family) => CAP_KIN[family] ?? [family];
+
 function matchesProvider(entry, targetFamily) {
   if (!entry || typeof entry !== "object" || !targetFamily) return false;
+  const kin = capKin(targetFamily); // shared by every usageProviders caller (agent-duties, spawn-route, brainstorm)
   const candidates = [entry.id, entry.sourceId, entry.provider, entry.name, entry.sourceLabel];
   for (const c of candidates) {
-    if (c && normalizeProviderFamily(c) === targetFamily) return true;
+    if (c && kin.includes(normalizeProviderFamily(c))) return true;
   }
   return false;
 }
@@ -253,10 +258,6 @@ function readDiskCaps(opts = {}) {
 export function readLiveCapDoc(opts = {}) {
   return { capped: readDiskCaps(opts) };
 }
-
-/** idea-705: a `vs cap set deepseek` key is the same cap as provider `opencode` (every opencode profile is DeepSeek). Read-side only; stored keys stay as written. */
-const CAP_KIN = { opencode: ["opencode", "deepseek"], deepseek: ["deepseek", "opencode"] };
-const capKin = (family) => CAP_KIN[family] ?? [family];
 
 function isFamilyCapped(caps, targetFamily) {
   if (!caps) return false;
