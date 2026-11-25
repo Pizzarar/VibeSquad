@@ -49,6 +49,10 @@ test("fold: park-held after idle marks bgHeld; a new running status, park-forced
   assert.equal(fold([...base, { type: "park-held" }, { type: "exit" }]).bgHeld, undefined);
 });
 
+test("fold (M1): bg-stopped, park-held-dead and bg-wake end the hold even with no status change", () => {
+  for (const type of ["bg-stopped", "park-held-dead", "bg-wake"]) assert.equal(fold([...base, { type: "park-held" }, { type }]).bgHeld, undefined, type);
+});
+
 test("worker duties forbid a background run and ending the turn on it", () => {
   assert.match(WORKER_PACK, /FOREGROUND/);
   assert.match(WORKER_PACK, /run_in_background/);

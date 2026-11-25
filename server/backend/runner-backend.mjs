@@ -26,7 +26,7 @@ import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../.
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Log event types that change the roster row (everything else is timeline-only).
-const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "unarchive", "usage", "permission", "session"]);
+const ROSTER_EVENTS = new Set(["created", "status", "meta", "exit", "archive", "unarchive", "usage", "permission", "session", "park-held", "park-forced", "park-held-dead", "bg-stopped", "bg-wake"]);
 
 const FIRST_CLASS = ["squad", "team", "lane", "role", "ord", "profile"];
 const ENV_FOR = { lane: "VS_LANE", team: "VS_TEAM", role: "VS_ROLE", profile: "VS_PROFILE" };
@@ -257,7 +257,7 @@ export function feedFoldLine(st, line) {
   else if (e.type === "park-held") st.bgHeld = true;
   else if (e.type === "status") { if (e.status !== "idle") st.bgHeld = false; st.status = e.status; st.queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
   else if (e.type === "exit") { st.exited = true; st.bgHeld = false; }
-  else if (e.type === "park-forced" || e.type === "parked") st.bgHeld = false;
+  else if (e.type === "park-forced" || e.type === "parked" || e.type === "park-held-dead" || e.type === "bg-stopped" || e.type === "bg-wake") st.bgHeld = false;
   else if (e.type === "archive") st.archivedAt = e.ts;
   else if (e.type === "unarchive") st.archivedAt = null;
   else if (e.type === "usage") { const u = {}; for (const k of USAGE_KEYS) if (k in e) u[k] = e[k]; st.usage = u; }
