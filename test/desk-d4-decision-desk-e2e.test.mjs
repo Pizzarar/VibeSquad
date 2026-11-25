@@ -389,3 +389,89 @@ test("D4 r3 (R38 m3): the status strip lists Squads in the same order as the fee
     await context.close();
   }
 });
+
+for (const cfg of [
+  { name: "p2-dark-1600-lanes24", theme: "dark", width: 1600, height: 900, dpr: 1, wide: false },
+  { name: "p2-light-1600-lanes24", theme: "light", width: 1600, height: 900, dpr: 1, wide: false },
+  { name: "p2-dark-1920-lanes24", theme: "dark", width: 1920, height: 1080, dpr: 1, wide: true },
+  { name: "p2-light-1920-lanes24", theme: "light", width: 1920, height: 1080, dpr: 1, wide: true },
+  { name: "p2-dark-3200-lanes24", theme: "dark", width: 3200, height: 1800, dpr: 1.2, wide: true, checkWideRail: true },
+  { name: "p2-light-3200-lanes24", theme: "light", width: 3200, height: 1800, dpr: 1.2, wide: true, checkWideRail: true },
+]) {
+  test(`D4 P2 (${cfg.name}): rail grows at 3200@1.2 and stacked <1900 puts feed above scroll-capped strip (?lanes=24)`, async (t) => {
+    if (unavailable) { t.skip(unavailable); return; }
+    resetBackend();
+    const context = await browser.newContext({ viewport: { width: cfg.width, height: cfg.height }, deviceScaleFactor: cfg.dpr, colorScheme: cfg.theme });
+    await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({...p,"app.theme":"${cfg.theme}"})); }catch{}`);
+    const page = await context.newPage();
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    try {
+      await page.goto(`${baseUrl}/?demo=&lanes=24`, { waitUntil: "domcontentloaded" });
+      await page.waitForSelector('[data-testid="boring-decision-desk"]', { timeout: 20000 });
+      await page.waitForTimeout(700);
+
+      const g = await page.evaluate(() => {
+        const desk = document.querySelector('[data-testid="boring-decision-desk"]');
+        const feed = document.querySelector('[data-testid="boring-decision-feed"]').getBoundingClientRect();
+        const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+        const strip = stripEl.getBoundingClientRect();
+        const bar = document.querySelector('[data-testid="boring-decision-bar"]').getBoundingClientRect();
+        const cards = [...document.querySelectorAll(".boring-decision-card")].map((c) => c.getBoundingClientRect());
+        const eventSpans = [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].map((el) => ({
+          text: el.textContent || "",
+          scrollW: el.scrollWidth,
+          clientW: el.clientWidth,
+        }));
+        return {
+          isWide: desk.classList.contains("is-wide"),
+          feed: { top: feed.top, bottom: feed.bottom, left: feed.left, right: feed.right, width: feed.width },
+          strip: { top: strip.top, bottom: strip.bottom, left: strip.left, right: strip.right, width: strip.width, height: strip.height, scrollHeight: stripEl.scrollHeight, clientHeight: stripEl.clientHeight, overflowY: getComputedStyle(stripEl).overflowY },
+          barTop: bar.top,
+          innerHeight,
+          cardsAbove: cards.filter((r) => r.top >= 0 && r.bottom <= bar.top).length,
+          eventSpans,
+        };
+      });
+
+      assert.equal(g.isWide, cfg.wide, `is-wide class matches viewport (${cfg.width})`);
+      assert.ok(g.cardsAbove >= 1, `at least 1 decision card sits above the send bar (got ${g.cardsAbove})`);
+
+      if (cfg.wide) {
+        assert.ok(g.strip.left >= g.feed.right, `wide rail sits right of feed (${JSON.stringify(g)})`);
+        assert.ok(Math.abs(g.strip.top - g.feed.top) < 40, "wide rail aligns with top of feed");
+        if (cfg.checkWideRail) {
+          assert.ok(g.strip.width > 580, `m2: rail width at 3200@1.2 must exceed 580px (got ${g.strip.width})`);
+          assert.ok(g.feed.width >= 600 && g.feed.width <= 1200, `m2: feed keeps a readable measure (got ${g.feed.width})`);
+          const tracked = g.eventSpans.filter((e) => e.text.includes("Nightly build green") || e.text.includes("Standardized PNG compression"));
+          assert.ok(tracked.length >= 2, "expected demo event lines present");
+          for (const ev of tracked) {
+            assert.ok(ev.scrollW <= ev.clientW + 1, `m2: event text "${ev.text}" should not truncate at 3200 (scrollW=${ev.scrollW}, clientW=${ev.clientW})`);
+          }
+        }
+      } else {
+        const cap = Math.min(320, Math.round(g.innerHeight * 0.35)) + 2;
+        assert.ok(g.feed.bottom <= g.strip.top + 1, `m4: feed precedes strip in stacked layout (feed.bottom=${g.feed.bottom}, strip.top=${g.strip.top})`);
+        assert.ok(g.strip.height <= cap, `m4: stacked strip height ${g.strip.height} <= cap ${cap}`);
+        assert.equal(g.strip.overflowY, "auto", "m4: stacked strip scrolls vertically");
+        // Expanding the +N quiet fold keeps the strip within its cap and scrollable.
+        const quietBtn = page.locator('[data-testid^="boring-decision-strip-quiet-"]').first();
+        assert.ok(await quietBtn.count(), "quiet fold button present with ?lanes=24");
+        await quietBtn.click();
+        await page.waitForTimeout(150);
+        const expanded = await page.evaluate(() => {
+          const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+          const r = stripEl.getBoundingClientRect();
+          return { height: r.height, scrollHeight: stripEl.scrollHeight, clientHeight: stripEl.clientHeight };
+        });
+        assert.ok(expanded.height <= cap, `m4: expanded stacked strip height ${expanded.height} stays <= cap ${cap}`);
+        assert.ok(expanded.scrollHeight > expanded.clientHeight, `m4: expanded stacked strip overflows inside its scroll box (${expanded.scrollHeight} > ${expanded.clientHeight})`);
+      }
+
+      await page.screenshot({ path: path.join(SHOTS_DIR, `${cfg.name}.png`), fullPage: false });
+      assert.deepEqual(errs, [], `zero pageerrors: ${errs.join("; ")}`);
+    } finally {
+      await context.close();
+    }
+  });
+}
