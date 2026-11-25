@@ -6556,6 +6556,26 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 
 /* usa-27: Ready-Time & Compaction gauge. Reuses cohort tile / table styles. */
 .usage-plans { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+/* usa-53: plan drilldown rows + burst cohort table */
+.usage-plan-rows { margin-top: var(--sp-2, 8px); display: flex; flex-direction: column; }
+.usage-plan-grid { display: grid; grid-template-columns: minmax(140px, 3fr) minmax(70px, 1fr) minmax(60px, 1fr) minmax(60px, 1fr) minmax(64px, 1fr) minmax(56px, 1fr); gap: var(--sp-2, 8px); align-items: center; padding: 5px 8px; font-variant-numeric: tabular-nums; }
+.usage-plan-grid .num { text-align: right; }
+.usage-plan-head { border-bottom: 1px solid var(--line); font-weight: 600; }
+.usage-plan-details { border-bottom: 1px solid var(--line); }
+.usage-plan-summary { list-style: none; cursor: pointer; }
+.usage-plan-summary::-webkit-details-marker { display: none; }
+.usage-plan-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-plan-name::before { content: "\25B8"; display: inline-block; width: 1.2em; color: var(--muted); }
+.usage-plan-details[open] .usage-plan-name::before { content: "\25BE"; }
+.usage-plan-path { color: var(--cyan-t); }
+.usage-plan-status { font-weight: 600; }
+.usage-plan-status.is-done { color: var(--cyan-t); }
+.usage-plan-status.is-stale { color: var(--amber-t); }
+.usage-plan-status.is-open { color: var(--text); }
+.usage-plan-detail { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-1, 4px) var(--sp-3, 12px); margin: 0; padding: var(--sp-2, 8px) 8px var(--sp-2, 8px) var(--sp-4, 16px); }
+.usage-plan-detail dt { color: var(--muted); }
+.usage-plan-detail dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.usage-burst-thin td { color: var(--muted); }
 .usage-ready { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-ready-pill { align-self: flex-start; color: var(--cyan-t); border: 1px solid var(--cyan-t); border-radius: 999px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-variant-numeric: tabular-nums; }
 .usage-ready-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }
