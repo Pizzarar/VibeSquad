@@ -7,8 +7,22 @@ import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 
-// Legacy failover tables (COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS): read-only for old profile names until P5f.
-// Role names (server/role-route.mjs ROLE_TABLE) fail over along their role's provider list instead (P5c).
+// Role failover chains (R1, docs/PLAN_PER_ROLES_LADDER_1125.md): role key -> provider families in hop order, the most
+// capable provider for that role first. The one source for server/role-route.mjs ROLE_TABLE.providers; a role spawn
+// walks it on cap/quota and the tier ladder picks each hop's model. Same hops the old-name chains below land on.
+export const ROLE_PROVIDER_CHAINS = Object.freeze({
+  lead: Object.freeze(["claude", "antigravity-cli", "opencode"]),
+  brainstorm: Object.freeze(["claude", "antigravity-cli", "opencode"]),
+  implement: Object.freeze(["claude", "antigravity-cli", "opencode"]),
+  "work-order": Object.freeze(["opencode", "claude", "antigravity-cli"]),
+  review: Object.freeze(["antigravity-cli", "claude", "opencode"]),
+  "pre-check": Object.freeze(["antigravity-cli", "claude", "opencode"]),
+  "art-director": Object.freeze(["antigravity-cli", "claude", "opencode"]),
+  "art-painter": Object.freeze(["claude", "antigravity-cli", "opencode"]),
+});
+
+// Legacy failover tables (COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS): read-only for old profile names until P5f
+// (now R5); they route exactly as before. Role names fail over along ROLE_PROVIDER_CHAINS above instead (P5c, R1).
 export const COUNTERPART_PROFILES = {
   "Lead - Claude": "Lead - Gemini",
   "Lead - Gemini": "Lead - Claude",

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES } from "../server/profiles.mjs";
+import { COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS, ROLE_PROVIDER_CHAINS } from "../server/provider-failover.mjs";
 import { LEGACY_HOP_PROFILES, LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
 import {
   DEFAULT_TIER_LADDER,
@@ -226,6 +227,19 @@ test("role table: 8 roles, every preferred provider has a ladder and a mode; loo
   assert.equal(lookupRole("Lead")?.legacy?.name, "Lead - Claude");
   assert.equal(lookupRole("Reviewer")?.legacy?.name, "Review - Gemini");
   assert.equal(lookupRole("lead")?.legacy, null);
+});
+
+test("R1: ROLE_TABLE.providers reads the role-keyed failover chains; old-name chains stay as they were", () => {
+  assert.deepEqual(Object.keys(ROLE_PROVIDER_CHAINS).sort(), Object.keys(ROLE_TABLE).sort());
+  for (const [k, r] of Object.entries(ROLE_TABLE)) {
+    assert.deepEqual(r.providers, [...ROLE_PROVIDER_CHAINS[k]], k);
+    assert.notEqual(r.providers, ROLE_PROVIDER_CHAINS[k], `${k}: a copy, not the shared array`);
+    assert.ok(Object.isFrozen(ROLE_PROVIDER_CHAINS[k]), k);
+  }
+  assert.deepEqual(ROLE_PROVIDER_CHAINS["work-order"], [O, C, A]);
+  // Old names keep their own hop tables (read-only until R5): unchanged by the role table.
+  assert.equal(COUNTERPART_PROFILES["Work Order - DSP"], "Implement - Sonnet");
+  assert.deepEqual(ROLE_FAILOVER_CHAINS["Implement - Sonnet"], ["Lead - Gemini", "Work Order - DSP"]);
 });
 
 test("unknown role -> null; unknown role with an explicit provider still routes", () => {
