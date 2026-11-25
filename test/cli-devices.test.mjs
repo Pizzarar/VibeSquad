@@ -210,14 +210,16 @@ describe("vs pair (headless)", () => {
       const j = JSON.parse(r.out);
       assert.match(j.code, /^\d{6}$/);
       // The link carries the server's configured public port (4180 by default), not the ephemeral loopback port of this test.
-      assert.equal(j.pairUrl, `https://home-pc.test:4180/pair?code=${j.code}&fp=${j.caFingerprint.full.replace(/:/g, "").toLowerCase()}`);
+      // idea-69: the primary link pairs by the Meshnet IP, never the configured host name.
+      assert.equal(j.pairUrl, `https://100.64.0.7:4180/pair?code=${j.code}&fp=${j.caFingerprint.full.replace(/:/g, "").toLowerCase()}`);
       assert.equal(j.qrSvg, undefined, "SVG payloads are not dumped to the terminal");
       assert.ok(auth.discardPairCode && typeof j.expiresAt === "number");
 
       r = await vsAsync(["pair"], { VIBESQUAD_PORT: port });
       assert.equal(r.status, 0, r.err);
       assert.match(r.out, /Pairing code:\s+\d{3} \d{3}/);
-      assert.match(r.out, /Pairing link:\s+https:\/\/home-pc\.test:4180\/pair\?code=\d{6}&fp=[0-9a-f]{64}/);
+      assert.match(r.out, /Pairing link:\s+https:\/\/100\.64\.0\.7:4180\/pair\?code=\d{6}&fp=[0-9a-f]{64}/);
+      assert.doesNotMatch(r.out, /Pairing link:\s+https:\/\/home-pc\.test/);
       assert.match(r.out, /CA fingerprint:\s+([0-9A-F]{2}:){31}[0-9A-F]{2}/);
       assert.ok(r.out.split("\n").length > 20, "an ASCII QR follows the text");
       assert.ok(!r.out.includes("<svg"));
