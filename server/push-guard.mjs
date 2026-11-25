@@ -23,16 +23,12 @@
 // undigested later turn), the reviewer's own last message read offline from the runner store (readRunnerVerdicts); the newest
 // decides. FAIL, none, or no owning Squad refuses. Override (owner/lead only; each use is logged as a `decision`
 // entry and printed): `git -c vs.verdictOverride=<sha> merge|push ...` or VS_VERDICT_OVERRIDE=<sha>[,<sha>].
-// idea-941 rollout window: the gate fails closed by default. Only an owner-opened, MACed, time-boxed window
-// (`vs push-guard window open --for <dur>`, server/verdict-window.mjs) downgrades a MISSING verdict to a loud warning until
-// it expires; a FAIL still refuses inside it. An absent/expired/forged/unreadable window changes nothing.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { applyRolloutWindow, entryVerdict, evaluateMergeVerdicts, formatRolloutWarning, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "./verdict.mjs";
-import { describeVerdictWindow, readVerdictWindow } from "./verdict-window.mjs";
+import { entryVerdict, evaluateMergeVerdicts, formatVerdictOverrides, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "./verdict.mjs";
 
 export const GUARDED_REFS = Object.freeze(["refs/heads/master", "refs/heads/main"]);
 export const HOOKS_PATH = ".githooks";
@@ -211,19 +207,6 @@ export function verdictOverrides({ env = process.env, cwd = process.cwd(), git =
 /** idea-883: the VS home whose team logs hold recorded verdicts: an explicit `home`, else env.VIBESQUAD_HOME, else ~/.vibesquad. */
 export function verdictHome({ home, env = process.env } = {}) {
   return path.resolve(home || env.VIBESQUAD_HOME || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
-}
-
-/**
- * idea-941: gate one evaluateMergeVerdicts result against the owner rollout window. Returns { verdict, message, warnings }:
- * `message` is the refusal text ("" when ok), `warnings` the loud banner while an active window applied. With no active
- * window the verdict is unchanged (fail closed) and an expired/invalid window is named in the refusal.
- */
-export function gateVerdict(verdict, { action, squads, window: win }) {
-  const windowLine = win && win.state !== "none" ? describeVerdictWindow(win) : "";
-  const gated = applyRolloutWindow(verdict, { active: Boolean(win?.active) });
-  const warnings = win?.active && (gated.warned.length || !gated.ok || gated.passed?.length || gated.overridden?.length) ? formatRolloutWarning(gated, { action, windowLine }) : "";
-  const message = gated.ok ? "" : formatVerdictRefusal(gated, { action, squads, windowLine });
-  return { verdict: gated, message, warnings };
 }
 
 /** A Squad id as its log directory name (the same mapping as appendVsLogEntry's safeSegment in server/brainstorm.mjs), but ""
@@ -500,15 +483,12 @@ async function defaultTeams() {
  */
 export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd = process.cwd(), env = process.env, git = defaultGit, registry, home } = {}) {
   const guarded = updates.filter((u) => GUARDED_REFS.includes(u.remoteRef) && !ZERO.test(u.localSha));
-  if (!guarded.length) return { ok: true, message: "", warnings: "", results: [] };
+  if (!guarded.length) return { ok: true, message: "", results: [] };
   const { teams, findLane } = registry ?? (await defaultTeams());
   const who = pusherFromEnv({ env, cwd, git });
   const shared = isSharedRemote(remote, url, { cwd, git });
-  const vsHome = verdictHome({ home, env });
   const results = [];
   let message = "";
-  let warnings = "";
-  let win = null; // idea-941: the owner rollout window, read once on the first unit merge
   let squads = null; // idea-883: this repo's Squads, resolved once on the first unit merge
   for (const u of guarded) {
     const branch = u.remoteRef.replace("refs/heads/", "");
@@ -527,17 +507,15 @@ export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd
     const unit = listed.merges.filter((m) => isUnitMergeSubject(m.subject));
     if (unit.length && !squads) squads = await repoSquads({ cwd, git, teams });
     const recorded = unit.length
-      ? await recordedVerdicts({ tips: unit.map((m) => m.tip), home: vsHome, squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env })
+      ? await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env })
       : () => null;
-    if (unit.length && !win) win = readVerdictWindow({ home: vsHome, env });
-    const gated = gateVerdict(evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) }), { action: "push", squads: squads ?? [], window: win });
-    results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict: gated.verdict });
+    const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
+    results.push({ ref: u.remoteRef, result, direct: listed.direct, verdict });
     message += formatRefusal(result, { ref: u.remoteRef });
-    message += gated.message;
-    warnings += gated.warnings;
+    message += formatVerdictRefusal(verdict, { action: "push", squads: squads ?? [] });
   }
   const ok = results.every((r) => r.result?.ok && (r.verdict?.ok ?? true));
-  return { ok, message, warnings, results, squads: squads ?? [], window: win };
+  return { ok, message, results, squads: squads ?? [] };
 }
 
 /**
@@ -607,7 +585,7 @@ export function isUnitBranchName(name, remotes = [SHARED_REMOTE]) {
  * Returns { ok, message, verdict }.
  */
 export async function checkMergeCommit({ cwd = process.cwd(), env = process.env, git = defaultGit, home, registry } = {}) {
-  const pass = { ok: true, message: "", warnings: "", verdict: null, squads: [] };
+  const pass = { ok: true, message: "", verdict: null, squads: [] };
   let ref = "";
   try {
     ref = git(["symbolic-ref", "-q", "HEAD"], cwd).trim();
@@ -654,11 +632,9 @@ export async function checkMergeCommit({ cwd = process.cwd(), env = process.env,
   if (!unit.length) return pass;
   const { teams } = registry ?? (await defaultTeams());
   const squads = await repoSquads({ cwd, git, teams });
-  const vsHome = verdictHome({ home, env });
-  const recorded = await recordedVerdicts({ tips: unit.map((m) => m.tip), home: vsHome, squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env });
-  const win = readVerdictWindow({ home: vsHome, env });
-  const gated = gateVerdict(evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) }), { action: "merge", squads, window: win });
-  return { ok: gated.verdict.ok, message: gated.message, warnings: gated.warnings, verdict: gated.verdict, squads, window: win };
+  const recorded = await recordedVerdicts({ tips: unit.map((m) => m.tip), home: verdictHome({ home, env }), squads, resolve: resolveInRepo({ cwd, git }), tipTime: commitTimeInRepo({ cwd, git }), env });
+  const verdict = evaluateMergeVerdicts({ merges: unit, recorded, overrides: verdictOverrides({ env, cwd, git }) });
+  return { ok: verdict.ok, message: formatVerdictRefusal(verdict, { action: "merge", squads }), verdict, squads };
 }
 
 /** `vs push-guard check`: what the hook would decide for pushing HEAD to <remote>/<branch> now. */
@@ -718,7 +694,6 @@ export function summarize(results) {
     for (const m of result.included) lines.push(`  included  ${m.sha.slice(0, 8)} ${String(m.subject).slice(0, 80)}`);
     for (const m of verdict?.passed ?? []) lines.push(`  verdict   ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: ${m.line.slice(0, 60)}${m.source === "runner" ? ` (reviewer ${m.reviewer}'s runner record)` : ""}`);
     for (const m of verdict?.overridden ?? []) lines.push(`  OVERRIDE  ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: verdict gate overridden (vs.verdictOverride; the hook logs it)`);
-    for (const m of verdict?.warned ?? []) lines.push(`  WINDOW    ${m.sha.slice(0, 8)} tip ${m.tip.slice(0, 8)}: no recorded verdict, allowed by the owner rollout window (idea-941)`);
     if (direct.length) lines.push(`  note: ${ref} also carries ${direct.length} direct (non-merge) commit(s); check they are yours: git log --first-parent --no-merges <remote>..HEAD`);
   }
   return lines.length ? `${lines.join("\n")}\n` : "";
@@ -736,11 +711,10 @@ export async function main(argv = process.argv.slice(2)) {
     const updates = parsePrePushLines(await readStdin());
     const res = await checkPush({ updates, remote: remoteName, url });
     if (!res.ok) {
-      process.stderr.write(`${res.message}${res.warnings ?? ""}`);
+      process.stderr.write(res.message);
       return 1;
     }
     process.stderr.write(summarize(res.results));
-    if (res.warnings) process.stderr.write(res.warnings);
     // idea-883: an override is allowed only with a durable audit entry plus a stderr notice.
     for (const r of res.results) {
       if (!r.verdict?.overridden?.length) continue;
@@ -752,10 +726,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (mode === "pre-merge-commit") {
     const res = await checkMergeCommit();
     if (!res.ok) {
-      process.stderr.write(`${res.message}${res.warnings ?? ""}`);
+      process.stderr.write(res.message);
       return 1;
     }
-    if (res.warnings) process.stderr.write(res.warnings);
     if (res.verdict?.overridden?.length) {
       const logged = await logVerdictOverrides({ verdict: res.verdict, action: "merge", squads: res.squads });
       process.stderr.write(formatVerdictOverrides(res.verdict, { action: "merge", logged }));
@@ -764,8 +737,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (mode === "check") {
     const res = await checkHead({ remote: remoteName });
-    const warn = res.warnings ?? "";
-    process.stdout.write(res.ok ? `vs push-guard: OK to push HEAD to ${remoteName}/master\n${summarize(res.results)}${warn}` : `${res.message}${warn}`);
+    process.stdout.write(res.ok ? `vs push-guard: OK to push HEAD to ${remoteName}/master\n${summarize(res.results)}` : res.message);
     return res.ok ? 0 : 1;
   }
   process.stderr.write("usage: node server/push-guard.mjs pre-push <remote> <url> | pre-merge-commit | check [remote]\n");

@@ -10,7 +10,6 @@ import { after, before, describe, test } from "node:test";
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
 import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, readRunnerVerdicts, recordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
-import { openVerdictWindow, VERDICT_WINDOW_FILE } from "../server/verdict-window.mjs";
 import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "../server/verdict.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -898,115 +897,124 @@ describe("push-guard: idea-883 runner-attested fallback (pure + store)", () => {
   });
 });
 
-// ---- idea-941 rollout window: fail closed by default; only an owner-opened, MACed, unexpired window downgrades a MISSING
-// verdict to a loud warning (a FAIL still refuses). Nothing is inferred from server-start files / capability markers.
-describe("push-guard: idea-941 owner rollout window (fail closed by default)", () => {
+// ---- idea-941: the verdict gate fails closed with no bypass switch. Missing / unreadable / malformed verdict state and a
+// recorded FAIL all refuse; nothing is read from server-start files, capability markers or an old rollout-window file. The
+// refusal names the per-commit owner/lead override (vs.verdictOverride), which is unchanged.
+describe("push-guard: idea-941 verdict gate fails closed (no rollout window)", () => {
   const at = (home, extra = {}) => baseEnv({ VIBESQUAD_HOME: home, ...extra });
-  const TOKEN = "ef".repeat(32);
   let h = 0;
-  function windowHome() {
-    const home = join(tmp, `rollout-window-${++h}`);
+  function gateHome() {
+    const home = join(tmp, `fail-closed-${++h}`);
     mkdirSync(home, { recursive: true });
-    writeFileSync(join(home, "local-token"), `${TOKEN}\n`);
+    writeFileSync(join(home, "local-token"), `${"ef".repeat(32)}\n`);
     return home;
   }
-  // A server-start record claiming the old capability marker: the gate must not read it (forged or real).
-  const forgeMarker = (home) => writeFileSync(join(home, "server-start-2099-01-01T00-00-00-000Z.json"), JSON.stringify({ startedAt: "2099-01-01T00:00:00.000Z", ok: true, dryRun: false, source: "server-start", capabilities: ["attested-verdict"] }));
+  // Things that used to (r1, r2) or could plausibly relax the gate: a server-start capability marker and a rollout-window file.
+  function forgeRelaxers(home) {
+    writeFileSync(join(home, "server-start-2099-01-01T00-00-00-000Z.json"), JSON.stringify({ startedAt: "2099-01-01T00:00:00.000Z", ok: true, dryRun: false, source: "server-start", capabilities: ["attested-verdict"] }));
+    const now = Date.now();
+    writeFileSync(join(home, "verdict-rollout-window.json"), JSON.stringify({ openedAt: new Date(now - 60_000).toISOString(), until: new Date(now + 3600_000).toISOString(), reason: "forged", mac: "1".repeat(64) }));
+  }
+  const assertMissingRefusal = (err, action, tip) => {
+    assert.match(err, new RegExp(`vs verdict gate: refusing to ${action}`));
+    assert.match(err, new RegExp(`tip ${tip.slice(0, 8)}: no recorded verdict`));
+    assert.match(err, /Missing verdict: pre-restart PASS digests .* never get the `verdict` field retroactively/);
+    assert.match(err, /There is no rollout window or global bypass \(idea-941\)/);
+    assert.match(err, new RegExp(`git -c vs\\.verdictOverride=${tip.slice(0, 8)} ${action}`));
+    assert.doesNotMatch(err, /ROLLOUT WINDOW|WARNING/);
+  };
 
-  test("no window: a missing verdict refuses on merge and push, with a forged capability marker or none", () => {
-    for (const marker of [false, true]) {
+  test("missing verdict (none, or an unattested pre-restart PASS) refuses on merge and push, even with forged relaxers", () => {
+    for (const forged of [false, true]) {
       const { work, origin } = freshRepo();
-      const home = windowHome();
-      if (marker) forgeMarker(home);
+      const home = gateHome();
+      if (forged) forgeRelaxers(home);
       const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
-      const tip = unitBranch(work, `unit-941-nowin-${marker}`, { verdict: null });
-      // A pre-restart PASS digest (no server-attested `verdict` field) does not count.
+      const b = `unit-941-miss-${forged}`;
+      const tip = unitBranch(work, b, { verdict: null });
       recordVerdict(`PASS 0/0/0 ${tip.slice(0, 8)} reviewer=Review - Gemini: pre-restart`, { home, attested: false });
-      const m = run(work, ["merge", "-q", "--no-ff", "-m", `Merge unit-941-nowin-${marker}: x (@alp)`, `unit-941-nowin-${marker}`], env);
+      const m = run(work, ["merge", "-q", "--no-ff", "-m", `Merge ${b}: x (@alp)`, b], env);
       assert.notEqual(m.code, 0);
-      assert.match(m.err, /vs verdict gate: refusing to merge/);
-      assert.match(m.err, /Pre-restart PASS digests/);
-      assert.doesNotMatch(m.err, /ROLLOUT WINDOW ACTIVE/);
+      assertMissingRefusal(m.err, "merge", tip);
       ok(work, ["merge", "--abort"]);
       const before = remoteTip(origin);
-      ok(work, ["merge", "-q", "--no-ff", "--no-verify", "-m", `Merge unit-941-nowin-${marker}: x (@alp)`, `unit-941-nowin-${marker}`]);
+      ok(work, ["merge", "-q", "--no-ff", "--no-verify", "-m", `Merge ${b}: x (@alp)`, b]);
       const p = run(work, ["push", "origin", "master"], env);
       assert.notEqual(p.code, 0);
-      assert.match(p.err, /vs verdict gate: refusing to push/);
+      assertMissingRefusal(p.err, "push", tip);
       assert.equal(remoteTip(origin), before);
     }
   });
 
-  test("a hand-written (agent-forged) window file is ignored and named in the refusal", () => {
+  test("unreadable verdict state (Squad log is a directory) refuses", () => {
     const { work } = freshRepo();
-    const home = windowHome();
-    const now = Date.now();
-    writeFileSync(join(home, VERDICT_WINDOW_FILE), JSON.stringify({ openedAt: new Date(now - 60_000).toISOString(), until: new Date(now + 3600_000).toISOString(), reason: "", mac: "1".repeat(64) }));
-    unitBranch(work, "unit-941-forged", { verdict: null });
-    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-forged: x (@alp)", "unit-941-forged"], at(home, { VS_LANE: "lane-alpha" }));
+    const home = gateHome();
+    mkdirSync(join(home, "teams", "squad-a", "log.jsonl"), { recursive: true }); // EISDIR on read
+    const tip = unitBranch(work, "unit-941-unreadable", { verdict: null });
+    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-unreadable: x (@alp)", "unit-941-unreadable"], at(home, { VS_LANE: "lane-alpha" }));
     assert.notEqual(m.code, 0);
-    assert.match(m.err, /vs verdict gate: refusing to merge/);
-    assert.match(m.err, /verdict rollout window: INVALID, ignored \(MAC does not verify/);
-  });
-
-  test("owner window active: a missing verdict warns loudly on merge, check and push; a FAIL still refuses; lane ownership still refuses", async () => {
-    const { work, origin } = freshRepo();
-    const home = windowHome();
-    forgeMarker(home); // irrelevant either way
-    openVerdictWindow({ home, env: { VIBESQUAD_HOME: home }, durationMs: 3600_000, reason: "pre-restart rollout" });
-    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
-    const tip = unitBranch(work, "unit-941-win", { verdict: null });
-    recordVerdict(`PASS 0/0/0 ${tip.slice(0, 8)} reviewer=Review - Gemini: pre-restart`, { home, attested: false });
-    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-win: x (@alp)", "unit-941-win"], env);
-    assert.equal(m.code, 0, m.err);
-    assert.match(m.err, /OWNER ROLLOUT WINDOW ACTIVE \(idea-941\)/);
-    assert.match(m.err, /verdict rollout window: ACTIVE until .*pre-restart rollout/);
-    assert.match(m.err, new RegExp(`tip ${tip.slice(0, 8)}: no recorded verdict`));
-
-    const chk = await checkHead({ cwd: work, env, registry });
-    assert.equal(chk.ok, true);
-    assert.match(chk.warnings, /OWNER ROLLOUT WINDOW ACTIVE/);
-    assert.equal(chk.results[0].verdict.warned.length, 1);
-
-    const p = run(work, ["push", "origin", "master"], env);
-    assert.equal(p.code, 0, p.err);
-    assert.match(p.err, /WINDOW +[0-9a-f]{8} tip [0-9a-f]{8}: no recorded verdict, allowed by the owner rollout window/);
-    assert.match(p.err, /OWNER ROLLOUT WINDOW ACTIVE/);
-    assert.equal(remoteTip(origin), ok(work, ["rev-parse", "HEAD"]));
-
-    // A recorded FAIL refuses inside the window.
-    const failTip = unitBranch(work, "unit-941-winfail", { verdict: null });
-    recordVerdict(`FAIL 1/0/0 ${failTip.slice(0, 8)} reviewer=Review - Gemini: high`, { home, attested: true });
-    const f = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-winfail: x (@alp)", "unit-941-winfail"], env);
-    assert.notEqual(f.code, 0);
-    assert.match(f.err, /vs verdict gate: refusing to merge/);
-    assert.match(f.err, /latest recorded verdict is FAIL 1\/0\/0/);
+    assertMissingRefusal(m.err, "merge", tip);
     ok(work, ["merge", "--abort"]);
-
-    // Lane ownership is not weakened by the window.
-    unitBranch(work, "unit-941-theirs", { verdict: null });
-    assert.equal(run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-theirs: theirs (@bet)", "unit-941-theirs"], env).code, 0);
-    const other = run(work, ["push", "origin", "master"], env);
-    assert.notEqual(other.code, 0);
-    assert.match(other.err, /refusing to push refs\/heads\/master/);
   });
 
-  test("an expired owner window refuses again (and says it expired)", () => {
+  test("malformed verdict state (garbage, truncated JSON, wrong verdict shape) refuses", () => {
     const { work } = freshRepo();
-    const home = windowHome();
-    openVerdictWindow({ home, env: { VIBESQUAD_HOME: home }, durationMs: 3600_000, now: Date.now() - 2 * 3600_000 });
-    unitBranch(work, "unit-941-expired", { verdict: null });
-    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-expired: x (@alp)", "unit-941-expired"], at(home, { VS_LANE: "lane-alpha" }));
+    const home = gateHome();
+    const tip = unitBranch(work, "unit-941-malformed", { verdict: null });
+    const t = tip.slice(0, 8);
+    mkdirSync(join(home, "teams", "squad-a"), { recursive: true });
+    const lines = [
+      `not json at all PASS 0/0/0 ${t}`,
+      `{"ts":"${new Date().toISOString()}","agent":"dg-1","type":"done","text":"PASS 0/0/0 ${t}","verdict":{"reviewer":"rv-1"`,
+      JSON.stringify({ ts: new Date().toISOString(), agent: "dg-1", type: "done", text: `PASS 0/0/0 ${t}`, verdict: `PASS 0/0/0 ${t}` }),
+      JSON.stringify({ ts: new Date().toISOString(), agent: "dg-1", type: "done", text: `PASS 0/0/0 ${t}`, verdict: { reviewer: "rv-1", line: "PASS" } }),
+    ];
+    writeFileSync(join(home, "teams", "squad-a", "log.jsonl"), `${lines.join("\n")}\n`);
+    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-malformed: x (@alp)", "unit-941-malformed"], at(home, { VS_LANE: "lane-alpha" }));
+    assert.notEqual(m.code, 0);
+    assertMissingRefusal(m.err, "merge", tip);
+    ok(work, ["merge", "--abort"]);
+  });
+
+  test("a recorded FAIL refuses (forged relaxers or not) and does not print the missing-verdict note", () => {
+    const { work } = freshRepo();
+    const home = gateHome();
+    forgeRelaxers(home);
+    const tip = unitBranch(work, "unit-941-fail", { verdict: null });
+    recordVerdict(`FAIL 1/0/0 ${tip.slice(0, 8)} reviewer=Review - Gemini: high`, { home, attested: true });
+    const m = run(work, ["merge", "-q", "--no-ff", "-m", "Merge unit-941-fail: x (@alp)", "unit-941-fail"], at(home, { VS_LANE: "lane-alpha" }));
     assert.notEqual(m.code, 0);
     assert.match(m.err, /vs verdict gate: refusing to merge/);
-    assert.match(m.err, /verdict rollout window: expired at .*fails closed/);
-    assert.doesNotMatch(m.err, /ROLLOUT WINDOW ACTIVE/);
+    assert.match(m.err, /latest recorded verdict is FAIL 1\/0\/0/);
+    assert.doesNotMatch(m.err, /Missing verdict/);
+    ok(work, ["merge", "--abort"]);
   });
 
-  test("docs/WORKFLOWS.md documents the owner rollout window and pre-restart PASS digests", () => {
+  test("the per-commit override named in the refusal still works (merge and push), unchanged", () => {
+    const { work, origin } = freshRepo();
+    const home = gateHome();
+    const env = at(home, { VS_LANE: "lane-alpha", VS_TEAM: "squad-a" });
+    const tip = unitBranch(work, "unit-941-ovr", { verdict: null });
+    const t = tip.slice(0, 8);
+    ok(work, ["-c", `vs.verdictOverride=${t}`, "merge", "-q", "--no-ff", "-m", "Merge unit-941-ovr: docs-only, lead-checked (@alp)", "unit-941-ovr"], env);
+    const p = run(work, ["-c", `vs.verdictOverride=${t}`, "push", "origin", "master"], env);
+    assert.equal(p.code, 0, p.err);
+    assert.equal(remoteTip(origin), ok(work, ["rev-parse", "HEAD"]));
+  });
+
+  test("the rollout-window code and CLI are gone", async () => {
+    assert.throws(() => readFileSync(join(ROOT, "server", "verdict-window.mjs"), "utf8"), /ENOENT/);
+    const verdict = await import("../server/verdict.mjs");
+    assert.equal(verdict.applyRolloutWindow, undefined);
+    assert.equal(verdict.formatRolloutWarning, undefined);
+    assert.doesNotMatch(readFileSync(join(ROOT, "cli", "vs.mjs"), "utf8"), /push-guard window|verdict-window/);
+  });
+
+  test("docs/WORKFLOWS.md documents fail closed with no rollout window, and pre-restart PASS digests", () => {
     const wf = readFileSync(join(ROOT, "docs", "WORKFLOWS.md"), "utf8");
-    assert.match(wf, /Rollout window \(idea-941\):\*\* the gate fails closed by default/);
-    assert.match(wf, /vs push-guard window open/);
+    assert.match(wf, /\*\*Fails closed, no bypass switch \(idea-941\):\*\*/);
+    assert.match(wf, /there is no rollout window/);
+    assert.doesNotMatch(wf, /vs push-guard window/);
     assert.match(wf, /PASS digests written before the server restart never get the `verdict` field retroactively/);
   });
 });

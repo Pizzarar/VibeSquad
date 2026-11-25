@@ -587,7 +587,7 @@ Usage:
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record
   vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
-  vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks (pre-push, pre-merge-commit, pre-commit) so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ... Verdict gate (idea-883): a unit merge into master/main (git merge, and push) needs a reviewer's recorded PASS on the merged tip in this repo's Squad log; docs-only/lead-checked units: the lead overrides with git -c vs.verdictOverride=<tip> on the merge AND the push (each use is logged). Rollout window (idea-941, owner only): vs push-guard window open <dur, max 24h> [--reason ...] | close | status: until it expires a MISSING verdict warns loudly instead of refusing (a FAIL still refuses); no window = fail closed
+  vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks (pre-push, pre-merge-commit, pre-commit) so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ... Verdict gate (idea-883): a unit merge into master/main (git merge, and push) needs a reviewer's recorded PASS on the merged tip in this repo's Squad log; docs-only/lead-checked units: the lead overrides with git -c vs.verdictOverride=<tip> on the merge AND the push (each use is logged)
   vs slot run --pool <name> [--max <N>] [--timeout <sec>] [--squad <id>] -- <cmd> [args...]   run <cmd> in a machine-wide N-slot pool (idea-267): waits FIFO for a free slot ("waiting for <pool> slot (N ahead)" every ~30s; N counts only waiters that can block you), passes the exit code through; a dead or silent holder is reclaimed. Godot suites: --pool godot (3 slots; VS_SLOT_MAX_GODOT overrides). --timeout: max wait for a slot, then exit 124. Reservations (idea-578): VS_SLOT_RESERVE_<POOL>=<squad>:<n>[,<squad>:<n>] or none; godot defaults to efi:2, so Squad efi may use all 3 slots and every other Squad together at most 1 (a caller takes a slot only if the unused part of each other Squad's reservation stays free). Your Squad is your agent's team label (VS_AGENT_ID); no agent or an unknown one = shared slots only; --squad <id> sets it. FIFO within each class; a waiter the rule blocks never holds up the waiters behind it
   vs storybook check <project> [--json]   report-only Storybook consistency check of a project (Squad id, e.g. efi) at origin/<default>: prints [STORYBOOK] sha=<short> #<check>=<n> ... total=<n> (--json: the snapshot); never gates, exit 0
   vs slot status [--pool <name>] [--json]   holders and waiters of a pool (default godot), with their Squads and the pool's reservations
@@ -3544,8 +3544,7 @@ export async function commandPushGuard(flags, { cwd = process.cwd(), env = proce
   if (sub === "check") {
     const remote = String(flags._[1] ?? "origin");
     const res = await guard.checkHead({ remote, cwd, env, registry });
-    const warn = res.warnings ?? "";
-    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}${warn}` : `${res.message}${warn}`);
+    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}` : res.message);
     return res.ok ? 0 : 1;
   }
   if (sub === "install") {
@@ -3556,32 +3555,7 @@ export async function commandPushGuard(flags, { cwd = process.cwd(), env = proce
     out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${was}${active}\n` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})${active}\n`);
     return 0;
   }
-  if (sub === "window") {
-    // idea-941: the owner's time-boxed rollout window for the verdict gate (server/verdict-window.mjs). open = owner verb
-    // (refused from an agent shell / without owner proof); close only tightens the gate; status reads it offline.
-    const win = await import("../server/verdict-window.mjs");
-    const action = String(flags._[1] ?? "status").toLowerCase();
-    if (action === "open") {
-      const raw = flags._[2] ?? (typeof flags.for === "string" ? flags.for : "");
-      const durationMs = win.parseWindowDuration(raw);
-      if (!durationMs) throw new Error("usage: vs push-guard window open <duration, e.g. 4h; max 24h> [--reason \"...\"]");
-      const rec = win.openVerdictWindow({ env, durationMs, reason: typeof flags.reason === "string" ? flags.reason : "" });
-      out(`vs push-guard: verdict rollout window OPEN until ${rec.until} (idea-941). Until then a MISSING verdict warns instead of refusing on git merge/push; a FAIL still refuses. Close early: vs push-guard window close\n`);
-      return 0;
-    }
-    if (action === "close") {
-      const removed = win.closeVerdictWindow({ env });
-      out(removed ? "vs push-guard: verdict rollout window closed; the verdict gate fails closed.\n" : "vs push-guard: no verdict rollout window was open; the verdict gate fails closed.\n");
-      return 0;
-    }
-    if (action === "status") {
-      const state = win.readVerdictWindow({ env });
-      out(`vs push-guard: ${win.describeVerdictWindow(state)}\n`);
-      return state.active ? 0 : 1;
-    }
-    throw new Error(`unknown push-guard window action "${action}". Use: vs push-guard window open <duration> [--reason ...] | close | status`);
-  }
-  throw new Error(`unknown push-guard subcommand "${sub}". Use: vs push-guard check [remote] | install [--force] | window open <duration>|close|status`);
+  throw new Error(`unknown push-guard subcommand "${sub}". Use: vs push-guard check [remote] | install [--force]`);
 }
 
 function commandLesson(flags) {

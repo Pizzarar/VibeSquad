@@ -363,41 +363,10 @@ export function evaluateMergeVerdicts({ merges = [], recorded = () => null, over
   return { ok: refused.length === 0, passed, overridden, refused };
 }
 
-/**
- * idea-941: apply an ACTIVE owner rollout window (server/verdict-window.mjs) to an evaluateMergeVerdicts result. Inside the
- * window a *missing* verdict ("no-verdict") is downgraded to a warning (moved to `warned`); a recorded FAIL still refuses.
- * Without an active window the result is returned unchanged (fail closed). Pure.
- */
-export function applyRolloutWindow(result, { active = false } = {}) {
-  if (!active || !result || result.ok) return { ...result, warned: [] };
-  const warned = result.refused.filter((r) => r.reason === "no-verdict");
-  const refused = result.refused.filter((r) => r.reason !== "no-verdict");
-  return { ...result, ok: refused.length === 0, refused, warned };
-}
-
-/** idea-941: the loud stderr banner while an owner rollout window is active; lists the missing-verdict merges it let through. */
-export function formatRolloutWarning(result, { action = "push", windowLine = "" } = {}) {
-  const warned = result?.warned ?? [];
-  const short = (s) => String(s ?? "").slice(0, 8);
-  const bar = "!".repeat(78);
-  const lines = [bar, `vs verdict gate: OWNER ROLLOUT WINDOW ACTIVE (idea-941): a missing verdict warns instead of refusing; a FAIL still refuses.`];
-  if (windowLine) lines.push(`  ${windowLine}`);
-  for (const r of warned) {
-    const head = r.sha ? `${short(r.sha)} ${String(r.subject ?? "").slice(0, 80)}` : String(r.subject ?? "").slice(0, 80);
-    lines.push(`  WARNING: allowing ${action} of ${head}`, `           tip ${short(r.tip)}: no recorded verdict (re-review it, or the lead overrides with git -c vs.verdictOverride=${short(r.tip)})`);
-  }
-  lines.push(
-    "  PASS digests written before the server restarted onto the verdict-writer build never get the `verdict` field retroactively.",
-    "  When the window expires the gate fails closed again; close it early with: vs push-guard window close",
-    bar,
-  );
-  return `${lines.join("\n")}\n`;
-}
-
 /** Human-readable refusal for stderr; "" when every unit merge has a recorded PASS (or is overridden). `squads`: the Squad
- * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). `windowLine`: the idea-941
- * rollout window's status when one exists but did not apply (expired / invalid / FAIL inside it). */
-export function formatVerdictRefusal(result, { action = "push", squads, windowLine = "" } = {}) {
+ * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). idea-941: there is no rollout
+ * window or other bypass switch; a missing verdict points at the per-commit owner/lead override (vs.verdictOverride). */
+export function formatVerdictRefusal(result, { action = "push", squads } = {}) {
   if (result.ok) return "";
   const short = (s) => String(s ?? "").slice(0, 8);
   const lines = [`vs verdict gate: refusing to ${action}: a unit commit's latest recorded verdict is FAIL or missing (idea-883, fail closed).`];
@@ -417,11 +386,13 @@ export function formatVerdictRefusal(result, { action = "push", squads, windowLi
         : `           tip ${short(r.tip)}: no recorded verdict (no reviewer digest \`PASS|FAIL H/M/L <hash>\` line names this tip)`,
     );
   }
-  if (windowLine) lines.push(`  ${windowLine}`);
-  lines.push(
-    "Get a review PASS on the exact tip (vs verdict <reviewer> --branch <unit> exits 0), then retry.",
-    "Pre-restart PASS digests (written before the server restarted onto the verdict-writer build) never get the `verdict` field retroactively: re-review the tip or use an override below.",
-  );
+  lines.push("Get a review PASS on the exact tip (vs verdict <reviewer> --branch <unit> exits 0), then retry.");
+  if (result.refused.some((r) => r.reason !== "fail")) {
+    lines.push(
+      "Missing verdict: pre-restart PASS digests (written before the server restarted onto the verdict-writer build) never get the `verdict` field retroactively.",
+      "Re-review the tip, or the owner/lead overrides that one commit with vs.verdictOverride (below). There is no rollout window or global bypass (idea-941).",
+    );
+  }
   const shas = result.refused.map((r) => short(r.tip || r.sha)).join(",");
   lines.push(
     "Docs-only or lead-checked unit (no code reviewer, or a docs:<path> review, which names no commit): the lead overrides with the tip",
