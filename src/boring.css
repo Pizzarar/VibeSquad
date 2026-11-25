@@ -634,6 +634,7 @@ html[data-vibe="boring"] .decision-card .btn { font-size: var(--t-ui); font-weig
 html[data-vibe="boring"] .decision-card { padding: 10px 14px; }
 html[data-vibe="boring"] .decision-card .dc-summary,
 html[data-vibe="boring"] .decision-card .dc-primary { font-weight: 500; }
+html[data-vibe="boring"] .decision-card .dc-decides { color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
 
 /* ---- B6: Corporate Vibe-OS (pastel airbrushed sunsets, spray-paint wash, light surrealism) ---- */
 /* D1 (UX_REVIEW 1.1): flat canvas. The sunset/radial wash is gone; hue lives in status + accent only. */

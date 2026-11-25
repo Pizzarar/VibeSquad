@@ -50,6 +50,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
+import { handleDecisionsAnswer, handleDecisionsList } from "./decisions.mjs";
 import { authenticate, playtestCaller, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, OWNER_PLAYTEST_ROLE, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
@@ -81,6 +82,7 @@ import {
   triageInboxCards,
   triageInboxCardsAsync,
   writeInboxCards,
+  pickLiveAgent,
 } from "./inbox.mjs";
 import {
   broadcastWebPush,
@@ -572,6 +574,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
   }
   if (path === "/__vibesquad/local-image") return true; // file contents
   if (path === "/__vibesquad/restart-host") return true; // H2 (idea-74): restart request state is owner-only, GET included
+  if (path === "/__vibesquad/decisions" || String(path).startsWith("/__vibesquad/decisions/")) return true; // @desk D2: owner-only feed (agent asks + owner answers)
   if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return true; // prompts, target configs, run logs
   if (isTerminalsPath(path)) return true; // live shells and script logs
   if (isGitPath(path)) return true; // diffs are file contents (writes are owner-gated as non-GET)
@@ -2815,6 +2818,13 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "restart-runner")); // idea-249
       case "/__vibesquad/restart-host": // H2 (idea-74): owner-only coordinated server+runner restart (gated read + in-handler check)
         return handleRestartHost(req, res, { owner, rootDir });
+      // @desk D2 (tierA-security): Decision Desk feed + batch answer. Owner-only twice: a gated read / a write that is not in
+      // AGENT_WRITE_ALLOWLIST (so an agent caller is 403 above and can never answer a needs-you), then the in-handler check.
+      case "/__vibesquad/decisions":
+      case "/__vibesquad/decisions/answer": {
+        const dctx = { owner, sendJson, readBody: async (r) => sanitizeBody(await readBody(r, 128 * 1024)), backend: opts.backend ?? sharedRunnerBackend(), rootDir, appendLog: appendVsLogEntry, pickLiveAgent };
+        return path === "/__vibesquad/decisions" ? handleDecisionsList(req, res, dctx) : handleDecisionsAnswer(req, res, dctx);
+      }
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":

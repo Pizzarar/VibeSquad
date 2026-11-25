@@ -6473,6 +6473,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .decision-card { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--violet); border-radius: 10px; background: var(--violet-dim); color: var(--text); }
 .decision-card.pin { flex: 0 0 auto; max-height: 45%; overflow-y: auto; margin: 6px 8px; }
 .dc-summary { margin: 0; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.dc-decides { margin: 0; color: var(--muted); line-height: 1.35; overflow-wrap: anywhere; }
 .dc-actions, .dc-alts { display: flex; flex-direction: column; gap: 6px; }
 .dc-actions .btn { min-height: 44px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .dc-primary { font-weight: 700; }
