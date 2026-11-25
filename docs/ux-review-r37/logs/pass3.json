@@ -1,0 +1,146 @@
+{
+ "dark": {
+  "pitch": [
+   32,
+   32,
+   82,
+   30,
+   82,
+   32,
+   32,
+   32,
+   32,
+   32
+  ],
+  "stripH": 518,
+  "stripTop": 127,
+  "firstRowTop": null,
+  "vh": 1800,
+  "mainW": 2820,
+  "sample": {
+   ".boring-decision-strip-state": {
+    "cls": "boring-decision-strip-state st-none",
+    "fs": "11px",
+    "color": "rgb(154, 151, 168)",
+    "t": "no lead"
+   },
+   ".boring-decision-strip-event": {
+    "cls": "boring-decision-strip-event",
+    "fs": "13px",
+    "color": "rgb(195, 192, 207)",
+    "t": "doneNightly build green on all"
+   },
+   ".boring-decision-strip-lane-name": {
+    "cls": "boring-decision-strip-lane-name",
+    "fs": "13px",
+    "color": "rgb(243, 241, 247)",
+    "t": "Desk"
+   },
+   ".boring-decision-row-ask, .boring-decision-ask": {
+    "cls": "boring-decision-ask",
+    "fs": "14px",
+    "color": "rgb(243, 241, 247)",
+    "t": "Make Decision Desk the default"
+   },
+   ".boring-decision-choice": {
+    "cls": "boring-decision-choice is-lean selected",
+    "fs": "13px",
+    "color": "rgb(243, 241, 247)",
+    "t": "LeanYes, default landing + sid"
+   },
+   "[class*=decision][class*=age]": {
+    "cls": "boring-decision-age",
+    "fs": "11px",
+    "color": "rgb(154, 151, 168)",
+    "t": "30m"
+   },
+   "[class*=decision][class*=handle], [class*=decision] code": {
+    "cls": "boring-decision-code",
+    "fs": "11px",
+    "color": "rgb(154, 151, 168)",
+    "t": "@main-game"
+   },
+   "[class*=decision-decides]": {
+    "cls": "boring-decision-decides",
+    "fs": "13px",
+    "color": "rgb(195, 192, 207)",
+    "t": "Decides: Sets whether opening "
+   }
+  },
+  "stripClick": "?demo=&team=efi&agent=demo-lead-efi"
+ },
+ "light": {
+  "pitch": [
+   32,
+   32,
+   82,
+   30,
+   82,
+   32,
+   32,
+   32,
+   32,
+   32
+  ],
+  "stripH": 518,
+  "stripTop": 127,
+  "firstRowTop": null,
+  "vh": 1800,
+  "mainW": 2820,
+  "sample": {
+   ".boring-decision-strip-state": {
+    "cls": "boring-decision-strip-state st-none",
+    "fs": "11px",
+    "color": "rgb(94, 88, 104)",
+    "t": "no lead"
+   },
+   ".boring-decision-strip-event": {
+    "cls": "boring-decision-strip-event",
+    "fs": "13px",
+    "color": "rgb(74, 69, 88)",
+    "t": "doneNightly build green on all"
+   },
+   ".boring-decision-strip-lane-name": {
+    "cls": "boring-decision-strip-lane-name",
+    "fs": "13px",
+    "color": "rgb(29, 26, 36)",
+    "t": "Desk"
+   },
+   ".boring-decision-row-ask, .boring-decision-ask": {
+    "cls": "boring-decision-ask",
+    "fs": "14px",
+    "color": "rgb(29, 26, 36)",
+    "t": "Make Decision Desk the default"
+   },
+   ".boring-decision-choice": {
+    "cls": "boring-decision-choice is-lean selected",
+    "fs": "13px",
+    "color": "rgb(29, 26, 36)",
+    "t": "LeanYes, default landing + sid"
+   },
+   "[class*=decision][class*=age]": {
+    "cls": "boring-decision-age",
+    "fs": "11px",
+    "color": "rgb(94, 88, 104)",
+    "t": "30m"
+   },
+   "[class*=decision][class*=handle], [class*=decision] code": {
+    "cls": "boring-decision-code",
+    "fs": "11px",
+    "color": "rgb(94, 88, 104)",
+    "t": "@main-game"
+   },
+   "[class*=decision-decides]": {
+    "cls": "boring-decision-decides",
+    "fs": "13px",
+    "color": "rgb(74, 69, 88)",
+    "t": "Decides: Sets whether opening "
+   }
+  },
+  "stripClick": "?demo=&team=efi&agent=demo-lead-efi"
+ },
+ "deeplink": {
+  "url": "?demo=&team=vibesquad&agent=demo-rev",
+  "desk": 0
+ }
+}

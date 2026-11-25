@@ -351,3 +351,10 @@ export function FiveLeads() {
     </main>
   );
 }
+
+// ?lanes=N: N extra idle VibeSquad lead lanes (no event for hours) so the Decision Desk status strip can be checked at a real lane count
+// (UX R37 M2: the quiet-lane fold and the 1920x1080 above-the-fold e2e). Off by default.
+if (typeof location !== "undefined") {
+  const n = Math.min(60, Math.max(0, Number(new URLSearchParams(location.search).get("lanes")) || 0));
+  for (let i = 0; i < n; i++) CAST.push({ id: `demo-lead-lane-${i + 1}`, who: "sonnet", title: `★ LANE ${i + 1} ord${i + 1}`, labels: vs({ role: "lead", lane: `lane-${i + 1}`, ord: String(i + 1) }), used: 10_000, ago: 300 + i });
+}

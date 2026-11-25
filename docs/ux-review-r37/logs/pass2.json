@@ -1,0 +1,348 @@
+{
+ "initial": {
+  "send": "Send 0 answers",
+  "row1": [
+   {
+    "tid": "boring-decision-lean-ny-00000000000000000001",
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "true",
+    "cls": "boring-decision-choice is-lean selected",
+    "bg": "color(srgb 0.17302 0.153725 0.240314)",
+    "bc": "rgb(155, 114, 232)"
+   },
+   {
+    "tid": "boring-decision-alt-ny-00000000000000000001-0",
+    "t": "Sidebar entry only",
+    "pressed": "false",
+    "cls": "boring-decision-choice",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   },
+   {
+    "tid": "boring-decision-not-ny-00000000000000000001",
+    "t": "Not that",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-not",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   }
+  ]
+ },
+ "afterLeanClick": {
+  "send": "Send 1 answer",
+  "row1": [
+   {
+    "tid": "boring-decision-lean-ny-00000000000000000001",
+    "t": "✓ LeanYes, default landing + sidebar entry",
+    "pressed": "true",
+    "cls": "boring-decision-choice is-lean selected staged",
+    "bg": "rgb(155, 114, 232)",
+    "bc": "rgb(155, 114, 232)"
+   },
+   {
+    "tid": "boring-decision-alt-ny-00000000000000000001-0",
+    "t": "Sidebar entry only",
+    "pressed": "false",
+    "cls": "boring-decision-choice",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   },
+   {
+    "tid": "boring-decision-not-ny-00000000000000000001",
+    "t": "Not that",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-not",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   }
+  ]
+ },
+ "afterUseAll": {
+  "send": "Send 6 answers",
+  "row1": [
+   {
+    "tid": "boring-decision-lean-ny-00000000000000000001",
+    "t": "✓ LeanYes, default landing + sidebar entry",
+    "pressed": "true",
+    "cls": "boring-decision-choice is-lean selected staged",
+    "bg": "rgb(155, 114, 232)",
+    "bc": "rgb(155, 114, 232)"
+   },
+   {
+    "tid": "boring-decision-alt-ny-00000000000000000001-0",
+    "t": "Sidebar entry only",
+    "pressed": "false",
+    "cls": "boring-decision-choice",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   },
+   {
+    "tid": "boring-decision-not-ny-00000000000000000001",
+    "t": "Not that",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-not",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   }
+  ]
+ },
+ "afterNot": {
+  "send": "Send 6 answers",
+  "row1": [
+   {
+    "tid": "boring-decision-lean-ny-00000000000000000001",
+    "t": "LeanYes, default landing + sidebar entry",
+    "pressed": "false",
+    "cls": "boring-decision-choice is-lean",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   },
+   {
+    "tid": "boring-decision-alt-ny-00000000000000000001-0",
+    "t": "Sidebar entry only",
+    "pressed": "false",
+    "cls": "boring-decision-choice",
+    "bg": "rgb(29, 29, 38)",
+    "bc": "rgb(57, 57, 74)"
+   },
+   {
+    "tid": "boring-decision-not-ny-00000000000000000001",
+    "t": "Not that",
+    "pressed": "true",
+    "cls": "boring-decision-choice is-not selected staged",
+    "bg": "rgba(255, 107, 138, 0.1)",
+    "bc": "rgb(255, 127, 147)"
+   }
+  ]
+ },
+ "undoMsg": "Sending 6 answers in 5s…",
+ "afterUndo": {
+  "send": "Send 6 answers",
+  "delivered": 0
+ },
+ "offscreen": "OFF-SCREEN · TEST, MONEY & RELEASE\n3\nVibeSquad\n@art-direction\n1h\nSign and publish v1.14.2 beta to the desktop updater\nDecides: Pushes the signed installer to beta testers\nMark done\nDismiss\nMain Game Project\n@ui-lab\n34m\nPlaytest the rain reverb mix on studio headphones\nDecides: Unblocks final mastering of ambient weather stems\nMark done\nDismiss\nSite\n@site-polish\n6m\nApprove the $20/mo build-cache storage upgrade\nDecides: Increases remote cache quota for CI runners\nMark done\nDismiss",
+ "scrollers": [
+  "boring-project-tree 432/358",
+  "boring-dashboard-wrap boring-decision-wrap 2541/1032"
+ ],
+ "errs1": [],
+ "landing-needs-back": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&team=efi",
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "click needs-you",
+    "url": "?demo=&team=vibesquad&agent=demo-rev",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-rev"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "forward",
+    "url": "?demo=&team=vibesquad&agent=demo-rev",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "h": [
+     "POP ?demo=&team=vibesquad&agent=demo-rev"
+    ]
+   },
+   {
+    "step": "back again",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "deeplink-agent": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&team=efi",
+    "h": [
+     "replaceState /?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "",
+    "desk": 0,
+    "crumb": "",
+    "h": []
+   }
+  ],
+  "errs": []
+ },
+ "team-url": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&team=vibesquad",
+    "h": []
+   },
+   {
+    "step": "click Decisions",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "pushState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&team=vibesquad",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "h": [
+     "POP ?demo=&team=vibesquad"
+    ]
+   },
+   {
+    "step": "forward",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "reload",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "replaceState /?demo=&team=vibesquad",
+     "replaceState /?demo=&view=decisions"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "proj-a-b-back2": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&team=efi",
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "proj Main",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "h": [
+     "pushState /?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "proj Site",
+    "url": "?demo=&team=site",
+    "desk": 0,
+    "crumb": "Site",
+    "h": [
+     "pushState /?demo=&team=site"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&team=efi",
+    "desk": 0,
+    "crumb": "Main Game Project",
+    "h": [
+     "POP ?demo=&team=efi"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "",
+    "desk": 0,
+    "crumb": "",
+    "h": []
+   }
+  ],
+  "errs": []
+ },
+ "ctrlj": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&view=decisions",
+    "h": [
+     "replaceState /?demo=&team=efi",
+     "replaceState /?demo=&view=decisions"
+    ]
+   },
+   {
+    "step": "ctrl+j",
+    "url": "?demo=&team=vibesquad&agent=demo-aud",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-aud"
+    ]
+   },
+   {
+    "step": "back",
+    "url": "?demo=&view=decisions",
+    "desk": 1,
+    "crumb": "Decision Desk",
+    "h": [
+     "POP ?demo=&view=decisions"
+    ]
+   }
+  ],
+  "errs": []
+ },
+ "ctrlk-decisions": {
+  "tr": [
+   {
+    "step": "load",
+    "url": "?demo=&team=vibesquad",
+    "h": []
+   },
+   {
+    "step": "ctrl+k",
+    "url": "?demo=&team=vibesquad",
+    "desk": 0,
+    "crumb": "VibeSquad",
+    "h": []
+   }
+  ],
+  "errs": []
+ }
+}
