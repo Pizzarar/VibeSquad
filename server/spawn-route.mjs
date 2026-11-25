@@ -77,13 +77,23 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * The profile a role-name spawn runs as. {profile, route, explicitCapped} | null (hint is not a role).
  * `explicitModel`: the caller's model, only to report `explicit-capped` (its family is capped): for profile spawns the
  * cap wins and the model is dropped when the family changes (P5a review M3, today's agent-duties.ts behaviour).
+ * `prefer` (R1, PLAN_PER_ROLES_LADDER_1125): a provider family the role tries first (the R0 implementer arm pick, read
+ * from `vs.arm` via exp6-arm.mjs armProvider). Only a family already in the role's provider list moves to the front; the
+ * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
+ * still that family's tier-ladder rung. Unknown/blank = the role's own order.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel } = {}) {
-  const table = roles ?? ROLE_TABLE;
+export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer } = {}) {
+  let table = roles ?? ROLE_TABLE;
+  const found0 = roleNameHit(hint, table);
+  if (!found0) return null;
+  const fam = routeProviderFamily(prefer);
+  const order = found0.role.providers ?? [];
+  if (fam && order.includes(fam) && order[0] !== fam) {
+    table = { ...table, [found0.key]: { ...found0.role, providers: [fam, ...order.filter((p) => p !== fam)] } };
+  }
   const found = roleNameHit(hint, table);
-  if (!found) return null;
   const rungs = ladder ?? loadTierLadder();
   const route = resolveRoute({ role: found.key, stakes, caps, ladder: rungs }, { roles: table });
   if (!route?.provider) return null;
@@ -200,11 +210,11 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
  * spawns from the role route, threading its model + thinkingOptionId (effort) into the create call, so the hook sees
  * the same values it would pick. null = not a role name (callers keep their profile path).
  */
-export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [] } = {}) {
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer } = {}) {
   const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
-  const hit = roleSpawnProfile(name, { stakes, caps, roles });
+  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer });
   if (!hit) return null;
   const p = hit.profile;
   return {
