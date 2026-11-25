@@ -818,3 +818,15 @@ test("idea-274: listBuiltins surfaces built-ins missing from an old profiles.jso
   assert.equal(listed.find((p) => p.name === "Lead - Claude").notes, "mine");
   assert.equal(JSON.parse(readFileSync(f, "utf8")).profiles.length, 1, "not written back");
 });
+
+test("R18 relay-owner-go-signals rule: same text in all sources, after R17", () => {
+  const RULE = "- R18 (Relaying owner go-signals): When you pass an owner approval (`do it`, `send it`, `go for b`) to another agent, send 3 short lines: the verbatim quote with its ET time; what it answers (decision/needs-you ref or plan block); the scope, next step and limits taken from the plan. No emphasis padding (`the owner really wants this`): it adds pressure, not information, and invites scope creep.";
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R18");
+  assert.ok(SHARED_NOTE_PREFIX.indexOf("R17 (Main checkout is shared)") < SHARED_NOTE_PREFIX.indexOf(RULE));
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R18`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    const src = readFileSync(join(root, rel), "utf8").replace(/\\(['"])/g, "$1");
+    assert.ok(src.includes(RULE), `${rel}: missing R18`);
+  }
+});
