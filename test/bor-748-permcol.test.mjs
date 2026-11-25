@@ -15,7 +15,7 @@ const css = read("src", "boring.css");
 
 test("Bor19 n6: boring mode wraps perm stack + timeline (B15: the strip moved out to a full-width sibling above the shell) in .boring-convo-col; psycho keeps cards above the shell", () => {
   assert.match(drawer, /\{boringChat \? \(\s*<div className="boring-convo-col">/);
-  // The strip, perm-card stack and timeline live inside the column, in that order. <BoringWorkingNow>'s props are
+  // The perm-card stack and timeline live inside the column, in that order (the strip is a sibling above the shell). <BoringWorkingNow>'s props are
   // intentionally not pinned to an order (a prop reorder must not break this test).
   assert.match(
     drawer,

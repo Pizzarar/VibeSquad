@@ -1423,7 +1423,7 @@ html[data-vibe="boring"] .drawer > .boring-now[data-multi] .boring-now-h { margi
 html[data-vibe="boring"] .drawer > .boring-now .boring-now-s2 { flex: 0 100000 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 16px; }
 html[data-vibe="boring"] .drawer > .boring-now[data-state="idle"] .boring-now-t { color: var(--text-2); }
 /* Multi-agent: a row of clickable 30px busts with warm rings (right edge); +N past six. */
-html[data-vibe="boring"] .drawer > .boring-now .boring-now-chips { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; flex: none; max-width: 55%; overflow: hidden; }
+html[data-vibe="boring"] .drawer > .boring-now .boring-now-chips { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; flex: none; max-width: 55%; padding: 6px; overflow: visible; }
 html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--surface-sunken); box-shadow: 0 0 0 2px var(--living-warm), 0 0 12px -2px color-mix(in srgb, var(--living-warm) 55%, transparent); overflow: hidden; }
 html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip:hover { background: var(--surface-3); }
 html[data-vibe="boring"] .drawer > .boring-now .boring-now-chip img { width: 30px; height: 30px; border-radius: 50%; background: transparent; box-shadow: none; }

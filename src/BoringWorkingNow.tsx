@@ -70,6 +70,7 @@ export function BoringWorkingNow({ agent, members, subs, attention }: { agent: P
         className="boring-now-big"
         disabled={!canOpen}
         title={canOpen ? `Open ${nameOf(focal)}` : undefined}
+        aria-label={canOpen ? `Open ${nameOf(focal)}, ${headline}` : headline}
         onClick={() => canOpen && openAgent(focal.id)}
       >
         <img className="boring-bust-img" src={bustUrl(bustRoleForAgent(focal), theme)} alt="" width={48} height={48} />
