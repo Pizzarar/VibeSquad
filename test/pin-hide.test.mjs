@@ -1,6 +1,7 @@
 // idea-632: `vs pin hide|unhide|remove <lane>` is for the owner's shell or the Overlord of the lane's own Squad only.
 // Every refused caller leaves teams.json byte-identical. Runs in its own process (node --test isolates files): the
 // VibeSquad home/root and the caller env are set before cli/vs.mjs is imported.
+import "./setup/hermetic.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
