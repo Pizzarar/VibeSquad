@@ -2,7 +2,7 @@
 // Edge/Chrome across surfaces x sizes x themes and flags: intersecting boxes, text overflow / truncation,
 // edge clipping, decorative lines through text, and text contrast < 3:1.
 //
-//   node scripts/ui-overlap.mjs [--sizes 4k,1080,800,mobile] [--themes dark,light] [--surfaces a,b]
+//   node scripts/ui-overlap.mjs [--vibe boring|fun|both (default both)] [--sizes 4k,1080,800,mobile] [--themes dark,light] [--surfaces a,b]
 //                               [--out scratch/ui-overlap] [--shots scratch/shots] [--no-fail] [--rebuild]
 //
 // Kinds: overlap, text-overflow, text-outside-container, truncated, edge-clip, decor-line (geometric line/border/
@@ -271,6 +271,27 @@ export const SURFACES = [
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },
 ];
 
+// Normal mode (html[data-vibe=boring], BoringAde): sidebar, topbar/breadcrumb, context panel, timeline. No mobile route (PhoneCockpit).
+async function toBoringHome(page) {
+  await reload(page);
+  await page.locator(tid("boring-app")).waitFor({ timeout: 10000 });
+  await page.locator(tid("boring-sidebar")).waitFor({ timeout: 6000 });
+  await sleep(500);
+}
+async function toBoringLane(page) {
+  await toBoringHome(page);
+  await click(page, tid("boring-worker-demo-aud")); // a live worker: opens its chat + timeline + context panel
+  await page.locator(tid("boring-chat-column")).waitFor({ timeout: 8000 });
+  await page.locator(".timeline").locator("visible=true").first().waitFor({ timeout: 8000 }).catch(() => {});
+  await sleep(500);
+}
+export const BORING_SURFACES = [
+  { id: "normal-home", setup: toBoringHome, mobile: false },
+  { id: "normal-lane", setup: toBoringLane, mobile: false },
+  { id: "normal-lane-context", setup: toBoringLane, roots: [tid("boring-context-panel")], mobile: false },
+  { id: "normal-lane-timeline", setup: toBoringLane, roots: [".timeline-col"], mobile: false },
+];
+
 // Surfaces whose setup deliberately leaves a non-modal popover/menu/panel open: that layer is the top layer, so
 // content beneath it is covered. A pair with one element inside the layer and the other outside is NOT an
 // overlap (same idea as ui-clicks OPEN_LAYER); overlaps between elements inside the layer still are.
@@ -366,6 +387,9 @@ export async function run(opts = {}) {
   const only = (opts.surfaces ?? arg("surfaces", "")).split(",").filter(Boolean);
   const outDir = path.resolve(REPO, opts.out ?? arg("out", "scratch/ui-overlap"));
   const shotDir = path.resolve(REPO, opts.shots ?? arg("shots", "scratch/shots"));
+  const vibeArg = opts.vibe ?? arg("vibe", "both");
+  const vibes = vibeArg === "both" ? ["fun", "boring"] : vibeArg.split(",");
+  for (const v of vibes) if (v !== "fun" && v !== "boring") throw new Error(`unknown --vibe ${v} (boring|fun|both)`);
   const maxShots = Number(arg("max-shots", "260"));
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(shotDir, { recursive: true });
@@ -391,15 +415,15 @@ export async function run(opts = {}) {
     for (const sid of sizeIds) {
       const size = SIZES[sid];
       if (!size) throw new Error(`unknown size ${sid}`);
-      for (const theme of themes) {
+      for (const vibe of vibes) for (const theme of themes) {
         const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme });
-        await ctx.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": "fun" })); } catch {}`); // B9: Normal is the default; this audit targets Psycho
+        await ctx.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": "${vibe}" })); } catch {}`); // B9: Normal is the default; --vibe picks Psycho (fun) and/or Normal (boring)
         await E.installRoutes(ctx);
         const page = await ctx.newPage();
         const pageErrors = [];
         page.on("pageerror", (e) => pageErrors.push(String(e?.message ?? e)));
         await reload(page);
-        for (const surf of SURFACES) {
+        for (const surf of vibe === "boring" ? BORING_SURFACES : SURFACES) {
           if (only.length && !only.includes(surf.id)) continue;
           let setup = surf.setup;
           if (size.mobile) {

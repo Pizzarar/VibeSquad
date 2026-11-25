@@ -3,6 +3,7 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
+import { readLimits } from "./limits-read.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import { gitExecOffLoop } from "./git-spawn.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 import { normalizeWfLabel } from "./wf-label.mjs";
+import { entryVerdict, isDocsTarget, parseVerdictLine } from "./verdict.mjs"; // usa-60: read-only reuse of the idea-883 verdict parsers
 import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "./lead-handoff.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
@@ -549,7 +551,7 @@ function foldEvent(st, ev) {
   } else if (ev.type === "output") {
     if (st.firstOutputTs === undefined && t !== null) st.firstOutputTs = t;
     if (typeof ev.text === "string") {
-      foldOutputLines(st, ev.text);
+      foldOutputLines(st, ev.text, t);
       st.msgVerdict = messageVerdict(st);
       st.pass = st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
@@ -572,6 +574,7 @@ function foldEvent(st, ev) {
     // real claude /compact emits no usage before `compacted`; the turn's usage is the adapter's post_tokens one right after it
     if (st.compactPending) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
   } else if (ev.type === "turn_done") {
+    if (st.curLine && st.curLine.trim()) noteVerdictLine(st, st.curLine.trim(), t); // usa-60: a final verdict line often has no trailing newline
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
     let delta = 0;
@@ -644,7 +647,20 @@ function foldIdentity(st, m) {
 const DIGEST_PROFILE_RE = /^Pre-check\b/i;
 const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit|UX Reviewer)\b/i;
 const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|Planner|Spec)\b/i;
-const JOBKIND_REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
+const REVIEWER_WORD_RE = /\b(?:re-?review|reviewer)\b/i;
+const REVIEW_ROLE_RE = /(?:^|[:\s])review(?:\s|$)/i;
+/**
+ * idea-677: a title is "<unit> · <role part>". A bare "review" only marks a reviewer in the role part (after the last "·"), so an
+ * implementer whose unit slug words contain "review" ("Per T2 review stdin · implement") stays an implementer. "reviewer" /
+ * "re-review" count anywhere; a title with no "·" is all role part.
+ */
+function isReviewerTitle(title) {
+  const t = String(title || "");
+  if (/\breview\s+fix/i.test(t)) return false;
+  if (REVIEWER_WORD_RE.test(t)) return true;
+  const i = t.lastIndexOf("·");
+  return REVIEW_ROLE_RE.test(i >= 0 ? t.slice(i + 1) : t);
+}
 
 /** usa-29: strip the trailing effort suffix so "gemini-4-neon-medium" and "gemini-4-neon" are one model row. */
 const baseModel = (m) => String(m || "unknown").replace(/-(?:low|medium|high|xhigh|max)$/i, "");
@@ -665,13 +681,27 @@ function classifyJobKind(st) {
   if (st.digest || role === "digest" || DIGEST_PROFILE_RE.test(profile)) return "digest";
   if (REVIEWER_PROFILE_RE.test(profile) || st.roleOnly) return "reviewer";
   const title = st.title || "";
-  if (JOBKIND_REVIEWER_TITLE_RE.test(title) && !/\breview\s+fix/i.test(title)) return "reviewer";
+  if (isReviewerTitle(title)) return "reviewer";
   if (SCOUT_PROFILE_RE.test(profile)) return "scout";
   return role === "worker" ? "implementer" : "scout";
 }
 
+/** usa-60: remember every whole-line `PASS|FAIL H/M/L <hash>` verdict a run wrote (runner-record source of per-unit review
+ * outcomes, same line grammar as idea-883 / verdict.mjs). Only lines naming a hex sha are kept (docs targets never match a
+ * commit); one entry per (verdict, hash), capped. Whether the run IS a reviewer is decided later (agentV2), not here. */
+const MAX_VERDICT_LINES = 60;
+function noteVerdictLine(st, line, ts) {
+  if (!/PASS|FAIL/.test(line)) return;
+  const v = parseVerdictLine(line);
+  if (!v || isDocsTarget(v.hash) || !/^[0-9a-f]{7,40}$/i.test(v.hash)) return;
+  const list = (st.verdictLines ??= []);
+  const hash = v.hash.toLowerCase();
+  if (list.length >= MAX_VERDICT_LINES || list.some((x) => x.hash === hash && x.verdict === v.verdict)) return;
+  list.push({ verdict: v.verdict, hash, ts: ts ?? null });
+}
+
 /** Incrementally track the first and last non-empty (non-warning) lines of the current assistant message. */
-function foldOutputLines(st, chunk) {
+function foldOutputLines(st, chunk, ts = null) {
   let i = 0;
   while (true) {
     const nl = chunk.indexOf("\n", i);
@@ -683,6 +713,7 @@ function foldOutputLines(st, chunk) {
     const line = (st.curLine + chunk.slice(i, nl)).trim();
     st.curLine = "";
     if (line && !line.startsWith("⚠")) {
+      noteVerdictLine(st, line, ts);
       if (!st.firstLineDone) { st.firstLine = line.slice(0, 1000); st.firstLineDone = true; }
       st.lastLine = line.slice(0, 1000);
     }
@@ -750,7 +781,7 @@ function logLines(file, maxBytes = Infinity) {
       let e;
       try { e = JSON.parse(line); } catch { continue; }
       if (!e || typeof e !== "object") continue;
-      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad, agent: e.agent, role: e.role, plan: e.plan, pass: e.pass }); // t = tsMs(ts), parsed once
+      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad, agent: e.agent, role: e.role, plan: e.plan, pass: e.pass, ...(e.type === "done" && e.verdict && typeof e.verdict === "object" ? { verdict: e.verdict } : {}) }); // t = tsMs(ts), parsed once; usa-60: the server-attested done.verdict rides along
     }
     c.offset += lastNl + 1; // a trailing partial line is re-read next time
   }
@@ -880,7 +911,8 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 
 // ---- provider limit windows: <runner home>/limits.jsonl, one JSON line per sample (written by the adapters/runner):
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
-const BURN_LOOKBACK_MS = 2 * 3600_000;
+// readLimits lives in ./limits-read.mjs (G2 idea-1012: a leaf module, so the spawn hook reads it without this catalog).
+export { readLimits } from "./limits-read.mjs";
 
 const AGY_THIRD_PARTY_POOL = "antigravity-cli/claude-gpt";
 /** Attribute the Antigravity 3rd-party (Claude/GPT) pool to VibeSquad agents: antigravity-cli agents running claude or gpt models. */
@@ -890,57 +922,6 @@ export function withPoolAgents(limits, agents) {
     const ids = agents.filter((a) => a.provider === "antigravity-cli" && /^(claude|gpt)/i.test(a.model || "")).map((a) => a.agentId);
     return { ...l, poolAgents: { count: ids.length, agentIds: ids, text: ids.length ? `${ids.length} VibeSquad agent${ids.length === 1 ? "" : "s"}` : "0 VibeSquad agents (used outside VibeSquad)" } };
   });
-}
-
-/** Latest sample per provider/window + burn rate (%/h over the last 2h of the current window) + ETA-to-cap. Missing file -> []. */
-export function readLimits(home) {
-  const dir = home || vibesquadHome();
-  if (isForbiddenRealHome(dir)) return [];
-  let text = "";
-  try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
-  // Sidecar: last *check* time per provider/window (updated on every poll, even when the sample didn't change).
-  let checked = {};
-  try { checked = JSON.parse(readFileSync(join(dir, "runner", "limits-checked.json"), "utf8")); } catch { checked = {}; }
-  if (typeof checked !== "object" || checked === null || Array.isArray(checked)) checked = {};
-  const groups = new Map();
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    let r;
-    try { r = JSON.parse(line); } catch { continue; }
-    const at = toMs(r?.at);
-    const used = Number(r?.usedPct);
-    if (!r?.provider || !r?.window || at === null || !Number.isFinite(used)) continue;
-    getOrSet(groups, `${r.provider}|${r.window}`, () => []).push({ ...r, atMs: at, used, resetMs: toMs(r.resetsAt) });
-  }
-  const out = [];
-  for (const pts of groups.values()) {
-    pts.sort((x, y) => x.atMs - y.atMs);
-    const last = pts[pts.length - 1];
-    // Current window starts after the last usedPct drop or the last change of a known resetsAt (both mean the window rolled over).
-    let start = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const rolled = pts[i].used < pts[i - 1].used || (pts[i].resetMs !== null && pts[i - 1].resetMs !== null && pts[i].resetMs !== pts[i - 1].resetMs);
-      if (rolled) start = i;
-    }
-    const cur = pts.slice(start).filter((p) => p.atMs >= last.atMs - BURN_LOOKBACK_MS);
-    const hours = (last.atMs - cur[0].atMs) / 3600_000;
-    const burn = Math.max(0, hours > 0 ? (last.used - cur[0].used) / hours : 0);
-    let etaToCap = null;
-    if (burn > 0) {
-      const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
-      if (last.resetMs === null || eta < last.resetMs) etaToCap = new Date(eta).toISOString();
-    }
-    const sidecarMs = tsMs(checked[`${last.provider}|${last.window}`]);
-    const checkedMs = sidecarMs === null ? last.atMs : Math.max(sidecarMs, last.atMs);
-    out.push({
-      provider: last.provider, window: last.window, usedPct: last.used,
-      resetsAt: last.resetMs === null ? null : new Date(last.resetMs).toISOString(),
-      source: last.source ?? "provider", agentId: last.agentId ?? null, at: new Date(last.atMs).toISOString(),
-      checkedAt: new Date(checkedMs).toISOString(),
-      burnPctPerHour: Math.round(burn * 100) / 100, etaToCap,
-    });
-  }
-  return out.sort((x, y) => x.provider.localeCompare(y.provider) || x.window.localeCompare(y.window));
 }
 
 // ---- merged units from git. `git` is injectable: (args: string[]) => stdout string.
@@ -1123,8 +1104,9 @@ function* mergedUnitsSteps(head, raw, numstatRaw) {
     }
     const rounds = maxR > 0 ? maxR : fixCount;
     const branch = mergeSubjectBranch(c.subject);
+    const branchShas = [c.sha, ...side.map((k) => k.sha)]; // usa-60: commits a reviewer verdict hash can name (merge + merged side)
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
-    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
+    units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged, branchShas });
   }
   // A unit's sha is never excluded (mainline and side are disjoint), so the two sets never overlap.
   units.excluded = excluded;
@@ -1232,8 +1214,8 @@ function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = 
       repoHeadCheck.set(key, hc);
     }
     for (const u of hc?.units ?? []) {
-      const lane = laneOf(u);
-      out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
+      const lane = laneOf(u, r.teams);
+      out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null, scopeTeams: r.teams });
     }
     for (const [sha, why] of hc?.units?.excluded ?? []) excluded.set(sha, why);
   }
@@ -1336,17 +1318,40 @@ export const pooledMergedTestHooks = {
   inflight: () => pooledRefresh.size,
 };
 
+/** usa-61: resolve a lane code/id inside a Squad scope. Returns { lane } (exactly one distinct lane across the scoped Squads),
+ * { ambiguous: true } (the code means different lanes in the scope), or { lane: null } (no scoped Squad knows it; `elsewhere`
+ * says another Squad does). A map without per-Squad data (injected test laneCodes) resolves flat, as before. */
+export function resolveLaneCode(codes, code, teams) {
+  const key = String(code ?? "").toLowerCase();
+  if (!key) return { lane: null, elsewhere: false };
+  if (!codes.byTeam) return { lane: codes.get(key) ?? null, elsewhere: false };
+  const found = new Set();
+  let elsewhere = false;
+  for (const [teamId, tm] of codes.byTeam) {
+    const l = tm.get(key);
+    if (!l) continue;
+    if (!teams?.length || teams.includes(teamId)) found.add(l); else elsewhere = true;
+  }
+  if (found.size === 1) return { lane: [...found][0], elsewhere };
+  return found.size ? { lane: null, ambiguous: true, elsewhere } : { lane: null, elsewhere };
+}
+
 /** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
 function readLaneCodes(home) {
   const map = new Map();
+  map.byTeam = new Map(); // usa-61: teamId -> Map(code|id -> lane id); the flat map above is last-Squad-wins, so scoped lookups use this
   try {
     const own = home ? join(home, "teams.json") : null;
     const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(gitRepoRoot());
     const t = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-    for (const team of t.teams ?? []) for (const l of team.lanes ?? []) {
-      if (!l?.id) continue;
-      map.set(String(l.id).toLowerCase(), l.id);
-      if (l.code) map.set(String(l.code).toLowerCase(), l.id);
+    for (const team of t.teams ?? []) {
+      const tm = getOrSet(map.byTeam, String(team?.id ?? ""), () => new Map());
+      for (const l of team.lanes ?? []) {
+        if (!l?.id) continue;
+        map.set(String(l.id).toLowerCase(), l.id);
+        tm.set(String(l.id).toLowerCase(), l.id);
+        if (l.code) { map.set(String(l.code).toLowerCase(), l.id); tm.set(String(l.code).toLowerCase(), l.id); }
+      }
     }
   } catch { /* no teams.json */ }
   return map;
@@ -1375,6 +1380,7 @@ function agentV2(st, agentId) {
     wfLabel: st.wfLabel ?? null,
     respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
+    verdictLines: classifyJobKind(st) === "reviewer" ? (st.verdictLines ?? []) : [], // usa-60: reviewer runner record, see buildUnitReviewIndex
     cwd: st.cwd,
     unitRef: primaryUnitRef(st),
     unitSecondary: secondaryUnitRefs(st), // usa-58: other units this run demonstrably worked in (>= SECONDARY_UNIT_CALLS calls)
@@ -1548,7 +1554,6 @@ const unitNameOfCwd = (cwd) => {
 };
 
 const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|UX Reviewer|Planner|Spec)\b/i;
-const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
 
 /** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */
 function isImplementerWorker(a) {
@@ -1556,7 +1561,7 @@ function isImplementerWorker(a) {
   if (a.jobKind !== undefined && a.jobKind !== "implementer") return false;
   if (a.roleOnly) return false;
   if (NON_IMPLEMENTER_PROFILE_RE.test(a.profile || "")) return false;
-  if (REVIEWER_TITLE_RE.test(a.title || "") && !/\breview\s+fix/i.test(a.title || "")) return false;
+  if (isReviewerTitle(a.title)) return false;
   return true;
 }
 
@@ -1674,6 +1679,89 @@ function resolveImplementer(unit, agents, index) {
   if (laneWorkers.length === 1) return hit(laneWorkers[0]);
   const laneImpls = laneWorkers.filter(isImplementerWorker);
   return laneImpls.length === 1 ? hit(laneImpls[0]) : miss("no-lane-implementer");
+}
+
+/** usa-60 (idea-989): first-try verdict of a merged unit. true/false when a review outcome is known, null when it is not.
+ * reviewSource "none" (no `review rN` subject AND no verdict anywhere) is UNKNOWN: it used to read as a first-try PASS
+ * (reviewRounds 0 <= 1), the 163/163 artifact on repos whose merge subjects omit `review rN`. A recorded first verdict wins;
+ * otherwise the subject's round count. Rows without reviewSource (old ledger rows) keep the legacy rule. */
+export function unitFirstTry(u) {
+  if (!u || u.reviewSource === "none") return null;
+  if (u.firstReviewVerdict === "PASS" || u.firstReviewVerdict === "FAIL") return u.firstReviewVerdict === "PASS";
+  return (u.reviewRounds ?? 0) <= 1;
+}
+/** usa-60: { yes, known, unknown } first-try tally over units; rates divide by `known`, never by units whose outcome is unknown. */
+function firstTryTally(units) {
+  let yes = 0, known = 0;
+  for (const u of units) { const v = unitFirstTry(u); if (v === null) continue; known += 1; if (v) yes += 1; }
+  return { yes, known, unknown: units.length - known };
+}
+
+/**
+ * usa-60 (idea-989): per-request index of reviewer verdicts by 7-char hash prefix. Two sources, the idea-883 ones:
+ *   attested   - server-set `done.verdict` entries in <home>/teams/<squad>/log.jsonl (verdict.mjs entryVerdict; entry text never read)
+ *   runner     - verdict lines in a reviewer run's own record (agent.verdictLines, jobKind reviewer)
+ * `reviewerRuns` = [{ agentId, verdictLines }] of EVERY Squad's reviewer runs (a squad filter must not hide a verdict). Each entry { verdict, hash, tsMs, reviewer, origin }. A unit takes the entries whose hash is a prefix of one of its branch
+ * commits (branchShas), deduped by (reviewer, hash): the attested entry wins over the same reviewer's runner line.
+ */
+function buildReviewVerdictIndex(home, reviewerRuns) {
+  const byPrefix = new Map();
+  const add = (e) => getOrSet(byPrefix, e.hash.slice(0, 7), () => []).push(e);
+  const dir = home || vibesquadHome();
+  if (!isForbiddenRealHome(dir)) {
+    try {
+      const teams = join(dir, "teams");
+      if (existsSync(teams)) for (const t of readdirSync(teams)) {
+        const p = join(teams, t, "log.jsonl");
+        if (!existsSync(p)) continue;
+        for (const e of logLines(p)) {
+          if (e.type !== "done" || !e.verdict) continue;
+          const v = entryVerdict({ type: "done", verdict: e.verdict });
+          if (!v || isDocsTarget(v.hash) || !/^[0-9a-f]{7,40}$/.test(v.hash)) continue;
+          add({ verdict: v.verdict, hash: v.hash, tsMs: e.t ?? null, reviewer: v.reviewer, origin: "attested" });
+        }
+      }
+    } catch { /* no team logs */ }
+  }
+  for (const a of reviewerRuns) for (const l of a.verdictLines ?? []) add({ verdict: l.verdict, hash: l.hash, tsMs: l.ts ?? null, reviewer: a.agentId, origin: "runner-record" });
+  return byPrefix;
+}
+
+/** usa-60: the verdicts naming one of a unit's branch commits: deduped, earliest first (a FAIL wins a tie). */
+function unitReviewVerdicts(index, branchShas) {
+  const seen = new Map();
+  for (const sha of branchShas ?? []) {
+    for (const e of index.get(String(sha).slice(0, 7)) ?? []) {
+      if (!String(sha).toLowerCase().startsWith(e.hash)) continue;
+      const k = `${e.reviewer}\u0000${String(sha).toLowerCase()}\u0000${e.verdict}`;
+      const old = seen.get(k);
+      if (!old) { seen.set(k, e); continue; }
+      // same verdict from both sources: keep the attested origin but the EARLIEST time (the digest lands after the reviewer wrote it;
+      // the later digest ts would push the first FAIL past a fixer the lead spawned straight away)
+      const tsMs = old.tsMs !== null && e.tsMs !== null ? Math.min(old.tsMs, e.tsMs) : (old.tsMs ?? e.tsMs);
+      seen.set(k, { ...(old.origin !== "attested" && e.origin === "attested" ? e : old), tsMs });
+    }
+  }
+  return [...seen.values()].sort((a, b) => ((a.tsMs ?? Infinity) - (b.tsMs ?? Infinity)) || (a.verdict === b.verdict ? 0 : a.verdict === "FAIL" ? -1 : 1));
+}
+
+/** usa-60 (idea-988): worker spawns on the unit after its first FAIL verdict (implementer/fixer kind, never reviewer/digest;
+ * respawnOf excluded: a respawn replaces a spawn, it is not another fix round), in spawn order, each with the verdict that
+ * followed it (`next`). */
+function unitFixSpawns(u, verdicts, index, mergedAtMs) {
+  const firstFail = verdicts.find((v) => v.verdict === "FAIL" && v.tsMs !== null);
+  if (!firstFail || typeof u.unit !== "string" || !u.unit) return [];
+  const want = u.unit.toLowerCase();
+  const cands = new Set([...workersOfUnit(index, want), ...(index.byRef?.get(want) ?? [])]);
+  const out = [];
+  for (const a of cands) {
+    if (a.respawnOf || a.jobKind !== "implementer" || !sameSquad(u, a)) continue;
+    if (a.createdAt === null || a.createdAt === undefined || a.createdAt <= firstFail.tsMs) continue;
+    if (mergedAtMs !== null && a.createdAt > mergedAtMs) continue;
+    const nextV = verdicts.find((v) => v.tsMs !== null && v.tsMs > a.createdAt);
+    out.push({ agentId: a.agentId, provider: a.provider, model: baseModel(a.model), profile: a.profile, createdAt: a.createdAt, next: nextV ? nextV.verdict : null });
+  }
+  return out.sort((x, y) => x.createdAt - y.createdAt || String(x.agentId).localeCompare(String(y.agentId)));
 }
 
 /** usa-55: enumerated reasons a merged unit has no implementer (set by resolveImplementer). */
@@ -2078,7 +2166,7 @@ function* buildAutonomySteps({ entries, merged, agents, squads, squad }) {
     const rounds = mine.reduce((t, u) => t + (u.reviewRounds ?? 0), 0);
     bySquad.push({
       squad: sq, mergedUnits: mine.length, turns: mineAgents.reduce((t, x) => t + x.turns, 0), costUsd,
-      firstTryPassRate: mine.length ? Math.round((mine.filter((u) => (u.reviewRounds ?? 0) <= 1).length / mine.length) * 1000) / 1000 : null,
+      firstTryPassRate: (() => { const t = firstTryTally(mine); return t.known ? Math.round((t.yes / t.known) * 1000) / 1000 : null; })(),
       avgReviewRounds: mine.length ? Math.round((rounds / mine.length) * 100) / 100 : null,
       costPerUnit: mine.length ? costUsd / mine.length : null,
       mergedInCoverage: a.planAutonomy.mergedUnits, // idea-192
@@ -2274,13 +2362,13 @@ function buildByWorkflow(merged, agentById) {
     const g = getOrSet(groups, workflowMode, () => ({
       workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
       wfSources: new Set(),
-      units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
+      units: 0, firstTryPassCount: 0, firstTryKnown: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
       fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
     }));
     g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
-    if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
+    { const ft = unitFirstTry(u); if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryPassCount += 1; } }
     g.reviewRoundsSum += u.reviewRounds ?? 0;
     const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
     if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
@@ -2300,7 +2388,8 @@ function buildByWorkflow(merged, agentById) {
       wfSource: wfSourceOf(g.wfSources),
       implementerModel: g.implementerModel, stakes: g.stakes, reviewerFamily: g.reviewerFamily,
       units: g.units,
-      firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
+      firstTryPassRate: g.firstTryKnown ? Math.round((g.firstTryPassCount / g.firstTryKnown) * 1000) / 1000 : (g.units ? null : 0),
+      unknownReviewUnits: g.units - g.firstTryKnown,
       avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
       costUsd: g.costUsd,
       costPerUnit: g.costUnits ? g.costUsd / g.costUnits : null,
@@ -2394,10 +2483,10 @@ function buildSavings(merged, totals, lanes, agents, rows = []) {
 function cohortOf(units) {
   const n = units.length;
   if (!n) return { units: 0, firstTryPassRate: null, avgReviewRounds: null, costPerUnit: null, tokensPerUnit: null, avgUnitCycleMs: null, fixAfterMergeRate: null };
-  let firstTry = 0, rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0, costN = 0;
+  const ftt = firstTryTally(units);
+  let rounds = 0, cost = 0, tokens = 0, cycSum = 0, cycCount = 0, fix = 0, costN = 0;
   for (const u of units) {
     if (!u.implementerShared) costN += 1; // usa-58: shared credits have no cost: kept out of the cost/token averages
-    if ((u.reviewRounds ?? 0) <= 1) firstTry += 1;
     rounds += u.reviewRounds ?? 0;
     cost += Number.isFinite(u.costUsd) ? u.costUsd : 0;
     tokens += (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
@@ -2406,7 +2495,8 @@ function cohortOf(units) {
   }
   return {
     units: n,
-    firstTryPassRate: round2(firstTry / n),
+    firstTryPassRate: ftt.known ? round2(ftt.yes / ftt.known) : null,
+    unknownReviewUnits: ftt.unknown,
     avgReviewRounds: round2(rounds / n),
     costPerUnit: costN ? round2(cost / costN) : null,
     tokensPerUnit: costN ? round2(tokens / costN) : null,
@@ -2600,6 +2690,7 @@ function buildLedgerSnapshot(merged, rows) {
     sha: u.sha,
     ts: u.mergedAt ?? null,
     lane: u.lane ?? null,
+    ...(u.laneSource && u.laneSource !== "none" ? { laneSource: u.laneSource } : {}),
     ...(u.squad ? { squad: u.squad } : {}),
     ...(u.repo ? { repo: u.repo } : {}),
     implementerProfile: u.implementerProfile ?? null,
@@ -2609,7 +2700,13 @@ function buildLedgerSnapshot(merged, rows) {
     ...(u.reviewerFamily ? { reviewerFamily: u.reviewerFamily } : {}),
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
     reviewRounds: u.reviewRounds ?? 0,
-    firstTryPass: (u.reviewRounds ?? 0) <= 1,
+    firstTryPass: unitFirstTry(u),
+    reviewVerdicts: u.reviewVerdicts ?? 0,
+    firstReviewVerdict: u.firstReviewVerdict ?? null,
+    reviewSource: u.reviewSource ?? null,
+    ...(u.reviewVerdictOrigin ? { reviewVerdictOrigin: u.reviewVerdictOrigin } : {}),
+    fixRounds: u.fixRounds ?? 0,
+    ...(u.fixProfiles?.length ? { fixProfiles: u.fixProfiles } : {}),
     costUsd: u.costUsd ?? null,
     totalTokens: (u.inputTokens ?? 0) + (u.outputTokens ?? 0),
     inputTokens: u.inputTokens ?? 0,
@@ -2671,11 +2768,11 @@ function usageKpis(u) {
   const merged = u?.merged?.units ?? [];
   const n = merged.length;
   const rounds = merged.reduce((s, x) => s + (x.reviewRounds ?? 0), 0);
-  const firstTry = merged.filter((x) => (x.reviewRounds ?? 0) <= 1).length;
+  const ftt = firstTryTally(merged);
   const cost = merged.reduce((s, x) => s + (Number.isFinite(x.costUsd) ? x.costUsd : 0), 0);
   const fix = merged.filter((x) => x.fixAfterMerge).length;
   return {
-    firstTryPassRate: n ? round2(firstTry / n) : null,
+    firstTryPassRate: ftt.known ? round2(ftt.yes / ftt.known) : null,
     avgReviewRounds: n ? round2(rounds / n) : null,
     costPerUnit: n ? round2(cost / n) : null,
     cleanShare: u?.floor?.cleanShare ?? null,
@@ -2817,12 +2914,12 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   const bw = u.byWorkflow ?? [];
   if (bw.length) {
     out.push(`A/B workflows (mode | units | firstTryPassRate | costPerUnit | costPer100Loc | fixAfterMergeRate):`);
-    for (const w of bw.slice(0, 12)) out.push(`- ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.fixAfterMergeRate}`);
+    for (const w of bw.slice(0, 12)) out.push(`- ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate ?? "-"} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.fixAfterMergeRate}`);
   }
   const cohorts = u.cohorts;
   if (cohorts?.recent?.units) {
     const d = cohorts.delta ?? {};
-    out.push(`Cohorts (Last ${cohorts.recent.units} vs Prior ${cohorts.prior?.units ?? 0}): firstTryPass ${cohorts.recent.firstTryPassRate} vs ${cohorts.prior?.firstTryPassRate ?? "-"} (Δ${d.firstTryPassRate ?? "-"}), cost/unit $${cohorts.recent.costPerUnit} vs $${cohorts.prior?.costPerUnit ?? "-"} (Δ${d.costPerUnit ?? "-"}), fix rate ${cohorts.recent.fixAfterMergeRate} vs ${cohorts.prior?.fixAfterMergeRate ?? "-"}.`);
+    out.push(`Cohorts (Last ${cohorts.recent.units} vs Prior ${cohorts.prior?.units ?? 0}): firstTryPass ${cohorts.recent.firstTryPassRate ?? "-"} vs ${cohorts.prior?.firstTryPassRate ?? "-"} (Δ${d.firstTryPassRate ?? "-"}), cost/unit $${cohorts.recent.costPerUnit} vs $${cohorts.prior?.costPerUnit ?? "-"} (Δ${d.costPerUnit ?? "-"}), fix rate ${cohorts.recent.fixAfterMergeRate} vs ${cohorts.prior?.fixAfterMergeRate ?? "-"}.`);
   }
   const floor = u.floor;
   if (floor) {
@@ -3402,7 +3499,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
 
   // merged units; cost per merged unit = lane cost / lane merged units. Lane via the (@code) tag -> teams.json lane code/id.
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
-  const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
+  // usa-61: the (@code tag resolves inside the repo's own Squads (not the flat last-Squad-wins map); a code that means
+  // different lanes there is ambiguous -> no lane (the backfill below may still find real evidence). An unmapped tag stays raw.
+  const laneOf = (u, teams) => {
+    if (!u.code) return null;
+    const r = resolveLaneCode(codes, u.code, teams);
+    return r.ambiguous ? null : (r.lane ?? (r.elsewhere ? null : u.code));
+  };
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
   yield;
   const mergedSrc = git ? readMergedUnits(git) : null;
@@ -3410,8 +3513,6 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const mergedExcluded = (mergedSrc ?? mergedRawAll).excluded ?? new Map(); // usa-54: sha -> reason, for the ledger re-fold
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
-  const mergedByLane = new Map();
-  for (const u of mergedRaw) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
 
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
@@ -3429,7 +3530,35 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   for (const l of workerIndex.mergesByName.values()) l.sort((x, y) => x.ms - y.ms);
   yield;
   const dispatchIndex = buildDispatchBurstIndex(agents);
+  const verdictIndex = buildReviewVerdictIndex(home, allAgentSquads.filter((a) => classifyJobKind(a.st) === "reviewer").map((a) => ({ agentId: a.agentId, verdictLines: a.st.verdictLines ?? [] }))); // usa-60
+  /** usa-60: a unit's review outcome (shared by merged.units and the unfiltered autonomy.bySquad rows). */
+  const reviewOutcomeOf = (u) => {
+    const verdicts = unitReviewVerdicts(verdictIndex, u.branchShas);
+    const subjectRounds = u.reviewRounds ?? 0;
+    return { verdicts, subjectRounds, reviewRounds: Math.max(subjectRounds, verdicts.length), firstReviewVerdict: verdicts[0]?.verdict ?? null, reviewSource: verdicts.length ? (subjectRounds > 0 ? "both" : "verdict-log") : (subjectRounds > 0 ? "subject" : "none") };
+  };
+  // usa-61: lane backfill for units whose subject has no (@code tag. Evidence only, in order: the attributed run's lane label,
+  // the unit-<code>-* name prefix (only when <code> is an existing lane code/id in teams.json), the ledger row for the sha.
+  const ledgerLaneBySha = new Map();
+  for (const r of readUsageLedger(home)) if (r.kind === "unit" && r.sha && typeof r.lane === "string" && r.lane) ledgerLaneBySha.set(r.sha, r);
+  const backfillLane = (u, implementer) => {
+    if (u.lane) return { lane: u.lane, laneSource: "subject" };
+    const scope = u.scopeTeams?.length ? u.scopeTeams : null; // the unit's repo Squads; null = injected git / unscoped: unique codes only
+    const rl = typeof implementer?.lane === "string" ? implementer.lane : "";
+    if (rl && rl.toLowerCase() !== "unknown" && !(scope && !(implementer.team && scope.includes(implementer.team)))) { // usa-61: with a repo scope the run must carry a team label inside it; no label or another Squad = fall through
+      const r = resolveLaneCode(codes, rl, scope);
+      if (r.lane) return { lane: r.lane, laneSource: "run" };
+      if (!r.ambiguous && !r.elsewhere) return { lane: rl, laneSource: "run" }; // a label no Squad maps: the run's own claim
+    }
+    const pre = /^unit-([a-z0-9]+)-/i.exec(typeof u.unit === "string" ? u.unit : "")?.[1];
+    const pr = pre ? resolveLaneCode(codes, pre, scope) : null;
+    if (pr?.lane) return { lane: pr.lane, laneSource: "unit-prefix" };
+    const row = ledgerLaneBySha.get(u.sha);
+    if (row) return { lane: row.lane, laneSource: row.laneSource && row.laneSource !== "none" ? row.laneSource : "ledger" };
+    return { lane: null, laneSource: "none" };
+  };
   const merged = [];
+  const fixUnits = new Set();
   for (const u of mergedRaw) {
     if (merged.length % 200 === 199) yield;
     merged.push(mergedUnitV2(u));
@@ -3444,13 +3573,30 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
-    let fixAfterMerge = false;
-    if (isFixUnit && u.lane && mergedAtMs !== null) {
-      fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
-    }
+    const fixAfterMerge = false; // usa-61: computed after the loop, once every unit's lane is backfilled
+    if (isFixUnit) fixUnits.add(u.sha);
     const burst = dispatchBurstFor(dispatchIndex, implementer);
+    // usa-60: review outcomes + fix rounds. reviewRounds stays max(subject `review rN`, verdict count): VS numbers don't move.
+    const { branchShas, scopeTeams, ...unitRest } = u;
+    const { verdicts, reviewRounds: outRounds, firstReviewVerdict: outFirst, reviewSource } = reviewOutcomeOf(u);
+    const fixSpawns = unitFixSpawns(u, verdicts, workerIndex, mergedAtMs);
+    const fixProfiles = [];
+    for (const f of fixSpawns) {
+      let g = fixProfiles.find((x) => x.provider === f.provider && x.profile === f.profile && x.model === f.model);
+      if (!g) fixProfiles.push((g = { provider: f.provider, model: f.model, profile: f.profile, n: 0, passN: 0 }));
+      g.n += 1;
+      if (f.next === "PASS") g.passN += 1;
+    }
+    const { lane: unitLane, laneSource } = backfillLane(u, implementer);
     return {
-      ...u, mergedAtMs,
+      ...unitRest, mergedAtMs,
+      lane: unitLane, laneSource,
+      reviewRounds: outRounds,
+      reviewVerdicts: verdicts.length,
+      firstReviewVerdict: outFirst,
+      reviewSource,
+      reviewVerdictOrigin: verdicts.length ? (verdicts.some((v) => v.origin === "attested") ? "attested" : "runner-record") : null,
+      fixRounds: fixSpawns.length, fixProfiles, fixSpawns,
       dispatchBurstSize: burst.size, dispatchBurstAll: burst.all,
       implementerProfile: implementer ? implementer.profile : null,
       implementerProvider: implementer ? implementer.provider : null,
@@ -3470,7 +3616,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       unitCycleMs, fixAfterMerge,
     };
   }
+  for (const u of merged) {
+    if (!fixUnits.has(u.sha) || !u.lane || u.mergedAtMs === null) continue;
+    u.fixAfterMerge = merged.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAtMs !== null && p.mergedAtMs < u.mergedAtMs && u.mergedAtMs - p.mergedAtMs <= FIX_AFTER_MERGE_WINDOW_MS);
+  }
   yield;
+  const mergedByLane = new Map(); // usa-60: the enriched units (reviewRounds includes verdict counts), not the raw git rows
+  for (const u of merged) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const attributionCoverage = buildAttributionCoverage(merged);
 
   // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
@@ -3479,7 +3631,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const roleSuccess = (g) => {
     const rate = (n, d) => Math.round((n / d) * 1000) / 1000;
     if (g.jobKind === "reviewer") return g.runs - g.blockedCount > 0 ? { successRate: rate(g.passCount, g.runs - g.blockedCount), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
-    if (g.jobKind === "implementer") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
+    if (g.jobKind === "implementer") return g.firstTryKnown ? { successRate: rate(g.firstTryCount, g.firstTryKnown), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
     return { successRate: null, successBasis: "no-signal" };
   };
 
@@ -3488,7 +3640,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, firstTryKnown: 0, fixRounds: 0, fixPassN: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -3509,10 +3661,20 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const g = profileMap.get(profileKey(a));
     if (!g) continue;
     g.mergedUnits += 1;
-    if (u.reviewRounds <= 1) g.firstTryCount += 1;
+    { const ft = unitFirstTry(u); if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryCount += 1; } } // usa-60: unknown outcomes are not first-try PASSes
     g.reviewRounds += u.reviewRounds;
     if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
+  }
+  // usa-60 (idea-988): fix rounds by the fixer's own profile row: spawns after the unit's first FAIL, and how often the next verdict passed.
+  for (const u of merged) {
+    for (const f of u.fixSpawns ?? []) {
+      const a = agentById.get(f.agentId);
+      const g = a ? profileMap.get(profileKey(a)) : null;
+      if (!g) continue;
+      g.fixRounds += 1;
+      if (f.next === "PASS") g.fixPassN += 1;
+    }
   }
   // idea-300: attribute reviewed (merged) units to reviewer rows — reviewer cost per reviewed unit, review rounds, fix-after-merge.
   for (const u of merged) {
@@ -3542,6 +3704,10 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       reviewedUnits: isReviewer ? g.reviewedUnits : 0,
       mergedUnits,
       firstTryCount: g.firstTryCount,
+      firstTryKnown: g.firstTryKnown,
+      unknownReviewUnits: isReviewer ? 0 : g.mergedUnits - g.firstTryKnown,
+      fixRounds: g.fixRounds,
+      fixPassRate: g.fixRounds ? Math.round((g.fixPassN / g.fixRounds) * 1000) / 1000 : null,
       reviewRounds: isReviewer ? g.reviewedReviewRounds : g.reviewRounds,
       avgReviewRounds: mergedUnits ? Math.round(((isReviewer ? g.reviewedReviewRounds : g.reviewRounds) / mergedUnits) * 100) / 100 : 0,
       costPerMergedUnit: mergedUnits ? g.costUsd / mergedUnits : null,
@@ -3622,12 +3788,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       sha: r.sha, unit: r.unit ?? null, code: null, reviewRounds: r.reviewRounds ?? 0,
       mergedAt: r.ts ?? null, mergedAtMs: toMs(r.ts), firstBranchCtMs: null, subject: "",
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
-      lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
+      lane: r.lane ?? null, laneSource: r.lane ? (r.laneSource && r.laneSource !== "none" ? r.laneSource : "ledger") : "none", squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
       // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
       attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
       implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
+      reviewVerdicts: r.reviewVerdicts ?? 0, firstReviewVerdict: r.firstReviewVerdict ?? null, reviewSource: r.reviewSource ?? undefined, reviewVerdictOrigin: r.reviewVerdictOrigin ?? null, fixRounds: r.fixRounds ?? 0, fixProfiles: r.fixProfiles ?? [],
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
       dispatchBurstSize: r.dispatchBurstSize ?? null, dispatchBurstAll: r.dispatchBurstAll ?? null,
       fromLedger: true,
@@ -3655,7 +3822,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const squads = [...new Set([...laneTeams.values(), ...entries.map((e) => e.squad), ...allAgentSquads.map((a) => a.squad), ...mergedRawAll.map(unitSquad)].filter(Boolean))].sort();
   const autonomy = yield* buildAutonomySteps({
     entries, squads, squad,
-    merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), reviewRounds: u.reviewRounds })),
+    merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), ...(({ reviewRounds, reviewSource, firstReviewVerdict }) => ({ reviewRounds, reviewSource, firstReviewVerdict }))(reviewOutcomeOf(u)) })),
     agents: allAgentSquads.map(({ st, squad: sq }) => { const a = agentV2(st, ""); return { squad: sq, turns: a.turns, costUsd: a.costUsd }; }),
   });
   yield;
@@ -3686,7 +3853,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       const basis = gs.find((p) => p.successBasis === "implementer-first-try-pass") ? "implementer-first-try-pass" : gs[0]?.successBasis;
       const use = gs.filter((p) => p.successBasis === basis);
       const num = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.firstTryCount, 0) : use.reduce((t, p) => t + p.passCount, 0);
-      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs - (p.blockedCount ?? 0), 0);
+      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.firstTryKnown, 0) : use.reduce((t, p) => t + p.runs - (p.blockedCount ?? 0), 0);
       return { ...r, successRate: den ? Math.round((num / den) * 1000) / 1000 : null, successBasis: den ? basis : "no-signal" };
     }),
     lanes: lanes.map((l) => ({ ...l, ...(laneV2.get(l.lane) ?? {}) })),
@@ -3746,7 +3913,7 @@ function usageToMarkdown(u) {
   if (c?.recent?.units) {
     lines.push("");
     lines.push("## Cohort trend (last vs prior)");
-    lines.push(`- first-try PASS: ${c.recent.firstTryPassRate} vs ${c.prior?.firstTryPassRate ?? "-"} (Δ${c.delta?.firstTryPassRate ?? "-"})`);
+    lines.push(`- first-try PASS: ${c.recent.firstTryPassRate ?? "-"} vs ${c.prior?.firstTryPassRate ?? "-"} (Δ${c.delta?.firstTryPassRate ?? "-"})`);
     lines.push(`- rev rounds/unit: ${c.recent.avgReviewRounds} vs ${c.prior?.avgReviewRounds ?? "-"} (Δ${c.delta?.avgReviewRounds ?? "-"})`);
     lines.push(`- cost/unit: $${c.recent.costPerUnit} vs $${c.prior?.costPerUnit ?? "-"} (Δ${c.delta?.costPerUnit ?? "-"})`);
     lines.push(`- tokens/unit: ${c.recent.tokensPerUnit} vs ${c.prior?.tokensPerUnit ?? "-"}`);
@@ -3758,7 +3925,7 @@ function usageToMarkdown(u) {
     lines.push("## A/B workflow comparison");
     lines.push("| mode | units | 1st-pass | rev/unit | $/unit | $/100LOC | tok/unit | fix rate |");
     lines.push("|---|---|---|---|---|---|---|---|");
-    for (const w of bw) lines.push(`| ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate} | ${w.avgReviewRounds} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.tokensPerUnit} | ${w.fixAfterMergeRate} |`);
+    for (const w of bw) lines.push(`| ${w.workflowMode} | ${w.units} | ${w.firstTryPassRate ?? "-"} | ${w.avgReviewRounds} | ${w.costPerUnit ?? "-"} | ${w.costPer100Loc ?? "-"} | ${w.tokensPerUnit} | ${w.fixAfterMergeRate} |`);
   }
   const pl = u.merged?.perLane ?? [];
   if (pl.length) {

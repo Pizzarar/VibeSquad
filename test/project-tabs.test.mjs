@@ -126,7 +126,9 @@ test("T2: ⋯ menu entry removed; palette command 'Open Storybook: <project>' fo
   const c = src("CommandPalette.tsx"), p = src("PhoneCockpit.tsx");
   assert.ok(!c.includes('label: "Open Storybook"'), "interim ⋯ item gone");
   assert.ok(c.includes("label: `Open Storybook: ${v.team.name}`"), "palette command label");
-  assert.ok(c.includes("filter((v) => !probeStorybook(v.team.id))"), "hidden when known-missing");
+  assert.ok(c.includes("filter((v) => !isStorybookMissing(v.team.id))"), "hidden when known-missing (pure cache read)");
+  assert.ok(!c.includes("probeStorybook("), "palette does not call probeStorybook during render");
+  assert.ok(c.includes("useStorybookProbes("), "palette probes via effect hook");
   assert.ok(c.includes('id.startsWith("storybook:")') && c.includes("openStorybook(v.team.id, v.team.name)"), "command opens Storybook");
   assert.ok(p.includes('data-testid="phone-storybook-btn"') && p.includes("view && !sbMissing"), "phone ⋯ entry stays (own button, not teamCtxItems)");
 });

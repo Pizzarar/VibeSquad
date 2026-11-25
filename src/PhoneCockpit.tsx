@@ -4,6 +4,7 @@ import type { RunnerConn } from "./daemonOverlay";
 import { oppositeProviderTarget } from "./DrawerHeader";
 import { getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
 import { providerSpec } from "./pixel";
+import { drawerSpawnWhy, spawnReasonLabel } from "./roleSpawn";
 import { setPref, usePref } from "./prefs";
 import { isAndroidUserAgent } from "./remoteSession";
 import {
@@ -29,6 +30,7 @@ import { openStorybook, useStorybookMissing } from "./StorybookView";
 import { openPhoneUsage } from "./phoneUsageStore";
 import { CrunchToggle } from "./CrunchToggle";
 import { PhoneUsageView } from "./PhoneUsageView";
+import { orderViews } from "./projectOrder";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
@@ -236,6 +238,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   const activeMember =
     shown === "overlord" ? zones.overlord.member : shown === "riffbot" ? zones.riffbot.member : shown === "bugs" ? bugs.member : buddy;
   const activeProv = activeMember ? providerSpec(activeMember.agent.provider) : null;
+  const phoneWhy = activeMember ? drawerSpawnWhy((activeMember.agent.labels ?? {}) as Record<string, string>, activeMember.agent.model, false) : "";
   const switchTarget = activeMember
     ? oppositeProviderTarget(activeMember.agent.provider, (activeMember.agent.labels as Record<string, string> | undefined)?.profile)
     : null;
@@ -342,7 +345,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
       </header>
       {squadMenu && (
         <div className="phone-squad-menu" role="listbox" data-testid="phone-squad-menu">
-          {views.map((v) => (
+          {orderViews(views).map((v) => ( // Main first, then teams.json order (PLAN_PROJECT_ORDER); no reorder UI on the phone
             <button
               key={v.team.id}
               type="button"
@@ -469,8 +472,15 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
         )}
         {activeMember && activeProv && (
           <div className="phone-provider-bar" data-testid="phone-provider-bar">
+            {/* R2 (UX m4b): same as the drawer chip: the provider · model part ellipsizes first, the reason never shrinks. */}
             <span className="phone-active-provider" data-testid="phone-active-provider">
-              {activeProv.symbol} {activeProv.name}{activeMember.agent.model ? ` · ${activeMember.agent.model}` : ""}
+              <span className="pap-main">{activeProv.symbol} {activeProv.name}{activeMember.agent.model ? ` · ${activeMember.agent.model}` : ""}</span>
+              {phoneWhy && (
+                <span className="pap-why" data-testid="phone-active-why" data-reason={phoneWhy}>
+                  {" · "}
+                  {spawnReasonLabel(phoneWhy)}
+                </span>
+              )}
             </span>
             {switchTarget && (
               <button

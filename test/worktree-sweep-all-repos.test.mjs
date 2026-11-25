@@ -256,6 +256,23 @@ test("idea-978: the base scan is chunked (history longer than one chunk is still
     assert.ok(calls.filter((c) => c.startsWith("log -p")).length >= 2);
   }));
 
+test("idea-999: an empty commit inside the first chunk does not end the squash scan early", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-old");
+    commitFile(wt, "old.txt", "1\n");
+    commitFile(wt, "old.txt", "1\n2\n");
+    commitFile(repo, "pre.txt", "x\n");
+    git(["merge", "-q", "--squash", "unit-old"], repo);
+    git(["commit", "-q", "-m", "squashed"], repo);
+    for (let i = 0; i < 260; i++) commitFile(repo, "n.txt", `${i}\n`, `n${i}`); // squash lands in the second 250-commit chunk
+    git(["commit", "-q", "--allow-empty", "-m", "empty in the first chunk"], repo); // no patch-id: the first chunk yields 249 ids for 250 commits
+    const r = mergedStatus(repo, git(["rev-parse", "unit-old"], repo), ["refs/heads/master"], {});
+    assert.equal(r.how, "squash-patch");
+  }));
+
 test("dirty: untracked build output is ignored, tracked edits and other untracked files are not", () =>
   withTmp((root) => {
     const repo = join(root, "repo");

@@ -6,7 +6,7 @@
 //                   or is cut by an overflow ancestor; its own controls are hit-tested too.
 // Measures the built dist/ (vite build + static server), never the dev server.
 //
-//   node scripts/ui-clicks.mjs [--sizes 1080,4k,mobile,1280] [--vibe fun|boring] [--themes dark,light] [--surfaces a,b] [--out scratch/ui-clicks]
+//   node scripts/ui-clicks.mjs [--sizes 1080,4k,mobile,1280] [--vibe fun|boring] [--themes dark,light] [--surfaces a,b] [--jobs 4] [--out scratch/ui-clicks]
 //                              [--no-popovers] [--no-fail] [--rebuild]
 import fs from "node:fs";
 import path from "node:path";
@@ -289,10 +289,13 @@ export async function run() {
   const skip = (combo, surface, reason) => { if (/crash/i.test(reason)) { reason = `RENDERER CRASH (not a legitimate skip): ${reason}`; crashCount++; } skipped.push({ surface, combo, reason }); stats[combo].skipped++; process.stderr.write(`  SKIP ${surface} ${combo}: ${reason}\n`); };
 
   try {
-    for (const sid of sizeIds) {
+    // idea-967: size x theme combos are independent (own context, own stats key) and the run is dominated by fixed sleeps, so a serial
+    // run of all four sizes outlasts a ~10 min caller cap (which kills the browser mid-run: "browser has been closed"). Run them in a small pool.
+    const comboList = [];
+    for (const sid of sizeIds) { if (!SIZES[sid]) throw new Error(`unknown size ${sid}`); for (const theme of themes) comboList.push({ sid, theme }); }
+    const runCombo = async ({ sid, theme }) => {
       const size = SIZES[sid];
-      if (!size) throw new Error(`unknown size ${sid}`);
-      for (const theme of themes) {
+      {
         const combo = `${sid}/${theme}${vibe === "fun" ? "" : `/${vibe}`}`;
         stats[combo] = { controls: 0, popovers: 0, mismatch: new Set(), clipped: new Set(), skipped: 0, triggers: 0, triggersSkipped: 0, surfaces: 0 };
         const st = stats[combo];
@@ -310,10 +313,15 @@ export async function run() {
         };
         await open();
         // Rail/menu state persists in storage between surfaces (a probe click can collapse a rail): every setup starts from a clean app.
+        // Condition-based replacement for the old fixed 1.5s: the app shell is up (sidebar toggle or Normal root), fonts are loaded and two frames have painted.
+        const appReady = async (pg) => {
+          await pg.locator('[data-testid="sidebar-collapse-toggle"], [data-testid="boring-app"]').first().waitFor({ state: "visible", timeout: 10000 });
+          await pg.evaluate(() => document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))));
+        };
         const fresh = async () => {
           await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 });
           await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); }); // vibePicked: never hit the first-launch Normal/Psycho picker
-          if (!size.mobile) { await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 }); await page.waitForTimeout(1500); }
+          if (!size.mobile) { await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 }); await appReady(page); }
         };
         for (const surf of size.mobile ? PHONE_SURFACES : vibe === "boring" ? BORING_SURFACES : [...O.SURFACES, ...RAIL_SURFACES]) {
           if (only.length && !only.includes(surf.id)) continue;
@@ -351,7 +359,9 @@ export async function run() {
                 await probe(page, "P.snapshot()");
                 const pageSig = await stateSig(page);
                 await page.mouse.click(cur.cx, cur.cy);
-                await sleep(/sky/.test(t.sel) ? 4500 : 250); // the sky chat swings in over ~1-4s: judge it once landed
+                await sleep(250);
+                // The sky chat swings in over ~1-4s: judge it once landed = no .is-slam-fx class and no --slam-* vars left (same condition as ui-overlap toSkyRiff). A trigger that opens no sky panel falls through at once.
+                if (/sky/.test(t.sel)) await page.waitForFunction(() => !document.querySelector(".sky-chat-panel.is-slam-fx") && !/--slam-(swing|body-a)/.test(document.querySelector(".sky-zones")?.style.cssText ?? ""), null, { timeout: 8000 }).catch(() => {});
                 const pops = await probe(page, "P.popovers()");
                 for (const p of pops) {
                   popoversSeen++; st.popovers++;
@@ -373,7 +383,15 @@ export async function run() {
         }
         await ctx.close();
       }
-    }
+    };
+    const jobs = Math.max(1, Math.min(Number(arg("jobs", "4")), comboList.length));
+    let next = 0, failure = null;
+    await Promise.all(Array.from({ length: jobs }, async () => {
+      while (!failure && next < comboList.length) {
+        try { await runCombo(comboList[next++]); } catch (e) { failure ??= e; }
+      }
+    }));
+    if (failure) throw failure;
   } finally {
     await browser.close();
     server.close();

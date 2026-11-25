@@ -135,6 +135,7 @@ export function routeProviderFamily(raw) {
 }
 
 /** The tier stakes force, or null when the role's default tier applies (normal / missing / unknown). */
+// Parity with src/roleSpawn.ts tierFor pinned by test/walk-mapping-parity.test.mjs.
 export function stakesTier(stakes) {
   const s = normalizeStakes(stakes);
   if (s === "tierA-security" || s === "tierA-invariant") return "top";

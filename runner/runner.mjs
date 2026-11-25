@@ -10,6 +10,7 @@ import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
+import { LEGACY_PROFILE_ALIASES } from '../server/profile-aliases.mjs';
 import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndexInfo, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import { COLD_FOLD_MIN, coldFoldEntries, coldFoldWorkersFromEnv } from './fold-cold.mjs';
 import path from 'node:path';
@@ -74,17 +75,41 @@ export function agentEnv(id, meta = {}, base = process.env, { token } = {}) {
 // the accepted limit (SECURITY.md).
 
 const DIGEST_PROFILE = 'Pre-check - Flash'; // server/hooks/agent-duties.ts DIGEST_PROFILE: a digest is this profile + labels.digestFor
-// Spawning these needs the VS server (admin): a Buddy or a digest is never created by an agent caller.
-const ADMIN_ONLY_PROFILE_RE = /^(brainstorm|pre-check)\b/i;
+// Spawning these needs the VS server (admin): a Buddy or a digest is never created by an agent caller (idea-1046). Keyed on
+// what marks them, never a role-name prefix (the old /^(brainstorm|pre-check)\b/ refused the R1 Pre-check role and let its
+// legacy names such as "Scout - Flash" through): a digest is DIGEST_PROFILE (server/identity.mjs isDigestAgent counts the
+// profile alone as a digest) or a digest label; a Buddy is role brainstorm/buddy or a Brainstorm profile.
+// Labels that mark a digest (server/hooks/agent-duties.ts stamps digestFor + DIGEST_TURN_LABEL): an agent spawn carrying one is refused.
+const DIGEST_SPAWN_LABELS = ['digestFor', 'digestTurn'];
+/** A profile name compared case-, space- and punctuation-free ("pre-check  -  FLASH" === "Pre-check - Flash"). */
+const profileKey = (name) => String(name ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// Legacy aliases resolved before the check (server/profile-aliases.mjs, the one alias table), so "Fast" is the digest profile
+// and "Buddy" / "RiffBot" / "Brainstorm - Opus" are Brainstorm profiles in any case or spacing.
+const ALIAS_BY_KEY = new Map(Object.entries(LEGACY_PROFILE_ALIASES).map(([alias, target]) => [profileKey(alias), target]));
+const DIGEST_PROFILE_KEY = profileKey(DIGEST_PROFILE);
+// Brainstorm role (server/role-route.mjs ROLE_TABLE.brainstorm) and its legacy profiles (server/profiles.mjs
+// LEGACY_PROFILE_ROLES "Brainstorm - Claude" / "Brainstorm - Gemini"): any name whose key starts with "brainstorm"; plus the
+// Buddy spellings identity.mjs reads as the brainstorm role.
+const BUDDY_PROFILE_KEYS = new Set(['buddy', 'riffbot']);
+/** 'digest' | 'buddy' | null: what an agent-requested profile name resolves to, after the legacy alias table. */
+export function adminOnlyProfile(name) {
+  const raw = profileKey(name);
+  if (!raw) return null;
+  const key = ALIAS_BY_KEY.has(raw) ? profileKey(ALIAS_BY_KEY.get(raw)) : raw;
+  if (key === DIGEST_PROFILE_KEY) return 'digest';
+  if (key.startsWith('brainstorm') || BUDDY_PROFILE_KEYS.has(key)) return 'buddy';
+  return null;
+}
 // Meta an agent caller may never set, on `meta.*` or `meta.labels.*` (every key server/identity.mjs, lead-handoff.mjs and
 // agent-duties.ts read for privilege: role, lane, team, ord, parent, digest, orphan, retirement markers).
 export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
 // idea-629: `schedule` / `scheduleName` mark a schedule-spawned agent (server/schedules.mjs execute); only the VS server sets them.
-export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
+// idea-1046: digestTurn (agent-duties.ts DIGEST_TURN_LABEL) is a digest marker like digestFor, so a meta patch may not set it either.
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'digestTurn', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
 const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
 const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
 // Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.
-const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan', 'schedule', 'scheduleName']);
+const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'digestTurn', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan', 'schedule', 'scheduleName']);
 
 export function secretEquals(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
@@ -178,7 +203,8 @@ export function crossSquadInput(caller, target) {
 
 /**
  * The meta an agent caller's spawn request actually gets. Throws a 403-tagged error when the requested role is not
- * allowed (never a silent downgrade, tools.mjs rule): `brainstorm`/Brainstorm/Pre-check profiles need the VS server;
+ * allowed (never a silent downgrade, tools.mjs rule): role `brainstorm`, a Brainstorm/Buddy profile, the digest profile or a
+ * digest label (adminOnlyProfile, DIGEST_SPAWN_LABELS; aliases and case resolved first) need the VS server; Pre-check is a worker role;
  * `lead` only for a Buddy on its own lane or the Overlord inside its Squad, and only when that lane has no live lead.
  * Anything else becomes `worker` in the caller's lane (the Overlord may name another lane of its Squad). Team + parent are
  * always the caller's. Enforced on both meta.* and meta.labels.* (runner-backend folds them together).
@@ -189,8 +215,17 @@ export function spawnMetaForAgent(caller, meta = {}, { laneHasLiveLead = () => f
   const labels = { ...(meta.labels ?? {}) };
   for (const k of Object.keys(labels)) if (STRIPPED_SPAWN_LABELS.has(k) || isHandoffKey(k)) delete labels[k];
   const out = { ...meta, labels };
-  for (const k of ['ord', 'squad']) delete out[k];
-  if (want.profile && ADMIN_ONLY_PROFILE_RE.test(want.profile)) throw forbid(`an agent may not spawn profile "${want.profile}" (the VS server spawns Buddies and digests)`);
+  for (const k of ['ord', 'squad', ...DIGEST_SPAWN_LABELS]) delete out[k];
+  // Every carrier of the profile (meta.profile wins in identityOf, but labels.profile is folded too): none may be admin-only.
+  for (const name of new Set([meta.profile, meta.labels?.profile].filter((v) => v !== undefined && v !== null && v !== '').map(String))) {
+    const kind = adminOnlyProfile(name);
+    if (kind) throw forbid(`an agent may not spawn profile "${name}" (${kind === 'digest' ? 'a digest' : 'a Buddy'}: the VS server spawns Buddies and digests)`);
+  }
+  for (const k of DIGEST_SPAWN_LABELS) {
+    for (const v of [meta.labels?.[k], meta[k]]) {
+      if (v !== undefined && v !== null && String(v).trim() !== '') throw forbid(`an agent may not spawn a digest (${k}): the VS server spawns digests`);
+    }
+  }
   if (want.role === 'brainstorm') throw forbid('an agent may not spawn a brainstorm (Buddy)');
   let role = 'worker';
   let lane = caller.lane ?? null;
@@ -852,6 +887,11 @@ export class Runner {
       if (!yieldable.length) return false;
       const [k, e] = yieldable.shift();
       this._forcePark(k, e, 'room');
+    }
+    // idea-975: an owner job starting over maxLive through the OWNER_OVER_CAP allowance leaves one log line (live after this start, maxLive, allowance used).
+    const liveAfter = others.length - freed + 1;
+    if (owner && liveAfter > this.maxLive) {
+      try { this.store.append(except, 'owner-over-cap', { live: liveAfter, maxLive: this.maxLive, allowanceUsed: liveAfter - this.maxLive, allowance: OWNER_OVER_CAP }); } catch { /* log gone */ }
     }
     return true;
   }
@@ -1823,7 +1863,18 @@ export class Runner {
     const { queued, ...rec } = f.rec;
     // R4-1: a tool can only be in flight in a running agent with a child; a lost/exited/parked log that ended mid-call has none.
     const openTool = status === 'running' ? rec.openTool ?? null : null;
-    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()], openTool };
+    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()], openTool, ...(status === 'idle' && this._bgHeldNow(id) ? { bgHeld: true } : {}) };
+  }
+
+  // idea-631: an idle live agent whose park the runner is holding on its own background work, OR that is still in the post-turn
+  // grace + first probe (heldIds' rule, without its re-arm side effect): its turn end is not a report yet. False once the probe saw
+  // no shell (it parks, leaving live) or the hold dropped (bg-stopped / held-dead clear heldSince).
+  _bgHeldNow(id) {
+    const e = this.live.get(id);
+    if (!e || e.status !== 'idle' || e.perms.size > 0) return false; // a pending permission reads blocked (permission), not waiting-bg
+    if (e.heldSince !== null && e.heldSince !== undefined) return true;
+    if (this._wakeOwed(e)) return true; // the hold's shells exited (held-dead / probe saw none): the bg-wake turn is coming, not a report
+    return !!(this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0 && (e.parkTimer !== null || e.probing)); // post-turn window, only while a park check is coming
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.

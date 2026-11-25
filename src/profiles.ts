@@ -105,6 +105,8 @@ export type ProfilesState = {
   ladderDefaults?: Ladder;
   /** Role keys the server hides from pickers (GET /__vibesquad/roles hiddenRoles); absent = the static fallback. */
   hiddenRoles?: string[];
+  /** R2: provider families currently capped (GET /__vibesquad/roles capped); New Agent shows where a spawn lands. */
+  capped?: string[];
   /** "v2" = stored roles, "v1" = built live from the legacy profiles (nothing saved yet), "default" = shipped table. */
   rolesSource?: string;
 };
@@ -207,7 +209,7 @@ const ART_DIRECTOR_NOTE_BODY = [
 ].join("\n");
 
 const UX_REVIEWER_NOTE_BODY = [
-  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots. Write the report only; never switch branches or check out anything in the main checkout (use your own worktree).",
+  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_<lane>_R<n>.md and its screenshots (<lane> = your lane code, lowercase; n counts per lane: one more than the highest existing docs/UX_REVIEW_<lane>_R*.md, starting at R1, so two lanes never pick the same file; the old shared docs/UX_REVIEW_R<n>.md files stay where they are). Write the report only; never switch branches or check out anything in the main checkout (use your own worktree).",
   "1. Read the job list (docs/UX_REVIEW.md §1.3) and the previous round's doc. Do NOT read the unit's plan until after your first pass.",
   "2. Run the app with ?demo at 3200x1800 (the owner's 4K at 120%), then 1920x1080, dark and light. Drive the standard sequences: open project A then B; Ctrl+J into another project; open a Needs-you item; deep-link ?agent=; expand two projects; open a worker; 10+ alerts. Screenshot each.",
   "3. Check the invariants: counts agree everywhere they're shown; exactly one selected row; breadcrumb = selected row = open agent; expanded projects share one shape; no agent listed more than twice on screen; nothing that explains WHY is truncated.",
@@ -700,6 +702,7 @@ function applyRolesBody(body: Record<string, unknown>): void {
     ladder: (body.ladder as Ladder) ?? state.ladder,
     ladderDefaults: (body.ladderDefaults as Ladder) ?? state.ladderDefaults,
     hiddenRoles: Array.isArray(body.hiddenRoles) ? (body.hiddenRoles as string[]) : state.hiddenRoles,
+    capped: Array.isArray(body.capped) ? (body.capped as string[]) : state.capped,
     rolesSource: String(body.source ?? state.rolesSource ?? ""),
   };
   notify();
@@ -710,7 +713,7 @@ function applyRolesBody(body: Record<string, unknown>): void {
 let rolesInflight: Promise<ProfilesState> | null = null;
 export function fetchRoles(): Promise<ProfilesState> {
   if (DEMO) {
-    if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2" });
+    if (!state.roles) applyRolesBody({ schemaVersion: 2, roles: DEMO_ROLES, ladder: DEMO_LADDER, ladderDefaults: DEMO_LADDER, source: "v2", capped: new URLSearchParams(location.search).get("demoCapped")?.split(",").filter(Boolean) ?? [] });
     return Promise.resolve(state);
   }
   rolesInflight ??= (async () => {

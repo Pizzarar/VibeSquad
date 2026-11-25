@@ -96,6 +96,7 @@ const buddy = (w, over = {}) => w.seed({ id: "rn-bud1", title: "Buddy", status: 
 function coordinator(w, over = {}) {
   return createLeadHandoffCoordinator({
     rootDir: w.dir, baseHome: () => w.vsHome, profilesPath: w.profilesPath, sharedSlots: false,
+    usageProviders: () => [],
     listAgents: async () => (await w.fetchAgents()).entries.map((e) => e.agent),
     getAgent: async (id) => (await w.fetchAgent(id).catch(() => null))?.agent ?? null,
     setLabels: (id, labels, name) => w.updateAgent(id, { name, labels }),

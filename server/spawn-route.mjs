@@ -98,7 +98,7 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, override?: {provider?: string, model?: string} | null}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null}} [opts]
  */
 export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override } = {}) {
   let table = roles ?? ROLE_TABLE;

@@ -447,6 +447,7 @@ test("lead-handoff spawnSuccessor and confirmTakeover sweep any earlier stale/lo
       rootDir: dir,
       baseHome: vsHome,
       profilesPath,
+      usageProviders: () => [],
       listAgents: async () => [...agents.values()],
       getAgent: async (id) => agents.get(id) ?? null,
       setLabels: async (id, labels, name) => {
@@ -738,6 +739,7 @@ test("R2 [M2]: retireStaleLeads and sweepEarlierLaneLeads scope by teamId (share
       rootDir: dir,
       baseHome: vsHome,
       profilesPath,
+      usageProviders: () => [],
       listAgents: async () => [...agents.values()],
       getAgent: async (id) => agents.get(id) ?? null,
       setLabels: async (id, labels, name) => {
@@ -896,6 +898,7 @@ function r3Fixture(prefix) {
       rootDir: dir,
       baseHome: vsHome,
       profilesPath,
+      usageProviders: () => [],
       listAgents: async () => [...agents.values()],
       getAgent: async (id) => agents.get(id) ?? null,
       setLabels: async (id, labels, name) => {
