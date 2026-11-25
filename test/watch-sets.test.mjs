@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -916,7 +916,9 @@ test("a failed merge spawn falls back to the raw text, truncated with a size not
     assert.ok(ping.text.length > DIGEST_MERGE_MAX);
     assert.equal(delivered.length, 1, "fallback delivered exactly once");
     assert.ok(ping.attemptedAt, "attemptedAt persisted (never re-offered)");
-    assert.equal(delivered[0].text.startsWith(ping.text.slice(0, DIGEST_MERGE_MAX)), true, "fallback is the raw text's prefix");
+    // idea-883: the code-read verdict block leads the fallback, then the raw text's prefix.
+    assert.match(delivered[0].text, /^Verdicts \(read in code[^\n]*\n- agent w-1: NO VERDICT\n/, "verdict block leads the fallback");
+    assert.equal(delivered[0].text.includes(`\n${ping.text.slice(0, DIGEST_MERGE_MAX)}`), true, "fallback carries the raw text's prefix");
     assert.match(delivered[0].text, /\(\+\d+ chars, see vs log\)$/, "fallback names the dropped char count");
     // Never sent twice: another tick does not re-offer (attempted) or re-spawn.
     clock.t += 5 * MIN;
@@ -1443,7 +1445,8 @@ test(
       const toLead = h.sent.filter((s) => s.to === "lead-1");
       assert.equal(spawns.length, 1, "one Flash worker spawned");
       assert.equal(toLead.length, 1, JSON.stringify(h.sent));
-      assert.match(toLead[0].text, /MERGED: 6 done, all PASS/);
+      assert.match(toLead[0].text, /MERGED: 6 done, all \[verdict↑\]/, "idea-883: the merge worker's verdict word is masked");
+      assert.match(toLead[0].text, /^Verdicts \(read in code[^\n]*\n- agent w-1: NO VERDICT\n/, "idea-883: the code-read verdict block leads");
       assert.doesNotMatch(toLead[0].text, /\(\+\d+ chars, see vs log\)$/, "no truncated fallback when the merge succeeds");
     } finally {
       h.stop();
@@ -1480,7 +1483,7 @@ test(
       assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0, "nothing goes to the retired owner");
       const toNew = h.sent.filter((s) => s.to === "lead-new");
       assert.equal(toNew.length, 1, JSON.stringify(h.sent));
-      assert.match(toNew[0].text, /MERGED: 6 done, all PASS/);
+      assert.match(toNew[0].text, /MERGED: 6 done, all \[verdict↑\]/);
       // W4 marks the ping attempted before the spawn: the fired set has nothing left to send or cancel, so it is not re-owned.
       const set = h.watch.get(id);
       assert.ok(set.firedAt && set.pings.every((p) => p.attemptedAt));
@@ -2288,7 +2291,7 @@ test(
       assert.match(spawns[0].prompt, /see <host-path>/);
       const toLead = h.sent.filter((s) => s.to === "lead-1");
       assert.equal(toLead.length, 1, JSON.stringify(h.sent));
-      assert.match(toLead[0].text, /MERGED: 6 PASS, log at <host-path> ok/);
+      assert.match(toLead[0].text, /MERGED: 6 \[verdict↑\], log at <host-path> ok/);
       assert.doesNotMatch(toLead[0].text, HOSTY);
     } finally {
       h.stop();
@@ -2953,3 +2956,111 @@ test("idea-596: prune metric goes to the mutating engine's own log (not a shared
     sb.cleanup();
   }
 });
+
+// ---- idea-883: a watch summary's verdict is read in code from the agent's own verdict line, never from prose/test counts ----
+
+/** The w-d81540c8 shape: a review that opens with passing test counts and puts its FAIL verdict on the LAST line. */
+const failLastReview = (hash) =>
+  [
+    `Reviewed commit \`${hash}\` on \`unit-bug-795-sweep\`.`,
+    "### Verification",
+    "- `node --test test/worktree-sweep-fetch.test.mjs` — **3/3 pass**",
+    "- `node --test test/*worktree*.test.mjs` — **65/65 pass**",
+    `- ${"Hard rule: Pass. ".repeat(30)}`,
+    "### Findings",
+    "- **[High]** fetch throttle is in-memory only.",
+    "",
+    `FAIL 1/0/3 ${hash}`,
+  ].join("\n");
+
+test("idea-883 itemVerdict: the agent's own verdict line, a FAIL anywhere wins, null without one", () => {
+  const agent = (report, final) => ({ kind: "agent", ref: "r", state: "done", report, ...(final ? { final } : {}) });
+  assert.equal(itemVerdict(agent(failLastReview("4c288c19"))), "FAIL 1/0/3 4c288c19", "trailing FAIL after passing counts");
+  assert.equal(itemVerdict(agent("PASS 0/0/2 9aa9be4e\nbody\nFAIL 1/0/0 9aa9be4e")), "FAIL 1/0/0 9aa9be4e", "FAIL beats an earlier PASS");
+  assert.equal(itemVerdict(agent("PASS 0/0/2 9aa9be4e — done", "body\nFAIL 0/1/0 9aa9be4e")), "FAIL 0/1/0 9aa9be4e", "a FAIL in the final wins over the report's PASS");
+  assert.equal(itemVerdict(agent("**VERDICT: PASS 0/0/1 abcdef12**")), "PASS 0/0/1 abcdef12");
+  assert.equal(itemVerdict(agent("tests 3/3 pass, 65/65 pass, all good")), null, "test counts are not a verdict");
+  assert.equal(itemVerdict({ kind: "suite", ref: "", state: "done", report: "PASS 3/3 pass" }), null, "only agent items carry reviewer verdicts");
+  // Review Low: an orphan-sweep report with no final still reads its verdict under the UNVERIFIED prefix.
+  assert.equal(itemVerdict(agent("UNVERIFIED (digest failed): FAIL 1/0/3 4c288c19 reviewer=Review - Gemini: High")), "FAIL 1/0/3 4c288c19");
+  assert.equal(itemVerdict(agent("UNVERIFIED (digest orphaned): PASS 0/0/1 9aa9be4e")), "PASS 0/0/1 9aa9be4e");
+});
+
+test("idea-883 maskVerdictWords masks Title-case verdict words too; lowercase test counts stay", () => {
+  assert.equal(maskVerdictWords("- w-3: Pass | Passed review; Fail, Failed, Fails; No verdict"), "- w-3: [verdict↑] | [verdict↑] review; [verdict↑], [verdict↑], [verdict↑]; [verdict↑]");
+  assert.equal(maskVerdictWords("count: 3/3 pass, 65 passed, 0 failed, 1 fail"), "count: 3/3 pass, 65 passed, 0 failed, 1 fail");
+  assert.equal(maskVerdictWords("Passport and Failover stay"), "Passport and Failover stay", "whole words only");
+});
+
+test("idea-883 completion ping: a FAIL on a long review's last line leads its item line and the head tally; no verdict reads NO VERDICT", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: ["rv-1", "rv-2", "im-1"].map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    for (const ref of ["rv-1", "rv-2", "im-1"]) engine.onRunnerEvent(agentEv(ref, "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("rv-1", T0 + 1000, failLastReview("4c288c19")));
+    engine.onLogEntry("vibesquad", doneEntry("rv-2", T0 + 1000, "PASS 0/0/2 9aa9be4e\nlooks good"));
+    engine.onLogEntry("vibesquad", doneEntry("im-1", T0 + 1000, "Implemented it; 12/12 tests pass. Committed abc1234."));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const text = engine.get(id).pings[0].text;
+    assert.match(text, /^Watch \S+ complete: all 3 items done\. Verdicts: 1 FAIL, 1 PASS, 1 NO VERDICT\./);
+    assert.match(text, /\n- agent rv-1: done — FAIL 1\/0\/3 4c288c19 — Reviewed commit/, "the FAIL leads, before the 400-char cap");
+    assert.match(text, /\n- agent rv-2: done — PASS 0\/0\/2 9aa9be4e looks good/, "a report already opening with its tag is not double-tagged");
+    assert.match(text, /\n- agent im-1: done — NO VERDICT — Implemented it/, "no verdict line: NO VERDICT, never PASS");
+    assert.equal(delivered.length, 1);
+  } finally {
+    sb.cleanup?.();
+  }
+});
+
+test("idea-883 verdictBlock / maskVerdictWords", () => {
+  const set = {
+    items: [
+      { kind: "agent", ref: "rv-1", state: "done", report: failLastReview("4c288c19") },
+      { kind: "agent", ref: "im-1", state: "done", report: "shipped, 3/3 pass" },
+      { kind: "agent", ref: "wt-1", state: "waiting" },
+      { kind: "suite", ref: "", state: "done", report: "PASS 10/10 pass, 0 fail" },
+    ],
+  };
+  assert.equal(verdictBlock(set).split("\n").slice(1).join("\n"), "- agent rv-1: FAIL 1/0/3 4c288c19\n- agent im-1: NO VERDICT");
+  assert.equal(verdictBlock({ items: [{ kind: "agent", ref: "x", state: "waiting" }] }), "");
+  assert.equal(maskVerdictWords("rv-1: PASS | commit 4c288c19 | count: 3/3 pass; im-1 FAILED; NO-VERDICT"), "rv-1: [verdict↑] | commit 4c288c19 | count: 3/3 pass; im-1 [verdict↑]; [verdict↑]");
+});
+
+test(
+  "idea-883 plugin repro (w-d81540c8): the Flash merge's guessed PASS never reaches the lead; the code-read FAIL does",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ...refs.map((r) => [r, mk(r, "worker")])]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async (payload) => {
+        spawns.push(payload);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "idle" }) };
+      },
+      // What rn-aa8e6664c934 actually wrote for the FAIL 1/0/3 review.
+      timelineFor: (aid) => (aid === "flash-1" ? [{ item: { type: "assistant_message", text: "- w-3: PASS | commit 4c288c19 | count: 3/3 fetch, 65/65 worktree pass" } }] : []),
+    });
+    try {
+      const text = (ref) => (ref === "w-3" ? failLastReview("4c288c19") : `PASS 0/0/1 ${"a".repeat(7)}${refs.indexOf(ref)}\n${longReport(ref)}`);
+      writeLog(sb, refs.map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "done", text: text(ref), refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      assert.equal(spawns.length, 1, "one Flash worker spawned");
+      assert.match(spawns[0].prompt, /- agent w-3: done — FAIL 1\/0\/3 4c288c19 — /, "the merge input leads w-3's line with its FAIL");
+      assert.match(spawns[0].prompt, /Do NOT write PASS, FAIL or any verdict word/);
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      assert.equal(toLead.length, 1, JSON.stringify(h.sent));
+      assert.match(toLead[0].text, /\n- agent w-3: FAIL 1\/0\/3 4c288c19\n/);
+      assert.doesNotMatch(toLead[0].text, /PASS \| commit 4c288c19/);
+      assert.match(toLead[0].text, /- w-3: \[verdict↑\] \| commit 4c288c19/);
+    } finally {
+      h.stop();
+    }
+  }),
+);

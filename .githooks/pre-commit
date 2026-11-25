@@ -1,0 +1,7 @@
+#!/bin/sh
+# VibeSquad verdict gate (idea-883): a conflicted merge's final `git commit` skips pre-merge-commit, so it is checked here.
+# Ordinary commits (no MERGE_HEAD) exit at once without starting node.
+mh=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null) || exit 0
+[ -f "$mh" ] || exit 0
+here=$(cd "$(dirname "$0")" && pwd) || exit 1
+exec node "$here/../server/push-guard.mjs" pre-merge-commit
