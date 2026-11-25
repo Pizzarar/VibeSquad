@@ -1028,7 +1028,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             </div>
           )}
           <div className="boring-topbar-actions">
-            {view && <CrunchToggle teamId={view.team.id} variant="boring" />}
             <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
             <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
             {mode === "chat" && (agent || panes.split) && (
@@ -1041,6 +1040,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
               </button>
             )}
+            {/* Last, so it stays put when Split/Details appear with an open agent (UX R26 n1). */}
+            {view && <CrunchToggle teamId={view.team.id} variant="boring" />}
           </div>
         </header>
         {view && activeAsleep && (

@@ -875,7 +875,7 @@ export function TeamSettingsModal({
               Delete team
             </button>
           </div>
-          <label className="muted small" style={{ display: "block", margin: "6px 0" }}>
+          <label className="muted small" style={{ display: "block", margin: "6px 0" }} data-setting-id={i === 0 ? "crunch-mode" : undefined}>
             <input
               type="checkbox"
               aria-label="Crunch mode"

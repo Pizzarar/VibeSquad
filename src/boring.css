@@ -1452,3 +1452,8 @@ html[data-vibe="boring"] .project-tabs .boring-switch-pill.on { color: var(--acc
 html[data-vibe="boring"][data-theme="light"] .project-tabs .boring-switch-pill.on { color: var(--text); }
 /* C3 Crunch pill (topbar right): same active cue as the project tabs; the label stays --text so it reads on both themes. */
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="true"].on { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: inset 0 0 0 1px var(--accent); }
+/* C3 r1: Crunch pill off = muted label (reads as a switch, not a plain button); busy = colour only, never opacity (Art13). */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"] { color: var(--muted); opacity: 1; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"]:hover:not(:disabled) { color: var(--text); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill:disabled { cursor: progress; opacity: 1; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed] { color: var(--st-err, var(--text)); }

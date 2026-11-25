@@ -476,6 +476,7 @@ export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string; 
   { id: "remote-control", section: "remote", label: "Remote control & link device" },
   { id: "teams", section: "team", label: "Teams and lanes" },
   { id: "path-matchers", section: "team", label: "Path matchers" },
+  { id: "crunch-mode", section: "team", label: "Crunch mode (per-Squad auto-pilot)", keywords: ["crunch", "vibe", "auto", "lean", "autopilot"] },
   { id: "token-thresholds", section: "team", label: "Token thresholds" },
   { id: "runner-providers", section: "runner", label: "Runner & Providers" },
   { id: "profiles", section: "profiles", label: "Agent profiles" },
