@@ -138,6 +138,7 @@ export function toAgent(rec) {
     ...(rec.lastProgressAt != null ? { lastProgressAt: iso(rec.lastProgressAt) } : {}),
     archivedAt: iso(rec.archivedAt),
     ...openToolFields(STATUS[rec.status] === "running" ? rec.openTool : null),
+    ...(rec.bgHeld ? { bgHeld: true } : {}), // idea-631: idle with a background shell still holding its park: its turn end is not a report
     workspaceId: null,
     backend: "runner",
   };
@@ -231,6 +232,7 @@ export function newFoldState() {
     offered: null,
     sessionId: null,
     tools: new Map(), // R4-1: open tool calls, same reducer as the runner's own fold
+    bgHeld: false, // idea-631: idle, but the runner holds its park on a background shell (park-held) until a new status/park/exit
   };
 }
 
@@ -252,8 +254,10 @@ export function feedFoldLine(st, line) {
     if (e.sessionId) st.sessionId = e.sessionId;
     if (Array.isArray(e.modes)) st.offered = { modes: e.modes, models: e.models ?? [] };
   }
-  else if (e.type === "status") { st.status = e.status; st.queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
-  else if (e.type === "exit") st.exited = true;
+  else if (e.type === "park-held") st.bgHeld = true;
+  else if (e.type === "status") { if (e.status !== "idle") st.bgHeld = false; st.status = e.status; st.queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
+  else if (e.type === "exit") { st.exited = true; st.bgHeld = false; }
+  else if (e.type === "park-forced" || e.type === "parked") st.bgHeld = false;
   else if (e.type === "archive") st.archivedAt = e.ts;
   else if (e.type === "unarchive") st.archivedAt = null;
   else if (e.type === "usage") { const u = {}; for (const k of USAGE_KEYS) if (k in e) u[k] = e[k]; st.usage = u; }
@@ -287,7 +291,7 @@ export function finishFold(id, st, home, env, liveness) {
     id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(st.offered ? { offered: st.offered } : {}),
     status: st.exited ? "exited" : status, createdAt: created.ts, updatedAt: st.hasLast ? st.lastTs : undefined, archivedAt: st.archivedAt,
     lastPromptAt: st.lastPromptTs ?? null, lastProgressAt: st.lastProgressTs ?? null,
-    usage: st.usage, pendingPermissions: [...st.perms.values()], resumable, openTool: oldestOpenTool(st.tools),
+    usage: st.usage, pendingPermissions: [...st.perms.values()], resumable, openTool: oldestOpenTool(st.tools), bgHeld: st.bgHeld === true && status === "idle" && !st.exited,
     ...(status === "queued" && !st.exited && st.queued ? { queued: st.queued } : {}),
   });
 }

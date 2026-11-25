@@ -318,6 +318,12 @@ export function classifyItem(item, set, ctx) {
     const selfReported = reps.some((r) => r.type === "done" && r.agent === item.ref);
     const fin = !selfReported && o.finalText ? { final: String(o.finalText) } : {};
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text, ...fin };
+    // idea-631: idle but the runner holds its park on the worker's own background shell (a suite/monitor it ended its turn on):
+    // that final text is not a verdict. waiting-bg until the shell ends and the runner wakes it (bg-wake), bounded by the stall clock.
+    if (!busy && o.bgHeld && !o.archived && o.status !== "closed" && o.status !== "error") {
+      const ps = since("waiting-bg");
+      return t - ps > stallMs ? { phase: "waiting-bg", phaseSince: iso(ps), state: "stalled", reason: "bg-held" } : { phase: "waiting-bg", phaseSince: iso(ps), state: "waiting" };
+    }
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
     if (!busy && (o.archived || o.status !== "closed") && o.status !== "error" && o.finalText && Math.max(o.activeAt ?? -Infinity, o.progressAtMs ?? -Infinity) >= floor) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: o.finalText, ...fin };
@@ -759,6 +765,7 @@ export function createWatchEngine({
       o.finalChecked = 0;
       o.progressAtMs = prog;
     }
+    o.bgHeld = a.bgHeld === true; // idea-631
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
     o.archived = Boolean(a.archivedAt || a.archived);
