@@ -31,6 +31,7 @@ import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
 import { useStorybookPresent } from "./StorybookView";
+import { CrunchToggle } from "./CrunchToggle";
 import { UsageDashboard } from "./UsageDashboard";
 
 export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
@@ -1080,6 +1081,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
               </button>
             )}
+            {/* Last, so it stays put when Split/Details appear with an open agent (UX R26 n1). */}
+            {view && <CrunchToggle key={view.team.id} teamId={view.team.id} variant="boring" />}
           </div>
         </header>
         {view && activeAsleep && (

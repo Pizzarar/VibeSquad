@@ -28,6 +28,7 @@ import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
 import { openStorybook, useStorybookMissing } from "./StorybookView";
 import { openPhoneUsage } from "./phoneUsageStore";
+import { CrunchToggle } from "./CrunchToggle";
 import { PhoneUsageView } from "./PhoneUsageView";
 import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
@@ -388,6 +389,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
               <span className="phone-storybook-name">{view.team.name}</span>
             </button>
           )}
+          {view && <CrunchToggle key={view.team.id} teamId={view.team.id} variant="phone" />}
           <button
             type="button"
             className="btn ghost phone-usage-btn"
