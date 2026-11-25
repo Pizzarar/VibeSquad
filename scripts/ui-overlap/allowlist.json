@@ -78,6 +78,12 @@
     },
     {
       "kind": "compact-scroll",
+      "selector": "div\\.drawer-shell > div\\.timeline-col > div\\.timeline",
+      "surface": "sky-riff",
+      "reason": "RiffBot drawer chat timeline is a scrollback: it fills the drawer height and scrolls by nature; the prior messages are history, not content to compact."
+    },
+    {
+      "kind": "compact-scroll",
       "selector": "cmd-list",
       "reason": "Command palette opens on demand (Ctrl+K) and its action list scrolls by nature; the filter box narrows it."
     },
