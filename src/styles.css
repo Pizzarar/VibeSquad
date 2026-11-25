@@ -5900,7 +5900,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .sidebar-footer-row .btn, .sidebar-footer-row .sidebar-icon-btn, .sidebar-footer-row .sidebar-cog-btn { min-height: calc(var(--u3-px) * 14); flex-shrink: 0; }
 /* The fixed bottom-left "Normal mode" chip (psycho focus/pin-focus) floats over the sidebar footer. It is a slim 10px chip tucked into the corner and the footer reserves its 18px so its buttons stay clickable; a taller reserve scrolled the pin rows out of reach at 720px (idea-734). In the 56px collapsed rail it stacks its words to fit inside the rail instead of covering the composer's left controls at 1280. */
 .app.focus .sidebar-footer-row, .app.pin-focus .sidebar-footer-row { margin-bottom: 18px; }
-[data-testid="psycho-focus-normal-btn"] { bottom: 3px !important; left: 6px !important; padding: 1px 6px; font-size: 10px; line-height: 1.2; min-height: 0; }
+[data-testid="psycho-focus-normal-btn"] { bottom: 3px; left: 6px; padding: 1px 6px; font-size: 10px; line-height: 1.2; min-height: 0; }
 .app.sidebar-collapsed [data-testid="psycho-focus-normal-btn"] { max-width: 44px; padding: 1px 3px; font-size: 9px; line-height: 1.1; white-space: normal; text-align: center; }
 .team-head .team-emblem { flex-shrink: 0; }
 /* ── Narrow-window rails (src/railCollapse.ts): under 1600 css px the sidebar (.sidebar-collapsed, existing 56px rail) and the right pin rail

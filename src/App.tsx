@@ -2300,7 +2300,7 @@ export function App() {
           className="tchip"
           data-testid="psycho-focus-normal-btn"
           title="Switch to Normal mode"
-          style={{ position: "fixed", left: 8, bottom: 8, zIndex: 50, opacity: 0.8 }}
+          style={{ position: "fixed", zIndex: 50, opacity: 0.8 }}
           onClick={() => setPref("app.vibe", "boring")}
         >
           Normal mode

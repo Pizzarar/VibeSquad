@@ -169,7 +169,7 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
         <span title={resetMs ? etDateTime(resetMs) : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
         <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
       </div>
-      {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? new Date(checked).toLocaleString() : undefined}>{sampled}</div>}
+      {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? etDateTime(checked) || undefined : undefined}>{sampled}</div>}
       <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
     </div>
   );

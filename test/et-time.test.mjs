@@ -22,3 +22,11 @@ test("formatTimestamp absolute is ET-labelled", () => {
   assert.equal(formatTimestamp("2026-11-25T13:00:00Z", "absolute", now), "8:00 AM ET");
   assert.equal(formatTimestamp("2026-11-24T13:00:00Z", "absolute", now), "2026-11-24 8:00 AM ET");
 });
+test("owner-facing dates in src use etTime, not toLocale*String (idea-734)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const ud = readFileSync(new URL("../src/UsageDashboard.tsx", import.meta.url), "utf8");
+  assert.match(ud, /import \{[^}]*etDateTime[^}]*\} from "\.\/etTime"/);
+  assert.doesNotMatch(ud, /new Date\([^)]*\)\.toLocale(Time|Date)?String/);
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /psycho-focus-normal-btn[\s\S]{0,200}left: 8, bottom: 8/);
+});
