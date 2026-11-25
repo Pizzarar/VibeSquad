@@ -357,7 +357,7 @@ export function usePaseo(): State {
 
 export type SpawnRequest = {
   provider: string; // "claude", "antigravity-cli", ...
-  model: string;
+  model?: string;
   modeId?: string;
   thinkingOptionId?: string;
   featureValues?: Record<string, unknown>;
