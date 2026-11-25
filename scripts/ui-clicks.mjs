@@ -313,10 +313,15 @@ export async function run() {
         };
         await open();
         // Rail/menu state persists in storage between surfaces (a probe click can collapse a rail): every setup starts from a clean app.
+        // Condition-based replacement for the old fixed 1.5s: the app shell is up (sidebar toggle or Normal root), fonts are loaded and two frames have painted.
+        const appReady = async (pg) => {
+          await pg.locator('[data-testid="sidebar-collapse-toggle"], [data-testid="boring-app"]').first().waitFor({ state: "visible", timeout: 10000 });
+          await pg.evaluate(() => document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))));
+        };
         const fresh = async () => {
           await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 });
           await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); }); // vibePicked: never hit the first-launch Normal/Psycho picker
-          if (!size.mobile) { await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 }); await page.waitForTimeout(1500); }
+          if (!size.mobile) { await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 }); await appReady(page); }
         };
         for (const surf of size.mobile ? PHONE_SURFACES : vibe === "boring" ? BORING_SURFACES : [...O.SURFACES, ...RAIL_SURFACES]) {
           if (only.length && !only.includes(surf.id)) continue;
@@ -354,7 +359,9 @@ export async function run() {
                 await probe(page, "P.snapshot()");
                 const pageSig = await stateSig(page);
                 await page.mouse.click(cur.cx, cur.cy);
-                await sleep(/sky/.test(t.sel) ? 4500 : 250); // the sky chat swings in over ~1-4s: judge it once landed
+                await sleep(250);
+                // The sky chat swings in over ~1-4s: judge it once landed = no .is-slam-fx class and no --slam-* vars left (same condition as ui-overlap toSkyRiff). A trigger that opens no sky panel falls through at once.
+                if (/sky/.test(t.sel)) await page.waitForFunction(() => !document.querySelector(".sky-chat-panel.is-slam-fx") && !/--slam-(swing|body-a)/.test(document.querySelector(".sky-zones")?.style.cssText ?? ""), null, { timeout: 8000 }).catch(() => {});
                 const pops = await probe(page, "P.popovers()");
                 for (const p of pops) {
                   popoversSeen++; st.popovers++;
