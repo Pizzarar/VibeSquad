@@ -65,7 +65,7 @@ test('destructive git in the main checkout is refused (cwd, subdir, every listed
 test('false positives: read-only git, checkout -b, branch switches, dry runs and --help pass in the main checkout', () => {
   for (const cmd of [
     'git status', 'git status --short', 'git diff', 'git log --oneline -5', 'git show HEAD', 'git rev-parse --show-toplevel',
-    'git branch -a', 'git fetch origin', 'git worktree list', 'git reset', 'git reset --soft HEAD~1', 'git reset HEAD src/a.ts',
+    'git branch -a', 'git fetch origin', 'git worktree list', 'git reset', 'git reset HEAD src/a.ts',
     'git checkout -b feat', 'git checkout -b feat origin/master', 'git checkout -B feat', 'git checkout master', 'git switch -c feat',
     'git switch master', 'git clean -n', 'git clean -nd', 'git clean --dry-run -fd', 'git stash list', 'git stash show -p',
     'git reset --help', 'git checkout -h', 'git log --grep="reset --hard"', 'echo "git reset --hard"', 'grep -r "git clean" docs',
@@ -289,7 +289,9 @@ test('tokenize: quotes, escapes, redirections and comments', () => {
   const words = (s) => tokenize(s, { env }).tokens.filter((t) => t.type === 'word').map((t) => t.text);
   assert.deepEqual(words(`git commit -m "a && b" 2>&1`), ['git', 'commit', '-m', 'a && b', '2>&1']);
   assert.deepEqual(words(`echo 'x;y' \\; z # git reset --hard`), ['echo', 'x;y', ';', 'z']);
-  ok('git commit -m "reset --hard; git clean -fd"');
+  ok('git commit -m "reset --hard; git clean -fd"', WT); // the quoted message is data, not commands
+  // idea-888: in the main checkout the commit itself is refused (an R17 write), labelled as the commit, never as its message
+  assert.equal(bad('git commit -m "reset --hard; git clean -fd"').label, 'git commit');
   ok('ls # git reset --hard');
   // heredoc bodies are data: a commit message or inbox note that mentions destructive git is not a command
   ok(`vs inbox add "$(cat <<'EOF'\nworker ran git reset --hard\ngit clean -fd\nEOF\n)"`);

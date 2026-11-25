@@ -21,6 +21,7 @@ import {
   defaultGit,
   detectDefaultBranch,
   discoverSanctuaryRepos,
+  holdAgentCwds,
   liveAgentCwds,
   resolveManagedWorktreeRoot,
   sweepMergedWorktrees,
@@ -90,7 +91,7 @@ export const AUTOSWEEP_HEAVY = {
    * groups: [{ repo, def, moves: [{ ref, prev, tip }] }], one per repo (several moved refs of a repo are swept once).
    * With apply, holds the sweep lock for the whole call; busy -> { busy }. Returns { results: [{ repo, via, refs, ...r }] }.
    */
-  sweep({ root, groups, liveCwds, apply, now, git = defaultGit }) {
+  sweep({ root, groups, liveCwds, holdCwds, apply, now, git = defaultGit }) {
     const release = apply ? acquireSweepLock(root) : () => {};
     if (!release) return { busy: true, results: [] };
     try {
@@ -108,6 +109,7 @@ export const AUTOSWEEP_HEAVY = {
         const res = sweepMergedWorktrees(repo.repoRoot, {
           apply,
           liveCwds,
+          holdCwds,
           git,
           sanctuaryRoot: root,
           targetBranch: def.name,
@@ -227,7 +229,7 @@ export function createWorktreeAutoSweep({
       say("worktree-autosweep skipped: agent roster unreadable, no live-cwd guard");
       return { skipped: "agents-unreadable" };
     }
-    const res = await heavy("sweep", { root, groups: [...byRepo.values()], liveCwds: liveAgentCwds(agents), apply, now: now() });
+    const res = await heavy("sweep", { root, groups: [...byRepo.values()], liveCwds: liveAgentCwds(agents), holdCwds: holdAgentCwds(agents, { now: now() }), apply, now: now() });
     if (res.busy) {
       say("worktree-autosweep skipped: another sweep holds the sanctuary lock");
       return { skipped: "sweep-busy" };
@@ -249,9 +251,13 @@ export function createWorktreeAutoSweep({
   return { tick };
 }
 
-/** Server wiring: one tick every AUTOSWEEP_TICK_MS against the runner roster, git work in a worker. Returns { stop, tick }. */
+/**
+ * Server wiring: one tick every AUTOSWEEP_TICK_MS against the runner roster, git work in a worker. Returns { stop, tick }.
+ * The roster includes archived records (idea-1043): a recently archived worker still holds its zero-commit worktree.
+ * listAgents() is only called on a tick that saw a default-branch move.
+ */
 export function startWorktreeAutoSweep({ runner, tickMs = AUTOSWEEP_TICK_MS, ...rest } = {}) {
-  const sweep = createWorktreeAutoSweep({ listAgents: () => runner.listAgents(), runHeavy: runHeavyInWorker, ...rest });
+  const sweep = createWorktreeAutoSweep({ listAgents: () => runner.listAgents({ filter: { includeArchived: true } }), runHeavy: runHeavyInWorker, ...rest });
   let running = false;
   const run = () => {
     if (running) return;

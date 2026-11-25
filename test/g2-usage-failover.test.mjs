@@ -398,11 +398,12 @@ test("G2 r1 M1: at claude >=95% live quota a plain Implement spawn picks the Neo
   const { USER_PROFILES } = await import("./helpers/route-golden.mjs");
   const { readArmCaps } = await import("../server/exp6-arm.mjs");
   const TEAMS = [{ id: "mx", name: "Matrix", paths: ["matrix"], lanes: [{ id: "feat", name: "Feat" }] }];
-  const spawnOnce = async (pct) => {
+  const spawnOnce = async (pct, poolPct = null) => {
     const h = mkdtempSync(join(tmpdir(), "vs-g2-arm-"));
     try {
       mkdirSync(join(h, "runner"), { recursive: true });
       if (pct !== null) writeLimits(h, pct);
+      if (poolPct !== null) writeFileSync(join(h, "runner", "limits.jsonl"), JSON.stringify({ at: iso(Date.now() - MIN), provider: "antigravity-cli/claude-gpt", window: "5h", usedPct: poolPct, resetsAt: iso(Date.now() + 3 * 3600_000), source: "provider" }) + "\n", { flag: "a" });
       const creates = [];
       const agents = [];
       const backend = {
@@ -427,8 +428,12 @@ test("G2 r1 M1: at claude >=95% live quota a plain Implement spawn picks the Neo
   const base = await spawnOnce(null);
   // R10: the sonnet arm runs Sonnet on agy (agy-claude: no pool rows = headroom).
   assert.deepEqual([base.res.ab.arm, base.res.ab.reason, base.c.config.provider, base.c.config.model], ["sonnet", "alternation", "antigravity-cli", "claude-sonnet-5-5-medium"]);
-  // 96%: the claude arm is capped by quota, the pick (and its labels) go to Neon on Gemini.
-  const over = await spawnOnce(96);
+  // R10 fu2: 96% on direct claude alone leaves agy-claude, so the sonnet arm is NOT capped (it lands on agy-claude).
+  const claudeOnly = await spawnOnce(96);
+  assert.deepEqual(claudeOnly.caps.claude, { reason: "claude usage 96% >= 95%", quota: true });
+  assert.deepEqual([claudeOnly.res.ab.arm, claudeOnly.res.ab.reason, claudeOnly.c.config.provider], ["sonnet", "alternation", "antigravity-cli"]);
+  // 96% claude AND an exhausted agy-claude pool (>= 85%): the sonnet arm is capped by quota, the pick (and its labels) go to Neon on Gemini.
+  const over = await spawnOnce(96, 90);
   assert.deepEqual(over.caps.claude, { reason: "claude usage 96% >= 95%", quota: true });
   assert.deepEqual([over.res.ab.arm, over.res.ab.reason, over.c.config.provider], ["neon", "capped:claude", "antigravity-cli"]);
   assert.deepEqual([over.c.labels["vs.arm"], over.c.labels["vs.arm-reason"], over.c.labels["vs.model"]], ["neon", "capped:claude", over.c.config.model]);

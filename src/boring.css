@@ -1649,3 +1649,626 @@ html[data-vibe="boring"] .boring-project-block.drop-before { box-shadow: inset 0
 html[data-vibe="boring"] .boring-project-block.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
 html[data-vibe="boring"] .boring-main-pin .boring-project-block.is-main { min-width: 0; } /* hook for the Main block (polish) */
 /* === end PLAN_PROJECT_ORDER O2 === */
+
+/* === @desk D4: Decision Desk (docs/PLAN_DESK_DECISION_DESK.md) === */
+html[data-vibe="boring"] .boring-decision-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font: 600 13px/18px var(--sans);
+  cursor: pointer;
+  text-align: left;
+  flex-shrink: 0;
+}
+html[data-vibe="boring"] .boring-decision-nav:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+html[data-vibe="boring"] .boring-decision-nav.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+html[data-vibe="boring"] .boring-decision-nav-label { flex: 1 1 auto; min-width: 0; }
+html[data-vibe="boring"] .boring-decision-nav-count {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+html[data-vibe="boring"] .boring-decision-wrap {
+  padding-bottom: 0;
+}
+html[data-vibe="boring"] .boring-decision-desk {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 16px;
+}
+html[data-vibe="boring"] .boring-decision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+html[data-vibe="boring"] .boring-decision-head-text {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+html[data-vibe="boring"] .boring-decision-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-sub {
+  font-size: 13px;
+  color: var(--text-3);
+}
+html[data-vibe="boring"] .boring-decision-refresh {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font: 500 12px/16px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-refresh:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+html[data-vibe="boring"] .boring-decision-refresh:disabled { cursor: progress; color: var(--text-3); }
+
+html[data-vibe="boring"] .boring-decision-alert {
+  padding: 10px 14px;
+  border: 1px solid var(--st-err);
+  border-radius: 8px;
+  background: var(--st-err-bg);
+  color: var(--text-1);
+  font-size: 13px;
+}
+html[data-vibe="boring"] .boring-decision-alert.err { border-color: var(--st-err); }
+
+html[data-vibe="boring"] .boring-decision-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+html[data-vibe="boring"] .boring-decision-section-title {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+html[data-vibe="boring"] .boring-decision-section-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* Status strip */
+html[data-vibe="boring"] .boring-decision-strip {
+  display: flex;
+  flex-direction: column;
+}
+html[data-vibe="boring"] .boring-decision-strip-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+html[data-vibe="boring"] .boring-decision-strip-squad {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+html[data-vibe="boring"] .boring-decision-strip-squad-btn {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  font: 700 12px/16px var(--sans);
+  color: var(--text-2);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-strip-squad-btn:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-decision-strip-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+html[data-vibe="boring"] .boring-decision-strip-line {
+  display: grid;
+  grid-template-columns: 10px minmax(100px, 140px) minmax(88px, 116px) 74px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-1);
+  font: 400 13px/18px var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-code-slot {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+html[data-vibe="boring"] .boring-decision-strip-line:hover { background: var(--surface-2); }
+html[data-vibe="boring"] .boring-decision-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  display: inline-block;
+}
+html[data-vibe="boring"] .boring-decision-dot.st-running { background: var(--st-run); }
+html[data-vibe="boring"] .boring-decision-dot.st-needs-you { background: var(--st-attn); }
+html[data-vibe="boring"] .boring-decision-dot.st-error { background: var(--st-err); }
+html[data-vibe="boring"] .boring-decision-dot.st-idle { background: var(--st-done); }
+html[data-vibe="boring"] .boring-decision-dot.st-none { background: var(--border-strong); }
+
+html[data-vibe="boring"] .boring-decision-strip-lane-name {
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-vibe="boring"] .boring-decision-code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+html[data-vibe="boring"] .boring-decision-strip-state {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+html[data-vibe="boring"] .boring-decision-strip-state.st-running { color: var(--st-run); }
+html[data-vibe="boring"] .boring-decision-strip-state.st-needs-you { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-decision-strip-state.st-error { color: var(--st-err); }
+html[data-vibe="boring"] .boring-decision-strip-state.st-idle { color: var(--text-2); }
+html[data-vibe="boring"] .boring-decision-strip-state.st-none { color: var(--text-3); }
+
+html[data-vibe="boring"] .boring-decision-strip-event {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-vibe="boring"] .boring-decision-strip-event > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-vibe="boring"] .boring-decision-ev-tag {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+html[data-vibe="boring"] .boring-decision-muted { color: var(--text-3); }
+html[data-vibe="boring"] .boring-decision-age {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Feed */
+html[data-vibe="boring"] .boring-decision-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+html[data-vibe="boring"] .boring-decision-empty {
+  padding: 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 14px;
+}
+html[data-vibe="boring"] .boring-decision-squad-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+html[data-vibe="boring"] .boring-decision-squad-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-1);
+  padding: 0 2px;
+}
+html[data-vibe="boring"] .boring-decision-squad-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+html[data-vibe="boring"] .boring-decision-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+html[data-vibe="boring"] .boring-decision-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+html[data-vibe="boring"] .boring-decision-card.staged {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+html[data-vibe="boring"] .boring-decision-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+html[data-vibe="boring"] .boring-decision-lane-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+html[data-vibe="boring"] .boring-decision-asker {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: 500 12px/16px var(--sans);
+  color: var(--text-2);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-asker:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+html[data-vibe="boring"] .boring-decision-inferred {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-3);
+}
+html[data-vibe="boring"] .boring-decision-grouped {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--st-done-bg);
+  color: var(--text-2);
+}
+html[data-vibe="boring"] .boring-decision-ask {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-decides {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-2);
+}
+html[data-vibe="boring"] .boring-decision-decides-label {
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+/* Choices (yes/no + alts + Not that) */
+html[data-vibe="boring"] .boring-decision-choices {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+html[data-vibe="boring"] .boring-decision-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font: 500 13px/18px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-choice:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--accent);
+}
+html[data-vibe="boring"] .boring-decision-choice.selected.staged {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+html[data-vibe="boring"] .boring-decision-choice.is-not.selected.staged {
+  border-color: var(--st-err);
+  background: var(--st-err-bg);
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-choice-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+html[data-vibe="boring"] .boring-decision-choice:disabled { cursor: default; color: var(--text-3); }
+
+/* One-line answer box */
+html[data-vibe="boring"] .boring-decision-answer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+html[data-vibe="boring"] .boring-decision-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--text-1);
+  font: 400 13px/18px var(--sans);
+}
+html[data-vibe="boring"] .boring-decision-input::placeholder { color: var(--text-3); }
+html[data-vibe="boring"] .boring-decision-input:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+html[data-vibe="boring"] .boring-decision-dismiss {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font: 500 12px/18px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-dismiss:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-dismiss.staged {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-row-err {
+  font-size: 12px;
+  color: var(--st-err);
+}
+
+/* Off-screen strip */
+html[data-vibe="boring"] .boring-decision-offscreen {
+  display: flex;
+  flex-direction: column;
+}
+html[data-vibe="boring"] .boring-decision-offscreen-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+html[data-vibe="boring"] .boring-decision-offscreen-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--st-attn);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+html[data-vibe="boring"] .boring-decision-offscreen-row.staged {
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+}
+html[data-vibe="boring"] .boring-decision-offscreen-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+html[data-vibe="boring"] .boring-decision-offscreen-squad {
+  font-weight: 700;
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-offscreen-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Sticky Send bar */
+html[data-vibe="boring"] .boring-decision-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+html[data-vibe="boring"] .boring-decision-bar-status {
+  font-size: 13px;
+  color: var(--text-2);
+  min-width: 0;
+}
+html[data-vibe="boring"] .boring-decision-bar-hint { color: var(--text-2); }
+html[data-vibe="boring"] .boring-decision-undo-msg {
+  font-weight: 600;
+  color: var(--text-1);
+}
+html[data-vibe="boring"] .boring-decision-banner.ok { color: var(--st-ok); font-weight: 600; }
+html[data-vibe="boring"] .boring-decision-banner.err { color: var(--st-err); font-weight: 600; }
+html[data-vibe="boring"] .boring-decision-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+html[data-vibe="boring"] .boring-decision-leans-btn,
+html[data-vibe="boring"] .boring-decision-undo-btn {
+  padding: 7px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-1);
+  font: 600 13px/18px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-leans-btn:hover:not(:disabled),
+html[data-vibe="boring"] .boring-decision-undo-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+html[data-vibe="boring"] .boring-decision-send-btn {
+  padding: 7px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 700 13px/18px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-send-btn:disabled {
+  border-color: var(--border);
+  background: var(--surface-3);
+  color: var(--text-3);
+  cursor: default;
+}
+/* === end @desk D4 === */
+
+/* @desk D4 r2 (UX R37): lean opt-in, quiet-lane fold, wide right rail, slim header */
+html[data-vibe="boring"] .boring-decision-head { align-items: center; }
+html[data-vibe="boring"] .boring-decision-sub {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--text-2);
+}
+html[data-vibe="boring"] .boring-decision-offscreen-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 500 12px/16px var(--sans);
+  text-decoration: underline;
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-choice.is-lean.suggested {
+  border: 1px dashed var(--accent);
+  background: transparent;
+}
+html[data-vibe="boring"] .boring-decision-choice.is-lean.suggested:hover:not(:disabled) {
+  border-style: solid;
+  background: var(--surface-3);
+}
+html[data-vibe="boring"] .boring-decision-quiet-btn {
+  align-self: flex-start;
+  margin: 2px 0 0 8px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: 500 12px/16px var(--mono);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-quiet-btn:hover { background: var(--surface-2); color: var(--text-1); }
+/* .is-wide is set from matchMedia(DECISION_RAIL_QUERY): viewport >= 1900px == a main area of ~1600px (the sidebar takes 16vw). boring.css carries no media queries (B4). */
+html[data-vibe="boring"] .boring-decision-wrap:has(.boring-decision-desk.is-wide) { max-width: min(2200px, 100%); }
+html[data-vibe="boring"] .boring-decision-desk.is-wide {
+  max-width: 2000px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(500px, 580px);
+  grid-template-areas:
+    "head head"
+    "alert alert"
+    "feed strip"
+    "off strip"
+    "bar bar";
+  column-gap: 24px;
+  row-gap: 14px;
+  align-items: start;
+}
+html[data-vibe="boring"] .is-wide .boring-decision-head { grid-area: head; }
+html[data-vibe="boring"] .is-wide .boring-decision-alert { grid-area: alert; }
+html[data-vibe="boring"] .is-wide .boring-decision-feed { grid-area: feed; }
+html[data-vibe="boring"] .is-wide .boring-decision-offscreen { grid-area: off; }
+html[data-vibe="boring"] .is-wide .boring-decision-bar { grid-area: bar; }
+html[data-vibe="boring"] .is-wide .boring-decision-strip {
+  grid-area: strip;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}

@@ -565,20 +565,21 @@ test(
   }),
 );
 
-// Case 14 (R10 review gap 3): callerFamily fix (agent-duties.ts ~2497) treats a bare Claude id inherited by a Gemini
-// spawn as foreign (callerFamily=antigravity-cli), not agy-claude, so Lead - Gemini keeps its explicit thinkingOptionId.
+// Case 14 (R10 review gap 3 + fu1): callerFamily fix (agent-duties.ts ~2497) treats a bare Claude id inherited by a Gemini
+// spawn as foreign (callerFamily=antigravity-cli), not agy-claude, so Lead - Gemini keeps an explicit thinkingOptionId
+// that differs from the tierA-invariant top-tier rung default ("high").
 test(
-  "R10-14: Lead - Gemini inheriting bare claude-opus-5-5 keeps its thinkingOptionId (callerFamily=antigravity-cli)",
+  "R10-14: Lead - Gemini inheriting bare claude-opus-5-5 keeps explicit thinkingOptionId different from top-tier rung default",
   withEnv(async () => {
     const h = harness({ usageProviders: [] });
     try {
       const out = await h.spawn(
-        { provider: A, model: "claude-opus-5-5", thinkingOptionId: "high" },
+        { provider: A, model: "claude-opus-5-5", thinkingOptionId: "low" },
         { labels: LABELS("Lead - Gemini", { role: "lead", stakes: "tierA-invariant" }) },
       );
       assert.equal(out.config.provider, A);
       assert.equal(out.config.model, "gemini-4-neon");
-      assert.equal(out.config.thinkingOptionId, "high");
+      assert.equal(out.config.thinkingOptionId, "low", "caller effort 'low' kept instead of overwritten by tierA top rung 'high'");
     } finally {
       h.stop?.();
     }

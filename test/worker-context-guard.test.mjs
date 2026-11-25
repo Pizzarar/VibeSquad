@@ -13,6 +13,8 @@ import { LEAD_AUTO_HANDOFF_DEFAULT, LEAD_FLAG_DEFAULT, SOFT_FLAG_NUDGE } from ".
 import {
   WORKER_HARD_DEFAULT,
   WORKER_SOFT_DEFAULT,
+  WORKER_WIP_DEFAULT,
+  WORKER_WIP_NUDGE,
   WORKER_WRAP_NUDGE,
   createWorkerContextGuard,
   loadWorkerThresholds,
@@ -118,13 +120,14 @@ const metrics = (home) => {
   return existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.type === "metric") : [];
 };
 
-test("thresholds: same constant family as the lead ladder (soft 150k / hard 250k), team and top-level overridable", () => {
+test("thresholds: wip 120k + same constant family as the lead ladder (soft 150k / hard 250k), team and top-level overridable", () => {
+  assert.equal(WORKER_WIP_DEFAULT, 120_000);
   assert.equal(WORKER_SOFT_DEFAULT, LEAD_FLAG_DEFAULT);
   assert.equal(WORKER_HARD_DEFAULT, LEAD_AUTO_HANDOFF_DEFAULT);
-  const { rootDir } = makeEnv({ workerSoftTokens: 120_000 });
-  assert.deepEqual(loadWorkerThresholds(worker("w"), rootDir), { softTokens: 120_000, hardTokens: 250_000 });
-  writeFileSync(join(rootDir, "teams.json"), JSON.stringify({ workerSoftTokens: 120_000, teams: [{ id: "t", workerHardTokens: 200_000, workerSoftTokens: 90_000, lanes: [{ id: "l" }] }] }));
-  assert.deepEqual(loadWorkerThresholds(worker("w"), rootDir), { softTokens: 90_000, hardTokens: 200_000 });
+  const { rootDir } = makeEnv({ workerWipTokens: 100_000, workerSoftTokens: 120_000 });
+  assert.deepEqual(loadWorkerThresholds(worker("w"), rootDir), { wipTokens: 100_000, softTokens: 120_000, hardTokens: 250_000 });
+  writeFileSync(join(rootDir, "teams.json"), JSON.stringify({ workerWipTokens: 100_000, workerSoftTokens: 120_000, teams: [{ id: "t", workerWipTokens: 80_000, workerHardTokens: 200_000, workerSoftTokens: 90_000, lanes: [{ id: "l" }] }] }));
+  assert.deepEqual(loadWorkerThresholds(worker("w"), rootDir), { wipTokens: 80_000, softTokens: 90_000, hardTokens: 200_000 });
 });
 
 test("P0: the startup / backfill pass over idle, queued, errored, closed and archived over-threshold workers sends 0 inputs and 0 lead pings", async () => {
@@ -201,7 +204,7 @@ test("P0: a running worker crossing 150k gets exactly one wrap-up and its lead e
   r.agents.set("rn-w", worker("rn-w"));
   const w = startTokenWatcher({ runner: r, rootDir });
   r.roster();
-  for (const t of [90_000, 140_000, 151_000, 151_000, 155_000, 170_000, 200_000]) {
+  for (const t of [90_000, 110_000, 151_000, 151_000, 155_000, 170_000, 200_000]) {
     r.usage("rn-w", t);
     await tick();
   }
@@ -226,10 +229,10 @@ test("P0: a worker woken by someone else, then running, crosses the line correct
   r.roster();
   await tick();
   assert.equal(r.sent.length, 0);
-  // The lead sends rn-a a follow-up: its turn runs and grows past 150k.
+  // The lead sends rn-a a follow-up: its turn runs and grows past 120k (WIP) and 150k (soft).
   r.usage("rn-a", 100_000, { status: "running" });
   await tick();
-  r.usage("rn-a", 149_000);
+  r.usage("rn-a", 119_000);
   await tick();
   assert.equal(r.sent.length, 0);
   r.usage("rn-a", 152_000);
@@ -559,4 +562,137 @@ test("idea-169: soft nudge dropped, still running past hard in the same episode:
   assert.equal(pings.length, 2, "soft + hard");
   assert.match(pings[0], /wrap-up nudge not delivered/);
   assert.match(pings[1], /and still running: respawn fresh now/);
+});
+
+test("idea-1069: running worker crossing 120k gets one WIP nudge (steer-only, no lead ping), never twice across restarts, and soft/lead ping still fire at 150k", async () => {
+  const { rootDir, home } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  let w = startTokenWatcher({ runner: r, rootDir });
+  r.roster();
+  for (const t of [90_000, 119_000, 120_000, 125_000, 140_000]) {
+    r.usage("rn-w", t);
+    await tick();
+  }
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WIP_NUDGE, steerOnly: true }]);
+  assert.equal(to(r, "rn-lead").length, 0, "WIP nudge is worker-only; no lead ping at 120k");
+  const marks = JSON.parse(readFileSync(workerGuardMarksPath(home), "utf8"));
+  assert.ok(marks["rn-w"]?.wip, "wip mark persisted");
+  assert.equal(marks["rn-w"]?.soft, undefined);
+  const wipMetrics = metrics(home).filter((e) => /worker-context wip/.test(e.text));
+  assert.equal(wipMetrics.length, 1);
+  assert.match(wipMetrics[0].text, /worker-context wip rn-w 120k \(wip 120k\)/);
+  w.stop();
+
+  // Restart: persisted wip mark prevents any repeat at 120k-149k, while crossing 150k still fires soft + lead ping.
+  w = startTokenWatcher({ runner: r, rootDir });
+  r.roster();
+  await tick();
+  r.usage("rn-w", 145_000);
+  await tick();
+  assert.equal(to(r, "rn-w").length, 1, "no second WIP nudge after restart");
+  r.usage("rn-w", 151_000);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w").map((s) => s.text), [WORKER_WIP_NUDGE, WORKER_WRAP_NUDGE]);
+  const leadMsgs = to(r, "rn-lead").map((s) => s.text);
+  assert.equal(leadMsgs.length, 1, "lead ping still works at soft threshold");
+  assert.match(leadMsgs[0], /W-rn-w \(rn-w\) at 151k: wrapping; spawn a fresh worker from its final note/);
+});
+
+test("idea-1069: WIP threshold is configurable via teams.json (team overrides top-level)", async () => {
+  const { rootDir } = makeEnv({ workerWipTokens: 95_000 });
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", 94_000);
+  await tick();
+  assert.equal(to(r, "rn-w").length, 0);
+  r.usage("rn-w", 96_000);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WIP_NUDGE, steerOnly: true }]);
+});
+
+test("idea-1069: idle/done worker crossing 120k is NOT woken; WIP nudge is delivered as a steer on its next running turn (once)", async () => {
+  const { rootDir } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w", {}, { status: "idle" }));
+  const w = startTokenWatcher({ runner: r, rootDir });
+  // Turn ends idle at 125k: must NOT wake the idle worker.
+  r.usage("rn-w", 125_000, { status: "idle" });
+  await tick();
+  assert.deepEqual(r.sent, [], "never wakes an idle worker");
+
+  // Later, the worker is woken for a next turn (same token count 125k, now running): note is delivered into that turn as a steer.
+  r.usage("rn-w", 125_000, { status: "running" });
+  await tick();
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WIP_NUDGE, steerOnly: true }]);
+
+  // Further usage in the same or later turn never repeats the WIP nudge.
+  r.usage("rn-w", 130_000, { status: "running" });
+  await tick();
+  w.stop();
+  assert.equal(to(r, "rn-w").length, 1);
+  assert.equal(to(r, "rn-lead").length, 0);
+});
+
+test("idea-1069: dropped steer-only WIP nudge (turn ended mid-flight) does not mark or wake; delivers on next running turn", async () => {
+  const { rootDir, home } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  r.dropSteerTo.add("rn-w");
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", 122_000);
+  await tick();
+  assert.deepEqual(to(r, "rn-w"), [], "dropped steer sends nothing");
+  const file = workerGuardMarksPath(home);
+  assert.equal(existsSync(file) ? JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.wip : undefined, undefined, "dropped wip steer is not marked");
+
+  // Next turn runs (steer now accepted): delivered once.
+  r.dropSteerTo.delete("rn-w");
+  r.usage("rn-w", 122_000, { status: "running" });
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WIP_NUDGE, steerOnly: true }]);
+  assert.ok(JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.wip, "marked once delivered");
+});
+
+test("idea-1069: WIP nudge never fires for lead or brainstorm (Buddy) roles at 120k-149k", async () => {
+  const { rootDir, home } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", { ...lead("rn-lead"), status: "running" });
+  r.agents.set("rn-buddy", { ...buddy("rn-buddy"), status: "running" });
+  const w = startTokenWatcher({ runner: r, rootDir, compactor: { run: async () => ({ outcome: "skipped", reason: "not-claude" }), tried: new Set() } });
+  r.usage("rn-lead", 130_000);
+  r.usage("rn-buddy", 130_000);
+  await tick();
+  w.stop();
+  assert.ok(!r.sent.some((s) => s.text === WORKER_WIP_NUDGE), "neither lead nor Buddy ever gets WORKER_WIP_NUDGE");
+  assert.equal(to(r, "rn-lead").length, 0, "lead below 150k gets no nudge");
+  assert.deepEqual(to(r, "rn-buddy").map((s) => s.text), [BRAINSTORM_WARN_NUDGE], "Buddy keeps its own warn nudge");
+  assert.equal(existsSync(workerGuardMarksPath(home)), false);
+});
+
+test("idea-1069: a failed WIP nudge send is rolled back and retried on the next fresh usage event", async () => {
+  const { rootDir, home } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  r.failSendTo.add("rn-w");
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", 121_000);
+  await tick();
+  assert.equal(to(r, "rn-w").length, 0);
+  const file = workerGuardMarksPath(home);
+  assert.equal(existsSync(file) ? JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.wip : undefined, undefined, "rolled back on error");
+  r.failSendTo.delete("rn-w");
+  r.usage("rn-w", 123_000);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WIP_NUDGE, steerOnly: true }]);
 });

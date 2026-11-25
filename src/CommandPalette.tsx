@@ -39,9 +39,11 @@ export function dateBucket(iso: string | null | undefined, now = Date.now()): Da
 export type UrlSlot = "overlord" | "riffbot" | "bugs";
 /** U1 (idea-895): the Overview sub-tab; the default Overview tab is omitted from the URL. */
 export type UrlTab = "inbox" | "standup";
-export type UrlState = { team: string | null; agent: string | null; slot?: UrlSlot | null; tab?: UrlTab | null };
+/** D4 (PLAN_DESK_DECISION_DESK): cross-Squad Decision Desk URL key (`?view=decisions`). */
+export type UrlView = "decisions";
+export type UrlState = { team: string | null; agent: string | null; slot?: UrlSlot | null; tab?: UrlTab | null; view?: UrlView | null };
 
-/** One screen, one URL: an agent wins over a slot, a slot over a tab. Unknown slot/tab values fall back to the Overview (null). */
+/** One screen, one URL: an agent wins over a slot, a slot over a tab, and ?view=decisions names the Decision Desk. Unknown values fall back to null. */
 export function parseUrlState(search: string): UrlState {
   const p = new URLSearchParams(search);
   const agent = p.get("agent") || null;
@@ -49,10 +51,11 @@ export function parseUrlState(search: string): UrlState {
   const slot = !agent && (rawSlot === "overlord" || rawSlot === "riffbot" || rawSlot === "bugs") ? rawSlot : null;
   const rawTab = p.get("tab");
   const tab = !agent && !slot && (rawTab === "inbox" || rawTab === "standup") ? rawTab : null;
-  return { team: p.get("team") || null, agent, slot, tab };
+  const view: UrlView | null = !agent && !slot && !tab && p.get("view") === "decisions" ? "decisions" : null;
+  return { team: p.get("team") || null, agent, slot, tab, ...(view ? { view } : {}) };
 }
 
-/** Merges team/agent (+ U1 slot/tab) into an existing query string, keeping unrelated params (demo, dock, sb, ...). */
+/** Merges team/agent (+ U1 slot/tab, D4 view=decisions) into an existing query string, keeping unrelated params (demo, dock, sb, ...). */
 export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, search = ""): string {
   const p = new URLSearchParams(search);
   p.delete("team");
@@ -60,11 +63,15 @@ export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, se
   p.delete("view");
   p.delete("slot");
   p.delete("tab");
-  if (state.squadsHome) p.set("view", "squads"); // Squads Home survives a reload/reconnect
-  if (state.team) p.set("team", state.team);
-  if (state.agent) p.set("agent", state.agent);
-  else if (state.slot) p.set("slot", state.slot);
-  else if (state.tab) p.set("tab", state.tab);
+  if (state.view === "decisions") {
+    p.set("view", "decisions");
+  } else {
+    if (state.squadsHome) p.set("view", "squads"); // Squads Home survives a reload/reconnect
+    if (state.team) p.set("team", state.team);
+    if (state.agent) p.set("agent", state.agent);
+    else if (state.slot) p.set("slot", state.slot);
+    else if (state.tab) p.set("tab", state.tab);
+  }
   const s = p.toString();
   return s ? `?${s}` : "";
 }

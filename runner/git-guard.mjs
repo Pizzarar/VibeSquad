@@ -14,10 +14,31 @@
 // (env/sudo/nice/time/timeout/exec/command/xargs by basename, with their option arguments) are stripped first; operands
 // xargs appends count as paths. A destructive command whose dir cannot be resolved (cd "$(...)", unset $VAR) fails
 // closed. Read-only git, `--help`, `checkout -b`/branch switches and `clean -n`/`stash list|show` always pass.
-// Known gaps: git aliases, scripts that run git themselves, and ACP providers (no PreToolUse hook: adapters/acp.mjs).
-import { statSync } from 'node:fs';
+// idea-888 adds the shared-branch writes R17 names (commit, merge, rebase, pull, cherry-pick, revert, am) to the same
+// classifier, so the hook and the PATH gate below refuse the same set.
+//
+// Provider-neutral PATH gate (idea-888): the hook above exists only for Claude. Every role=worker agent, whatever its
+// provider (claude, agy/Gemini, opencode, Codex over ACP), also gets runner/git-shim/ first on PATH (applyGitShim, called by
+// runner.mjs agentEnv). Its `git` is a POSIX sh script: argv that holds none of the write subcommand names execs the real git
+// at once (no node start: git is called constantly); otherwise runner/git-guard-check.mjs judges the real argv + cwd +
+// GIT_DIR/GIT_WORK_TREE with gitArgvViolation (this file: same classifier, same main-checkout test) and the shim execs the
+// real git only on exit 0. Any other outcome (refusal, node missing, a crash) refuses the write: it fails closed.
+// Main checkouts under the OS temp dir are exempt there only: unlike the hook, the PATH gate also sees git run by scripts and
+// test suites (`git init` + commit in a mkdtemp repo), and a shared project checkout never lives in a temp dir.
+// Aliases (round 1 of the Tier A review): the shim's fast path runs only for a subcommand on GIT_SAFE_BUILTINS (git never
+// lets an alias shadow a builtin), so `git -c alias.x=reset x --hard`, --config-env and config-file aliases all reach the
+// check, and classifyGit (hook and shim alike) resolves a non-builtin subcommand with `git <globals> config --get
+// alias.<sub>` and judges the expansion; a `!shell` alias, or one that cannot be resolved, is refused in a main checkout.
+// What the PATH gate does NOT cover (an accident guard, not a sandbox): an absolute git path (/usr/bin/git), a PATH or
+// TMPDIR the agent rewrites, libgit2/JGit tools that never exec git, git writes outside the classifier (apply, rm, mv,
+// update-ref, branch -f, read-tree -u, checkout-index, external git-<x> commands), and win32 (no shim yet: the Claude hook
+// still covers Claude workers there). git's own children (hooks, `pull` -> merge, an external git-<x>) get git's exec-path
+// first on PATH, so they bypass the shim; only the outer command is judged.
+import { spawnSync } from 'node:child_process';
+import { accessSync, chmodSync, constants as fsConstants, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const OPS = ['&&', '||', ';;', ';', '|&', '|', '&', '\n', '(', ')'];
 // Leading reserved words of compound commands: `if x; then git ...; fi`, `for ...; do git ...; done`, `{ git ...; }`.
@@ -198,24 +219,76 @@ const exists = (p) => { try { statSync(p); return true; } catch { return false; 
 
 /** Short-flag cluster test: `-fdx` has `f`. */
 const hasShort = (args, ch) => args.some((a) => /^-[A-Za-z]+$/.test(a) && a.includes(ch));
-const hasLong = (args, ...names) => args.some((a) => names.some((n) => a === n || a.startsWith(`${n}=`)));
+/**
+ * `--name`, `--name=v`, or an abbreviation of it: parse-options takes any unique prefix (`git reset --ha` is --hard). Used
+ * only on the destructive side: a prefix that is ambiguous makes git exit with an error, so over-matching never lets a write
+ * through. The allowing flags (--dry-run, --help) are matched exactly.
+ */
+const longIs = (a, name) => {
+  if (!a.startsWith('--') || a.length < 3) return false;
+  const n = a.slice(2).split('=')[0];
+  return n.length > 0 && name.startsWith(n);
+};
+const hasLongAbbr = (args, ...names) => args.some((a) => names.some((n) => longIs(a, n)));
+const hasLongExact = (opts, ...names) => opts.some((a) => names.some((n) => a === n || a.startsWith(`${n}=`)));
 
 /**
- * Is `git <sub> <args>` destructive to uncommitted work? Returns a short label or null. `dir` (or UNKNOWN) is used only
- * to tell a `checkout <path>` from a `checkout <branch>` when no `--` separates them. `appended`: a wrapper (xargs) adds
- * more operands at the end.
+ * A subcommand's args as parse-options reads them: stops at `--` and skips the value of an option that takes one (`-m <msg>`,
+ * `-am <msg>`, `--file <f>` or an abbreviation of such a long option), so `commit -m -h` or `clean -e -n` never reads a value as
+ * a flag. `short` = short flags with a value, `long` = long options with a value. Returns { opts, pos, after } (pos =
+ * operands before `--`, after = the words after it, or null). Only the allowing tests use it; destructive flags are matched
+ * on every word (over-matching only refuses).
+ */
+function scanArgs(args, { short = '', long = [] } = {}) {
+  const opts = [];
+  const pos = [];
+  let after = null;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === '--') { after = args.slice(k + 1); break; }
+    if (a.startsWith('--')) { opts.push(a); if (!a.includes('=') && long.some((n) => longIs(a, n))) k++; continue; }
+    if (a.startsWith('-') && a.length > 1) {
+      opts.push(a);
+      for (let j = 1; j < a.length; j++) if (short.includes(a[j])) { if (j === a.length - 1) k++; break; }
+      continue;
+    }
+    pos.push(a);
+  }
+  return { opts, pos, after };
+}
+const COMMIT_VALUES = { short: 'mFCct', long: ['message', 'file', 'reuse-message', 'reedit-message', 'fixup', 'squash', 'author', 'date', 'template', 'cleanup', 'trailer', 'pathspec-from-file'] };
+const CLEAN_VALUES = { short: 'e', long: ['exclude'] };
+const RESET_VALUES = { short: 'U', long: ['pathspec-from-file', 'unified', 'inter-hunk-context'] };
+
+/**
+ * Is `git <sub> <args>` destructive to uncommitted work or the shared branch? Returns a short label or null. `dir` (or
+ * UNKNOWN) is used only to tell a path from a revision when no `--` separates them (`checkout <x>`, `reset <x>`).
+ * `appended`: a wrapper (xargs) adds more operands at the end.
  */
 export function destructiveGit(sub, args, dir, { appended = false } = {}) {
-  if (hasLong(args, '--help') || args.includes('-h')) return null;
+  // Help only as the first word: git turns `git <cmd> --help` into `git help <cmd>`, and `-h` first prints usage. Elsewhere
+  // `-h` may be an option's value (`commit -m -h`).
+  if (args[0] === '-h' || args[0] === '--help') return null;
   switch (sub) {
-    case 'reset':
-      return hasLong(args, '--hard') ? 'git reset --hard' : null;
+    case 'reset': {
+      if (hasLongAbbr(args, 'hard')) return 'git reset --hard';
+      if (hasLongAbbr(args, 'merge')) return 'git reset --merge'; // both rewrite work-tree files too
+      if (hasLongAbbr(args, 'keep')) return 'git reset --keep';
+      if (hasLongAbbr(args, 'soft')) return 'git reset --soft'; // only ever moves HEAD: the shared branch
+      // Mixed: with paths it only unstages (index); with a lone revision it moves the shared branch like a commit.
+      const { pos, after } = scanArgs(args, RESET_VALUES);
+      if (after !== null || pos.length !== 1 || appended) return null; // `reset [<rev>] -- <paths>` / `reset <rev> <paths>`
+      const p = pos[0];
+      if (p === 'HEAD' || p === '@') return null;
+      if (dir !== UNKNOWN && exists(path.resolve(dir, p))) return null; // `git reset a.txt`: unstage a path
+      return 'git reset <commit>';
+    }
     case 'checkout': {
-      if (hasLong(args, '--force') || hasShort(args, 'f')) return 'git checkout -f';
+      if (hasLongAbbr(args, 'force') || hasShort(args, 'f')) return 'git checkout -f';
       const dd = args.indexOf('--');
       if (dd >= 0 && (dd < args.length - 1 || appended)) return 'git checkout -- <paths>'; // xargs supplies the paths
-      if (hasLong(args, '--pathspec-from-file')) return 'git checkout --pathspec-from-file';
-      const creates = hasShort(args, 'b') || hasShort(args, 'B') || hasLong(args, '--orphan');
+      if (hasLongAbbr(args, 'pathspec-from-file')) return 'git checkout --pathspec-from-file';
+      const creates = hasShort(args, 'b') || hasShort(args, 'B') || hasLongExact(args, '--orphan');
       const pos = [];
       for (let k = 0; k < args.length; k++) {
         const a = args[k];
@@ -231,9 +304,11 @@ export function destructiveGit(sub, args, dir, { appended = false } = {}) {
       return null;
     }
     case 'switch':
-      return hasLong(args, '--discard-changes', '--force') || hasShort(args, 'f') ? 'git switch --discard-changes' : null;
-    case 'clean':
-      return hasLong(args, '--dry-run') || hasShort(args, 'n') ? null : 'git clean';
+      return hasLongAbbr(args, 'discard-changes', 'force') || hasShort(args, 'f') ? 'git switch --discard-changes' : null;
+    case 'clean': {
+      const { opts } = scanArgs(args, CLEAN_VALUES);
+      return hasLongExact(opts, '--dry-run') || hasShort(opts, 'n') ? null : 'git clean';
+    }
     case 'stash': {
       const verb = args[0] && !args[0].startsWith('-') ? args[0] : 'push'; // `git stash -u` = push
       if (['list', 'show', 'create'].includes(verb)) return null;
@@ -241,10 +316,23 @@ export function destructiveGit(sub, args, dir, { appended = false } = {}) {
     }
     case 'restore':
       return 'git restore';
+    // idea-888 (R17): writes that move or rewrite the shared checkout's branch, index or files.
+    case 'commit':
+      return hasLongExact(scanArgs(args, COMMIT_VALUES).opts, '--dry-run') ? null : 'git commit';
+    case 'merge':
+    case 'rebase':
+    case 'pull':
+    case 'cherry-pick':
+    case 'revert':
+    case 'am':
+      return `git ${sub}`;
     default:
       return null;
   }
 }
+
+/** Labels that write only the repository (HEAD, refs, index), never work-tree files: judged by the git dir when one is given. */
+const REPO_ONLY = new Set(['git commit', 'git reset --soft', 'git reset <commit>']);
 
 /** Parse `git [global opts] <sub> <args>` from argv (without the leading `git`). */
 export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: envGitDir = null } = {}) {
@@ -258,25 +346,135 @@ export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: 
     const a = w.text;
     const val = () => { const n = argv[++k]; return !n ? UNKNOWN : n.dynamic ? UNKNOWN : n.text; };
     if (a === '-C') { dir = resolveFrom(dir, val()); continue; }
-    if (a === '-c' || a === '--namespace' || a === '--super-prefix' || a === '--config-env' || a === '--exec-path') { if (!a.includes('=')) k++; continue; }
     if (a === '--work-tree') { workTree = val(); continue; }
     if (a.startsWith('--work-tree=')) { workTree = w.dynamic ? UNKNOWN : a.slice(12); continue; }
     if (a === '--git-dir') { gitDir = val(); continue; }
     if (a.startsWith('--git-dir=')) { gitDir = w.dynamic ? UNKNOWN : a.slice(10); continue; }
+    // The other global options whose value is the next word (git.c handle_options; `--opt=value` forms fall through to the
+    // `-` skip). Keep in sync with the shim's skip list (runner/git-shim/git).
+    if (GIT_GLOBAL_VALUE_OPTS.has(a)) { k++; continue; }
     if (a.startsWith('-')) continue;
     break;
   }
   const sub = argv[k]?.text ?? '';
   const args = argv.slice(k + 1).map((w) => w.text);
+  // Relative --git-dir / GIT_DIR resolve against the cwd (after every -C), as git does: never against the work tree.
+  const base = dir;
   if (workTree !== null) dir = resolveFrom(dir, workTree);
   let forced = null;
-  if (workTree === null && gitDir !== null) {
-    const gd = resolveFrom(dir, gitDir);
-    if (gd === UNKNOWN) dir = UNKNOWN;
-    else if (path.basename(gd) === '.git') forced = repoKind(path.dirname(gd));
-    else forced = { kind: 'linked', root: gd }; // .git/worktrees/<x> or a bare repo: not the shared checkout
+  // The repository a --git-dir / GIT_DIR names (even next to a work tree): a commit writes only there, so a shadow repo over
+  // the main checkout's files (opencode/agy snapshots: `--git-dir=<shadow> --work-tree=<checkout> commit`) is not the main repo.
+  let gitDirRepo = null;
+  if (gitDir !== null) {
+    const gd = resolveFrom(base, gitDir);
+    if (gd !== UNKNOWN) gitDirRepo = path.basename(gd) === '.git' ? repoKind(path.dirname(gd)) : { kind: 'linked', root: gd };
   }
-  return { sub, args, dir, forced };
+  if (workTree === null && gitDir !== null) {
+    if (gitDirRepo === null) dir = UNKNOWN;
+    else forced = gitDirRepo; // .git/worktrees/<x> or a bare repo is 'linked': not the shared checkout
+  }
+  return {
+    sub, args, dir, forced, gitDirRepo,
+    subDynamic: !!argv[k]?.dynamic, globalWords: argv.slice(0, k), restWords: argv.slice(k + 1),
+  };
+}
+
+// ---- aliases (Tier A review round 1) ----
+
+/** Global options that take the next word as their value (git 2.53 handle_options; --super-prefix for older gits). */
+export const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix']);
+/** The write subcommands both gates classify (destructiveGit). Keep in sync with the shim's list. */
+export const GIT_WRITE_VERBS = ['reset', 'checkout', 'switch', 'clean', 'stash', 'restore', 'commit', 'merge', 'rebase', 'pull', 'cherry-pick', 'revert', 'am'];
+/**
+ * Long-standing git builtins (or git-core commands) that destructiveGit never refuses. git runs a builtin or a git-core
+ * command before it looks at aliases, so no `-c alias.<x>=` / --config-env / config-file alias can turn one into a write:
+ * the shim execs these at once (no node start) and classifyGit skips the alias lookup. Anything not here or in
+ * GIT_WRITE_VERBS (an alias, an external git-<x>, a newer builtin) costs one `git config --get alias.<sub>`. Never add a
+ * name that is not a builtin on every git a worker may run: an alias of that name would then skip the check.
+ */
+export const GIT_SAFE_BUILTINS = [
+  'status', 'log', 'diff', 'show', 'rev-parse', 'rev-list', 'branch', 'tag', 'fetch', 'push', 'remote', 'config', 'worktree',
+  'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'describe', 'blame', 'annotate', 'grep', 'for-each-ref', 'show-ref',
+  'symbolic-ref', 'merge-base', 'name-rev', 'shortlog', 'reflog', 'format-patch', 'range-diff', 'diff-tree', 'diff-index',
+  'diff-files', 'check-ignore', 'check-attr', 'check-ref-format', 'hash-object', 'count-objects', 'fsck', 'gc', 'var', 'help',
+  'version', 'init', 'clone', 'add', 'rm', 'mv', 'notes', 'show-branch', 'cherry', 'archive', 'bundle', 'verify-commit',
+  'verify-tag', 'submodule', 'bisect', 'difftool', 'mergetool',
+];
+const BUILTIN = new Set([...GIT_SAFE_BUILTINS, ...GIT_WRITE_VERBS]);
+const ALIAS_DEPTH = 8;
+
+/** git's split_cmdline for an alias value: whitespace-separated words, '...' / "..." quoting, backslash escapes; null on an open quote. */
+export function splitAlias(s) {
+  const out = [];
+  let cur = null;
+  let q = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === q) q = '';
+      else if (c === '\\' && q === '"' && i + 1 < s.length) cur += s[++i];
+      else cur += c;
+      continue;
+    }
+    if (/\s/.test(c)) { if (cur !== null) out.push(cur); cur = null; continue; }
+    if (cur === null) cur = '';
+    if (c === "'" || c === '"') q = c;
+    else if (c === '\\' && i + 1 < s.length) cur += s[++i];
+    else cur += c;
+  }
+  if (q) return null;
+  if (cur !== null) out.push(cur);
+  return out;
+}
+
+/**
+ * The alias git would expand for `git <globals> <sub>`: asks git itself, `git <globals> config --get alias.<sub>` in `cwd`
+ * with `env`, so inline `-c alias.<sub>=`, --config-env, GIT_CONFIG_* and every config file (repo, worktree, global,
+ * includes) count exactly as they would. Returns the value, null (no alias: an external git-<sub> or a typo), or UNKNOWN
+ * (the lookup could not run: the caller fails closed).
+ */
+export function gitAliasLookup(globals, sub, { cwd, env = process.env, git = 'git' } = {}) {
+  if (!cwd || cwd === UNKNOWN || globals.some((g) => g === UNKNOWN)) return UNKNOWN;
+  const e = env?.PATH ? env : { ...env, PATH: process.env.PATH ?? '' };
+  let r;
+  try {
+    r = spawnSync(git, [...globals, 'config', '--get', `alias.${sub}`], { cwd, env: e, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch { return UNKNOWN; }
+  if (r.status === 0) return r.stdout.replace(/\r?\n$/, '');
+  if (r.status === 1 && !r.error) return null;
+  return UNKNOWN;
+}
+
+/**
+ * Classify one git invocation (words after `git`): parse it, expand aliases the way git would (a non-builtin subcommand
+ * through `lookup(globalTexts, sub)`, repeatedly, alias words re-parsed in place so an alias may carry global options),
+ * then destructiveGit. Returns { label, g } with g the final parseGitArgv result. A `!shell` alias (its commands run with
+ * git's exec-path first on PATH, past the shim) and an alias that cannot be resolved get a label, so judgeGit refuses
+ * them in a main checkout or an unresolved dir.
+ */
+export function classifyGit(words, cwd, gitEnv, { appended = false, lookup = () => UNKNOWN } = {}) {
+  let ws = words;
+  for (let depth = 0; ; depth++) {
+    const g = parseGitArgv(ws, cwd, gitEnv);
+    if (!g.sub || g.subDynamic || BUILTIN.has(g.sub)) return { label: destructiveGit(g.sub, g.args, g.dir, { appended }), g };
+    const globals = g.globalWords.map((w) => (w.dynamic ? UNKNOWN : w.text));
+    const value = depth >= ALIAS_DEPTH ? UNKNOWN : lookup(globals, g.sub);
+    if (value === null) return { label: null, g };
+    if (value === UNKNOWN) return { label: `git ${g.sub} (an alias that could not be resolved)`, g };
+    if (value.trimStart().startsWith('!')) return { label: `git ${g.sub} (a !shell alias)`, g };
+    const expanded = splitAlias(value);
+    if (!expanded || !expanded.length) return { label: `git ${g.sub} (an alias that could not be resolved)`, g };
+    ws = [...g.globalWords, ...expanded.map((text) => ({ text, dynamic: false, quoted: true })), ...g.restWords];
+  }
+}
+
+/** The violation for a classified git command `g` (parseGitArgv) with destructive label `label`, or null. */
+function judgeGit(label, g) {
+  const target = REPO_ONLY.has(label) && g.gitDirRepo ? g.gitDirRepo : g.forced;
+  if (target) return target.kind === 'main' ? { label, dir: target.root, root: target.root, unresolved: false } : null;
+  if (g.dir === UNKNOWN) return { label, dir: null, root: null, unresolved: true };
+  const rk = repoKind(g.dir);
+  return rk.kind === 'main' ? { label, dir: g.dir, root: rk.root, unresolved: false } : null;
 }
 
 // ---- command walk ----
@@ -455,21 +653,22 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
       const v = nested((rest[0]?.text === '--' ? rest.slice(1) : rest).map((w) => w.text).join(' '), segDir, segEnv);
       if (v) return v;
     } else if (base === 'git') {
-      const g = parseGitArgv(ws.slice(1), segDir, {
+      const gitEnv = {
         workTree: Object.hasOwn(segEnv, 'GIT_WORK_TREE') ? segEnv.GIT_WORK_TREE : null,
         gitDir: Object.hasOwn(segEnv, 'GIT_DIR') ? segEnv.GIT_DIR : null,
-      });
-      const label = destructiveGit(g.sub, g.args, g.dir, { appended });
-      if (label) {
-        if (g.forced) {
-          if (g.forced.kind === 'main') return { label, dir: g.forced.root, root: g.forced.root, unresolved: false };
-        } else if (g.dir === UNKNOWN) {
-          return { label, dir: null, root: null, unresolved: true };
-        } else {
-          const rk = repoKind(g.dir);
-          if (rk.kind === 'main') return { label, dir: g.dir, root: rk.root, unresolved: false };
-        }
-      }
+      };
+      // Alias lookups see the env this git would: the hook's env with this segment's GIT_DIR / GIT_WORK_TREE.
+      const lookup = (globals, sub) => {
+        if (gitEnv.workTree === UNKNOWN || gitEnv.gitDir === UNKNOWN) return UNKNOWN;
+        const e = { ...env };
+        for (const k of GIT_ENV) delete e[k];
+        if (gitEnv.workTree !== null) e.GIT_WORK_TREE = gitEnv.workTree;
+        if (gitEnv.gitDir !== null) e.GIT_DIR = gitEnv.gitDir;
+        return gitAliasLookup(globals, sub, { cwd: segDir, env: e });
+      };
+      const { label, g } = classifyGit(ws.slice(1), segDir, gitEnv, { appended, lookup });
+      const v = label ? judgeGit(label, g) : null;
+      if (v) return v;
     }
     endSeg();
   }
@@ -485,7 +684,7 @@ export function gitGuardRefusalText(v) {
       'No worktree yet? `vs worktree create <unit>`, then cd into the path it prints.';
   }
   return `vs git-guard: refused \`${v.label}\` in ${v.root}: that is the repo's MAIN checkout (.git is a directory), shared by every agent; ` +
-    'other agents\' uncommitted edits live there and this would wipe them (R17: workers never run destructive git in a main checkout). ' +
+    'other agents\' uncommitted edits live there and this would wipe them or rewrite the branch under them (R17: workers never run git writes in a main checkout). ' +
     'Run it in your own linked worktree instead: `vs worktree create <unit>`, then `cd <the path it prints> && pwd`, and rerun it there. ' +
     'Read-only git (status, diff, log, show), `git checkout -b`, `git clean -n` and `git stash list` are fine here.';
 }
@@ -498,4 +697,68 @@ export function gitGuardDecision(input, { env = process.env } = {}) {
   if (typeof command !== 'string' || !/git/i.test(command)) return null;
   const v = findViolation(command, { cwd: input?.cwd || process.cwd(), env, powershell: tool === 'PowerShell' });
   return v ? gitGuardRefusalText(v) : null;
+}
+
+// ---- provider-neutral PATH gate (idea-888) ----
+
+/** The runner role that gets the guard (hook and PATH gate): the agent env (runner agentEnv's VS_ROLE) wins, then meta. */
+export const isWorkerAgent = (meta = {}, env = {}) => String(env?.VS_ROLE ?? meta?.role ?? meta?.labels?.role ?? '').trim().toLowerCase() === 'worker';
+
+/** The dir whose `git` shim goes first on a worker's PATH. Holds nothing else, so no other command resolves there. */
+export const GIT_SHIM_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'git-shim');
+/** Env var naming the node binary the shim runs the check with (the runner's own node); unset -> `node` from PATH. */
+export const GIT_SHIM_NODE_ENV = 'VS_GIT_GUARD_NODE';
+
+// A shim that lost its exec bit (a copy that dropped the mode) is skipped by every PATH lookup: git would run unguarded with
+// no error. Restore 0755 once per runner process; a missing file stays a silent miss (the Claude hook still covers Claude).
+const executableOk = new Set();
+function ensureExecutable(file) {
+  if (executableOk.has(file)) return;
+  try { accessSync(file, fsConstants.X_OK); executableOk.add(file); return; } catch { /* not executable or missing */ }
+  try { chmodSync(file, 0o755); accessSync(file, fsConstants.X_OK); executableOk.add(file); } catch { /* missing or read-only: nothing to heal */ }
+}
+
+/**
+ * Put the git shim first on PATH for a worker, in place on `env` (runner.mjs agentEnv's copy). Every role first loses any
+ * inherited shim entry (a runner started from a worker's shell must not gate its leads), so only workers carry it. win32:
+ * no-op (the shim is a POSIX sh script; cmd/PowerShell would not run it). Returns `env`.
+ */
+export function applyGitShim(env, { worker = false, platform = process.platform, execPath = process.execPath, shimDir = GIT_SHIM_DIR } = {}) {
+  if (platform === 'win32' || !env) return env;
+  const rest = String(env.PATH ?? '').split(':').filter((d) => d && path.resolve(d) !== shimDir);
+  delete env[GIT_SHIM_NODE_ENV];
+  if (worker) {
+    ensureExecutable(path.join(shimDir, 'git'));
+    env.PATH = [shimDir, ...rest].join(':');
+    // Only a real node binary: a runner hosted in another executable (electron etc.) leaves the shim on PATH's node.
+    if (/^node(\.exe)?$/i.test(path.basename(execPath ?? ''))) env[GIT_SHIM_NODE_ENV] = execPath;
+  } else if (env.PATH !== undefined) {
+    env.PATH = rest.join(':');
+  }
+  return env;
+}
+
+const within = (p, root) => { const r = path.relative(root, p); return r === '' || (!!r && !r.startsWith('..') && !path.isAbsolute(r)); };
+
+/** Temp dirs whose main checkouts are scratch repos (tests, scripts), not a shared checkout: os.tmpdir() for `env`, plus its realpath. */
+export function scratchRootsOf(env = process.env) {
+  const t = env?.TMPDIR || env?.TMP || env?.TEMP || os.tmpdir();
+  const roots = new Set([path.resolve(t)]);
+  try { roots.add(realpathSync(t)); } catch { /* missing temp dir: the literal path only */ }
+  return [...roots].filter((r) => path.dirname(r) !== r); // never `/`: TMPDIR=/ must not exempt every repo
+}
+
+/**
+ * The PATH gate's decision for one real git invocation: `argv` without the leading `git`, run in `cwd` with `env`
+ * (GIT_DIR / GIT_WORK_TREE read from it). Same classifier and main-checkout test as the hook. `git`: the real git for
+ * alias lookups (the shim passes its own pick, VS_GIT_REAL). Returns null (allow) or the violation for gitGuardRefusalText.
+ */
+export function gitArgvViolation(argv, { cwd = process.cwd(), env = process.env, scratchRoots = scratchRootsOf(env), git = 'git' } = {}) {
+  const words = (argv ?? []).map((text) => ({ text: String(text), dynamic: false, quoted: true }));
+  const at = path.resolve(cwd);
+  const lookup = (globals, sub) => gitAliasLookup(globals, sub, { cwd: at, env, git });
+  const { label, g } = classifyGit(words, at, { workTree: env?.GIT_WORK_TREE || null, gitDir: env?.GIT_DIR || null }, { lookup });
+  const v = label ? judgeGit(label, g) : null;
+  if (v?.root && scratchRoots.some((r) => within(v.root, r))) return null;
+  return v;
 }
