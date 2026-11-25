@@ -1,5 +1,6 @@
 // Block 3/4: runner auto mode + child env, VS MCP server (stdio round trip + Paseo-name aliases), vs spawn/send/status,
 // and rn- identity through the backend seam. Every filesystem touch is under a temp HOME/VIBESQUAD_HOME.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

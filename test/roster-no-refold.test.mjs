@@ -5,6 +5,7 @@
 //   - concurrent `vs who` processes never corrupt the index (atomic tmp + rename, no tmp/lock files left behind);
 //   - `vs who` prints the same thing whether its agents come from the live runner over HTTP or from the logs;
 //   - refreshRunnerRoster runs one scan at a time (fresh callers share one follow-up) and folds nothing while the runner boots.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import "./helpers/clean-env.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";

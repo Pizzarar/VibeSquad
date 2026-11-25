@@ -2,6 +2,7 @@
 // worker's own `PASS|FAIL H/M/L <hash>` line byte-for-byte (code wins over the digest's word; reviewer without one -> NO-VERDICT),
 // (3) `vs verdict <reviewer> --branch <b>` exits 0 only on the reviewer's first-line PASS matching the branch tip.
 // A real Runner + runner HTTP server + VS middleware on a temp VIBESQUAD_HOME, as in api-caller-gate.test.mjs.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

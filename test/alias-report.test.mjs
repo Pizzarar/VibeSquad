@@ -1,4 +1,5 @@
 // Own-daemon Block 5: `vs mcp alias-report` grouping, and shared prompt text naming VS MCP tools (with the Paseo names as the fallback).
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

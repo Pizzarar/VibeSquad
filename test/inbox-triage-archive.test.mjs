@@ -1,6 +1,7 @@
 // `vs inbox triage --archive|--park <cardId...>`: the owner's shell (direct disk write when the server is down) and the
 // server-side role gate (assertInboxTriageCaller). An agent id without its token is a 403 before any card is looked at
 // (X1d); the verified-agent paths (lead/Buddy through the server, worker refusal) live in test/x1b-client-token.test.mjs.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
