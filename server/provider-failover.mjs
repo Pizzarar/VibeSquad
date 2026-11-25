@@ -206,7 +206,7 @@ function extractUsageList(usageProviders) {
 
 /** idea-705: a `vs cap set deepseek` key is the same cap as provider `opencode` (every opencode profile is DeepSeek). Read-side only; stored keys stay as written. */
 const CAP_KIN = Object.assign(Object.create(null), { opencode: ["opencode", "deepseek"], deepseek: ["deepseek", "opencode"] });
-const capKin = (family) => CAP_KIN[family] ?? [family];
+export const capKin = (family) => CAP_KIN[family] ?? [family];
 
 function matchesProvider(entry, targetFamily) {
   if (!entry || typeof entry !== "object" || !targetFamily) return false;

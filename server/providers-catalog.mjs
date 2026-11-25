@@ -4,7 +4,7 @@
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
 import { readCredits, readLimits } from "./limits-read.mjs";
-import { DEFAULT_CREDIT_THRESHOLD_USD } from "./credit-guard.mjs";
+import { DEFAULT_CREDIT_THRESHOLD_USD, isProviderDeliberatelyCapped, readLiveCreditCaps } from "./credit-guard.mjs";
 import { ARM_LABEL, ARM_REASON_LABEL } from "./exp6-arm.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -4180,7 +4180,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   yield;
 
   const limitRows = readLimits(home);
-  const creditRows = readCredits(home);
+  const rawCredits = readCredits(home);
+  const liveCaps = rawCredits.length ? readLiveCreditCaps({ home, now: now() }) : {};
+  const creditRows = rawCredits.map((c) => (isProviderDeliberatelyCapped(c.provider, liveCaps) ? { ...c, capped: true } : c));
   const creditThresholdUsd = loadRunnerSettings(home).creditGuard.thresholdUsd;
   const result = {
     squad, squads, autonomy,
