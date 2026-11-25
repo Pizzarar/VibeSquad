@@ -13,6 +13,7 @@ import {
   LEAD_LONG_TURN_MIN,
   LEAD_LONG_THRESHOLD_MIN,
   LEAD_LONG_THRESHOLD_MAX,
+  POST_HANDOFF_CAP,
   TURN_TRIGGERS,
 } from '../server/providers-catalog.mjs';
 import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from '../server/lead-handoff.mjs';
@@ -162,10 +163,10 @@ test('turnTriggers: tags all 7 trigger kinds, ignores mid-turn steerOnly overwri
   assert.equal(tt.byLaneRole[0].lane, 'usage');
 });
 
-test('postHandoff & postHandoffCost: predecessor after handoff-successor, successor (vs.handoff-from); a plain respawnOf is NOT a handoff', () => {
+test('postHandoff & postHandoffCost: successor catch-up up to dispatch, predecessor lingering separated, plain respawn is not a handoff', () => {
   const home = tmp();
 
-  // Predecessor lead: 2 turns BEFORE handoff-successor ($1.00), then meta patch, then 1 turn AFTER ($0.50)
+  // Predecessor lead: 2 turns BEFORE handoff-successor ($1.00), then meta patch, then 1 turn AFTER ($0.50 -> postHandoffPredecessor)
   writeAgent(home, 'rn-pred', [
     { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', team: 'alpha' } },
     { ts: T0 + 1000, type: 'input', text: 'Boot' },
@@ -177,16 +178,24 @@ test('postHandoff & postHandoffCost: predecessor after handoff-successor, succes
     { ts: T0 + 7000, type: 'turn_done', costUsd: 1.50 },
   ]);
 
-  // Successor lead: created with vs.handoff-from -> ALL turns postHandoff ($2.00)
+  // Successor lead: created with vs.handoff-from, dispatches on turn 3 via spawn_worker, then runs turn 4 (not postHandoff)
+  // Turn 1: $0.50, Turn 2 (watch): $0.70, Turn 3 (spawn_worker): $0.80 -> postHandoff = 3 turns / $2.00
+  // Turn 4 (watch): $1.00 -> post-catchup (preHandoff), still in successorLifetime (4 turns / $3.00)
   writeAgent(home, 'rn-succ', [
     { ts: T0 + 5500, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', team: 'alpha', labels: { 'vs.handoff-from': 'rn-pred' } } },
     { ts: T0 + 6000, type: 'input', text: 'You are successor lead' },
-    { ts: T0 + 7000, type: 'turn_done', costUsd: 0.80 },
+    { ts: T0 + 6500, type: 'tool', phase: 'call', name: 'Read', input: { file_path: 'docs/SPEC.md' } },
+    { ts: T0 + 7000, type: 'turn_done', costUsd: 0.50 },
     { ts: T0 + 8000, type: 'input', text: 'Watch w-33334444 complete: all 1 item done.' },
-    { ts: T0 + 9000, type: 'turn_done', costUsd: 2.00 },
+    { ts: T0 + 9000, type: 'turn_done', costUsd: 1.20 },
+    { ts: T0 + 10000, type: 'input', text: 'Continue.' },
+    { ts: T0 + 10500, type: 'tool', phase: 'call', name: 'mcp__vibesquad__spawn_worker', input: { title: 'w', profile: 'Implement', prompt: 'go' } },
+    { ts: T0 + 11000, type: 'turn_done', costUsd: 2.00 },
+    { ts: T0 + 12000, type: 'input', text: 'Watch w-55556666 complete: all 1 item done.' },
+    { ts: T0 + 13000, type: 'turn_done', costUsd: 3.00 },
   ]);
 
-  // Normal worker ($3.00 preHandoff) + respawned worker ($1.00 postHandoff)
+  // Normal worker ($3.00) + respawned worker ($1.00) -> neither is a handoff
   writeAgent(home, 'rn-w1', [
     { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', team: 'alpha' } },
     { ts: T0 + 1000, type: 'input', text: 'Implement X' },
@@ -198,7 +207,7 @@ test('postHandoff & postHandoffCost: predecessor after handoff-successor, succes
     { ts: T0 + 5000, type: 'turn_done', costUsd: 1.00 },
   ]);
 
-  // Brainstorm (preHandoff only, $0.50)
+  // Non-handoff Brainstorm ($0.50)
   writeAgent(home, 'rn-b1', [
     { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'brainstorm', team: 'alpha' } },
     { ts: T0 + 1000, type: 'input', text: 'hi', owner: true },
@@ -207,38 +216,107 @@ test('postHandoff & postHandoffCost: predecessor after handoff-successor, succes
 
   const u = getUsage({ home, git: noGit });
   const ph = u.postHandoffCost;
+  assert.equal(ph.cap, POST_HANDOFF_CAP);
 
   const lead = ph.byRole.find((r) => r.role === 'lead');
-  assert.equal(lead.preHandoff.turns, 2);
-  assert.ok(Math.abs(lead.preHandoff.costUsd - 1.00) < 1e-6);
-  assert.equal(lead.postHandoff.turns, 3); // 1 on predecessor after handoff-successor + 2 on successor
-  assert.ok(Math.abs(lead.postHandoff.costUsd - 2.50) < 1e-6);
-  assert.equal(lead.postHandoffShare, Math.round((2.50 / 3.50) * 1000) / 1000);
+  // Lead preHandoff: 2 pred pre-handoff ($1.00) + 1 succ post-catchup ($1.00) = 3 turns, $2.00
+  assert.equal(lead.preHandoff.turns, 3);
+  assert.ok(Math.abs(lead.preHandoff.costUsd - 2.00) < 1e-6);
+  // Lead postHandoff (successor catch-up): turns 1..3 of rn-succ = 3 turns, $2.00
+  assert.equal(lead.postHandoff.turns, 3);
+  assert.ok(Math.abs(lead.postHandoff.costUsd - 2.00) < 1e-6);
+  // Lead postHandoffPredecessor (lingering): turn 3 of rn-pred = 1 turn, $0.50
+  assert.equal(lead.postHandoffPredecessor.turns, 1);
+  assert.ok(Math.abs(lead.postHandoffPredecessor.costUsd - 0.50) < 1e-6);
+  // Lead successorLifetime: all 4 turns of rn-succ ($3.00)
+  assert.equal(lead.successorLifetime.turns, 4);
+  assert.ok(Math.abs(lead.successorLifetime.costUsd - 3.00) < 1e-6);
+  assert.equal(lead.catchupCapped, 0);
+  assert.equal(lead.postHandoffShare, Math.round((2.00 / 4.50) * 1000) / 1000);
+  assert.equal(lead.postHandoffPredecessorShare, Math.round((0.50 / 4.50) * 1000) / 1000);
 
   const worker = ph.byRole.find((r) => r.role === 'worker');
   assert.equal(worker.preHandoff.turns, 2); // respawn is not a handoff (R1 M2)
   assert.ok(Math.abs(worker.preHandoff.costUsd - 4.00) < 1e-6);
   assert.equal(worker.postHandoff.turns, 0);
+  assert.equal(worker.postHandoffPredecessor.turns, 0);
+  assert.equal(worker.successorLifetime.turns, 0);
+  assert.equal(worker.catchupCapped, 0);
   assert.equal(worker.postHandoffShare, 0);
 
   const buddy = ph.byRole.find((r) => r.role === 'brainstorm');
   assert.equal(buddy.preHandoff.turns, 1);
   assert.equal(buddy.postHandoff.turns, 0);
+  assert.equal(buddy.postHandoffPredecessor.turns, 0);
+  assert.equal(buddy.successorLifetime.turns, 0);
+  assert.equal(buddy.catchupCapped, 0);
   assert.equal(buddy.postHandoffShare, 0);
 
-  // Totals across all roles: pre = 4.50 (4 turns), post = 3.50 (4 turns)
-  assert.equal(ph.totals.preHandoff.turns, 5);
-  assert.ok(Math.abs(ph.totals.preHandoff.costUsd - 5.50) < 1e-6);
+  // Totals across all roles: total cost = $4.50 (lead) + $4.00 (worker) + $0.50 (buddy) = $9.00
+  assert.equal(ph.totals.preHandoff.turns, 6);
+  assert.ok(Math.abs(ph.totals.preHandoff.costUsd - 6.50) < 1e-6);
   assert.equal(ph.totals.postHandoff.turns, 3);
-  assert.ok(Math.abs(ph.totals.postHandoff.costUsd - 2.50) < 1e-6);
-  assert.equal(ph.totals.postHandoffShare, Math.round((2.50 / 8.00) * 1000) / 1000);
+  assert.ok(Math.abs(ph.totals.postHandoff.costUsd - 2.00) < 1e-6);
+  assert.equal(ph.totals.postHandoffPredecessor.turns, 1);
+  assert.ok(Math.abs(ph.totals.postHandoffPredecessor.costUsd - 0.50) < 1e-6);
+  assert.equal(ph.totals.successorLifetime.turns, 4);
+  assert.ok(Math.abs(ph.totals.successorLifetime.costUsd - 3.00) < 1e-6);
+  assert.equal(ph.totals.catchupCapped, 0);
+  assert.equal(ph.totals.postHandoffShare, Math.round((2.00 / 9.00) * 1000) / 1000);
+  assert.equal(ph.totals.postHandoffPredecessorShare, Math.round((0.50 / 9.00) * 1000) / 1000);
 
-  // Trigger buckets also carry postHandoff breakdown
-  assert.equal(u.turnTriggers.totals.watch.turns, 2);
-  assert.equal(u.turnTriggers.totals.watch.postHandoffTurns, 1);
-  assert.ok(Math.abs(u.turnTriggers.totals.watch.postHandoffCostUsd - 1.20) < 1e-6);
-  assert.equal(u.turnTriggers.totals.send.postHandoffTurns, 1);
-  assert.ok(Math.abs(u.turnTriggers.totals.send.postHandoffCostUsd - 0.50) < 1e-6);
+  // Trigger buckets carry both postHandoff (catch-up) and postHandoffPredecessor (lingering)
+  assert.equal(u.turnTriggers.totals.watch.turns, 3);
+  assert.equal(u.turnTriggers.totals.watch.postHandoffTurns, 1); // rn-succ turn 2 ($0.70), NOT turn 4
+  assert.ok(Math.abs(u.turnTriggers.totals.watch.postHandoffCostUsd - 0.70) < 1e-6);
+  assert.equal(u.turnTriggers.totals.send.postHandoffTurns, 0);
+  assert.equal(u.turnTriggers.totals.send.postHandoffPredecessorTurns, 1); // rn-pred turn 3 ($0.50)
+  assert.ok(Math.abs(u.turnTriggers.totals.send.postHandoffPredecessorCostUsd - 0.50) < 1e-6);
+});
+
+test('postHandoff catch-up: cap at 10 sets catchupCapped, vs log decision and create_agent count as dispatch', () => {
+  const home = tmp();
+  const makeSucc = (id, role, nTurns, dispatchAt, dispatchTool) => {
+    const evs = [{ ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role, team: 'alpha', labels: { 'vs.handoff-from': 'rn-old' } } }];
+    for (let i = 1; i <= nTurns; i++) {
+      const ts = T0 + i * 1000;
+      evs.push({ ts, type: 'input', text: i === 1 ? 'Boot successor' : 'Continue' });
+      if (i === dispatchAt) evs.push({ ts: ts + 200, type: 'tool', phase: 'call', ...dispatchTool });
+      evs.push({ ts: ts + 500, type: 'turn_done', costUsd: Math.round(i * 0.10 * 1e6) / 1e6 });
+    }
+    writeAgent(home, id, evs);
+  };
+
+  // 1. No dispatch across 13 turns -> capped at 10 ($1.00), catchupCapped = 1, successorLifetime = 13 ($1.30)
+  makeSucc('rn-capped', 'lead', 13, 0, null);
+  // 2. Dispatch via `vs log decision` at turn 2 (of 5 turns) -> 2 turns ($0.20), catchupCapped = 0, successorLifetime = 5 ($0.50)
+  makeSucc('rn-dec', 'brainstorm', 5, 2, { name: 'Bash', input: { command: 'vs inbox triage; vs log decision "picked B"' } });
+  // 3. Dispatch via `create_agent` at turn 3 (of 6 turns) -> 3 turns ($0.30), catchupCapped = 0, successorLifetime = 6 ($0.60)
+  makeSucc('rn-ca', 'lead', 6, 3, { name: 'mcp__vibesquad__create_agent', input: { title: 'w', prompt: 'go' } });
+
+  const u = getUsage({ home, git: noGit });
+  const ph = u.postHandoffCost;
+
+  const lead = ph.byRole.find((r) => r.role === 'lead');
+  assert.equal(lead.postHandoff.turns, 13); // 10 (capped) + 3 (create_agent)
+  assert.ok(Math.abs(lead.postHandoff.costUsd - 1.30) < 1e-6);
+  assert.equal(lead.preHandoff.turns, 6); // 3 post-cap + 3 post-dispatch
+  assert.ok(Math.abs(lead.preHandoff.costUsd - 0.60) < 1e-6);
+  assert.equal(lead.successorLifetime.turns, 19); // 13 + 6
+  assert.ok(Math.abs(lead.successorLifetime.costUsd - 1.90) < 1e-6);
+  assert.equal(lead.catchupCapped, 1);
+
+  const buddy = ph.byRole.find((r) => r.role === 'brainstorm');
+  assert.equal(buddy.postHandoff.turns, 2); // vs log decision at turn 2
+  assert.ok(Math.abs(buddy.postHandoff.costUsd - 0.20) < 1e-6);
+  assert.equal(buddy.preHandoff.turns, 3); // turns 3..5 after decision
+  assert.equal(buddy.successorLifetime.turns, 5);
+  assert.equal(buddy.catchupCapped, 0);
+
+  assert.equal(ph.totals.postHandoff.turns, 15);
+  assert.ok(Math.abs(ph.totals.postHandoff.costUsd - 1.50) < 1e-6);
+  assert.equal(ph.totals.catchupCapped, 1);
+  assert.equal(ph.totals.successorLifetime.turns, 24);
 });
 
 test('clampLeadLongThreshold and ?leadLongThreshold=N query param on usage-export and usage', async () => {

@@ -548,6 +548,7 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "exit" || ev.type === "error") {
     st.curTools = undefined; // usa-40 R1 M3: a failed turn's tools must not leak into the next turn
+    st.curTurnDispatched = false;
     st.curTrigger = "none";
     st.hasTurnTrigger = false;
     st.exited = true;
@@ -564,6 +565,7 @@ function foldEvent(st, ev) {
     }
   } else if (ev.type === "input") {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
+    st.curTurnDispatched = false;
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED") st.priorPass = false;
     // L4: an env-stop BLOCKED survives follow-up turns that carry no verdict line; any PASS/FAIL verdict clears it.
@@ -603,6 +605,9 @@ function foldEvent(st, ev) {
   } else if (ev.type === "tool") {
     if ((st.role === "lead" || st.role === "brainstorm") && ev.phase === "call") (st.curTools ??= []).push({ name: ev.name, input: ev.input });
     else if (ev.phase === "call" && st.role === "worker") foldWorkedUnits(st, ev.input);
+    if (ev.phase === "call" && st.handoff && !st.catchupDone && isDispatchTool({ name: ev.name, input: ev.input })) {
+      st.curTurnDispatched = true;
+    }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -647,18 +652,37 @@ function foldEvent(st, ev) {
     }
     const turnTools = st.curTools ?? [];
     st.curTools = undefined;
+    const dispatched = !!st.curTurnDispatched;
+    st.curTurnDispatched = false;
     const trigger = st.curTrigger ?? "none";
     st.curTrigger = "none";
     st.hasTurnTrigger = false;
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
-    // usa-63 (EXP7b): per-turn trigger + postHandoff rollup (after invalid-ts guard so totals match st.turns).
-    // successor lifetime (vs.handoff-from) + predecessor turns after its handoff-successor label; a plain respawn is not a handoff (usa-63 R1 M2)
-    const postHandoff = Boolean(st.handoff || st.handedOff);
+    // usa-63 (Per3): postHandoff = successor catch-up turns (first turn up to and including first dispatch, capped at POST_HANDOFF_CAP).
+    // Predecessor lingering turns after handoff-successor are tracked separately as postHandoffPredecessor.
+    // successorLifetime preserves the full lifetime of vs.handoff-from successors as a separate field.
+    const turnNum = st.turns + 1;
+    const postHandoffPredecessor = Boolean(st.handedOff);
+    let postHandoff = false;
+    if (st.handoff && !st.catchupDone && !postHandoffPredecessor) {
+      if (turnNum <= POST_HANDOFF_CAP) {
+        postHandoff = true;
+        if (dispatched) {
+          st.catchupDone = true;
+        } else if (turnNum === POST_HANDOFF_CAP) {
+          st.catchupDone = true;
+          st.catchupCapped = true;
+        }
+      } else {
+        st.catchupDone = true;
+      }
+    }
+    const successorLifetime = Boolean(st.handoff);
     const tt = (st.turnTriggers ??= new Map());
-    const tk = `${trigger}|${postHandoff ? 1 : 0}`;
+    const tk = `${trigger}|${postHandoff ? 1 : 0}|${postHandoffPredecessor ? 1 : 0}|${successorLifetime ? 1 : 0}`;
     let ttb = tt.get(tk);
-    if (!ttb) { ttb = { trigger, postHandoff, turns: 0, costUsd: 0 }; tt.set(tk, ttb); }
+    if (!ttb) { ttb = { trigger, postHandoff, postHandoffPredecessor, successorLifetime, turns: 0, costUsd: 0 }; tt.set(tk, ttb); }
     ttb.turns += 1;
     ttb.costUsd += delta;
     // usa-40 R1 L5 / usa-63: record per-turn tool classification signals for lead/brainstorm so ?leadLongThreshold=N can slice at any threshold.
@@ -859,7 +883,7 @@ function logLinesStep(file, maxBytes) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, handedOff: false, curTrigger: "none", hasTurnTrigger: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, handedOff: false, catchupDone: false, catchupCapped: false, curTurnDispatched: false, curTrigger: "none", hasTurnTrigger: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -887,6 +911,16 @@ const SPAWN_BURST_WINDOW_MS = 2 * 60_000;
 const SPAWN_BURST_MIN = 3;
 // usa-40: lead turns past this index are the "long tail"; mirrors RESPAWN_OF_LABEL in server/hooks/agent-duties.ts (a .ts module this .mjs can't import).
 export const LEAD_LONG_TURN_MIN = 80;
+/** usa-63 (Per3): max catch-up turns counted as postHandoff for a handoff successor before a dispatch. */
+export const POST_HANDOFF_CAP = 10;
+const DISPATCH_TOOL_RE = /^\S*(?:^|[_./:-])(?:spawn_worker|create_agent)$/i;
+const DISPATCH_CMD_RE = /(?:^|[\s;&|])vs\s+log\s+decision\b/;
+function isDispatchTool(t) {
+  const name = String(t.name ?? "");
+  if (DISPATCH_TOOL_RE.test(name)) return true;
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  return DISPATCH_CMD_RE.test(cmd) || DISPATCH_CMD_RE.test(name);
+}
 const RESPAWN_OF_LABEL = "respawnOf";
 const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:log|spawn)\b/;
 const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:spawn_worker|report)$/i;
@@ -1460,6 +1494,7 @@ function agentV2(st, agentId) {
     lastError: st.lastError ?? "",
     lastErrorTs: st.lastErrorTs ?? null,
     handoff: !!st.handoff,
+    catchupCapped: !!st.catchupCapped,
     firstTurnCostUsd: st.firstTurnCostUsd ?? null,
     wrapUpCostUsd: st.wrapUpCostUsd ?? 0,
     wrapUpTurns: st.wrapUpTurns ?? 0,
@@ -2302,14 +2337,15 @@ function buildLeadLongTurns(allAgentSquads, threshold = LEAD_LONG_TURN_MIN) {
     byLaneRole: [...byLR.values()].sort((a, b) => a.teamId.localeCompare(b.teamId) || a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role)) };
 }
 
-/** usa-63 (EXP7b): turn trigger distribution (totals, byRole, byLaneRole) with postHandoff counts/cost per trigger. */
+/** usa-63 (EXP7b): turn trigger distribution (totals, byRole, byLaneRole) with postHandoff + postHandoffPredecessor counts/cost per trigger. */
 function buildTurnTriggers(agentStates) {
-  const mkBucket = () => ({ turns: 0, costUsd: 0, postHandoffTurns: 0, postHandoffCostUsd: 0 });
+  const mkBucket = () => ({ turns: 0, costUsd: 0, postHandoffTurns: 0, postHandoffCostUsd: 0, postHandoffPredecessorTurns: 0, postHandoffPredecessorCostUsd: 0 });
   const mkMap = () => Object.fromEntries(TURN_TRIGGERS.map((k) => [k, mkBucket()]));
   const addTo = (dst, e) => {
     dst.turns += e.turns;
     dst.costUsd += e.costUsd;
     if (e.postHandoff) { dst.postHandoffTurns += e.turns; dst.postHandoffCostUsd += e.costUsd; }
+    if (e.postHandoffPredecessor) { dst.postHandoffPredecessorTurns += e.turns; dst.postHandoffPredecessorCostUsd += e.costUsd; }
   };
   const totals = mkMap();
   const byRole = new Map();
@@ -2337,12 +2373,22 @@ function buildTurnTriggers(agentStates) {
   };
 }
 
-/** usa-63 (EXP7b): pre-handoff vs post-handoff turn/cost split, overall and by role. */
+/** usa-63 (Per3): pre-handoff vs successor catch-up (postHandoff, capped at POST_HANDOFF_CAP) vs predecessor lingering (postHandoffPredecessor), plus successorLifetime. */
 function buildPostHandoffCost(agentStates) {
-  const mk = () => ({ preHandoff: { turns: 0, costUsd: 0 }, postHandoff: { turns: 0, costUsd: 0 } });
+  const mk = () => ({
+    preHandoff: { turns: 0, costUsd: 0 },
+    postHandoff: { turns: 0, costUsd: 0 },
+    postHandoffPredecessor: { turns: 0, costUsd: 0 },
+    successorLifetime: { turns: 0, costUsd: 0 },
+    catchupCapped: 0,
+  });
   const finish = (x) => {
-    const tot = x.preHandoff.costUsd + x.postHandoff.costUsd;
-    return { ...x, postHandoffShare: tot > 0 ? Math.round((x.postHandoff.costUsd / tot) * 1000) / 1000 : null };
+    const tot = x.preHandoff.costUsd + x.postHandoff.costUsd + x.postHandoffPredecessor.costUsd;
+    return {
+      ...x,
+      postHandoffShare: tot > 0 ? Math.round((x.postHandoff.costUsd / tot) * 1000) / 1000 : null,
+      postHandoffPredecessorShare: tot > 0 ? Math.round((x.postHandoffPredecessor.costUsd / tot) * 1000) / 1000 : null,
+    };
   };
   const totals = mk();
   const byRole = new Map();
@@ -2350,16 +2396,27 @@ function buildPostHandoffCost(agentStates) {
     if (!st.turnTriggers?.size) continue;
     const role = st.role || "unknown";
     const r = getOrSet(byRole, role, mk);
+    if (st.catchupCapped) {
+      totals.catchupCapped += 1;
+      r.catchupCapped += 1;
+    }
     for (const e of st.turnTriggers.values()) {
-      const side = e.postHandoff ? "postHandoff" : "preHandoff";
+      const side = e.postHandoff ? "postHandoff" : e.postHandoffPredecessor ? "postHandoffPredecessor" : "preHandoff";
       totals[side].turns += e.turns;
       totals[side].costUsd += e.costUsd;
       r[side].turns += e.turns;
       r[side].costUsd += e.costUsd;
+      if (e.successorLifetime) {
+        totals.successorLifetime.turns += e.turns;
+        totals.successorLifetime.costUsd += e.costUsd;
+        r.successorLifetime.turns += e.turns;
+        r.successorLifetime.costUsd += e.costUsd;
+      }
     }
   }
   const roleOrd = (role) => { const i = ROLE_ORDER.indexOf(role); return i >= 0 ? i : ROLE_ORDER.length; };
   return {
+    cap: POST_HANDOFF_CAP,
     totals: finish(totals),
     byRole: [...byRole.entries()]
       .sort(([a], [b]) => roleOrd(a) - roleOrd(b) || a.localeCompare(b))
