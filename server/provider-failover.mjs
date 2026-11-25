@@ -347,7 +347,18 @@ export function readCappedProviders(opts = {}) {
   return result;
 }
 
-export function setProviderCapped(providerId, capped = true, { reason = "manual cap", normalizeKey = true, ttlMs, ...opts } = {}) {
+/** An entry the owner set with no explicit reset time (a manual `vs cap`), or a non-object flag: never auto-shortened. */
+function hasNoExplicitReset(entry) {
+  if (!entry || typeof entry !== "object") return true;
+  return !["resetsAt", "resetAt", "resetTime"].some((k) => entry[k] !== undefined && entry[k] !== null && entry[k] !== "");
+}
+
+/**
+ * Write or lift a provider cap. `keepLonger: true` (the automatic breakers, idea-826 M1): inside the file lock, a live cap
+ * that ends at or after this one (or a manual cap with no reset time) is kept as is, so a concurrent `vs cap` or a longer
+ * breaker cap is never shortened by a read-then-write race.
+ */
+export function setProviderCapped(providerId, capped = true, { reason = "manual cap", normalizeKey = true, ttlMs, keepLonger = false, ...opts } = {}) {
   const key = normalizeKey ? normalizeProviderFamily(providerId) : String(providerId ?? "").trim().toLowerCase();
   if (!key) return readCappedProviders(opts);
 
@@ -365,7 +376,11 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
       for (const [k, v] of Object.entries(rawMap)) {
         if (!isCapExpired(v, now)) live[k] = v;
       }
-      if (capped) {
+      const cur = live[key];
+      const until = Number.isFinite(ttlMs) && ttlMs > 0 ? now + ttlMs : Infinity;
+      if (capped && keepLonger && cur !== undefined && (hasNoExplicitReset(cur) || !(capExpiryMs(cur) < until))) {
+        // keep the longer cap
+      } else if (capped) {
         live[key] = { reason, updatedAt: new Date(now).toISOString(), ...(Number.isFinite(ttlMs) && ttlMs > 0 ? { resetsAt: now + ttlMs } : {}) };
       } else {
         delete live[key];
