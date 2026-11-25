@@ -1,5 +1,6 @@
 // W2: `vs watch add <agent...> [--suite] [--restart] [--stall <min>]` / list / cancel + the MCP `watch` tool, over the injected
 // watch-set registry (server/watch-sets.mjs, W1). Fake in-memory backend + fake watchSets; never the real runner or registry.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

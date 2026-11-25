@@ -2,6 +2,7 @@
 // cascade revoke, the Hub5 pair/start gate, X1 E4a M3 (device list needs the token), L3 (`vs pair` proves the server
 // before sending the token), MUST 6 (host-keypair.json lockdown) and the X1 R2 Lows. Threat note:
 // docs/lanes/android-app/E4B_THREAT_NOTE.md. Attacker cases are marked "attacker:".
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
