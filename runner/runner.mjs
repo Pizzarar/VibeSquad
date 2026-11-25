@@ -2127,6 +2127,11 @@ export class Runner {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
     for (const j of this.queue) if (j.id === id) this._consumed(j, 'dropped'); // idea-869: never replayed after an unarchive + restart
     this.queue = this.queue.filter((j) => j.id !== id); // an archived agent's waiting prompts are dropped
+    // idea-869: so are the inputs no job of this runner carries (owed `own` inputs a restart left behind a cut turn, a queued
+    // log's unstarted ones): one marker with no upTo empties the fold's pending, so an unarchive + send/resume never replays them.
+    let left = [];
+    try { left = this._fold(id)?.pending ?? []; } catch { /* unreadable log */ }
+    if (left.length) { try { this.store.append(id, 'inputs-consumed', { how: 'dropped' }); } catch { /* log gone */ } }
     this._announceQueue();
     const e = this.live.get(id);
     if (e?.handle) {

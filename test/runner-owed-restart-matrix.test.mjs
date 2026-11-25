@@ -206,6 +206,39 @@ test('owed inputs the agent may no longer act on (stale) are dropped with a mark
   runner4.shutdown();
 });
 
+// Round 3 F1 (rn-863584795900): archive on the lost agent after the restart drops what it was owed; unarchive brings back none of it.
+for (const via of ['send', 'resume']) {
+  test(`restart -> archive -> unarchive -> ${via}: only the fresh input is delivered, the owed one never resurrects`, () => {
+    const { dir, a } = arrange('running', 'own');
+    const adapter2 = recAdapter();
+    const runner2 = restart(dir, adapter2);
+    assert.deepEqual(ownPending(runner2, a).map((p) => p.text), ['own:1'], 'owed before the archive');
+    runner2.archive(a);
+    assert.deepEqual(runner2._fold(a).pending, [], 'archive drops it');
+    assert.deepEqual(runner2.timeline(a).filter((e) => e.type === 'inputs-consumed').map((e) => e.how), ['dropped']);
+    runner2.unarchive(a);
+    if (via === 'send') {
+      runner2.send(a, 'fresh-after-unarchive');
+      assert.deepEqual(adapter2.textsOf(a), ['fresh-after-unarchive']);
+    } else {
+      runner2.resume(a);
+      drive(adapter2);
+      assert.ok(!adapter2.textsOf(a).includes('own:1'), JSON.stringify(adapter2.textsOf(a)));
+      runner2.send(a, 'fresh-after-unarchive');
+      assert.deepEqual(adapter2.textsOf(a).filter((t) => t !== CONTINUE_PROMPT), ['fresh-after-unarchive']);
+    }
+    drive(adapter2);
+    assert.deepEqual(runner2._fold(a).pending, []);
+    runner2.shutdown({ keepResumable: true });
+    const adapter3 = recAdapter();
+    const runner3 = restart(dir, adapter3);
+    runner3.resume(a);
+    drive(adapter3);
+    assert.deepEqual(adapter3.textsOf(a), [], 'a later restart replays nothing');
+    runner3.shutdown();
+  });
+}
+
 test('inputs-consumed / inputs-held are queue bookkeeping, never turn progress (server NON_PROGRESS_LOG_EVENTS)', () => {
   for (const type of ['inputs-consumed', 'inputs-held']) assert.equal(isTurnProgressEvent({ type, seq: 1 }), false, type);
   assert.equal(isTurnProgressEvent({ type: 'text', seq: 1 }), true);
