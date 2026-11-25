@@ -263,13 +263,13 @@ export type UsagePerfection = { pin: Pin | null; onOpen?: PinHandler };
 function BurstSplit({ cohorts }: { cohorts: BurstCohorts }) {
   const [by, setBy] = useState<"off" | "stakes" | "lane">("off");
   const rows = by === "stakes" ? cohorts.byStakes : by === "lane" ? cohorts.byLane : undefined;
-  if (!cohorts.byStakes && !cohorts.byLane) return null;
+  if (!cohorts.byStakes?.length && !cohorts.byLane?.length) return null;
   return (
     <div data-testid="usage-burst-split">
-      <div className="small muted">
-        Split by{" "}
+      <div className="usage-squad-filter" role="group" aria-label="Split burst table by" style={{ margin: "8px 0" }}>
+        <span className="usage-squad-label small muted">Split by:</span>
         {(["off", "stakes", "lane"] as const).map((k) => (
-          <button key={k} type="button" className="linklike" data-testid={`usage-burst-split-${k}`} aria-pressed={by === k} disabled={by === k} onClick={() => setBy(k)}>{k === "off" ? "none" : k}</button>
+          <button key={k} type="button" className={`usage-squad-pill${by === k ? " is-active" : ""}`} data-testid={`usage-burst-split-${k}`} aria-pressed={by === k} onClick={() => setBy(k)}>{k === "off" ? "none" : k}</button>
         ))}
       </div>
       {rows && (
@@ -280,7 +280,7 @@ function BurstSplit({ cohorts }: { cohorts: BurstCohorts }) {
               <tr key={r.key} data-testid="usage-burst-split-row">
                 <td>{r.key} <span className="muted">({r.units})</span></td>
                 {r.buckets.map((c) => (
-                  <td key={c.key} className="num">{c.units === 0 ? "—" : c.insufficient ? `n<${cohorts.minN} (${c.units})` : `${c.units} · ${burstCellText(c, c.firstTryPassRate, pctText)} · ${burstCellText(c, c.costPerUnit, usdText)}`}</td>
+                  <td key={c.key} className="num">{c.units === 0 ? "—" : c.insufficient ? `n<${cohorts.minN} (${c.units})` : `${c.units} · ${burstCellText(c, c.firstTryPassRate, pctText, cohorts.minN)} · ${burstCellText(c, c.costPerUnit, usdText, cohorts.minN)}`}</td>
                 ))}
               </tr>
             ))}
