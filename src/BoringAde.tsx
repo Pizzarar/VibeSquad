@@ -985,6 +985,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         </div>
     );
   };
+  const DROP_CLS = { before: "drop-before", after: "drop-after" } as const;
   const renderProject = (v: TeamView, isMain = false) => {
     const active = v.team.id === activeTeamId;
     const open = isMain ? (projectOpen[v.team.id] ?? false) : projectIsOpen(v.team.id); // the pinned Main row starts compact
@@ -992,8 +993,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
     const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
     return (
-      <div key={v.team.id} className={`${open ? "boring-project-block open" : "boring-project-block"}${isMain ? " is-main" : ""}${drag?.over === v.team.id ? ` drop-${drag.where}` : ""}${drag?.id === v.team.id ? " dragging" : ""}`} data-order-id={isMain ? undefined : v.team.id} data-order-group={orderGroup(v)} data-testid={isMain ? "boring-main-project" : undefined}>
-        <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}${isMain ? " boring-main-line" : ""}`} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
+      <div key={v.team.id} className={[open ? "boring-project-block open" : "boring-project-block", isMain && "is-main", drag?.over === v.team.id && DROP_CLS[drag.where], drag?.id === v.team.id && "dragging"].filter(Boolean).join(" ")} data-order-id={isMain ? undefined : v.team.id} data-order-group={orderGroup(v)} data-testid={isMain ? "boring-main-project" : undefined}>
+        <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}` + (isMain ? " boring-main-line" : "")} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
           {!isMain && (
             <span className="boring-drag-grip" aria-hidden="true" title="Drag to reorder (or ⋯ → Move up / Move down)" data-testid={`boring-project-grip-${v.team.id}`} onPointerDown={(e) => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); gripRef.current = { el: e.currentTarget, pid: e.pointerId }; setDragNow({ id: v.team.id, over: null, where: "before" }); }} onPointerMove={(e) => dragMove(e, v)} onPointerUp={() => dragEnd(true)} onPointerCancel={() => dragEnd(false)} onLostPointerCapture={() => { if (dragRef.current) dragEnd(false); }}>⠿</span>
           )}
