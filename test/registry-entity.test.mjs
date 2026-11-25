@@ -113,3 +113,10 @@ test("cross-lane / cross-project links", () => {
   assert.deepEqual(reg.crossLaneLinks(t).map((l) => l.rel), ["portrait", "sequel"]);
   assert.match(reg.validateEntity({ ...t, links: [{ rel: "x", kind: "item", id: "a", project: "Bad Key" }] }).errors.join(), /links\[0\]\.project/);
 });
+
+test("registry: character flag is optional boolean, defaults false", () => {
+  const good = { kind: "x", label: "X", order: 1, reserved: false, lane: null, required: [], slots: ["text"] };
+  assert.equal(buildKindTable([good]).byKind.get("x").character, false);
+  assert.equal(buildKindTable([{ ...good, character: true }]).byKind.get("x").character, true);
+  assert.throws(() => buildKindTable([{ ...good, character: "yes" }]), /character/);
+});
