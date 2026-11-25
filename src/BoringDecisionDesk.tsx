@@ -674,76 +674,7 @@ export function BoringDecisionDesk({
         </div>
       )}
 
-      {/* 1. Live Status Strip: one line per lane, grouped by Squad */}
-      <section className="boring-decision-strip" data-testid="boring-decision-strip" aria-label="Squad status">
-        <div className="boring-decision-section-head">
-          <h2 className="boring-decision-section-title">Live Status</h2>
-          <span className="boring-decision-section-meta">{statusGroups.reduce((n, g) => n + g.lanes.length, 0)} lanes</span>
-        </div>
-        <div className="boring-decision-strip-groups">
-          {stripGroups.map((g) => (
-            <div key={g.squadId} className="boring-decision-strip-squad" data-testid={`boring-decision-strip-squad-${g.squadId}`}>
-              <button type="button" className="boring-decision-strip-squad-btn" onClick={() => onOpenProject?.(g.squadId)}>
-                {g.squadName}
-              </button>
-              <div className="boring-decision-strip-lanes">
-                {(() => {
-                  const { shown, quiet } = splitQuietLanes(g.lanes, now);
-                  const open = Boolean(quietOpen[g.squadId]);
-                  const lines = open ? [...shown, ...quiet] : shown;
-                  return (
-                    <>
-                      {lines.map((lane) => {
-                        const waiting = lane.openDecisions > 0 && (lane.leadState === "idle" || lane.leadState === "none" || lane.leadState === "running");
-                        const stClass = waiting ? "needs-you" : lane.leadState;
-                        return (
-                          <button
-                            key={lane.key}
-                            type="button"
-                            className="boring-decision-strip-line"
-                            data-testid={`boring-decision-strip-lane-${g.squadId}-${lane.laneId}`}
-                            onClick={() => (lane.openAgentId && onOpenAgent ? onOpenAgent(g.view, lane.openAgentId) : onOpenProject?.(g.squadId))}
-                          >
-                            <span className={`boring-decision-dot st-${stClass}`} aria-hidden="true" />
-                            <span className="boring-decision-strip-lane-name">{lane.label}</span>
-                            <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code">{lane.code}</code> : null}</span>
-                            <span className={`boring-decision-strip-state st-${stClass}`}>{leadStateLabel(lane)}</span>
-                            <span className="boring-decision-strip-event" title={lane.lastEvent || undefined}>
-                              {lane.lastEvent ? (
-                                <>
-                                  {lane.lastEventType && <span className="boring-decision-ev-tag">{lane.lastEventType}</span>}
-                                  <span>{lane.lastEvent}</span>
-                                </>
-                              ) : (
-                                <span className="boring-decision-muted">No recent done/decision</span>
-                              )}
-                            </span>
-                            {lane.age && <span className="boring-decision-age">{lane.age}</span>}
-                          </button>
-                        );
-                      })}
-                      {quiet.length > 0 && (
-                        <button
-                          type="button"
-                          className="boring-decision-quiet-btn"
-                          data-testid={`boring-decision-strip-quiet-${g.squadId}`}
-                          aria-expanded={open}
-                          title={open ? "Fold quiet lanes" : `${quiet.map((q) => q.label).join(", ")}: idle, no event in the last 2h`}
-                          onClick={() => setQuietOpen((cur) => ({ ...cur, [g.squadId]: !cur[g.squadId] }))}
-                        >
-                          {open ? `− hide ${quiet.length} quiet` : `+${quiet.length} quiet`}
-                        </button>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 2. Decision Feed: grouped by Squad, oldest first */}
+      {/* 1. Decision Feed: grouped by Squad, oldest first (comes first in stacked layout < 1900px; left column in .is-wide) */}
       <section className="boring-decision-feed" data-testid="boring-decision-feed" aria-label="Decision feed">
         <div className="boring-decision-section-head">
           <h2 className="boring-decision-section-title">Decisions</h2>
@@ -881,6 +812,75 @@ export function BoringDecisionDesk({
             </div>
           </div>
         ))}
+      </section>
+
+      {/* 2. Live Status Strip: one line per lane, grouped by Squad (below feed & scroll-capped < 1900px; right rail in .is-wide) */}
+      <section className="boring-decision-strip" data-testid="boring-decision-strip" aria-label="Squad status">
+        <div className="boring-decision-section-head">
+          <h2 className="boring-decision-section-title">Live Status</h2>
+          <span className="boring-decision-section-meta">{statusGroups.reduce((n, g) => n + g.lanes.length, 0)} lanes</span>
+        </div>
+        <div className="boring-decision-strip-groups">
+          {stripGroups.map((g) => (
+            <div key={g.squadId} className="boring-decision-strip-squad" data-testid={`boring-decision-strip-squad-${g.squadId}`}>
+              <button type="button" className="boring-decision-strip-squad-btn" onClick={() => onOpenProject?.(g.squadId)}>
+                {g.squadName}
+              </button>
+              <div className="boring-decision-strip-lanes">
+                {(() => {
+                  const { shown, quiet } = splitQuietLanes(g.lanes, now);
+                  const open = Boolean(quietOpen[g.squadId]);
+                  const lines = open ? [...shown, ...quiet] : shown;
+                  return (
+                    <>
+                      {lines.map((lane) => {
+                        const waiting = lane.openDecisions > 0 && (lane.leadState === "idle" || lane.leadState === "none" || lane.leadState === "running");
+                        const stClass = waiting ? "needs-you" : lane.leadState;
+                        return (
+                          <button
+                            key={lane.key}
+                            type="button"
+                            className="boring-decision-strip-line"
+                            data-testid={`boring-decision-strip-lane-${g.squadId}-${lane.laneId}`}
+                            onClick={() => (lane.openAgentId && onOpenAgent ? onOpenAgent(g.view, lane.openAgentId) : onOpenProject?.(g.squadId))}
+                          >
+                            <span className={`boring-decision-dot st-${stClass}`} aria-hidden="true" />
+                            <span className="boring-decision-strip-lane-name">{lane.label}</span>
+                            <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code">{lane.code}</code> : null}</span>
+                            <span className={`boring-decision-strip-state st-${stClass}`}>{leadStateLabel(lane)}</span>
+                            <span className="boring-decision-strip-event" title={lane.lastEvent || undefined}>
+                              {lane.lastEvent ? (
+                                <>
+                                  {lane.lastEventType && <span className="boring-decision-ev-tag">{lane.lastEventType}</span>}
+                                  <span>{lane.lastEvent}</span>
+                                </>
+                              ) : (
+                                <span className="boring-decision-muted">No recent done/decision</span>
+                              )}
+                            </span>
+                            {lane.age && <span className="boring-decision-age">{lane.age}</span>}
+                          </button>
+                        );
+                      })}
+                      {quiet.length > 0 && (
+                        <button
+                          type="button"
+                          className="boring-decision-quiet-btn"
+                          data-testid={`boring-decision-strip-quiet-${g.squadId}`}
+                          aria-expanded={open}
+                          title={open ? "Fold quiet lanes" : `${quiet.map((q) => q.label).join(", ")}: idle, no event in the last 2h`}
+                          onClick={() => setQuietOpen((cur) => ({ ...cur, [g.squadId]: !cur[g.squadId] }))}
+                        >
+                          {open ? `− hide ${quiet.length} quiet` : `+${quiet.length} quiet`}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* 3. Off-screen strip: hands-on test, money/keys, release */}

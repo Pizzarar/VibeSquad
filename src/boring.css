@@ -1649,6 +1649,7 @@ html[data-vibe="boring"] .boring-decision-wrap {
   padding-bottom: 0;
 }
 html[data-vibe="boring"] .boring-decision-desk {
+  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
   display: flex;
@@ -2208,7 +2209,7 @@ html[data-vibe="boring"] .boring-decision-wrap:has(.boring-decision-desk.is-wide
 html[data-vibe="boring"] .boring-decision-desk.is-wide {
   max-width: 2000px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(500px, 580px);
+  grid-template-columns: minmax(0, 1fr) clamp(520px, 44%, 920px);
   grid-template-areas:
     "head head"
     "alert alert"
@@ -2229,5 +2230,10 @@ html[data-vibe="boring"] .is-wide .boring-decision-strip {
   position: sticky;
   top: 0;
   max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+/* @desk P2 (UX R38 m2 + m4, idea-1070): stacked layout (< 1900px) keeps feed first and caps strip height with its own scroll */
+html[data-vibe="boring"] .boring-decision-desk:not(.is-wide) .boring-decision-strip {
+  max-height: min(320px, 35vh);
   overflow-y: auto;
 }
