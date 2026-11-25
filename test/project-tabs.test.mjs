@@ -117,3 +117,12 @@ test("probe hooks share one stable subscribeProbe", () => {
   assert.ok(!s.includes("(cb) => { probeSubs.add(cb)"), "no inline per-render subscribe arrows");
   assert.equal(s.split("    subscribeProbe,\n").length - 1, 2, "both probe hooks use it");
 });
+
+test("T2: ⋯ menu entry removed; palette command 'Open Storybook: <project>' for non-missing projects; phone entry untouched", () => {
+  const c = src("CommandPalette.tsx"), p = src("PhoneCockpit.tsx");
+  assert.ok(!c.includes('label: "Open Storybook"'), "interim ⋯ item gone");
+  assert.ok(c.includes("label: `Open Storybook: ${v.team.name}`"), "palette command label");
+  assert.ok(c.includes("filter((v) => !probeStorybook(v.team.id))"), "hidden when known-missing");
+  assert.ok(c.includes('id.startsWith("storybook:")') && c.includes("openStorybook(v.team.id, v.team.name)"), "command opens Storybook");
+  assert.ok(p.includes('data-testid="phone-storybook-btn"') && p.includes("view && !sbMissing"), "phone ⋯ entry stays (own button, not teamCtxItems)");
+});
