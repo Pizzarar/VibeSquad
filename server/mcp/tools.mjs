@@ -16,6 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, readArmCaps } from "../exp6-arm.mjs";
+import { ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -218,7 +219,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles, { stakes, prefer } = {}) {
+    async resolveProfile(name, profiles, { stakes, prefer, override } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
       // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
       // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
@@ -228,7 +229,8 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const stored = (Array.isArray(profiles) ? profiles : []).some((p) => clean(p?.name).toLowerCase() === key || (p?.id && p.id === clean(name)));
       if (!stored) {
         const { roleSpawnConfig } = await import("../spawn-route.mjs");
-        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer }); // prefer: R1 arm provider for a role spawn
+        // prefer: R1 arm provider for a role spawn. override: the caller's own provider/model (H1), which win.
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer, override });
         if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
       }
       const profile = findProfile(name, profiles);
@@ -392,7 +394,8 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   if (profileName && (given.provider || given.model)) {
     const asked = armOfProfile(profileName);
     if (asked && (stakesNow || "normal").toLowerCase() === "normal" && clean(args.labels?.role).toLowerCase() !== LEAD_ROLE) {
-      ab = { mode: "arm", arm: null, requestedArm: asked.wf, swapped: false, reason: "override", counts: null, profile: profileName };
+      // A role-name hit (`Implement`) keeps role: true like decideArm's, so result.ab still reports the provider it ran on.
+      ab = { mode: "arm", arm: null, requestedArm: asked.wf, swapped: false, reason: "override", counts: null, profile: profileName, ...(asked.role ? { role: true } : {}) };
     }
   } else if (profileName) {
     // Same precedence the spawn stamps below (identity wins over a caller label).
@@ -408,7 +411,11 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   }
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const stk = { stakes: clean(args.labels?.stakes) || clean(args.stakes), ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}) };
+    const stk = {
+      stakes: clean(args.labels?.stakes) || clean(args.stakes),
+      ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}),
+      ...(given.provider || given.model ? { override: { provider: given.provider, model: given.model } } : {}),
+    };
     let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
     if (!hit && ab?.swapped) { // fail open: the swapped-to profile is not installed, keep the requested one
       hit = await ctx.resolveProfile(profileName, profiles, stk);
@@ -508,6 +515,13 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   delete labels["vs.profile-derived"];
   const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);
   if (derived.length) labels["vs.profile-derived"] = derived.join(",");
+  // H1 (idea-974): a ROLE-name spawn's caller provider/model win in the spawn hook (resolveRoute `explicit`); the hook can't
+  // tell them from a filled-in default by config alone, so name them here. Only this tool writes it (forged ones are stripped).
+  delete labels[ROUTE_OVERRIDE_LABEL];
+  if (profile?.roleKey && (given.provider || given.model)) {
+    const ov = routeOverrideLabel({ provider: given.provider, model: given.model });
+    if (ov) labels[ROUTE_OVERRIDE_LABEL] = ov;
+  }
   // R0 arm stamps are written only by this tool (a caller-supplied vs.arm would skew the per-lane counts).
   for (const k of [ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL]) delete labels[k];
   if (ab) {

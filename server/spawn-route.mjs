@@ -17,6 +17,8 @@ import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failov
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
 import { loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
 
+export { ROUTE_OVERRIDE_LABEL, parseRouteOverride, routeOverrideLabel } from "./route-override.mjs";
+
 /** Labels every routed spawn is stamped with (plus `profile` = the role or old profile name, and `wf`). */
 export const ROUTE_STAMP_LABELS = Object.freeze(["provider", "model", "tier", "stakes"]);
 
@@ -74,17 +76,26 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
 }
 
 /**
- * The profile a role-name spawn runs as. {profile, route, explicitCapped} | null (hint is not a role).
- * `explicitModel`: the caller's model, only to report `explicit-capped` (its family is capped): for profile spawns the
- * cap wins and the model is dropped when the family changes (P5a review M3, today's agent-duties.ts behaviour).
+ * The profile a role-name spawn runs as. {profile, route, explicitCapped, override} | null (hint is not a role).
+ * `override` (H1, idea-974): the caller's own provider and/or model (spawn_worker's ROUTE_OVERRIDE_LABEL). They win:
+ *   - provider given: the role runs on that provider; stakes still pick the tier rung (model + effort) of THAT
+ *     provider's ladder, unless a model is given too (then the caller's model; the rung's effort still applies).
+ *   - model only: the model's own family is the provider (resolveRoute). A model whose family has no ladder (unknown
+ *     id) is ignored here, as before (the hook's caller-model rule decides it).
+ *   - the caller's provider is capped/over quota: failover still hops along the role's list (the caller's model is kept
+ *     only when it belongs to the hop's family). `override.hopped` + `explicitCapped` report it. Every provider capped =
+ *     the caller's provider is kept.
+ *   Returned `override` = {provider, model, hopped} (null when no override applied): the hook stamps reason=override.
+ * `explicitModel`: the caller's model, only to report `explicit-capped` (its family is capped) on a spawn WITHOUT an
+ * override: for those the cap wins and the model is dropped when the family changes (P5a review M3).
  * `prefer` (R1, PLAN_PER_ROLES_LADDER_1125): a provider family the role tries first (the R0 implementer arm pick, read
  * from `vs.arm` via exp6-arm.mjs armProvider). Only a family already in the role's provider list moves to the front; the
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
- * still that family's tier-ladder rung. Unknown/blank = the role's own order.
+ * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string}} [opts]
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, override?: {provider?: string, model?: string} | null}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer } = {}) {
+export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, override } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
@@ -95,13 +106,35 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   }
   const found = roleNameHit(hint, table);
   const rungs = ladder ?? loadTierLadder();
-  const route = resolveRoute({ role: found.key, stakes, caps, ladder: rungs }, { roles: table });
+  const base = { role: found.key, stakes, caps, ladder: rungs };
+  const ovProvider = String(override?.provider ?? "").trim();
+  const ovModel = String(override?.model ?? "").trim();
+  const ovModelFam = routeProviderFamily(ovModel);
+  /** @type {{provider?: string, model?: string} | null} */
+  let explicit = null;
+  if (ovProvider) explicit = { provider: ovProvider, ...(ovModel ? { model: ovModel } : {}) };
+  else if (ovModel && ovModelFam && rungs[ovModelFam]) explicit = { model: ovModel };
+  let route = resolveRoute(explicit ? { ...base, explicit } : base, { roles: table });
   if (!route?.provider) return null;
   let explicitCapped = false;
-  const exModel = String(explicitModel ?? "").trim();
-  if (exModel) {
-    const probe = resolveRoute({ role: found.key, stakes, caps, ladder: rungs, explicit: { model: exModel } }, { roles: table });
-    explicitCapped = Boolean(probe?.reasons?.includes("explicit-capped"));
+  let applied = null;
+  if (explicit) {
+    applied = { provider: ovProvider, model: ovModel, hopped: false };
+    if (route.reasons.includes("explicit-capped")) {
+      // The caller's provider is capped: hop along the role's own list, as failover does for any spawn.
+      const walk = resolveRoute(base, { roles: table });
+      if (walk?.provider && !walk.capped && walk.provider !== route.provider) {
+        route = ovModel && ovModelFam === walk.provider ? resolveRoute({ ...base, explicit: { model: ovModel } }, { roles: table }) : walk;
+        applied.hopped = true;
+        explicitCapped = true;
+      }
+    }
+  } else {
+    const exModel = String(explicitModel ?? "").trim();
+    if (exModel) {
+      const probe = resolveRoute({ ...base, explicit: { model: exModel } }, { roles: table });
+      explicitCapped = Boolean(probe?.reasons?.includes("explicit-capped"));
+    }
   }
   const def = found.role;
   const mode = def.modes?.[route.provider] ?? {};
@@ -119,7 +152,7 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
     ...(def.icon !== undefined ? { icon: def.icon } : {}),
     ...(def.color !== undefined ? { color: def.color } : {}),
   };
-  return { profile, route, explicitCapped };
+  return { profile, route, explicitCapped, override: applied };
 }
 
 /**
@@ -208,13 +241,14 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
 /**
  * brainstorm.mjs / lead-handoff.mjs: a respawn whose profile label is a ROLE name (no stored profile of that name)
  * spawns from the role route, threading its model + thinkingOptionId (effort) into the create call, so the hook sees
- * the same values it would pick. null = not a role name (callers keep their profile path).
+ * the same values it would pick. null = not a role name (callers keep their profile path). `override` = the caller's own
+ * provider/model (spawn_worker, H1): routed as in roleSpawnProfile, so the spawn config already names that provider's rung.
  */
-export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer } = {}) {
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer, override } = {}) {
   const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
-  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer });
+  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer, override });
   if (!hit) return null;
   const p = hit.profile;
   return {

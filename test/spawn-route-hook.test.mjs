@@ -13,6 +13,7 @@ import { LEGACY_PROFILE_ALIASES, legacyProfileRole } from "../server/profiles.mj
 import { ROLE_TABLE } from "../server/role-route.mjs";
 import { saveRoles } from "../server/roles-api.mjs";
 import {
+  ROUTE_OVERRIDE_LABEL,
   cappedFamilies,
   legacyRouteMeta,
   legacyShadowMismatch,
@@ -150,6 +151,8 @@ test(
       assert.deepEqual([top.labels.tier, top.labels.stakes], ["top", "tierA-invariant"]);
       assert.match(top.labels[ROUTE_LABEL], /reason=ladder tier=top role=implement/);
 
+      // config.provider alone is a filled-in default (every spawn carries one), not the caller's choice: the role routes.
+      // A caller-given provider comes with spawn_worker's ROUTE_OVERRIDE_LABEL (H1): see the "H1 override" tests below.
       const rev = await h.spawn({ provider: "claude" }, { labels: LABELS("Review") });
       assert.equal(rev.config.provider, A);
       assert.equal(rev.config.model, "gemini-4-neon");
@@ -161,6 +164,153 @@ test(
       // Old names carry the stamps too.
       const old = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement - Sonnet") });
       assert.deepEqual([old.labels.provider, old.labels.model, old.labels.tier, old.labels.stakes], [C, "claude-sonnet-5-5", "mid", "normal"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// H1 (R1 fix, idea-974; live case 13:01Z: Review provider=claude model=claude-sonnet-5-5 tierA-invariant ran gemini-4-neon
+// reason=ladder). A role-name spawn's caller provider/model (spawn_worker's ROUTE_OVERRIDE_LABEL) win; stakes pick the
+// rung of THAT provider's ladder unless a model is given; a cap still hops; the metric says reason=override.
+const OV = (provider, model) => ({ [ROUTE_OVERRIDE_LABEL]: [provider && `provider=${provider}`, model && `model=${model}`].filter(Boolean).join(" ") });
+
+test(
+  "H1 override: the 13:01Z case (Review provider=claude model=claude-sonnet-5-5 tierA-invariant) lands on Claude Sonnet",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      const out = await h.spawn(
+        { provider: "claude", model: "claude-sonnet-5-5" },
+        { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) },
+      );
+      assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "high", modeId: "auto" });
+      assert.equal(out.labels.profile, "Review");
+      assert.deepEqual([out.labels.provider, out.labels.model, out.labels.tier], [C, "claude-sonnet-5-5", "top"]);
+      assert.match(out.labels[ROUTE_LABEL], /^stakes=tierA-invariant model=claude-sonnet-5-5 effort=high reason=override tier=top role=review$/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "H1 override: provider-only under every stakes value picks that provider's rung; provider+model keeps the model",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    // Review's default tier is mid; stakes force top (tierA-*) / cheap (mechanical) on the CALLER's provider's ladder.
+    const rung = { normal: ["claude-sonnet-5-5", "medium"], mechanical: ["claude-sonnet-5-5", "low"], "tierA-invariant": ["claude-opus-5-5", "high"], "tierA-security": ["claude-opus-5-5", "high"] };
+    try {
+      for (const s of STAKES_VALUES) {
+        const [model, effort] = rung[s];
+        // spawn_worker pre-fills the role's rung for the caller's provider and marks it derived.
+        const only = await h.spawn(
+          { provider: "claude", model, thinkingOptionId: effort },
+          { labels: LABELS("Review", { stakes: s, "vs.profile-derived": "model,thinking", ...OV("claude") }) },
+        );
+        assert.deepEqual(landed(only), { provider: C, model, effort, modeId: "auto" }, `provider-only ${s}`);
+        assert.match(only.labels[ROUTE_LABEL], new RegExp(`^stakes=${s} model=${model} effort=${effort} reason=override `), `provider-only ${s}`);
+        // A config without the pre-fill (direct create) lands the same: the hook routes the rung itself.
+        const bare = await h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: s, ...OV("claude") }) });
+        assert.deepEqual(landed(bare), { provider: C, model, effort, modeId: "auto" }, `provider-only bare ${s}`);
+
+        const both = await h.spawn(
+          { provider: "claude", model: "claude-sonnet-5-5" },
+          { labels: LABELS("Review", { stakes: s, "vs.profile-derived": "thinking", ...OV("claude", "claude-sonnet-5-5") }) },
+        );
+        assert.deepEqual(landed(both), { provider: C, model: "claude-sonnet-5-5", effort, modeId: "auto" }, `provider+model ${s}`);
+        assert.match(both.labels[ROUTE_LABEL], /reason=override tier=\S+ role=review$/, `provider+model ${s}`);
+
+        // Model only: the model's family is the provider.
+        const m = await h.spawn({ provider: A, model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: s, ...OV("", "claude-sonnet-5-5") }) });
+        assert.deepEqual(landed(m), { provider: C, model: "claude-sonnet-5-5", effort, modeId: "auto" }, `model-only ${s}`);
+        assert.match(m.labels[ROUTE_LABEL], /reason=override /, `model-only ${s}`);
+      }
+      // Implement (Claude first) overridden onto Gemini: Gemini's ladder, Gemini's mode.
+      const g = await h.spawn({ provider: A }, { labels: LABELS("Implement", { stakes: "tierA-invariant", ...OV(A) }) });
+      assert.deepEqual([g.config.provider, g.config.model, g.config.thinkingOptionId], [A, "gemini-4-neon", "high"]);
+      assert.equal(g.labels.profile, "Implement");
+      // A caller thinking value still beats the rung's effort; the reason stays override.
+      const t = await h.spawn({ provider: "claude", thinkingOptionId: "low" }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude") }) });
+      assert.deepEqual([t.config.provider, t.config.model, t.config.thinkingOptionId], [C, "claude-opus-5-5", "low"]);
+      assert.match(t.labels[ROUTE_LABEL], /reason=override /);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "H1 override: a capped caller provider still hops along the role's list, logged as override+failover",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: { claude: { capped: true } } });
+    try {
+      const out = await h.spawn(
+        { provider: "claude", model: "claude-sonnet-5-5" },
+        { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) },
+      );
+      assert.deepEqual([out.config.provider, out.config.model, out.config.thinkingOptionId], [A, "gemini-4-neon", "high"]);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override\+failover tier=top role=review explicit-capped=dropped$/);
+    } finally {
+      h.stop?.();
+    }
+    // Every provider capped: the caller's provider is kept (nothing to hop to), still reason=override.
+    const all = harness({ cappedProviders: capMap([C, A, O]) });
+    try {
+      const out = await all.spawn({ provider: "claude" }, { labels: LABELS("Review", OV("claude")) });
+      assert.equal(out.config.provider, C);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override tier=mid role=review$/);
+    } finally {
+      all.stop?.();
+    }
+  }),
+);
+
+test(
+  "H1 override: old names + aliases ignore the override label (today's walk, unchanged); no label = no change",
+  withEnv(async () => {
+    const names = [...GOLDEN.map((g) => g.name), ...Object.keys(LEGACY_PROFILE_ALIASES)];
+    for (const caps of [[], [C]]) {
+      const h = harness({ cappedProviders: capMap(caps) });
+      try {
+        for (const name of names) {
+          for (const s of STAKES_VALUES) {
+            const out = await h.spawn({ provider: "claude" }, { labels: LABELS(name, { stakes: s, ...OV(A, "gemini-4-neon") }) });
+            assert.deepEqual(landed(out), today(name, caps, s), `${name} caps=[${caps}] stakes=${s}`);
+            assert.doesNotMatch(String(out.labels[ROUTE_LABEL]), /reason=override/, name);
+          }
+        }
+      } finally {
+        h.stop?.();
+      }
+    }
+  }),
+);
+
+test(
+  "H1 override: an override-labelled role spawn is not refused after spawn (agent.created re-route honours it)",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      // Label-only arrival (no tier stamp, not before()-configured): the role re-route must use the override too.
+      const agent = {
+        id: "rev-ov",
+        title: "REV",
+        cwd: CWD,
+        provider: "claude",
+        model: "claude-opus-5-5",
+        thinkingOptionId: "high",
+        modeId: "auto",
+        labels: { ...LABELS("Review", { stakes: "tierA-invariant", ...OV("claude") }) },
+      };
+      const paseo = { getAgent: async () => agent, agents: { ref: () => ({ refresh: async () => ({ agent }), archive: async () => {} }), list: async () => ({ entries: [{ agent }] }) } };
+      await h.onCreated({ agent }, { paseo });
+      assert.deepEqual(h.calls.refused, []);
+      // Same spawn without the override is refused (Review routes to Gemini), as before.
+      const plain = { ...agent, id: "rev-plain", title: "REV2", labels: LABELS("Review", { stakes: "tierA-invariant" }) };
+      const paseo2 = { getAgent: async () => plain, agents: { ref: () => ({ refresh: async () => ({ agent: plain }), archive: async () => {} }), list: async () => ({ entries: [{ agent: plain }] }) } };
+      await h.onCreated({ agent: plain }, { paseo: paseo2 });
+      assert.deepEqual(h.calls.refused, ["rev-plain"]);
     } finally {
       h.stop?.();
     }
