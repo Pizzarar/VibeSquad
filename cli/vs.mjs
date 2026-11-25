@@ -3295,7 +3295,8 @@ function commandCap(flags) {
     return 0;
   }
 
-  if (sub === "clear") {
+  // R10: `off` = clear (the agy-claude kill switch reads `vs cap add agy-claude` / `vs cap off agy-claude`).
+  if (sub === "clear" || sub === "off") {
     const provider = String(flags._[1] ?? "").trim().toLowerCase();
     if (!provider) throw new Error("cap clear needs a provider: vs cap clear <provider>");
     setProviderCapped(provider, false, {
@@ -3306,7 +3307,7 @@ function commandCap(flags) {
     return 0;
   }
 
-  throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
+  throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear (off)`);
 }
 
 export function defaultBaseRef(repoRoot) {

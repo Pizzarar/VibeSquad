@@ -2302,8 +2302,10 @@ const OPUS_MODEL_RE = /^claude-(?:opus|fable)/i;
 const BRIEF_TOKENS = 5000; // isolated workers each carry a <5k brief (spec)
 
 /** Implementer provider -> one of the workflow families: gemini | claude | dsp | null. */
-function providerFamily(provider) {
+function providerFamily(provider, model) {
   const p = String(provider ?? "").toLowerCase();
+  // R10: Claude on agy (antigravity-cli + claude-opus/sonnet id) is Claude work: its reviewer family is claude.
+  if ((p === "antigravity-cli" || p === "agy") && /^claude-(?:opus|sonnet)-/i.test(String(model ?? "").trim())) return "claude";
   if (p === "antigravity-cli" || p === "agy" || p.includes("antigravity") || p.includes("gemini")) return "gemini";
   if (p === "claude") return "claude";
   if (p === "opencode" || p.includes("deepseek") || p.includes("dsp")) return "dsp";
@@ -2329,7 +2331,7 @@ function attributeReviewerAgent(unit, implementer, index) {
  * else "no-review". */
 function attributeReviewerFamily(unit, implementer, reviewer) {
   if (reviewer) {
-    const fam = providerFamily(reviewer.provider);
+    const fam = providerFamily(reviewer.provider, reviewer.model);
     if (fam) return `${fam}-review`;
   }
   return (unit.reviewRounds ?? 0) > 0 || implementer ? "gemini-review" : "no-review";
@@ -2345,7 +2347,7 @@ function classifyWorkflow(unit, implementer, reviewerFamily = "gemini-review") {
   if (!implementer) return { mode: "unattributed", source: "derived" };
   const wf = normalizeWfLabel(implementer.wfLabel);
   if (wf && wf !== "unknown") return { mode: wf, source: "label" };
-  return { mode: `${implementer.model ? baseModel(implementer.model) : (providerFamily(implementer.provider) || "unknown")} · ${implementer.stakes ?? "normal"} -> ${reviewerFamily}`, source: "derived" };
+  return { mode: `${implementer.model ? baseModel(implementer.model) : (providerFamily(implementer.provider, implementer.model) || "unknown")} · ${implementer.stakes ?? "normal"} -> ${reviewerFamily}`, source: "derived" };
 }
 
 /** String form for the per-unit ledger field; `classifyWorkflow` is the single source of the precedence logic. */
