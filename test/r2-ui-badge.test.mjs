@@ -33,6 +33,12 @@ test("landingPick: override wins over caps", () => {
   assert.deepEqual(l, { provider: "claude", model: "claude-opus-5-5", via: "override" });
   assert.equal(landingPick(role, ladder, "normal", { capped: [], override: { provider: "antigravity-cli" } }).via, "override (provider rung)");
 });
+test("landingPick: mechanical walks A2's cheap order (Gemini Flash first, Claude Haiku next) like the hook", () => {
+  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: [], installed: ALL }), { provider: "antigravity-cli", model: "g-cheap", via: "ladder" });
+  assert.deepEqual(landingPick(role, ladder, "mechanical", { capped: ["antigravity-cli"], installed: ALL }), { provider: "claude", model: "claude-haiku-5-5", via: "failover (Gemini capped → Claude)" });
+  const all = landingPick(role, ladder, "mechanical", { capped: ["claude", "antigravity-cli"], installed: ALL });
+  assert.deepEqual([all.provider, all.via], ["antigravity-cli", "all capped (Gemini capped, Claude capped)"]);
+});
 test("landingPick: all capped stays on the first provider and says so", () => {
   const l = landingPick(role, ladder, "normal", { capped: ["claude", "antigravity-cli"], installed: ALL });
   assert.equal(l.provider, "claude");

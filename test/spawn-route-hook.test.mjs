@@ -185,10 +185,11 @@ test(
   "A2: a mechanical role spawn lands on Gemini Flash; with Gemini capped on Claude Haiku; DeepSeek only when both are capped",
   withEnv(async () => {
     const cases = [
-      [[], row(A, "gemini-3.8-flash", "medium", "accept-edits"), "reason=ladder tier=cheap role=implement"],
+      [[], row(A, "gemini-3.8-flash", "medium", "accept-edits"), "reason=ladder tier=cheap role=implement why=rung"],
       // The metric names one reason for a role route; stakes (ladder) win over failover, as for tierA + a capped claude.
-      [[A], row(C, "claude-haiku-5-5", "low", "auto"), "reason=ladder tier=cheap role=implement"],
-      [[A, C], row(O, "deepseek/deepseek-flash", "high", "build"), "reason=ladder tier=cheap role=implement"],
+      // R2: the shown reason (why=) still says failover when a capped provider was skipped.
+      [[A], row(C, "claude-haiku-5-5", "low", "auto"), "reason=ladder tier=cheap role=implement why=failover"],
+      [[A, C], row(O, "deepseek/deepseek-flash", "high", "build"), "reason=ladder tier=cheap role=implement why=failover"],
     ];
     for (const [caps, want, metric] of cases) {
       const h = harness({ cappedProviders: capMap(caps) });
@@ -215,7 +216,7 @@ test(
         assert.equal(out.labels.profile, "Implement", name);
         // The stakes label keeps the caller's stakes; tier=cheap shows the reroute (lead ruling 11-25).
         assert.deepEqual([out.labels.stakes, out.labels.tier], ["normal", "cheap"], name);
-        assert.match(out.labels[ROUTE_LABEL], /^stakes=normal model=gemini-3\.8-flash effort=medium reason=\S*legacy-name tier=cheap role=implement$/, name);
+        assert.match(out.labels[ROUTE_LABEL], /^stakes=normal model=gemini-3\.8-flash effort=medium reason=\S*legacy-name tier=cheap role=implement why=legacy-name$/, name);
         // A label that still reads the old name at agent.created is relabelled, not refused.
         const agent = { id: `a2-${name}`, title: `A2-${name}`, cwd: CWD, provider: out.config.provider, model: out.config.model, labels: LABELS(name) };
         const paseo = { getAgent: async () => agent, agents: { ref: () => ({ refresh: async () => ({ agent }), archive: async () => {} }), list: async () => ({ entries: [{ agent }] }) } };

@@ -2555,7 +2555,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // result) rides the label as ` why=<reason>` (server/spawn-reason.mjs); the `route:` metric above keeps its fields.
           const why = shownSpawnReason({
             hookReason: reason,
-            failover: Boolean(failoverProfileName) || Boolean(roleRoute?.override?.hopped),
+            // A role route that skipped a capped provider is a failover even when the metric names `ladder` (stakes win there).
+            failover: Boolean(failoverProfileName) || Boolean(roleRoute?.override?.hopped) || Boolean(roleRoute?.route?.reasons?.includes("failover")),
             override: Boolean(roleRoute?.override) || keepCaller,
             arm: Boolean(String(reqLabels["vs.arm"] ?? "").trim()),
             legacyName,

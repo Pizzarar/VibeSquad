@@ -57,8 +57,9 @@ export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stake
   return { provider, model: ladder?.[provider]?.[tierFor(role, stakes)]?.model ?? "" };
 }
 
-/** R2: where a role row will actually land: the first role provider that is neither capped nor missing (the hook's failover),
- *  or the override. `via` is the badge text. All providers capped = the first provider (the hook queues/warns there). */
+/** R2: where a role row will actually land: the first provider of the stakes' walk order (walkOrder, A2) that is neither
+ *  capped nor missing (the hook's failover), or the override. `via` is the badge text. All providers capped = the first
+ *  provider of the walk order (the hook queues/warns there). */
 export function landingPick(
   role: RoleLike,
   ladder: LadderLike | undefined,
@@ -72,7 +73,7 @@ export function landingPick(
   }
   const capped = opts.capped ?? [];
   const installed = opts.installed;
-  const providers = role.providers.length ? role.providers : ["claude"];
+  const providers = role.providers.length ? walkOrder(role, stakes) : ["claude"];
   const skipped: string[] = [];
   for (const provider of providers) {
     const isCapped = capped.includes(provider);
