@@ -161,7 +161,11 @@ test(
       assert.equal(sent[0].to, "32baf0c7");
       assert.match(sent[0].text, /Status update for RiffBot/);
       assert.equal(sent[1].to, "b6e18e7d");
-      assert.equal(sent[1].text, "(old) RiffBot is retired; delivered to RiffBot");
+      // idea-768: names the real target (title and lane)
+      assert.equal(
+        sent[1].text,
+        "(old) RiffBot (a38b803b) is retired; delivered to RiffBot (vibesquad Buddy). Send to 32baf0c7 or `vs who brainstorm` next time.",
+      );
 
       const m = readMetrics(vsHome);
       assert.equal(m.filter((t) => t.startsWith("misroute-old:")).length, 1);

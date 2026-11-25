@@ -1273,7 +1273,7 @@ html[data-vibe="boring"] .boring-split-empty { margin: auto; max-width: 360px; p
 html[data-vibe="boring"] .boring-split-empty p { margin: 0; }
 html[data-vibe="boring"] .boring-split-hint { font-size: 12px; color: var(--text-dim); }
 /* The topbar-actions pill rules exclude this toggle via :not([aria-pressed="true"]), so its pressed accent fill is not beaten. */
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"]:hover { filter: brightness(1.08); }
 /* B8a: always-visible Trinity card (Overlord, RiffBot, Bugs) set apart from the feature lanes. */
 html[data-vibe="boring"] .boring-trinity-card { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 6px 6px; margin: 4px 0 6px; background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); }
@@ -1547,3 +1547,45 @@ html[data-vibe="boring"] .project-tabs .boring-switch-pill { min-height: 28px; p
 html[data-vibe="boring"] .sb-head .project-tabs { flex-wrap: wrap; }
 /* UX R22 m1: active segment reads clearly in dark + light (existing --accent token, colour not opacity). */
 html[data-vibe="boring"] .project-tabs .boring-switch-pill.on { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+/* UX R23 N1: light mode lilac active segment: label in --text (accent on lilac was 3.48:1), ring keeps the accent. */
+html[data-vibe="boring"][data-theme="light"] .project-tabs .boring-switch-pill.on { color: var(--text); }
+/* C3 Crunch pill (topbar right): same active cue as the project tabs; the label stays --text so it reads on both themes. */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="true"].on { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: inset 0 0 0 1px var(--accent); }
+/* C3 r1: Crunch pill off = muted label (reads as a switch, not a plain button); busy = colour only, never opacity (Art13). */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"] { color: var(--muted); opacity: 1; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[aria-pressed="false"]:hover:not(:disabled) { color: var(--text); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill:disabled { cursor: progress; opacity: 1; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed], html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.boring-crunch-pill[data-failed][aria-pressed]:hover:not(:disabled) { color: var(--st-err, var(--text)); }
+/* C3 r3 (UX R26c n1): the generic `html[data-vibe="boring"] .btn` (0,2,1) beat the phone row's own colours; Normal tokens, same specificity bump. */
+html[data-vibe="boring"] .btn.phone-crunch-btn.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); box-shadow: inset 3px 0 0 var(--accent); }
+html[data-vibe="boring"] .btn.phone-crunch-btn[data-failed] { color: var(--st-err, var(--text)); border-color: var(--st-err, var(--border)); }
+html[data-vibe="boring"] .btn.phone-crunch-btn:disabled { color: var(--muted); }
+
+/* === PLAN_PROJECT_ORDER O2: pinned Main project row + drag-reorder (@ui-bois). @boring-mode polish: build on this block, keep the hooks.
+   The pin sits OUTSIDE .boring-project-tree (the scroller) so folder collapse and scroll never hide it. It is sized by content, shrinks and
+   scrolls inside to keep the footer on screen, and never below its full header (60px collapsed, 220px expanded); below that the sidebar scrolls. */
+html[data-vibe="boring"] .boring-main-pin { flex: 0 1 auto; min-height: 60px; overflow-y: auto; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface-3); }
+html[data-vibe="boring"] .boring-main-pin:has(.boring-project-block.open) { min-height: 220px; }
+/* No open-card chrome inside the pin (it has its own frame): the header must not jump when Main expands. */
+html[data-vibe="boring"] .boring-main-pin .boring-project-block, html[data-vibe="boring"] .boring-main-pin .boring-project-block.open { background: transparent; border: 0; border-radius: 0; padding: 0 9px; gap: 2px; }
+html[data-vibe="boring"] .boring-main-pin ~ .boring-project-tree { flex-basis: 0; min-height: 120px; }
+/* Two-line header so the name keeps the width: line 1 = dot, bust, name, badge; line 2 = Open, actions. ~1.5x a normal row. */
+html[data-vibe="boring"] .boring-main-line, html[data-vibe="boring"] .boring-main-line.boring-project-line { position: sticky; top: 0; z-index: 1; background: var(--surface-3); display: grid; grid-template-columns: 16px 1fr auto auto; align-items: center; min-height: 54px; padding-bottom: 2px; }
+html[data-vibe="boring"] .boring-main-line > .boring-chevron-btn { grid-column: 1; grid-row: 1 / span 2; }
+html[data-vibe="boring"] .boring-main-line .boring-project-row { grid-column: 2 / -1; grid-row: 1; min-height: 30px; gap: 8px; font-weight: 600; padding-top: 2px; padding-bottom: 2px; }
+html[data-vibe="boring"] .boring-main-line .boring-project-row.on { box-shadow: none; }
+html[data-vibe="boring"] .boring-main-bust { flex: 0 0 24px; width: 24px; height: 24px; image-rendering: pixelated; }
+html[data-vibe="boring"] .boring-main-open { grid-column: 2; grid-row: 2; justify-self: start; margin-left: 4px; padding: 1px 12px; border: 1px solid var(--accent); border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+html[data-vibe="boring"] .boring-main-open:hover, html[data-vibe="boring"] .boring-main-open:focus-visible { background: var(--accent); color: var(--on-accent); }
+html[data-vibe="boring"] .boring-main-line .boring-row-menu-btn { grid-column: 3; grid-row: 2; margin-left: 0; opacity: 1; background: transparent; }
+html[data-vibe="boring"] .boring-main-line .boring-lane-add { grid-column: 4; grid-row: 2; }
+/* Grip: pointer-only (keyboard uses ⋯ → Move up/down). Sits in the row's left padding (never over the chevron or another control), hover/focus only, so it takes no width and rows match master. */
+html[data-vibe="boring"] .boring-project-line { position: relative; }
+html[data-vibe="boring"] .boring-drag-grip { position: absolute; left: -8px; top: 50%; transform: translateY(-50%); width: 7px; text-align: center; color: var(--muted); opacity: 1; cursor: grab; user-select: none; touch-action: none; line-height: 1; visibility: hidden; z-index: 1; font-size: 11px; }
+html[data-vibe="boring"] .boring-project-line:hover .boring-drag-grip, html[data-vibe="boring"] .boring-project-line:focus-within .boring-drag-grip { visibility: visible; }
+html[data-vibe="boring"] .boring-drag-grip:hover { color: var(--text); }
+html[data-vibe="boring"] .boring-project-block.dragging { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-project-block.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+html[data-vibe="boring"] .boring-project-block.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+html[data-vibe="boring"] .boring-main-pin .boring-project-block.is-main { min-width: 0; } /* hook for the Main block (polish) */
+/* === end PLAN_PROJECT_ORDER O2 === */

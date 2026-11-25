@@ -7,7 +7,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
-import { ARMS, IMPLEMENTER_ARMS, armCapKey, armCapped, armProvider, armTier, countArms, decideArm } from "../server/exp6-arm.mjs";
+import { ARMS, IMPLEMENTER_ARMS, armRouteFor, armCapKey, armCapped, armProvider, armTier, countArms, decideArm } from "../server/exp6-arm.mjs";
 import { roleSpawnConfig, roleSpawnProfile } from "../server/spawn-route.mjs";
 import { verifiedIdentity } from "./helpers/agent-token.mjs";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
@@ -139,7 +139,7 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.equal(fl.route, "arm=flash reason=opt-in model=gemini-3.8-flash (Implement -> antigravity-cli)");
   assert.deepEqual(countArms(agents, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0 }, "flash does not skew sonnet/neon counts");
 
-  // Default normal Implement spawns still alternate strictly sonnet -> neon -> sonnet (never flash).
+  // Default normal Implement spawns still alternate sonnet, neon, neon (2:1 Neon:Sonnet, @per G1; never flash).
   const seq = [];
   for (let i = 0; i < 4; i++) {
     const r = await go(ctx, { profile: "Implement", stakes: "normal" });
@@ -148,8 +148,8 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.deepEqual(seq, [
     ["sonnet", "claude-sonnet-5-5"],
     ["neon", "gemini-4-neon"],
-    ["sonnet", "claude-sonnet-5-5"],
     ["neon", "gemini-4-neon"],
+    ["sonnet", "claude-sonnet-5-5"],
   ]);
 
   // Capped antigravity falls back to Claude Sonnet with reason capped:antigravity-cli.
@@ -157,4 +157,12 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   const capped = await go(c2, { profile: "Implement", stakes: "normal", labels: { ab: "flash" } });
   assert.deepEqual([cr2[0].labels.profile, cr2[0].config.provider, cr2[0].config.model], ["Implement", "claude", "claude-sonnet-5-5"]);
   assert.deepEqual([cr2[0].labels["vs.arm"], cr2[0].labels["vs.arm-reason"], capped.ab.reason, capped.ab.capped], ["sonnet", "capped:antigravity-cli", "capped:antigravity-cli", true]);
+});
+
+test("armtier-gate armRouteFor: only the Implement role takes the arm's provider/tier", () => {
+  assert.deepEqual(armRouteFor("Implement", "flash"), { prefer: "antigravity-cli", tier: "cheap" });
+  assert.equal(armRouteFor("implement", "neon").prefer, "antigravity-cli");
+  for (const role of ["Review", "Pre-check", "Planner", "Implement - Sonnet", ""]) {
+    assert.deepEqual(armRouteFor(role, "flash"), { prefer: "", tier: "" }, role);
+  }
 });

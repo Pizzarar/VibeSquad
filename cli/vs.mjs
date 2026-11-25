@@ -56,7 +56,7 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
-import { findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
+import { DEFAULT_PACK_PROFILES, findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
 import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
 import { isHiddenRole } from "../server/role-route.mjs";
 import { loadTierLadder } from "../server/stakes-ladder.mjs";
@@ -1471,7 +1471,7 @@ async function commandWhoami(flags) {
 }
 
 function commandProfiles(flags) {
-  const { profiles } = loadProfiles(undefined, { autoSeed: false });
+  const { profiles } = loadProfiles(undefined, { autoSeed: false, listBuiltins: true }); // idea-732: same set GET /api/profiles (and spawn_worker) accepts, read from the same file, so no server needed
   const rawRole = flags.role ? String(flags.role).trim().toLowerCase() : "";
   const wantRole =
     rawRole === "buddy"
@@ -1493,6 +1493,7 @@ function commandProfiles(flags) {
     label: roleProfileLabel(key, roles),
     tier: r.tier,
     providers: [...(r.providers ?? [])],
+    rungs: roleRungs(r),
     ...(isHiddenRole(key, roles) ? { hidden: true } : {}),
   }));
   const listedRows = roleRows.filter((r) => !r.hidden);
@@ -1537,10 +1538,14 @@ function commandProfiles(flags) {
     writeRoleRows(listedRows);
     if (!flags.aliases) {
       // Roles only: custom (non-legacy) profiles are still spawnable by name, so they stay listed; old names are counted.
-      const legacy = matched.filter((p) => aliasOf(p));
-      shown = matched.filter((p) => !aliasOf(p));
-      if (shown.length) process.stdout.write("\nCustom profiles:\n");
-      for (const p of shown) writeProfileRow(p, "", includeNotes);
+      // idea-732: UX Reviewer - Opus maps to the review role for routing but is a distinct, named UX-gate profile: keep it listed.
+      const namedOnly = (p) => /^ux reviewer - /i.test(p.name);
+      const legacy = matched.filter((p) => aliasOf(p) && !namedOnly(p));
+      shown = matched.filter((p) => !aliasOf(p) || namedOnly(p));
+      const builtinNames = new Set(DEFAULT_PACK_PROFILES.map((d) => String(d.name).toLowerCase()));
+      const isBuiltin = (p) => builtinNames.has(String(p.name).toLowerCase());
+      if (shown.length) process.stdout.write("\nOther profiles (spawn by exact name; [built-in] ships with the server, no role label):\n");
+      for (const p of shown) writeProfileRow(p, isBuiltin(p) ? " [built-in]" : "", includeNotes);
       process.stdout.write(`\n${legacy.length} legacy alias${legacy.length === 1 ? "" : "es"} hidden (--aliases)\n`);
       return 0;
     }
@@ -1566,11 +1571,22 @@ function writeProfileRow(p, suffix, includeNotes) {
   }
 }
 
+/** idea-732: a role's model per provider, from the same tier ladder spawn routing reads (role tier -> ladder rung). */
+function roleRungs(r) {
+  const ladder = loadTierLadder();
+  const out = {};
+  for (const prov of r.providers ?? []) {
+    const x = ladder[prov]?.[r.tier];
+    if (x?.model) out[prov] = `${x.model}${x.effort ? `/${x.effort}` : ""}`;
+  }
+  return out;
+}
+
 /** `vs profiles` roles block: one line per role (label, default tier, provider order), then the tier ladder. */
 function writeRoleRows(roleRows) {
   process.stdout.write("Roles (spawn with profile=<label>; stakes picks the model: tierA-* -> top, mechanical -> cheap; provider/model to override):\n");
   for (const r of roleRows) {
-    process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · providers=${r.providers.join(">")}\n`);
+    process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · ${Object.entries(r.rungs ?? {}).map(([k, v]) => `${k}=${v}`).join(" > ")}\n`);
   }
   process.stdout.write("\nTier ladder (provider: top | mid | cheap):\n");
   const rung = (x) => (x?.model ? `${x.model}${x.effort ? `/${x.effort}` : ""}` : "-");

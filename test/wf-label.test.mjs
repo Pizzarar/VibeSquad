@@ -154,12 +154,13 @@ test(
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS() });
       assert.equal(out.config.provider, "antigravity-cli");
       assert.equal(out.labels.wf, "flash");
-      // R0: spawn_worker's vs.model follows the model actually run (re-synced after failover); absent stays absent.
+      // R0/R2: vs.model follows the model actually run (re-synced after failover) and is stamped on every routed spawn.
       const armed = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS({ "vs.arm": "sonnet", "vs.model": "claude-sonnet-5-5" }) });
       assert.equal(armed.labels["vs.model"], armed.config.model);
       assert.equal(armed.labels.model, armed.config.model);
       assert.notEqual(armed.labels["vs.model"], "claude-sonnet-5-5");
-      assert.equal(out.labels["vs.model"], undefined);
+      assert.equal(out.labels["vs.model"], out.config.model);
+      assert.ok(out.labels["vs.model"]);
     } finally {
       h.stop?.();
     }

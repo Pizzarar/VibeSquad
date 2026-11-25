@@ -432,6 +432,9 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
 
     const { handle } = createHarness();
     handle.setPaseo(paseo);
+    // idea-768: the notice names the real target (title and lane), not an ord label
+    const NOTICE18 =
+      "ord18 (lead-ord) is retired; delivered to ★ SITE POLISH ord19 (site-polish lead). Send to lead-ord or `vs who lead` next time.";
     try {
       const res = await handle.sendAgentPrompt(
         {
@@ -444,11 +447,11 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
       assert.ok(res);
       assert.equal(res.redirected, true);
       assert.equal(res.agentId, "lead-ord19");
-      assert.equal(res.notice, "ord18 is retired; delivered to ord19");
+      assert.equal(res.notice, NOTICE18);
 
       assert.deepEqual(sentMessages, [
         { to: "lead-ord19", text: "Approved Gate 14 plan ready for execution." },
-        { to: "bs-sender", text: "ord18 is retired; delivered to ord19" },
+        { to: "bs-sender", text: NOTICE18 },
       ]);
 
       const siteLogPath = join(env.vsHome, "teams", "site", "log.jsonl");

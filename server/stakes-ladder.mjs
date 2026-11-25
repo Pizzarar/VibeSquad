@@ -13,7 +13,7 @@ export const DEFAULT_STAKES_LADDER = {
   claude: {
     "tierA-security": { model: "claude-opus-5-5", effort: "high" },
     "tierA-invariant": { model: "claude-opus-5-5", effort: "high" },
-    mechanical: { model: "claude-sonnet-5-5", effort: "low" },
+    mechanical: { model: "claude-haiku-5-5", effort: "low" }, // A2 idea-986: was sonnet/low
   },
   "antigravity-cli": {
     "tierA-security": { model: GEMINI_TOP_MODEL, effort: "high" },
@@ -100,7 +100,7 @@ export const DEFAULT_TIER_LADDER = deepFreeze({
   claude: {
     top: { model: "claude-opus-5-5", effort: "high" },
     mid: { model: "claude-sonnet-5-5", effort: "medium" },
-    cheap: { model: "claude-sonnet-5-5", effort: "low" },
+    cheap: { model: "claude-haiku-5-5", effort: "low" }, // A2 idea-986: was sonnet/low
   },
   "antigravity-cli": {
     top: { model: GEMINI_TOP_MODEL, effort: "high" },
@@ -135,6 +135,7 @@ export function routeProviderFamily(raw) {
 }
 
 /** The tier stakes force, or null when the role's default tier applies (normal / missing / unknown). */
+// Parity with src/roleSpawn.ts tierFor pinned by test/walk-mapping-parity.test.mjs.
 export function stakesTier(stakes) {
   const s = normalizeStakes(stakes);
   if (s === "tierA-security" || s === "tierA-invariant") return "top";

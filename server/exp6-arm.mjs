@@ -1,5 +1,5 @@
 // Normal implementer arm pick (PLAN_PER_ROLES_LADDER_1125 R0; grew out of the EXP6 pick, idea-440). The server alternates
-// stakes=normal implementer spawns per lane between the Claude Sonnet arm (`Implement - Sonnet`, wf=sonnet) and the Gemini
+// (weighted 2:1 Neon:Sonnet, ARM_WEIGHTS, @per G1) stakes=normal implementer spawns per lane between the Claude Sonnet arm (`Implement - Sonnet`, wf=sonnet) and the Gemini
 // Neon arm (`Implement - Gemini (trial)`, wf=neon), so the alternation survives lead handoffs and feeds EXP10/EXP11.
 // DSP (`Work Order - DSP`) is never an arm: it runs only when asked for by name or reached by provider failover.
 // Every pick is visible: decideArm returns { arm, reason, swapped, profile } and spawn_worker prints/stamps it (no silent swap).
@@ -28,6 +28,12 @@ export const ARMS = {
 };
 /** The live arm set for stakes=normal implementer spawns (order = tie-break order). [] turns the alternation off. */
 export const IMPLEMENTER_ARMS = ["sonnet", "neon"];
+/** Alternation weights (@per G1): picks go to the uncapped arm with the lowest picks/weight, so Neon gets 2 of every 3. */
+export const ARM_WEIGHTS = { sonnet: 1, neon: 2 };
+const weightOf = (weights, wf) => {
+  const w = weights?.[wf];
+  return typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1;
+};
 /** Label stamped on every picked spawn: the arm it was picked for (countArms counts these, so both arms start at 0). */
 export const ARM_LABEL = "vs.arm";
 /** Label carrying the pick reason (alternation | capped:<family> | pin | wf | override | fail-open). */
@@ -58,9 +64,14 @@ export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP
  * parsed THROWS (readCappedProviders would read it as "no caps"): decideArm then treats the arm as capped and keeps the
  * requested profile, so a corrupt cap file never swaps a spawn onto a dead provider (idea-703). Other callers of
  * provider-failover.mjs keep their behaviour.
+ * G2 r1 (@per, idea-1012): families >=95% on live quota (runner/limits.jsonl, limits-read liveQuotaUsage, the same source
+ * and isProviderOverQuota test the spawn hook fails over on) are added as caps, so the arm the hook would hop off is never
+ * picked: the pick goes to the other arm with reason capped:<family>, and vs.arm / wf name the provider that actually runs.
+ * A `vs cap` entry for the family wins (kept as is). The quota read never throws (unreadable = no quota caps).
  */
 export async function readArmCaps({ env = process.env } = {}) {
-  const { readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
+  const { isProviderOverQuota, normalizeProviderFamily, readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
+  const { liveQuotaUsage } = await import("./limits-read.mjs");
   const cappedProvidersPath = env?.VIBESQUAD_CAPPED_PROVIDERS_PATH || (env?.VIBESQUAD_HOME ? join(env.VIBESQUAD_HOME, "capped-providers.json") : undefined);
   const path = resolveCappedProvidersPath(cappedProvidersPath ? { cappedProvidersPath } : {});
   if (existsSync(path)) {
@@ -68,7 +79,15 @@ export async function readArmCaps({ env = process.env } = {}) {
     const map = doc && typeof doc === "object" && !Array.isArray(doc) ? (doc.capped ?? doc) : null;
     if (!map || typeof map !== "object" || Array.isArray(map)) throw new Error(`capped-providers.json: unexpected shape at ${path}`);
   }
-  return readCappedProviders({ useDiskCaps: true, cappedProvidersPath: path });
+  const caps = { ...readCappedProviders({ useDiskCaps: true, cappedProvidersPath: path }) };
+  const quota = liveQuotaUsage({ home: env?.VIBESQUAD_HOME || undefined });
+  for (const entry of quota) {
+    const fam = normalizeProviderFamily(entry?.id);
+    if (!fam || caps[fam]) continue;
+    const q = isProviderOverQuota(fam, quota, undefined, { ignoreDiskCaps: true });
+    if (q.overQuota) caps[fam] = { reason: q.reason, quota: true };
+  }
+  return caps;
 }
 
 /** The capped family key of `wf`'s provider in the capped map/array, or "" (not capped). */
@@ -106,6 +125,15 @@ export function armProvider(wf) {
 /** Ladder tier a `vs.arm` label value routes a role-name spawn onto ("" = role default tier). */
 export function armTier(wf) {
   return ARMS[String(wf ?? "").trim().toLowerCase()]?.tier ?? "";
+}
+
+/**
+ * Route options a `vs.arm` label gives a role-name spawn: only arm-eligible roles (`Implement`, via ROLE_ARM_SOURCES)
+ * take the arm's provider/tier; Review, Pre-check, Planner... never do, even when they inherit a vs.arm label.
+ */
+export function armRouteFor(roleName, wf) {
+  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "" };
+  return { prefer: armProvider(wf), tier: armTier(wf) };
 }
 
 /** EXP6 history: open until a verdict is logged or the end date passes. `endIso` is VS_EXP6_END (or the default). */
@@ -164,12 +192,12 @@ export function countArms(agents, { lane, team = "", arms = IMPLEMENTER_ARMS } =
   return counts;
 }
 
-/** The uncapped arm with the fewest picks; a tie keeps the requested arm, else the first in `arms` order. */
-export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = new Set() } = {}) {
+/** The uncapped arm with the lowest picks/weight; a tie keeps the requested arm, else the first in `arms` order. */
+export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = new Set(), weights = ARM_WEIGHTS } = {}) {
   let best = null;
   for (const wf of arms) {
     if (capped.has(wf)) continue;
-    const n = counts?.[wf] ?? 0;
+    const n = (counts?.[wf] ?? 0) / weightOf(weights, wf);
     if (!best || n < best.n || (n === best.n && wf === requested.wf)) best = { wf, n };
   }
   return best ? ARMS[best.wf] : null;
@@ -182,7 +210,7 @@ export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = n
  * "capped:<family>" (a capped arm was skipped; both capped -> requested kept), "fail-open" (agent list or cap probe threw:
  * requested kept). `capProbe` -> capped map/array (readArmCaps). Never throws.
  */
-export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, capProbe, arms = IMPLEMENTER_ARMS }) {
+export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, capProbe, arms = IMPLEMENTER_ARMS, weights = ARM_WEIGHTS }) {
   if (asLead || !norm(lane)) return null;
   if ((norm(stakes) || "normal") !== "normal") return null;
   const requested = armOfProfile(profile);
@@ -228,10 +256,10 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   } catch {
     return keep("fail-open");
   }
-  const arm = pickArm(requested, counts, { arms: set, capped: new Set(capped.keys()) });
+  const arm = pickArm(requested, counts, { arms: set, capped: new Set(capped.keys()), weights });
   if (!arm) return keep(`capped:${[...capped.values()].join("+")}`, { counts, capped: true }); // every arm capped
   // The reason names a cap only when it changed the outcome (the uncapped pick was a capped arm).
-  const free = pickArm(requested, counts, { arms: set });
+  const free = pickArm(requested, counts, { arms: set, weights });
   const reason = free.wf !== arm.wf ? `capped:${capped.get(free.wf)}` : "alternation";
   const swapped = arm.wf !== requested.wf;
   // A role spawn keeps its role name: the arm only picks the provider (`provider`), the ladder picks the model.

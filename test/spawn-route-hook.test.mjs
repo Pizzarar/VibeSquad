@@ -13,8 +13,10 @@ import { LEGACY_PROFILE_ALIASES, legacyProfileRole } from "../server/profiles.mj
 import { ROLE_TABLE } from "../server/role-route.mjs";
 import { saveRoles } from "../server/roles-api.mjs";
 import {
+  LEGACY_DEEPSEEK_PIN_ROUTES,
   ROUTE_OVERRIDE_LABEL,
   cappedFamilies,
+  legacyDeepSeekReroute,
   legacyRouteMeta,
   legacyShadowMismatch,
   roleNameHit,
@@ -26,7 +28,7 @@ import {
 } from "../server/spawn-route.mjs";
 import { DEFAULT_TIER_LADDER, STAKES_VALUES } from "../server/stakes-ladder.mjs";
 import { ROUTE_OVERRIDE_ENV, isForeignModel } from "../server/route-override.mjs";
-import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, today } from "./helpers/route-golden.mjs";
+import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, a2Rerouted, row, today, todayHook } from "./helpers/route-golden.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -114,10 +116,16 @@ test(
           for (const s of stakesList) {
             const at = `${name} caps=[${caps}] stakes=${s}`;
             const out = await h.spawn({ provider: "claude" }, { labels: LABELS(name, s ? { stakes: s } : {}) });
-            assert.deepEqual(landed(out), today(name, caps, s), at);
+            assert.deepEqual(landed(out), todayHook(name, caps, s), at);
             const metric = String(out.labels?.[ROUTE_LABEL] ?? "");
             assert.match(metric, /reason=\S*legacy-name/, `${at}: ${metric}`);
             assert.doesNotMatch(metric, /shadow=/, `${at}: ${metric}`);
+            if (a2Rerouted(name, caps)) {
+              // A2: a DeepSeek-pinned old name with opencode capped runs (and is labelled) as Implement.
+              assert.equal(out.labels.profile, "Implement", `${at}: label`);
+              n++;
+              continue;
+            }
             // Old names keep an old profile label (failover relabels to the landed counterpart, as today).
             assert.ok(legacyProfileRole(out.labels.profile), `${at}: label ${out.labels.profile}`);
             if (!caps.length) assert.equal(legacyProfileRole(out.labels.profile).name, legacyProfileRole(name).name, at);
@@ -144,7 +152,7 @@ test(
         [impl.labels.provider, impl.labels.model, impl.labels.tier, impl.labels.stakes],
         [C, "claude-sonnet-5-5", "mid", "normal"],
       );
-      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement$/);
+      assert.match(impl.labels[ROUTE_LABEL], /reason=default tier=mid role=implement why=ladder$/);
       assert.doesNotMatch(impl.labels[ROUTE_LABEL], /legacy-name/);
 
       const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "tierA-invariant" }) });
@@ -171,6 +179,88 @@ test(
   }),
 );
 
+// A2 (idea-986, PLAN_PER_ROLES_LADDER_1125): mechanical walks Gemini Flash > Claude Haiku > opencode; an old name that
+// pins DeepSeek runs as Implement while opencode is capped (metric keeps legacy-name, tierA stakes kept).
+test(
+  "A2: a mechanical role spawn lands on Gemini Flash; with Gemini capped on Claude Haiku; DeepSeek only when both are capped",
+  withEnv(async () => {
+    const cases = [
+      [[], row(A, "gemini-3.8-flash", "medium", "accept-edits"), "reason=ladder tier=cheap role=implement why=ladder"],
+      // The metric names one reason for a role route; stakes (ladder) win over failover, as for tierA + a capped claude.
+      // R2: the shown reason (why=) still says failover when a capped provider was skipped.
+      [[A], row(C, "claude-haiku-5-5", "low", "auto"), "reason=ladder tier=cheap role=implement why=failover"],
+      [[A, C], row(O, "deepseek/deepseek-flash", "high", "build"), "reason=ladder tier=cheap role=implement why=failover"],
+    ];
+    for (const [caps, want, metric] of cases) {
+      const h = harness({ cappedProviders: capMap(caps) });
+      try {
+        const out = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "mechanical" }) });
+        assert.deepEqual(landed(out), want, `caps=[${caps}]`);
+        assert.deepEqual([out.labels.profile, out.labels.tier, out.labels.stakes], ["Implement", "cheap", "mechanical"], `caps=[${caps}]`);
+        assert.match(out.labels[ROUTE_LABEL], new RegExp(`^stakes=mechanical model=${want.model} effort=${want.effort} ${metric}$`), `caps=[${caps}]`);
+      } finally {
+        h.stop?.();
+      }
+    }
+  }),
+);
+
+test(
+  "A2: Work Order - DSP / Coder / Mechanical - DSF with opencode capped land on Gemini Flash as Implement, reason=legacy-name; uncapped = today",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: capMap([O]) });
+    try {
+      for (const name of ["Work Order - DSP", "Coder", "Mechanical - DSF"]) {
+        const out = await h.spawn({ provider: "claude", title: `A2-${name}` }, { labels: LABELS(name) });
+        assert.deepEqual(landed(out), row(A, "gemini-3.8-flash", "medium", "accept-edits"), name);
+        assert.equal(out.labels.profile, "Implement", name);
+        // The stakes label keeps the caller's stakes; tier=cheap shows the reroute (lead ruling 11-25).
+        assert.deepEqual([out.labels.stakes, out.labels.tier], ["normal", "cheap"], name);
+        assert.match(out.labels[ROUTE_LABEL], /^stakes=normal model=gemini-3\.8-flash effort=medium reason=\S*legacy-name tier=cheap role=implement why=legacy-name$/, name);
+        // A label that still reads the old name at agent.created is relabelled, not refused.
+        const agent = { id: `a2-${name}`, title: `A2-${name}`, cwd: CWD, provider: out.config.provider, model: out.config.model, labels: LABELS(name) };
+        const paseo = { getAgent: async () => agent, agents: { ref: () => ({ refresh: async () => ({ agent }), archive: async () => {} }), list: async () => ({ entries: [{ agent }] }) } };
+        await h.onCreated({ agent }, { paseo });
+        assert.deepEqual(h.calls.refused, [], name);
+      }
+      // A Tier A request through a DeepSeek name keeps tierA (lead ruling 11-25): Opus high, never the cheap rung.
+      const top = await h.spawn({ provider: "claude" }, { labels: LABELS("Work Order - DSP", { stakes: "tierA-invariant" }) });
+      assert.deepEqual(landed(top), row(C, "claude-opus-5-5", "high", "auto"));
+      assert.deepEqual([top.labels.profile, top.labels.stakes, top.labels.tier], ["Implement", "tierA-invariant", "top"]);
+      assert.match(top.labels[ROUTE_LABEL], /legacy-name/);
+    } finally {
+      h.stop?.();
+    }
+    // opencode not capped (only a quota-free map, or other families capped): today's DeepSeek walk, old label kept.
+    for (const caps of [[], [A], [C, A]]) {
+      const u = harness({ cappedProviders: capMap(caps) });
+      try {
+        const out = await u.spawn({ provider: "claude" }, { labels: LABELS("Work Order - DSP") });
+        assert.deepEqual(landed(out), today("Work Order - DSP", caps, undefined), `caps=[${caps}]`);
+        assert.equal(out.config.provider, O, `caps=[${caps}]`);
+        assert.equal(legacyProfileRole(out.labels.profile).name, "Work Order - DSP", `caps=[${caps}]`);
+      } finally {
+        u.stop?.();
+      }
+    }
+  }, [...USER_PROFILES, { name: "Mechanical - DSF", role: "worker", provider: O, model: "deepseek/deepseek-flash", modeId: "build", thinkingOptionId: "high" }]),
+);
+
+test("A2 units: legacyDeepSeekReroute fires only for DeepSeek-pinned old names, opencode capped in the cap map, profile still on opencode", () => {
+  const dsp = { provider: O, model: "deepseek/deepseek-v4-pro" };
+  const capped = { opencode: { capped: true } };
+  assert.deepEqual(legacyDeepSeekReroute("Work Order - DSP", { capped, profile: dsp }), { name: "Work Order - DSP", alias: null, role: "implement", stakes: "mechanical" });
+  assert.deepEqual(legacyDeepSeekReroute("Coder", { capped, profile: dsp }), { name: "Work Order - DSP", alias: "Coder", role: "implement", stakes: "mechanical" });
+  assert.equal(legacyDeepSeekReroute("Mechanical - DSF", { capped, profile: { provider: O } }).stakes, "mechanical");
+  for (const s of ["tierA-invariant", "tierA-security"]) assert.equal(legacyDeepSeekReroute("Work Order - DSP", { capped, profile: dsp, stakes: s }).stakes, s);
+  for (const s of ["normal", "mechanical", "bogus", undefined]) assert.equal(legacyDeepSeekReroute("Work Order - DSP", { capped, profile: dsp, stakes: s }).stakes, "mechanical");
+  assert.equal(legacyDeepSeekReroute("Work Order - DSP", { capped: {}, profile: dsp }), null, "opencode not capped");
+  assert.equal(legacyDeepSeekReroute("Work Order - DSP", { capped: { claude: { capped: true } }, profile: dsp }), null, "other family capped");
+  assert.equal(legacyDeepSeekReroute("Work Order - DSP", { capped, profile: { provider: C, model: "claude-sonnet-5-5" } }), null, "owner-edited profile off opencode");
+  for (const n of ["Implement - Sonnet", "Implement", "Senior Reasoning - DSP", "Lead - Claude", "nope"]) assert.equal(legacyDeepSeekReroute(n, { capped, profile: dsp }), null, n);
+  assert.deepEqual(Object.keys(LEGACY_DEEPSEEK_PIN_ROUTES), ["Work Order - DSP", "Mechanical - DSF"]);
+});
+
 // H1 (R1 fix, idea-974; live case 13:01Z: Review provider=claude model=claude-sonnet-5-5 tierA-invariant ran gemini-4-neon
 // reason=ladder). A role-name spawn's caller provider/model (spawn_worker's ROUTE_OVERRIDE_LABEL) win; stakes pick the
 // rung of THAT provider's ladder unless a model is given; a cap still hops; the metric says reason=override.
@@ -188,7 +278,7 @@ test(
       assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "high", modeId: "auto" });
       assert.equal(out.labels.profile, "Review");
       assert.deepEqual([out.labels.provider, out.labels.model, out.labels.tier], [C, "claude-sonnet-5-5", "top"]);
-      assert.match(out.labels[ROUTE_LABEL], /^stakes=tierA-invariant model=claude-sonnet-5-5 effort=high reason=override tier=top role=review$/);
+      assert.match(out.labels[ROUTE_LABEL], /^stakes=tierA-invariant model=claude-sonnet-5-5 effort=high reason=override tier=top role=review why=override$/);
     } finally {
       h.stop?.();
     }
@@ -200,7 +290,7 @@ test(
   withEnv(async () => {
     const h = harness({ cappedProviders: {} });
     // Review's default tier is mid; stakes force top (tierA-*) / cheap (mechanical) on the CALLER's provider's ladder.
-    const rung = { normal: ["claude-sonnet-5-5", "medium"], mechanical: ["claude-sonnet-5-5", "low"], "tierA-invariant": ["claude-opus-5-5", "high"], "tierA-security": ["claude-opus-5-5", "high"] };
+    const rung = { normal: ["claude-sonnet-5-5", "medium"], mechanical: ["claude-haiku-5-5", "low"] /* A2 idea-986 */, "tierA-invariant": ["claude-opus-5-5", "high"], "tierA-security": ["claude-opus-5-5", "high"] };
     try {
       for (const s of STAKES_VALUES) {
         const [model, effort] = rung[s];
@@ -220,7 +310,7 @@ test(
           { labels: LABELS("Review", { stakes: s, "vs.profile-derived": "thinking", ...OV("claude", "claude-sonnet-5-5") }) },
         );
         assert.deepEqual(landed(both), { provider: C, model: "claude-sonnet-5-5", effort, modeId: "auto" }, `provider+model ${s}`);
-        assert.match(both.labels[ROUTE_LABEL], /reason=override tier=\S+ role=review$/, `provider+model ${s}`);
+        assert.match(both.labels[ROUTE_LABEL], /reason=override tier=\S+ role=review why=override$/, `provider+model ${s}`);
 
         // Model only: the model's family is the provider.
         const m = await h.spawn({ provider: A, model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: s, ...OV("", "claude-sonnet-5-5") }) });
@@ -277,7 +367,7 @@ test(
         // The caller's model rides in the config too (not profile-derived): it must not come back as an explicit model.
         const out = await h.spawn({ provider: prov, model }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV(prov, model) }) });
         assert.deepEqual(landed(out), { provider: fam, model: top(fam).model, effort: top(fam).effort, modeId: mode }, at);
-        assert.match(out.labels[ROUTE_LABEL], /reason=override tier=top role=review model-dropped=family$/, at);
+        assert.match(out.labels[ROUTE_LABEL], /reason=override tier=top role=review model-dropped=family why=override$/, at);
       }
       // Same family, and opencode's own vendor/model ids, are kept (no model-dropped).
       const same = await h.spawn({ provider: "claude", model: "claude-sonnet-5-5" }, { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) });
@@ -331,7 +421,7 @@ test(
         { labels: LABELS("Review", { stakes: "tierA-invariant", ...OV("claude", "claude-sonnet-5-5") }) },
       );
       assert.deepEqual([out.config.provider, out.config.model, out.config.thinkingOptionId], [A, "gemini-4-neon", "high"]);
-      assert.match(out.labels[ROUTE_LABEL], /reason=override\+failover tier=top role=review explicit-capped=dropped$/);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override\+failover tier=top role=review explicit-capped=dropped why=failover$/);
     } finally {
       h.stop?.();
     }
@@ -340,7 +430,7 @@ test(
     try {
       const out = await all.spawn({ provider: "claude" }, { labels: LABELS("Review", OV("claude")) });
       assert.equal(out.config.provider, C);
-      assert.match(out.labels[ROUTE_LABEL], /reason=override tier=mid role=review$/);
+      assert.match(out.labels[ROUTE_LABEL], /reason=override tier=mid role=review why=override$/);
     } finally {
       all.stop?.();
     }
@@ -500,8 +590,9 @@ test("spawn-route units: roleSpawnConfig (role names only; caps walk the provide
   assert.equal(lead.profile.role, "lead");
   const capped = roleSpawnConfig("lead", { profiles: USER_PROFILES, usageList: [{ id: "claude", status: "exhausted", usedPct: 100 }] });
   assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
+  // A2 (idea-986): mechanical walks the cheap order (Gemini Flash first), also for the DSP-first Work Order role.
   const wo = roleSpawnConfig("Work Order", { profiles: USER_PROFILES, stakes: "mechanical" });
-  assert.equal(wo.spawnCfg.provider, O);
+  assert.deepEqual([wo.spawnCfg.provider, wo.spawnCfg.model], [A, "gemini-3.8-flash"]);
   assert.equal(wo.route.tier, "cheap");
   assert.equal(wo.profile.role, "worker");
 });
@@ -519,8 +610,10 @@ test(
     assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
 
     const old = resolveLeadProfile({ provider: "claude", labels: { profile: "Lead - Claude" } }, profilesPath, { ...noDisk, cappedProviders: ["claude"] });
-    assert.equal(old.profileName, "Lead - Claude");
-    assert.deepEqual([old.spawnCfg.provider, old.spawnCfg.model], [C, "claude-opus-5-5"], "old names: the hook's walk decides, as today");
+    // @per G2 L1: a stored name with its provider capped fails over here (same walk as the hook), so prompt + labels match.
+    assert.equal(old.profileName, "Lead - Gemini");
+    assert.equal(old.spawnCfg.provider, A, "stored names: a `vs cap` fails over on the successor path, not only in the hook");
+    assert.equal(old.failover?.from, "Lead - Claude");
   }),
 );
 
@@ -824,7 +917,7 @@ test(
         { labels: LABELS("Implement") },
       );
       assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
-      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement$/);
+      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement why=ladder$/);
       assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
     } finally {
       h.stop?.();
@@ -908,6 +1001,13 @@ test(
       // R8: vs.arm=flash routes a role-name Implement spawn onto the antigravity-cli cheap rung (gemini-3.8-flash).
       const f = await run({ "vs.arm": "flash", "vs.model": "gemini-3.8-flash" });
       assert.deepEqual([f.config.provider, f.config.model, f.labels.profile], [A, "gemini-3.8-flash", "Implement"]);
+      // armtier-gate: a non-implementer role that merely carries vs.arm gets neither the arm's provider nor the cheap tier.
+      const rv = (arm) => h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal", "vs.arm": arm }) });
+      const base = await h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal" }) });
+      for (const arm of ["flash", "neon"]) {
+        const r = await rv(arm);
+        assert.deepEqual([r.config.provider, r.config.model], [base.config.provider, base.config.model], `Review + vs.arm=${arm} routes like plain Review`);
+      }
     } finally {
       h.stop?.();
     }

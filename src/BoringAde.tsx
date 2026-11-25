@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
@@ -31,6 +31,9 @@ import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
 import { useStorybookPresent } from "./StorybookView";
+import { CrunchToggle } from "./CrunchToggle";
+import { mainView } from "./projectOrder";
+import { knownFolderNames, projectOrder } from "./projectOrderActions";
 import { UsageDashboard } from "./UsageDashboard";
 
 export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
@@ -821,12 +824,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const badge = (n: number, err = false) => (n > 0 ? <span className={`badge boring-badge${err ? " err" : ""}`}>{n}</span> : null);
   const memberAgent = (id: string | null) => (id ? agents.get(id) : undefined);
   const projectIsOpen = (id: string) => projectOpen[id] ?? (id === activeTeamId || id === sel.teamId);
-  const toggleProject = (id: string) => setProjectOpen((o) => ({ ...o, [id]: !projectIsOpen(id) }));
   /** Clicking a project's name opens its Overview (switching Squad if needed); only the chevron expands/collapses. */
   const openProject = (id: string) => {
     if (id !== activeTeamId) onSelectSquad(id);
     // Multiple projects can stay expanded: keep the one we leave open.
-    setProjectOpen((o) => ({ ...o, [activeTeamId]: o[activeTeamId] ?? true, [id]: true }));
+    setProjectOpen((o) => ({ ...o, [activeTeamId]: activeTeamId === mainV?.team.id ? o[activeTeamId] : o[activeTeamId] ?? true, [id]: true }));
     setMode("project");
   };
   const isOn = (v: TeamView, key: string) => sel.rowKey === `${v.team.id}|${key}`;
@@ -1010,39 +1012,79 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     { label: "New folder…", separatorBefore: true, run: () => { const n = window.prompt("New folder name")?.trim(); if (n) void folderOp({ op: "createFolder", name: n }); } },
   ];
   const stat = (v: TeamView) => { const mm = v.team.id === activeTeamId ? model : boringSidebarModel(v, now); return { needsYou: mm.totalNeedsYou, err: mm.projectErr }; };
-  const partition = partitionViews(allViews, folders, stat);
+  // PLAN_PROJECT_ORDER: the list keeps teams.json order (buildTeamViews); the Main project is lifted out and pinned above the tree.
+  const mainV = mainView(allViews);
+  const partition = partitionViews(mainV ? allViews.filter((v) => v !== mainV) : allViews, folders, stat);
+  const knownF = knownFolderNames(folders);
+  /** O2 drag-reorder: a grip drag (pointer events, so mouse and touch behave the same) over rows of the same folder/list. */
+  const [drag, setDrag] = useState<{ id: string; over: string | null; where: "before" | "after" } | null>(null);
+  const dragRef = useRef(drag);
+  /** Ref is set synchronously so a cancel (Escape) beats the pointerup that follows it. */
+  const setDragNow = (d: typeof drag) => { dragRef.current = d; setDrag(d); };
+  const gripRef = useRef<{ el: HTMLElement; pid: number } | null>(null);
+  const dragCancel = () => { const g = gripRef.current; gripRef.current = null; setDragNow(null); try { g?.el.releasePointerCapture(g.pid); } catch {} };
+  useEffect(() => {
+    if (!drag) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); dragCancel(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [drag !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+  const orderGroup = (v: TeamView) => (v.team.folder && knownF.has(v.team.folder) ? v.team.folder : "");
+  const dragMove = (e: PointerEvent<HTMLElement>, v: TeamView) => {
+    if (!dragRef.current) return;
+    const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-order-id]");
+    if (!hit || hit.dataset.orderId === v.team.id || hit.dataset.orderGroup !== orderGroup(v)) { setDragNow({ id: v.team.id, over: null, where: "before" }); return; }
+    const r = hit.getBoundingClientRect();
+    setDragNow({ id: v.team.id, over: hit.dataset.orderId ?? null, where: e.clientY < r.top + r.height / 2 ? "before" : "after" });
+  };
+  const dragEnd = (commit: boolean) => {
+    const d = dragRef.current;
+    gripRef.current = null;
+    setDragNow(null);
+    if (commit && d?.over) void projectOrder.drop(d.id, d.over, d.where, knownF);
+  };
   const awakeViews = filterAwakeViews(allViews, folders);
   const activeAsleep = view ? isViewAsleep(view, folders) : false;
   // B13b: the living sky reacts to Squad state; an asleep project is always idle.
   const squadState: "idle" | "busy" = view && !activeAsleep && (view.running ?? 0) > 0 ? "busy" : "idle";
-  const renderProject = (v: TeamView) => {
+  const projectLanes = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
     const active = v.team.id === activeTeamId;
-    const open = projectIsOpen(v.team.id);
+    return (
+          <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
+          {trinityCard(v, m)}
+          <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
+          {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
+          {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+        </div>
+    );
+  };
+  const DROP_CLS = { before: "drop-before", after: "drop-after" } as const;
+  const renderProject = (v: TeamView, isMain = false) => {
+    const active = v.team.id === activeTeamId;
+    const open = isMain ? (projectOpen[v.team.id] ?? false) : projectIsOpen(v.team.id); // the pinned Main row starts compact
     const m = active ? model : boringSidebarModel(v, now);
     // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
     const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
     return (
-      <div key={v.team.id} className={open ? "boring-project-block open" : "boring-project-block"}>
-        <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}`} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
-          {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
+      <div key={v.team.id} className={[open ? "boring-project-block open" : "boring-project-block", isMain && "is-main", drag?.over === v.team.id && DROP_CLS[drag.where], drag?.id === v.team.id && "dragging"].filter(Boolean).join(" ")} data-order-id={isMain ? undefined : v.team.id} data-order-group={orderGroup(v)} data-testid={isMain ? "boring-main-project" : undefined}>
+        <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}` + (isMain ? " boring-main-line" : "")} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
+          {!isMain && (
+            <span className="boring-drag-grip" aria-hidden="true" title="Drag to reorder (or ⋯ → Move up / Move down)" data-testid={`boring-project-grip-${v.team.id}`} onPointerDown={(e) => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); gripRef.current = { el: e.currentTarget, pid: e.pointerId }; setDragNow({ id: v.team.id, over: null, where: "before" }); }} onPointerMove={(e) => dragMove(e, v)} onPointerUp={() => dragEnd(true)} onPointerCancel={() => dragEnd(false)} onLostPointerCapture={() => { if (dragRef.current) dragEnd(false); }}>⠿</span>
+          )}
+          {chevronCol(open, () => setProjectOpen((o) => ({ ...o, [v.team.id]: !open })), v.team.name, `boring-project-toggle-${v.team.id}`)}
           <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
             <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
+            {isMain && <img className="boring-bust-img boring-main-bust" src={bustUrl("riffbot", theme)} alt="" width={24} height={24} aria-hidden="true" />}
             <span className="boring-project-name" title={v.team.name}>{v.team.name}</span>
             {!open && badge(m.totalNeedsYou, m.projectErr)}
           </button>
+          {isMain && <button type="button" className="boring-main-open" data-testid="boring-main-open" title={`Open ${v.team.name}'s Buddy chat`} aria-label={`Open ${v.team.name} Buddy chat`} onClick={() => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id)}>Open</button>}
           <button type="button" className="boring-row-menu-btn" data-testid={`boring-project-menu-${v.team.id}`} aria-haspopup="menu" aria-label={`${v.team.name} actions`} title="Project actions" onClick={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>⋯</button>
           {active && (
             <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>
           )}
         </div>
-        {open && (
-          <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
-            {trinityCard(v, m)}
-            <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
-            {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
-            {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
-          </div>
-        )}
+        {open && projectLanes(v, m)}
       </div>
     );
   };
@@ -1062,8 +1104,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <span className="boring-section-label">Projects</span>
           <button type="button" className="boring-icon-btn" data-testid="boring-new-project-btn" title="New project" aria-label="New project" onClick={onNewSquad}>+</button>
         </div>
+        {mainV && <div className="boring-main-pin" data-testid="boring-main-pin">{renderProject(mainV, true)}</div>}
         <div className="boring-project-tree" data-testid="boring-project-tree">
-          {partition.activeViews.map(renderProject)}
+          {partition.activeViews.map((v) => renderProject(v))}
           {partition.folderGroups.map((g) => {
             const slug = folderSlug(g.folder.name);
             const fOpen = openFolders[g.folder.name] === true;
@@ -1084,14 +1127,14 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                 </div>
                 {fOpen && (
                   <div className="boring-folder-projects" data-testid={`boring-folder-projects-${slug}`}>
-                    {g.views.map(renderProject)}
+                    {g.views.map((v) => renderProject(v))}
                     {g.views.length === 0 && <p className="boring-muted">No projects.</p>}
                   </div>
                 )}
               </div>
             );
           })}
-          {views.length === 0 && !view && <span className="boring-project-name">No project</span>}
+          {views.length === 0 && !view && !mainV && <span className="boring-project-name">No project</span>}
         </div>
         <div className="boring-sidebar-footer" data-testid="boring-sidebar-footer">
           <button type="button" className={`boring-footer-btn${mode === "usage" ? " on" : ""}`} data-testid="boring-usage-btn" onClick={() => setMode("usage")}>
@@ -1153,6 +1196,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
               </button>
             )}
+            {/* Last, so it stays put when Split/Details appear with an open agent (UX R26 n1). */}
+            {view && <CrunchToggle key={view.team.id} teamId={view.team.id} variant="boring" />}
           </div>
         </header>
         {view && activeAsleep && (

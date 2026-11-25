@@ -126,7 +126,7 @@ export function isReviewerAgent(agent) {
   const labels = agent?.labels ?? {};
   const profile = String(labels.profile ?? agent?.profile ?? "").trim();
   const title = String(agent?.title ?? "").trim();
-  // UX Reviewer is not a code reviewer: its verdict is a plain PASS/FAIL line in docs/UX_REVIEW_R<n>.md (no H/M/L <hash>),
+  // UX Reviewer is not a code reviewer: its verdict is a plain PASS/FAIL line in docs/UX_REVIEW_<lane>_R<n>.md (no H/M/L <hash>),
   // so it is excluded here; its digest is not rewritten to NO-VERDICT and `vs verdict` says "not a reviewer".
   if (UX_REVIEWER_RE.test(profile) || UX_REVIEWER_RE.test(title)) return false;
   if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;

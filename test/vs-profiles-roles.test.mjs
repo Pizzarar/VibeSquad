@@ -34,12 +34,12 @@ test("vs profiles (no flags): roles + ladder, custom profiles, old names hidden 
   const r = run([]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^Roles \(spawn with profile=<label>; stakes picks the model/m);
-  assert.match(r.stdout, /^Planner · label=Planner · tier=mid · providers=claude>antigravity-cli>opencode$/m);
+  assert.match(r.stdout, /^Planner · label=Planner · tier=mid · claude=claude-sonnet-5-5\/medium > antigravity-cli=gemini-4-neon > opencode=\S+$/m);
   assert.match(r.stdout, /^Implement · label=Implement · tier=mid/m);
   assert.doesNotMatch(r.stdout, /Work Order/, "hidden role is not listed");
   assert.match(r.stdout, /^Tier ladder/m);
-  assert.match(r.stdout, /^Custom profiles:\nMy Custom · c1 · claude\/claude-sonnet-5-5 · mode=auto$/m);
-  assert.match(r.stdout, /^4 legacy aliases hidden \(--aliases\)$/m);
+  assert.match(r.stdout, /^Other profiles \(spawn by exact name;.*\):\n(?:.*\[built-in\]\n)*My Custom · c1 · claude\/claude-sonnet-5-5 · mode=auto\n/m);
+  assert.match(r.stdout, /^\d+ legacy aliases hidden \(--aliases\)$/m);
   for (const n of ["Lead - Claude", "Implement - Sonnet", "Planner - Sonnet"]) assert.equal(r.stdout.includes(n), false, n);
 });
 
@@ -72,6 +72,28 @@ test("vs profiles --role / --name / --json keep today's profile rows (lead hando
   const named = run(["--name", "planner"]);
   assert.match(named.stdout, /^Planner - Sonnet · /m);
   const js = JSON.parse(run(["--json"]).stdout);
-  assert.deepEqual(js.map((p) => p.name), ["Lead - Claude", "Lead - Gemini", "Implement - Sonnet", "Planner - Sonnet", "My Custom"]);
+  const stored = ["Lead - Claude", "Lead - Gemini", "Implement - Sonnet", "Planner - Sonnet", "My Custom"];
+  assert.deepEqual(js.map((p) => p.name).slice(0, 5), stored, "stored profiles first, then the server built-ins (idea-732)");
+  assert.ok(js.length > stored.length);
   assert.equal(js.find((p) => p.name === "Planner - Sonnet").aliasOf, "planner");
+});
+
+test("vs profiles lists server built-ins missing from a stored profiles.json, marked [built-in] (idea-732)", (t) => {
+  const { run } = setup(t);
+  const r = run([]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^UX Reviewer - Opus · .* \[built-in\]$/m);
+  assert.doesNotMatch(r.stdout, /^My Custom .*\[built-in\]/m, "custom profiles are not marked");
+  assert.match(r.stdout, /^Implement · label=Implement/m, "role names still listed as routing labels");
+  const j = JSON.parse(run(["--name", "UX Reviewer", "--json"]).stdout);
+  assert.ok(j.some((p) => p.name === "UX Reviewer - Opus"));
+});
+
+test("vs profiles roles carry their ladder rung per provider; --roles --json has rungs; no model-named profile is listed (idea-732)", (t) => {
+  const { run } = setup(t);
+  const j = JSON.parse(run(["--roles", "--json"]).stdout);
+  const impl = j.roles.find((x) => x.key === "implement");
+  assert.equal(impl.rungs.claude, j.ladder.claude[impl.tier].model + "/" + j.ladder.claude[impl.tier].effort);
+  const out = run([]).stdout;
+  assert.doesNotMatch(out, /^(Implement|Lead|Planner|Review) - \w+ · /m);
 });

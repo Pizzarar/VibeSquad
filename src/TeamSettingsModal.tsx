@@ -4,6 +4,7 @@ import { getUserName, loadDesktopStatus, loadUpdaterStatus, loadUserName, saveLa
 import { RunnerSettingsSection } from "./RunnerSettingsSection";
 import { PairDeviceModal } from "./PairDeviceModal";
 import { LadderEditorSection, RoleEditorSection } from "./RoleEditors";
+import { getCurrentSquadId } from "./currentSquad";
 import {
   AGENT_TYPE_NAME,
   BRAINSTORM_RESTART_DEFAULT,
@@ -208,6 +209,8 @@ export function TeamSettingsModal({
   // CLI added while the modal was open isn't mistaken for one the user deleted.
   const [base, setBase] = useState(snapshotTeams);
   const [teams, setTeams] = useState<TeamDef[]>(() => JSON.parse(JSON.stringify(base.teams)));
+  // Settings search "Crunch mode" lands on the current Squad's checkbox (first Squad when the current one is not listed).
+  const crunchTargetId = (teams.some((x) => x.id === getCurrentSquadId()) ? getCurrentSquadId() : teams[0]?.id) ?? null;
   const [msg, setMsg] = useDraft("settings:msg");
   const { profiles, installedProviders, schemaVersion } = useProfiles();
   // P5d C2: once profiles.json is v2 (a role was saved), the legacy editor is read-only: the server 409s role-changing writes.
@@ -879,14 +882,15 @@ export function TeamSettingsModal({
               Delete team
             </button>
           </div>
-          <label className="muted small" style={{ display: "block", margin: "6px 0" }}>
+          <label className="muted small" style={{ display: "block", margin: "6px 0" }} data-setting-id={t.id === crunchTargetId ? "crunch-mode" : undefined}>
             <input
               type="checkbox"
-              aria-label="Vibe mode"
+              data-crunch-check={t.id === crunchTargetId ? "" : undefined}
+              aria-label="Crunch mode"
               checked={t.vibeMode === true}
               onChange={(e) => patch(i, { vibeMode: e.target.checked })}
             />{" "}
-            Vibe mode: Buddy auto-dispatches bug fixes, approved plan blocks and parity gaps; features and outward actions wait in one digest
+            Crunch mode: lanes act on their leans until there's a tryable build; stops only for deletes, releases, money, outward actions
           </label>
           <div className="row2" data-setting-id={i === 0 ? "token-thresholds" : undefined}>
             <Field label="Brainstorm warn tokens (amber)">
