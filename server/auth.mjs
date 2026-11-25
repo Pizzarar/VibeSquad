@@ -354,7 +354,7 @@ export function lockDownVibesquadHome({ home = vibesquadHome(), platform = proce
   }
 }
 
-/** Creates (or reuses) ~/.vibesquad/tls/{ca,server}.{key,crt}. Rotates the CA if its name constraints lack private LAN ranges or host/ip. */
+/** Creates (or reuses) ~/.vibesquad/tls/{ca,server}.{key,crt}. Rotates the CA if its exact /32 name constraints no longer match host/ip (a LAN-IP change rotates only a LAN-only host's CA, idea-69). */
 export function ensureTls(cfg = netConfig()) {
   const { meshnetIp = detectMeshnetIp(), meshnetHost = DEFAULT_MESHNET_HOST, lanIp = detectLanIp() } = cfg ?? {};
   const dir = tlsDir();
@@ -385,16 +385,18 @@ export function ensureTls(cfg = netConfig()) {
       leafText = openssl(["x509", "-in", f("server.crt"), "-noout", "-text"]);
     } catch {}
   }
-  const leafHasLanIp = !lanIp || leafText.includes(lanIp);
-
   const wantCa = { host: meshnetHost, ip: meshnetIp ?? "", lanIp: lanIp ?? "", v: 4 };
+  // idea-69: on a Meshnet host the CA is pinned by the phone (VsTrust.kt `caFp`), so a LAN-IP change (DHCP, Wi-Fi switch,
+  // unplugged) must not rotate it: the CA is kept, with its original meta.ca.lanIp, while host + Meshnet IP + v still match.
+  // A LAN-only host (no Meshnet IP) still rotates when its only IP changes. nameConstraints stay exact /32 (SECURITY.md).
+  const caLanIpOk = okMeshIp ? true : meta.ca?.lanIp === wantCa.lanIp; // idea-69 no-rotate guard
   const caOk =
     existsSync(f("ca.crt")) &&
     existsSync(f("ca.key")) &&
     caHasLanConstraints &&
     meta.ca?.host === wantCa.host &&
     meta.ca?.ip === wantCa.ip &&
-    meta.ca?.lanIp === wantCa.lanIp &&
+    caLanIpOk &&
     meta.ca?.v === wantCa.v;
 
   if (!caOk) {
@@ -445,7 +447,11 @@ export function ensureTls(cfg = netConfig()) {
     meta.leaf = null;
   }
 
-  const wantLeaf = { host: meshnetHost, ip: meshnetIp ?? "", lanIp: lanIp ?? "" };
+  // RFC 5280: every leaf SAN IP must be permitted by the active CA's /32 nameConstraints, so the LAN IP goes in the leaf
+  // only when it is the one the CA was issued for. A kept Meshnet CA re-issues the leaf without an unpermitted new LAN IP.
+  const effectiveLeafLanIp = okLanIp && okLanIp === (meta.ca?.lanIp ?? "") ? okLanIp : "";
+  const leafHasLanIp = !effectiveLeafLanIp || leafText.includes(effectiveLeafLanIp);
+  const wantLeaf = { host: meshnetHost, ip: meshnetIp ?? "", lanIp: effectiveLeafLanIp };
   const leafOk =
     existsSync(f("server.crt")) &&
     existsSync(f("server.key")) &&
@@ -458,7 +464,7 @@ export function ensureTls(cfg = netConfig()) {
     const san = ["DNS:localhost"];
     if (okHost) san.unshift(`DNS:${okHost}`);
     if (meshnetIp) san.push(`IP:${meshnetIp}`);
-    if (lanIp && lanIp !== meshnetIp) san.push(`IP:${lanIp}`);
+    if (effectiveLeafLanIp && effectiveLeafLanIp !== okMeshIp) san.push(`IP:${effectiveLeafLanIp}`);
     san.push("IP:127.0.0.1");
     writeFileSync(
       f("leaf.cnf"),
@@ -1615,7 +1621,8 @@ export async function handlePairStart(req, res, readBody) {
   const expiresAt = codes.get(code).expiresAt;
   // `fp` (CA SHA-256, hex) lets the Android app pin this PC's VS CA at pairing (see src-tauri/android/VsTrust.kt).
   const fpQuery = pairFpQuery();
-  const pairHost = meshnetHost || effectiveMeshnetIp || lanIp;
+  // idea-69: pair by the Meshnet IP first (its CA survives LAN-IP changes), never by host name; LAN IP only as fallback.
+  const pairHost = effectiveMeshnetIp || lanIp;
   const pairUrl = `https://${pairHost}:${port}/pair?code=${code}${fpQuery}`;
   const pairIpUrl = `https://${effectiveMeshnetIp || lanIp}:${port}/pair?code=${code}${fpQuery}`;
   const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}${fpQuery}` : null;
