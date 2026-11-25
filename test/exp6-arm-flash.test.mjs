@@ -118,9 +118,12 @@ test("R8 spawn-route: roleSpawnProfile / roleSpawnConfig land on cheap rung (gem
     [cfg.profileName, cfg.spawnCfg.provider, cfg.spawnCfg.model, cfg.spawnCfg.modeId, cfg.route.tier],
     ["Implement", "antigravity-cli", "gemini-3.8-flash", "accept-edits", "cheap"],
   );
-  // Capped antigravity fails over to Claude at the role's default mid tier (not cheap).
+  // Capped antigravity fails over to Claude at the role's default mid tier (not cheap): R10 agy-claude first (own quota,
+  // a Gemini cap never touches it), direct claude once agy-claude is capped too.
   const capped = roleSpawnProfile("Implement", { prefer: "antigravity-cli", tier: "cheap", caps: ["antigravity-cli"] });
-  assert.deepEqual([capped.profile.provider, capped.profile.model, capped.route.tier, capped.route.reason], ["claude", "claude-sonnet-5-5", "mid", "failover"]);
+  assert.deepEqual([capped.profile.provider, capped.profile.model, capped.route.provider, capped.route.tier, capped.route.reason], ["antigravity-cli", "claude-sonnet-5-5-medium", "agy-claude", "mid", "failover"]);
+  const both = roleSpawnProfile("Implement", { prefer: "antigravity-cli", tier: "cheap", caps: ["antigravity-cli", "agy-claude"] });
+  assert.deepEqual([both.profile.provider, both.profile.model, both.route.tier, both.route.reason], ["claude", "claude-sonnet-5-5", "mid", "failover"]);
   // tierA stakes still force top tier even if tier=cheap is passed.
   const tierA = roleSpawnProfile("Implement", { prefer: "antigravity-cli", tier: "cheap", stakes: "tierA-invariant" });
   assert.deepEqual([tierA.profile.provider, tierA.profile.model, tierA.route.tier], ["antigravity-cli", "gemini-4-neon", "top"]);
@@ -145,17 +148,19 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
     const r = await go(ctx, { profile: "Implement", stakes: "normal" });
     seq.push([r.ab.arm, creates[i + 1].config.model]);
   }
+  // R10: the sonnet arm runs Sonnet on agy (agy-claude has headroom: no pool rows in this temp home).
   assert.deepEqual(seq, [
-    ["sonnet", "claude-sonnet-5-5"],
+    ["sonnet", "claude-sonnet-5-5-medium"],
     ["neon", "gemini-4-neon"],
     ["neon", "gemini-4-neon"],
-    ["sonnet", "claude-sonnet-5-5"],
+    ["sonnet", "claude-sonnet-5-5-medium"],
   ]);
 
-  // Capped antigravity falls back to Claude Sonnet with reason capped:antigravity-cli.
+  // Capped antigravity falls back to Claude Sonnet with reason capped:antigravity-cli (R10: Sonnet on agy, whose
+  // agy-claude quota the Gemini cap does not touch).
   const { ctx: c2, creates: cr2 } = ctxWith([], [], { env: { VIBESQUAD_HOME: home({ "antigravity-cli": {} }) } });
   const capped = await go(c2, { profile: "Implement", stakes: "normal", labels: { ab: "flash" } });
-  assert.deepEqual([cr2[0].labels.profile, cr2[0].config.provider, cr2[0].config.model], ["Implement", "claude", "claude-sonnet-5-5"]);
+  assert.deepEqual([cr2[0].labels.profile, cr2[0].config.provider, cr2[0].config.model], ["Implement", "antigravity-cli", "claude-sonnet-5-5-medium"]);
   assert.deepEqual([cr2[0].labels["vs.arm"], cr2[0].labels["vs.arm-reason"], capped.ab.reason, capped.ab.capped], ["sonnet", "capped:antigravity-cli", "capped:antigravity-cli", true]);
 });
 
