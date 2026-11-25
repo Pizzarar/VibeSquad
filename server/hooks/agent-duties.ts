@@ -48,6 +48,7 @@ import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfil
 import { isDuetDirector, liveDuetPainterOf } from "../art-duet.mjs";
 import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { ROUTE_WHY_KEY, shownSpawnReason } from "../spawn-reason.mjs";
+import { liveQuotaUsage } from "../limits-read.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -1571,6 +1572,9 @@ const DEFAULT_DEPS: Deps = {
   doneSweepIntervalMs: 5 * 60_000,
   doneArchiveGraceMs: 30 * 60_000,
   unitBranchState: gitUnitBranchState,
+  // G2 (idea-1012): live quota from runner/limits.jsonl (what the usage panel shows), stale/rolled-over readings dropped,
+  // so QUOTA_FAILOVER_THRESHOLD actually fires at spawn. Before this, production passed nothing and only `vs cap` failed over.
+  usageProviders: () => liveQuotaUsage({ home: baseDir() }),
 };
 
 // ---------------------------------------------------------------------------
@@ -1987,6 +1991,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /** deps.usageProviders as a list. A source that throws or returns a non-list = [] (no switch: the requested provider runs). */
+    const quotaList = (): any[] => {
+      try {
+        const q = typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders;
+        return Array.isArray(q) ? q : [];
+      } catch (err) {
+        log(`usageProviders failed (no quota failover this spawn): ${err}`);
+        return [];
+      }
+    };
+
     /**
      * The usage list spawn failover judges caps on: deps.usageProviders (quota reports) + every capped family as an
      * `exhausted` entry. Shared by before(agent.create), enforceProfileAfterSpawn and agent.created (P5c).
@@ -1995,13 +2010,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // Capped families FIRST: isProviderOverQuota reads the first entry that matches a family, so a quota report for the
       // same provider (antigravity-cli, codex) must not shadow its cap.
       const list: any[] = Object.keys(readCappedProviderMap()).map((family) => ({ id: family, status: "exhausted", usedPct: 100 }));
-      list.push(
-        ...(typeof deps.usageProviders === "function"
-          ? deps.usageProviders()
-          : Array.isArray(deps.usageProviders)
-            ? deps.usageProviders
-            : []),
-      );
+      list.push(...quotaList());
       return list;
     };
 
@@ -2019,7 +2028,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
       const stored = loadStoredProfiles();
       const capped = Object.keys(readCappedProviderMap());
-      const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+      const quota = quotaList();
       for (;;) {
         // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
         const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
@@ -2047,7 +2056,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const failedFam = normalizeProviderFamily(failedProvider);
       if (roleNameHit(fromProfile, roles)) {
         const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
-        const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+        const quota = quotaList();
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
         const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
         const p = (route?.profile ?? null) as StoredProfile | null;
@@ -2576,7 +2585,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const why = shownSpawnReason({
             hookReason: reason,
             // A role route that skipped a capped provider is a failover even when the metric names `ladder` (stakes win there).
-            failover: Boolean(failoverProfileName) || Boolean(roleRoute?.override?.hopped) || Boolean(roleRoute?.route?.reasons?.includes("failover")),
+            // G2: a caller that already failed over before spawning (lead-handoff successor) says so in `vs.failover` / VS_FAILOVER.
+            failover:
+              Boolean(failoverProfileName) ||
+              Boolean(roleRoute?.override?.hopped) ||
+              Boolean(roleRoute?.route?.reasons?.includes("failover")) ||
+              Boolean(String(reqLabels["vs.failover"] ?? env?.VS_FAILOVER ?? "").trim()),
             override: Boolean(roleRoute?.override) || keepCaller,
             arm: Boolean(String(reqLabels["vs.arm"] ?? "").trim()),
             legacyName,

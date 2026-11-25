@@ -35,6 +35,7 @@ import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./use
 import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, readCappedProviders, toPaseoSpawnConfig } from "./profiles.mjs";
 import { GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 import { roleSpawnConfig } from "./spawn-route.mjs";
+import { isProviderOverQuota, resolveProfileWithFailover, ROLE_PROVIDER_CHAINS } from "./provider-failover.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -570,28 +571,46 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
   // the role route (provider list skipping capped providers, tier rung model + effort), as the spawn hook routes it.
   // Checked before findProfile: its alias lookup would map "lead" to "Lead - Claude". No stakes: the role's default tier.
   const storedHit = profiles.some((p) => String(p?.name ?? "").toLowerCase() === desiredKey.toLowerCase());
-  // Over-quota providers (usageProviders, >=95%) are skipped like capped ones, as brainstorm.mjs respawns do.
-  const roleHit = storedHit
-    ? null
-    : roleSpawnConfig(desiredKey, {
-        profiles,
-        profilesPath,
-        usageList: [
-          ...(Array.isArray(capOpts.usageProviders) ? capOpts.usageProviders : []),
-          ...Object.keys(
-            readCappedProviders({
-              useDiskCaps: true,
-              ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
-              ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
-            }),
-          ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
-        ],
-      });
+  // Over-quota providers (usageProviders, >=95%) are skipped like capped ones, as the spawn hook does. Capped families
+  // FIRST: isProviderOverQuota reads the first entry per family, so a live quota row must not shadow a `vs cap` (G2).
+  const quota = Array.isArray(capOpts.usageProviders) ? capOpts.usageProviders : [];
+  const usageList = [
+    ...Object.keys(
+      readCappedProviders({
+        useDiskCaps: true,
+        ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
+        ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
+      }),
+    ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+    ...quota,
+  ];
+  const roleHit = storedHit ? null : roleSpawnConfig(desiredKey, { profiles, profilesPath, usageList });
   // Only the lead role: a worker/Buddy role name here ("Implement") falls back like any unknown profile.
   const roleCfg = roleHit?.profile?.role === "lead" ? roleHit : null;
-  if (roleCfg) return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg };
-  const profile =
+  if (roleCfg) {
+    // The role route already skipped capped/over-quota families; name them (the families walked before the landed one).
+    let failover = null;
+    if (roleCfg.route?.reasons?.includes("failover")) {
+      const landed = roleCfg.route.provider;
+      const head = ROLE_PROVIDER_CHAINS.lead.slice(0, Math.max(0, ROLE_PROVIDER_CHAINS.lead.indexOf(landed)));
+      const why = head.map((f) => isProviderOverQuota(f, usageList, undefined, { ignoreDiskCaps: true }).reason).filter(Boolean);
+      failover = { from: desiredKey, to: roleCfg.profileName, reason: why.join("; ") || "capped provider skipped" };
+    }
+    return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg, failover };
+  }
+  let profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
+  // G2 (idea-1012): a stored lead profile whose provider is >=95% on live quota starts on its counterpart, the same
+  // resolveProfileWithFailover walk the spawn hook runs (caps first, so a capped counterpart is skipped), so the successor's
+  // prompt + labels match the provider it runs on. Only quota triggers it here: a `vs cap` alone stays the hook's swap, as before.
+  let failover = null;
+  if (profile && quota.length > 0 && isProviderOverQuota(profile.provider, quota, undefined, { ignoreDiskCaps: true }).overQuota) {
+    const fo = resolveProfileWithFailover(profile, profiles, usageList);
+    if (fo.failedOver && fo.profile) {
+      failover = { from: profile.name, to: fo.profile.name, reason: fo.reason };
+      profile = fo.profile;
+    }
+  }
   const spawnCfg = profile
     ? toPaseoSpawnConfig(profile)
     : {
@@ -614,7 +633,14 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
     profileName: profile?.name || desiredKey || fallbackProfileName,
     profile,
     spawnCfg,
+    failover,
   };
+}
+
+/** The `vs.failover` label / VS_FAILOVER env text for a failed-over successor: `<from> -> <to> (<reason>)`. */
+export function failoverLabelText(failover) {
+  if (!failover?.to) return "";
+  return `${failover.from} -> ${failover.to}${failover.reason ? ` (${failover.reason})` : ""}`.slice(0, 200);
 }
 
 const sharedHttpInFlightBySlot = new Map();
@@ -861,13 +887,24 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const summary = readBrainstormSummary(laneId, rootDir);
     const cwd = oldLead?.cwd || rootDir;
     const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
-    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, {
+    // Quota reports (deps.usageProviders: a list, or a function returning the live list, as the spawn hook takes it).
+    // A source that throws = no quota data = no switch (fail-open to the requested profile; `vs cap` still applies).
+    const liveQuota = (() => {
+      try {
+        const u = typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders;
+        return Array.isArray(u) ? u : null;
+      } catch {
+        return null;
+      }
+    })();
+    const { profileName, spawnCfg, failover } = resolveLeadProfile(oldLead, deps.profilesPath, {
       requestedProfile,
       ...(deps.cappedProviders !== undefined ? { cappedProviders: deps.cappedProviders } : {}),
       ...(deps.cappedProvidersPath ? { cappedProvidersPath: deps.cappedProvidersPath } : {}),
-      // Quota reports (deps.usageProviders: a list, or a function returning the live list, as the spawn hook takes it).
-      ...((u) => (Array.isArray(u) ? { usageProviders: u } : {}))(typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders),
+      ...(liveQuota ? { usageProviders: liveQuota } : {}),
     });
+    // R2: no silent swap. The label shows on the successor; the hook reads it (or the env twin) for `vs.route ... why=failover`.
+    const failoverText = failoverLabelText(failover);
 
     const prompt = buildSuccessorPrompt({
       laneId,
@@ -897,6 +934,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       profile: profileName,
       "vs.handoff-from": oldLead.id,
       "vs.handoff-trigger": trigger,
+      ...(failoverText ? { "vs.failover": failoverText } : {}),
     };
 
     timer.mark("prep");
@@ -919,7 +957,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         initialPrompt: prompt,
         labels: newLabels,
         // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-        env: { VS_ROLE: "lead", ...(profileName ? { VS_PROFILE: profileName } : {}) },
+        env: { VS_ROLE: "lead", ...(profileName ? { VS_PROFILE: profileName } : {}), ...(failoverText ? { VS_FAILOVER: failoverText } : {}) },
       });
     }
 
@@ -1021,6 +1059,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       reownedWatches,
       retiredImmediately: retired,
       pendingConfirmation: !retired,
+      ...(failover ? { failover } : {}),
     });
 
     if (retireNow) {

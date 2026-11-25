@@ -3,6 +3,7 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { activeQuotaAlerts } from "./quota-alert.mjs";
+import { readLimits } from "./limits-read.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -910,7 +911,8 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 
 // ---- provider limit windows: <runner home>/limits.jsonl, one JSON line per sample (written by the adapters/runner):
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
-const BURN_LOOKBACK_MS = 2 * 3600_000;
+// readLimits lives in ./limits-read.mjs (G2 idea-1012: a leaf module, so the spawn hook reads it without this catalog).
+export { readLimits } from "./limits-read.mjs";
 
 const AGY_THIRD_PARTY_POOL = "antigravity-cli/claude-gpt";
 /** Attribute the Antigravity 3rd-party (Claude/GPT) pool to VibeSquad agents: antigravity-cli agents running claude or gpt models. */
@@ -920,57 +922,6 @@ export function withPoolAgents(limits, agents) {
     const ids = agents.filter((a) => a.provider === "antigravity-cli" && /^(claude|gpt)/i.test(a.model || "")).map((a) => a.agentId);
     return { ...l, poolAgents: { count: ids.length, agentIds: ids, text: ids.length ? `${ids.length} VibeSquad agent${ids.length === 1 ? "" : "s"}` : "0 VibeSquad agents (used outside VibeSquad)" } };
   });
-}
-
-/** Latest sample per provider/window + burn rate (%/h over the last 2h of the current window) + ETA-to-cap. Missing file -> []. */
-export function readLimits(home) {
-  const dir = home || vibesquadHome();
-  if (isForbiddenRealHome(dir)) return [];
-  let text = "";
-  try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
-  // Sidecar: last *check* time per provider/window (updated on every poll, even when the sample didn't change).
-  let checked = {};
-  try { checked = JSON.parse(readFileSync(join(dir, "runner", "limits-checked.json"), "utf8")); } catch { checked = {}; }
-  if (typeof checked !== "object" || checked === null || Array.isArray(checked)) checked = {};
-  const groups = new Map();
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    let r;
-    try { r = JSON.parse(line); } catch { continue; }
-    const at = toMs(r?.at);
-    const used = Number(r?.usedPct);
-    if (!r?.provider || !r?.window || at === null || !Number.isFinite(used)) continue;
-    getOrSet(groups, `${r.provider}|${r.window}`, () => []).push({ ...r, atMs: at, used, resetMs: toMs(r.resetsAt) });
-  }
-  const out = [];
-  for (const pts of groups.values()) {
-    pts.sort((x, y) => x.atMs - y.atMs);
-    const last = pts[pts.length - 1];
-    // Current window starts after the last usedPct drop or the last change of a known resetsAt (both mean the window rolled over).
-    let start = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const rolled = pts[i].used < pts[i - 1].used || (pts[i].resetMs !== null && pts[i - 1].resetMs !== null && pts[i].resetMs !== pts[i - 1].resetMs);
-      if (rolled) start = i;
-    }
-    const cur = pts.slice(start).filter((p) => p.atMs >= last.atMs - BURN_LOOKBACK_MS);
-    const hours = (last.atMs - cur[0].atMs) / 3600_000;
-    const burn = Math.max(0, hours > 0 ? (last.used - cur[0].used) / hours : 0);
-    let etaToCap = null;
-    if (burn > 0) {
-      const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
-      if (last.resetMs === null || eta < last.resetMs) etaToCap = new Date(eta).toISOString();
-    }
-    const sidecarMs = tsMs(checked[`${last.provider}|${last.window}`]);
-    const checkedMs = sidecarMs === null ? last.atMs : Math.max(sidecarMs, last.atMs);
-    out.push({
-      provider: last.provider, window: last.window, usedPct: last.used,
-      resetsAt: last.resetMs === null ? null : new Date(last.resetMs).toISOString(),
-      source: last.source ?? "provider", agentId: last.agentId ?? null, at: new Date(last.atMs).toISOString(),
-      checkedAt: new Date(checkedMs).toISOString(),
-      burnPctPerHour: Math.round(burn * 100) / 100, etaToCap,
-    });
-  }
-  return out.sort((x, y) => x.provider.localeCompare(y.provider) || x.window.localeCompare(y.window));
 }
 
 // ---- merged units from git. `git` is injectable: (args: string[]) => stdout string.
