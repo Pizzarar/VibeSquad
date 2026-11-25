@@ -607,7 +607,7 @@ export const DEMO_ROLES: RolesMap = {
 export const DEMO_LADDER: Ladder = {
   claude: { top: { model: "claude-opus-5-5", effort: "high" }, mid: { model: "claude-sonnet-5-5", effort: "medium" }, cheap: { model: "claude-sonnet-5-5", effort: "low" } },
   "antigravity-cli": { top: { model: GEMINI_TOP_MODEL, effort: "high" }, mid: { model: GEMINI_TOP_MODEL }, cheap: { model: "gemini-3.8-flash" } },
-  opencode: { top: { model: "deepseek/deepseek-v4-pro", effort: "high" }, mid: { model: "deepseek/deepseek-v4-pro" }, cheap: { model: "deepseek/deepseek-v4-pro" } },
+  opencode: { top: { model: "deepseek/deepseek-v4-pro", effort: "high" }, mid: { model: "deepseek/deepseek-v4-pro" }, cheap: { model: "deepseek/deepseek-flash" } },
 };
 
 const listeners = new Set<() => void>();

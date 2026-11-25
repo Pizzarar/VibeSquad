@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeProviderFamily } from "./provider-failover.mjs";
-import { GEMINI_CHEAP_MODEL, GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
+import { DEEPSEEK_CHEAP_MODEL, DEEPSEEK_TOP_MODEL, GEMINI_CHEAP_MODEL, GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 
 export const STAKES_VALUES = ["tierA-security", "tierA-invariant", "normal", "mechanical"];
 
@@ -23,7 +23,7 @@ export const DEFAULT_STAKES_LADDER = {
   opencode: {
     "tierA-security": { effort: "high" },
     "tierA-invariant": { effort: "high" },
-    mechanical: {},
+    mechanical: { model: DEEPSEEK_CHEAP_MODEL }, // R7: was {} (kept the profile's model, i.e. Work Order - DSP v4-pro)
   },
 };
 
@@ -108,9 +108,9 @@ export const DEFAULT_TIER_LADDER = deepFreeze({
     cheap: { model: GEMINI_CHEAP_MODEL },
   },
   opencode: {
-    top: { model: "deepseek/deepseek-v4-pro", effort: "high" },
-    mid: { model: "deepseek/deepseek-v4-pro" },
-    cheap: { model: "deepseek/deepseek-v4-pro" },
+    top: { model: DEEPSEEK_TOP_MODEL, effort: "high" },
+    mid: { model: DEEPSEEK_TOP_MODEL },
+    cheap: { model: DEEPSEEK_CHEAP_MODEL }, // R7: was v4-pro, so mechanical/cheap never ran Flash
   },
 });
 
