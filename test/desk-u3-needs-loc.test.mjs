@@ -4,12 +4,15 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createReadStream, existsSync, statSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
 
 let pw, exe, server, baseUrl, browser, unavailable;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml" };
-const SHOTS = path.join(REPO_ROOT, "artifacts", "desk-u3");
+// Screenshots are only written when DESK_U3_SHOTS=1 (to the tracked artifacts/desk-u3/); otherwise nothing is written.
+const WRITE_SHOTS = process.env.DESK_U3_SHOTS === "1";
+const SHOTS = WRITE_SHOTS ? path.join(REPO_ROOT, "artifacts", "desk-u3") : path.join(os.tmpdir(), "desk-u3-unused");
 
 // Normal sidebar width is clamp(290px, 16vw, 380px) (src/boring.css:150), so drive it via viewport width:
 // 1280px -> 16vw = 204.8px -> clamped to 290px; 1920px -> 16vw = 307.2px -> ~307px.
@@ -35,7 +38,7 @@ before(async () => {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   browser = await pw.chromium.launch({ executablePath: exe, headless: true, args: ["--no-sandbox"] });
-  mkdirSync(SHOTS, { recursive: true });
+  if (WRITE_SHOTS) mkdirSync(SHOTS, { recursive: true });
 });
 after(async () => {
   await browser?.close();
@@ -62,7 +65,7 @@ for (const theme of ["light", "dark"]) {
         measuredSidebarWidths.set(`${theme}:${width}`, sidebarW);
 
         // Capture stock-demo screenshot at the real sidebar width.
-        await page.locator('[data-testid="boring-needs-you"]').screenshot({ path: path.join(SHOTS, `needs-you-${width}-${theme}.png`) });
+        if (WRITE_SHOTS) await page.locator('[data-testid="boring-needs-you"]').screenshot({ path: path.join(SHOTS, `needs-you-${width}-${theme}.png`) });
 
         // 2. Assert stock row geometry.
         const rows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="boring-needs-you-item"]')].map((li) => {
@@ -72,17 +75,19 @@ for (const theme of ["light", "dark"]) {
           const cs = getComputedStyle(who);
           const ch = parseFloat(cs.fontSize) * 0.5;
           const sep = getComputedStyle(proj, "::before").content;
-          return { whoText: who.textContent, who: box(who), where: box(where), lane: box(lane), laneText: lane.textContent, proj: box(proj), reason: box(reason), open: box(open), chPx: ch, sep, whereScroll: where.scrollWidth, whereClient: where.clientWidth, txt: where.innerText };
+          return { whoText: who.textContent, who: box(who), where: box(where), lane: box(lane), laneText: lane.textContent, laneScroll: lane.scrollWidth, laneClient: lane.clientWidth, proj: box(proj), reason: box(reason), open: box(open), chPx: ch, sep, whereScroll: where.scrollWidth, whereClient: where.clientWidth, txt: where.innerText };
         }));
         assert.ok(rows.length >= 4, `demo has >= 4 Needs-you rows (got ${rows.length})`);
         for (const r of rows) {
           const label = `${r.whoText} | ${r.txt}`;
-          assert.ok(r.who.w >= Math.min(r.chPx * 20, r.open.w) - 1, `title keeps its 20ch floor (${r.who.w}px): ${label}`);
+          assert.ok(r.who.w >= Math.min(r.chPx * 20, r.open.w) - 1 && r.who.w >= 20 * r.chPx - 1, `title keeps its 20ch floor (${r.who.w}px): ${label}`);
           assert.ok(r.where.t >= r.who.b - 1, `location sits under the title: ${label}`);
           assert.ok(r.reason.t >= r.where.b - 1, `reason is on its own line below the location: ${label}`);
           assert.ok(r.where.l >= r.open.l - 1 && r.where.r <= r.open.r + 1, `location inside the row: ${label}`);
+          assert.ok(r.whereScroll <= r.whereClient + 1, `location box not overflowing (scroll=${r.whereScroll} client=${r.whereClient}): ${label}`);
           assert.ok(r.lane.r <= r.where.r + 1 && r.proj.r <= r.where.r + 1, `lane/project clipped inside the location box: ${label}`);
           if (r.laneText.trim()) {
+            assert.ok(r.laneScroll <= r.laneClient, `lane unclipped (scroll=${r.laneScroll} <= client=${r.laneClient}): ${label}`);
             assert.ok(r.lane.w > 8, `the lane stays visible (${r.lane.w}px): ${label}`);
             assert.ok(r.proj.l >= r.lane.r - 1, `lane and project do not overlap: ${label}`);
             assert.ok(/·/.test(r.sep), `non-empty lane renders ::before separator (${r.sep}): ${label}`);
