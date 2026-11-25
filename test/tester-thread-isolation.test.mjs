@@ -499,6 +499,99 @@ describe("L1: tester SSE never carries the shared intake agent's timeline activi
     assert.equal(A.res.body, after);
   });
 
+  test("rn-630d32bc8390: cap+1 tester streams for one device -> 429, others untouched; close frees slots and listeners", async () => {
+    const runnerApi = await import("../server/runner-api.mjs");
+    const CAP = runnerApi.TESTER_STREAMS_PER_DEVICE;
+    const aDev = deviceId("Alice");
+    const bDev = deviceId("Bob");
+    assert.equal(runnerApi.testerStreamCount(aDev), 0);
+    assert.equal(tt.testerThreadListenerCount(aDev), 0);
+    const open = [];
+    try {
+      for (let i = 0; i < CAP; i++) open.push(openStream({ headers: bearer(alice) }));
+      await tick();
+      for (const s of open) assert.equal(s.res.statusCode, 200, s.res.body);
+      assert.equal(runnerApi.testerStreamCount(aDev), CAP);
+      assert.equal(tt.testerThreadListenerCount(aDev), CAP);
+
+      // cap+1: refused with 429; nothing subscribed, the open streams keep their slots
+      const over = openStream({ headers: bearer(alice) });
+      open.push(over);
+      await tick();
+      assert.equal(over.res.statusCode, 429, over.res.body);
+      assert.match(over.res.body, /too many open event streams/);
+      assert.equal(over.res.headers["retry-after"], "15");
+      assert.equal(runnerApi.testerStreamCount(aDev), CAP);
+      assert.equal(tt.testerThreadListenerCount(aDev), CAP);
+
+      // another device and the owner are unaffected
+      const B = openStream({ headers: bearer(bob) });
+      const O = openStream({ local: true, headers: ownerLocal() });
+      open.push(B, O);
+      await tick();
+      assert.equal(B.res.statusCode, 200, B.res.body);
+      assert.equal(O.res.statusCode, 200, O.res.body);
+      assert.equal(runnerApi.testerStreamCount(bDev), 1);
+
+      // ticks still reach every surviving stream; the refused one gets nothing
+      const base = open.slice(0, CAP).map((s) => s.events().length);
+      const overBody = over.res.body;
+      const r = await reply({ cardId: aCard, text: "cap tick" });
+      assert.equal(r.status, 200, r.body);
+      await tick();
+      open.slice(0, CAP).forEach((s, i) => assert.deepEqual(s.events().slice(base[i]), [{ kind: "tester-thread", seq: r.json().seq }]));
+      assert.equal(over.res.body, overBody);
+
+      // closing one frees its slot: a new stream for the same device is admitted
+      open[0].close();
+      assert.equal(runnerApi.testerStreamCount(aDev), CAP - 1);
+      assert.equal(tt.testerThreadListenerCount(aDev), CAP - 1);
+      const again = openStream({ headers: bearer(alice) });
+      open.push(again);
+      await tick();
+      assert.equal(again.res.statusCode, 200, again.res.body);
+      assert.equal(runnerApi.testerStreamCount(aDev), CAP);
+    } finally {
+      for (const s of open) s.close();
+    }
+    assert.equal(runnerApi.testerStreamCount(aDev), 0, "every slot released");
+    assert.equal(runnerApi.testerStreamCount(bDev), 0);
+    assert.equal(tt.testerThreadListenerCount(aDev), 0, "every listener unsubscribed");
+    assert.equal(tt.testerThreadListenerCount(bDev), 0);
+  });
+
+  test("rn-630d32bc8390 backstop: onTesterThreadLine refuses past the per-device cap, never throws, append still ticks", async () => {
+    const dev = "dev-listener-cap-test";
+    const MAX = tt.TESTER_THREAD_LISTENERS_MAX;
+    const got = [];
+    const offs = [];
+    for (let i = 0; i < MAX; i++) offs.push(tt.onTesterThreadLine(dev, (e) => got.push([i, e.seq])));
+    assert.equal(tt.testerThreadListenerCount(dev), MAX);
+    const warn = console.warn;
+    let warned = 0;
+    console.warn = () => warned++;
+    let extraOff;
+    try {
+      extraOff = tt.onTesterThreadLine(dev, () => got.push(["extra"]));
+    } finally {
+      console.warn = warn;
+    }
+    assert.equal(typeof extraOff, "function");
+    assert.equal(warned, 1);
+    assert.equal(tt.testerThreadListenerCount(dev), MAX);
+    assert.equal(tt.testerThreadListenerCount("dev-listener-cap-other"), 0, "other device unaffected");
+    const other = tt.onTesterThreadLine("dev-listener-cap-other", () => {});
+    assert.equal(tt.testerThreadListenerCount("dev-listener-cap-other"), 1);
+    other();
+    const line = await tt.appendTesterThreadLine(dev, { role: "user", kind: "chat", teamId: "efi", text: "cap backstop" });
+    assert.equal(got.length, MAX);
+    assert.ok(got.every(([i, seq]) => i !== "extra" && seq === line.seq));
+    extraOff();
+    assert.equal(tt.testerThreadListenerCount(dev), MAX, "the refused no-op unsubscribe touches nothing");
+    for (const off of offs) off();
+    assert.equal(tt.testerThreadListenerCount(dev), 0);
+  });
+
   test("createTesterEventFilter drops every raw timeline event, allowed agent or not", async () => {
     const runnerApi = await import("../server/runner-api.mjs");
     const teams = runnerApi.testerTeamRecords({ allowedTeams: ["efi"] }, TEAMS);

@@ -15,7 +15,7 @@ import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
-import { decideArm, readArmCaps, readPerfectionVerdict } from "../exp6-arm.mjs";
+import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, readArmCaps } from "../exp6-arm.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -379,20 +379,27 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const given = { provider: clean(args.provider), model: clean(args.model), modeId: clean(pick(args, "modeId", "mode")) };
   let spawn = {};
   let profile = null;
-  // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
-  // After the EXP6 verdict the same pick applies the EXP6_WINNER default (DSP); a swap never targets a capped arm (idea-703).
+  // R0 (PLAN_PER_ROLES_LADDER_1125): stakes=normal implementer spawns alternate per lane between the Sonnet and Neon arms
+  // (exp6-arm.mjs decideArm); DSP is never an arm (explicit request or failover only). A capped arm is never picked
+  // (idea-703). ab=pin / wf=<arm> / an explicit provider/model opt out. Every outcome is visible: result.ab carries
+  // arm + reason + model and the spawn labels carry vs.arm / vs.arm-reason / vs.model (no silent swap).
+  // ctx.implementerArms overrides the arm set (tests; R3/R8 seam); unset = IMPLEMENTER_ARMS.
   let ab = null;
   let pickedProfile = profileName;
+  const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
   // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
-  if (profileName && !given.provider && !given.model) {
-    const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
+  if (profileName && (given.provider || given.model)) {
+    const asked = armOfProfile(profileName);
+    if (asked && (stakesNow || "normal").toLowerCase() === "normal" && clean(args.labels?.role).toLowerCase() !== LEAD_ROLE) {
+      ab = { mode: "arm", arm: null, requestedArm: asked.wf, swapped: false, reason: "override", counts: null, profile: profileName };
+    }
+  } else if (profileName) {
     // Same precedence the spawn stamps below (identity wins over a caller label).
     const abLane = clean(ctx.identity.lane) || clean(args.labels?.lane);
     const abTeam = clean(ctx.identity.team) || clean(args.labels?.team);
     ab = await decideArm({
       profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
-      endIso: ctx.env?.VS_EXP6_END,
-      verdictProbe: () => readPerfectionVerdict({ home: ctx.env?.VIBESQUAD_HOME }),
+      arms: ctx.implementerArms,
       capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
@@ -404,7 +411,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
     if (!hit && ab?.swapped) { // fail open: the swapped-to profile is not installed, keep the requested one
       hit = await ctx.resolveProfile(profileName, profiles, stk);
-      ab = { ...ab, arm: ab.requestedArm, swapped: false, failOpen: true };
+      ab = { ...ab, arm: ab.requestedArm, swapped: false, failOpen: true, reason: "fail-open:not-installed" };
     }
     if (!hit) {
       const known = profiles.map((p) => p.name).join(", ");
@@ -500,6 +507,14 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   delete labels["vs.profile-derived"];
   const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);
   if (derived.length) labels["vs.profile-derived"] = derived.join(",");
+  // R0 arm stamps are written only by this tool (a caller-supplied vs.arm would skew the per-lane counts).
+  for (const k of [ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL]) delete labels[k];
+  if (ab) {
+    const opted = ["pin", "wf", "override"].includes(ab.reason);
+    if (!opted && ab.arm) labels[ARM_LABEL] = ab.arm; // only alternation members count toward the next pick
+    labels[ARM_REASON_LABEL] = ab.reason;
+    if (model) labels[MODEL_LABEL] = model; // the spawn hook re-syncs it to the final model after failover / the stakes ladder
+  }
   const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
@@ -520,12 +535,16 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
   if (ab) {
-    result.ab = { arm: ab.arm, swapped: ab.swapped, counts: ab.counts, ...(ab.mode === "default" ? { mode: "default" } : {}), ...(ab.capped ? { capped: true } : {}) };
-    // D3 re-read counts `exp6-default:` lines (swaps and cap-kept spawns); `exp6-arm swap:` stays the alternation metric.
-    // A fail-open keep (swap target not installed) logs nothing, like the alternation.
-    const metric = ab.mode === "default"
-      ? ab.swapped || ab.capped ? `exp6-default: ${profileName} -> ${ab.swapped ? ab.profile : `${profileName} (kept: winner capped)`} wf=${ab.arm} lane=${labels.lane ?? ""}` : ""
-      : ab.swapped ? `exp6-arm swap: ${profileName} -> ${ab.profile} wf=${ab.arm} lane=${labels.lane ?? ""} counts=sonnet:${ab.counts.sonnet},dsp:${ab.counts.dsp}` : "";
+    const shown = labels.profile ?? profileName;
+    result.ab = {
+      arm: ab.arm, reason: ab.reason, model: model || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
+      ...(ab.swapped ? { requested: profileName } : {}), ...(ab.capped ? { capped: true } : {}),
+    };
+    // One line a lead can read without digging: `arm=neon reason=alternation model=gemini-4-neon (Implement - Sonnet -> ...)`.
+    result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"}${ab.swapped ? ` (${profileName} -> ${shown})` : ""}`;
+    const counts = ab.counts ? ` counts=${Object.entries(ab.counts).map(([k, v]) => `${k}:${v}`).join(",")}` : "";
+    // Arm picks only: opt-outs (pin / wf / override) are visible in the result + labels and are not alternation data.
+    const metric = ["pin", "wf", "override"].includes(ab.reason) ? "" : `implementer-arm: ${profileName} -> ${shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${model || "?"} lane=${labels.lane ?? ""}${counts}`;
     if (metric) { try { await ctx.writeLog({ type: "metric", text: metric }); } catch { /* metrics are best effort: never fail the spawn */ } }
   }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff

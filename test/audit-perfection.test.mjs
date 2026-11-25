@@ -1,3 +1,4 @@
+import "./setup/hermetic.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

@@ -1,5 +1,6 @@
 // B11 unit-run-hook-parity: the Paseo plugin hooks run for runner (rn-*) agents through the lifecycle bus.
 // Hermetic: own VIBESQUAD_HOME / VIBESQUAD_ROOT, a fake adapter, an in-process runner on an ephemeral port.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
