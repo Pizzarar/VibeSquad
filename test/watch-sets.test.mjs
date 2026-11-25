@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
@@ -3064,3 +3065,113 @@ test(
     }
   }),
 );
+
+// ---- idea-897: a delivered report must not read as idle-no-report when the turn events were missed ----
+
+test("idea-897: an idle worker whose snapshot lastProgressAt is after the watch was armed counts its final message as the report (no turn events seen)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString() }; // last turn progress BEFORE arming
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => "PASS 0/0/0 abc1234 TOTAL 101 specs", deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 5 * 60_000;
+    snap.lastProgressAt = new Date(clock.t).toISOString(); // the re-task ran and reported; no turn_started/turn_ended reached the engine
+    clock.t += 61_000;
+    await eng.tick();
+    clock.t += 31 * 60_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.ok(!w.pings.some((p) => /idle-no-report/.test(p.text)), JSON.stringify(w.pings));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 review H2: a non-turn write (updatedAt moves, lastProgressAt does not) leaves an old final message as idle-no-report", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897b-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString(), updatedAt: new Date(clock.t - 60_000).toISOString() };
+    const sent = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => "OLD round report", deliver: (d) => { sent.push(d); return true; }, retryMs: 0 });
+    await eng.tick();
+    clock.t += 5 * 60_000;
+    snap.updatedAt = new Date(clock.t).toISOString(); // a label/meta write, not a turn
+    clock.t += 61_000;
+    await eng.tick();
+    clock.t += 31 * 60_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.notEqual(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 review M3: progress advancing past a cached finalText re-reads the timeline instead of delivering the old round's text", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897c-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t - 60_000).toISOString() };
+    let msg = "ROUND1 report";
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async () => msg, deliver: () => true, retryMs: 0 });
+    await eng.tick(); // caches ROUND1 as finalText (floor not met, so not done)
+    clock.t += 5 * 60_000;
+    msg = "ROUND2 report"; // new turn ran; turn_started/turn_ended never reached the engine
+    snap.lastProgressAt = new Date(clock.t).toISOString();
+    clock.t += 61_000;
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.match(String(w.items[0].report ?? ""), /ROUND2/, JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
+
+test("idea-897 integration: a real idle agent read through RunnerBackend.fetchAgent carries lastProgressAt, and the engine counts the re-task report (meta writes do not)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-897d-"));
+  try {
+    mkdirSync(join(sb, "agents"), { recursive: true });
+    const logFile = join(sb, "agents", "rn-w.jsonl");
+    const clock = { t: Date.now() };
+    const ev = (seq, ts, type, extra = {}) => JSON.stringify({ seq, ts, type, ...extra }) + "\n";
+    writeFileSync(logFile, ev(1, clock.t - 120_000, "input", { text: "go" }) + ev(2, clock.t - 60_000, "output", { text: "round1" }));
+    const rec = { id: "rn-w", provider: "claude", status: "idle", cwd: sb, createdAt: clock.t - 120_000, updatedAt: clock.t - 60_000, lastSeq: 2, meta: {} };
+    const backend = new RunnerBackend({ client: { home: sb, request: async () => ({ ...rec }) }, hooks: false });
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    let msg = "ROUND1 report";
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async (ref) => (await backend.fetchAgent(ref)).agent, lastMessage: async () => msg, deliver: () => true, retryMs: 0 });
+    const first = (await backend.fetchAgent("rn-w")).agent;
+    assert.ok(first.lastProgressAt, "idle agent read via fetchAgent exposes lastProgressAt");
+    await eng.tick(); // caches ROUND1 (progress predates the watch)
+    clock.t += 5 * 60_000;
+    // a meta/label write moves updatedAt only: must not count as progress
+    rec.updatedAt = clock.t; rec.lastSeq = 3;
+    appendFileSync(logFile, ev(3, clock.t, "meta", { labels: { a: "b" } }));
+    clock.t += 61_000;
+    await eng.tick();
+    assert.notEqual(listWatches({ all: true }, { home: sb }).find((x) => x.id === id).items[0].state, "done");
+    // the re-task ran: real turn output lands in the log
+    clock.t += 60_000;
+    msg = "ROUND2 report";
+    rec.updatedAt = clock.t; rec.lastSeq = 5;
+    appendFileSync(logFile, ev(4, clock.t - 1000, "input", { text: "again" }) + ev(5, clock.t, "output", { text: "round2" }));
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.match(String(w.items[0].report ?? ""), /ROUND2/, JSON.stringify(w.items[0]));
+    eng.stop?.();
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});
