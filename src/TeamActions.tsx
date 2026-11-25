@@ -418,11 +418,15 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
             </div>
           )}
           <div className="spawn-defaults" title="Applied at spawn (A1/A6)">
-            {badges.map(([k, v]) => (
-              <span key={k} className={k === "via" && landing?.note ? "def-badge def-badge-warn" : "def-badge"}>
-                <b>{k}</b> {v}
-              </span>
-            ))}
+            {badges.map(([k, v]) => {
+              // R2 (UX m3): the landing badge reads as a warning when every provider is capped.
+              const warn = k === "via" && Boolean(landing?.note);
+              return (
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                  <b>{k}</b> {v}
+                </span>
+              );
+            })}
           </div>
           {landing?.note && (
             <div className="stat-alert small" data-testid="all-capped-note">
@@ -937,11 +941,14 @@ export function AddBuddyModal({
             </Field>
           </div>
           <div className="spawn-defaults" title="Which model this Buddy will run" data-testid="add-buddy-badges">
-            {buddyBadges.map(([k, v]) => (
-              <span key={k} className={k === "via" && buddyLanding?.note ? "def-badge def-badge-warn" : "def-badge"}>
-                <b>{k}</b> {v}
-              </span>
-            ))}
+            {buddyBadges.map(([k, v]) => {
+              const warn = k === "via" && Boolean(buddyLanding?.note);
+              return (
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                  <b>{k}</b> {v}
+                </span>
+              );
+            })}
           </div>
           {buddyLanding?.note && (
             <div className="stat-alert small" data-testid="all-capped-note">

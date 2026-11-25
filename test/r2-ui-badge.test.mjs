@@ -1,6 +1,6 @@
 // R2 UI: New Agent badge shows where a spawn lands (landingPick) + GET /roles carries `capped`; drawer chip reads routeWhy.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -135,4 +135,54 @@ test("drawer chip: why=all-capped shows all-capped; an old why=rung shows ladder
   const old = drawerSpawnWhy({ "vs.route": "reason=default tier=mid role=review why=rung" }, "m", false);
   assert.equal(old, "ladder");
   assert.match(spawnChipTitle({ model: "m", reason: "rung" }), /Ladder: picked/);
+});
+
+// ---- L1 pins (R2 r2): the UX fixes must fail a test when reverted ------------------------------------------
+const srcText = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+/** Declarations of the rule whose selector list is exactly `selector` in src/styles.css ("" when absent). */
+function cssRule(selector) {
+  const css = srcText("styles.css");
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`(?:^|\\})\\s*${esc}\\s*\\{([^}]*)\\}`, "m").exec(css);
+  return m ? m[1] : "";
+}
+const noShrink = (decl) => /flex:\s*0\s+0\s+auto|flex-shrink:\s*0|flex:\s*none/.test(decl);
+const ellipsizes = (decl) => /min-width:\s*0/.test(decl) && /overflow:\s*hidden/.test(decl) && /text-overflow:\s*ellipsis/.test(decl);
+
+test("L1 drawer chip CSS: the reason span never shrinks; the model span ellipsizes first", () => {
+  assert.ok(noShrink(cssRule(".role-model-chip .rmc-why")), ".rmc-why does not shrink");
+  assert.ok(ellipsizes(cssRule(".role-model-chip .rmc-main")), ".rmc-main ellipsizes");
+  assert.match(cssRule(".role-model-chip"), /display:\s*inline-flex/, "the chip lays its spans out as flex items");
+  const chip = srcText("RoleModelChip.tsx");
+  assert.match(chip, /<span className="rmc-main">/);
+  assert.match(chip, /<span className="rmc-why"[^>]*>[^<]*spawnReasonLabel\(reason\)/);
+});
+
+test("L1 phone (UX m4b): the reason sits in its own non-shrinking span; provider · model ellipsizes first", () => {
+  const pc = srcText("PhoneCockpit.tsx");
+  const main = /<span className="pap-main">([^\n]*)<\/span>/.exec(pc);
+  assert.ok(main, "provider · model in .pap-main");
+  assert.doesNotMatch(main[1], /phoneWhy|spawnReasonLabel/, "the reason is not in the shrinking span");
+  assert.match(pc, /<span className="pap-why" data-testid="phone-active-why" data-reason=\{phoneWhy\}>[\s\S]{0,80}spawnReasonLabel\(phoneWhy\)/);
+  assert.ok(noShrink(cssRule(".phone-active-provider .pap-why")), ".pap-why does not shrink");
+  assert.ok(ellipsizes(cssRule(".phone-active-provider .pap-main")), ".pap-main ellipsizes");
+  assert.match(cssRule(".phone-active-provider"), /display:\s*inline-flex/);
+  assert.match(cssRule(".phone-active-provider"), /min-width:\s*0/);
+});
+
+test("L1 all-capped (UX m3): New Agent / Add Buddy show the warning note and a warn badge only when every provider is capped", () => {
+  const ta = srcText("TeamActions.tsx");
+  assert.match(ta, /note: l\.allCapped \? allCappedNote\(l\.provider\) : ""/, "roleBadges carries the note only when all capped");
+  // Both dialogs: New Agent (`landing`) and Add Buddy (`buddyLanding`).
+  for (const v of ["landing", "buddyLanding"]) {
+    assert.match(ta, new RegExp(`\\{${v}\\?\\.note && \\(\\s*<div className="stat-alert small" data-testid="all-capped-note">\\s*\\{${v}\\.note\\}`), `${v}: note`);
+    assert.match(ta, new RegExp(`const warn = k === "via" && Boolean\\(${v}\\?\\.note\\);`), `${v}: warn badge`);
+  }
+  assert.equal((ta.match(/className=\{warn \? "def-badge def-badge-warn" : "def-badge"\}/g) ?? []).length, 2);
+  assert.match(cssRule(".def-badge.def-badge-warn"), /color:\s*var\(--pink-t\)/);
+  // The note text itself (what roleBadges shows) is the plain-words all-capped line.
+  const l = landingPick(role, ladder, "normal", { capped: ["claude", "antigravity-cli"] });
+  assert.equal(l.allCapped, true);
+  assert.equal(allCappedNote(l.provider), "All providers capped: will start on Claude and wait or fail over.");
+  assert.equal(landingPick(role, ladder, "normal", { capped: ["claude"] }).allCapped, false, "one capped = failover, no warning");
 });

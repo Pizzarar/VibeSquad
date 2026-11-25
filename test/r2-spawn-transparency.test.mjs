@@ -356,6 +356,10 @@ test(
     const none = fixedRig(({ labels }) => ({ provider: "codex", labels: { ...labels } }));
     const b = await none({ profile: "Implement", stakes: "tierA-invariant" });
     assert.match(b.spawned, /^Implement · claude-\S+ · failover$/);
+    // A pre-R2 hook ran (reason= but no why=), same provider: its reason=failover still shows as failover (tools.mjs hookReason).
+    const preR2 = fixedRig(({ config, labels }) => ({ provider: config.provider, labels: { ...labels, [ROUTE_LABEL]: "stakes=tierA-invariant model=m reason=failover tier=top role=implement" } }));
+    const d = await preR2({ profile: "Implement", stakes: "tierA-invariant" });
+    assert.match(d.spawned, /^Implement · claude-\S+ · failover$/);
     // Hook did not run, same provider: the local ladder reason (not failover).
     const same = fixedRig(({ config, labels }) => ({ provider: config.provider, labels: { ...labels } }));
     const c = await same({ profile: "Implement", stakes: "tierA-invariant" });

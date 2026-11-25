@@ -469,8 +469,15 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
         )}
         {activeMember && activeProv && (
           <div className="phone-provider-bar" data-testid="phone-provider-bar">
+            {/* R2 (UX m4b): same as the drawer chip: the provider · model part ellipsizes first, the reason never shrinks. */}
             <span className="phone-active-provider" data-testid="phone-active-provider">
-              {activeProv.symbol} {activeProv.name}{activeMember.agent.model ? ` · ${activeMember.agent.model}` : ""}{phoneWhy ? ` · ${spawnReasonLabel(phoneWhy)}` : ""}
+              <span className="pap-main">{activeProv.symbol} {activeProv.name}{activeMember.agent.model ? ` · ${activeMember.agent.model}` : ""}</span>
+              {phoneWhy && (
+                <span className="pap-why" data-testid="phone-active-why" data-reason={phoneWhy}>
+                  {" · "}
+                  {spawnReasonLabel(phoneWhy)}
+                </span>
+              )}
             </span>
             {switchTarget && (
               <button

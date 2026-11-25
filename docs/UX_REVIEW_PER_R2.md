@@ -105,3 +105,40 @@ FAIL 0/1/4 cd3de949
 ## Files (uncommitted, for the lead)
 - `docs/UX_REVIEW_PER_R2.md`
 - `docs/ux-per-r2/` (19 PNGs)
+
+---
+
+## Round 2 (fix r1, tip `4120a47f`)
+
+PASS 0/0/1 4120a47f
+
+- Run: `vite --port 5392` in this worktree (not the live server), `?demo=1`, Normal mode. Sizes: 1024x768, 1920x1080 Split with a 49-character title (put into the DOM), 860x700, 3200x1800 @ dsf 1.2, and phone 390x844 @ dsf 3. Dark and light. No page errors.
+- Shots: `docs/ux-per-r2/r2-*.png` (12). I also looked at the fixer's `r1-*` shots. `r1-d390-phone.png` / `r1-l390-phone.png` show the "No Overlord" empty state with no provider bar, so they don't show the m4 fix. My `r2-*390-phone.png` cover it.
+- Lead decisions applied: the word is `ladder` everywhere; all-capped warns but never blocks Spawn.
+
+### Status vs round 1
+
+| Round 1 | Status | Evidence |
+|---|---|---|
+| **M1** reason truncated first | **Fixed** | `src/RoleModelChip.tsx`: `.rmc-why` is `flex: 0 0 auto` and `.rmc-main` ellipsizes (`src/styles.css:6775-6777`). The Normal header chip no longer repeats the role. Measured reason span = 73/73 px, fully inside the chip, in every case:<br>• 1024: `gemini-4-neon · failover`, nothing cut (`r2-d1024-drawer.png`, `r2-l1024-drawer.png`)<br>• 1920 Split, 49-character title: model cut to 81/86 px (`gemini-4-ne… · failover`), reason whole (`r2-d1920-split-longtitle-drawer.png`, `r2-l1920-…`)<br>• 860 window, 49-character title: model down to 9 px, reason still whole (`r2-d860-longtitle-drawer.png`) |
+| **m1** tooltip was machine text | **Fixed** | Title is now plain words: `gemini-4-neon. Failover: the preferred provider was capped, so a fallback ran instead. Runs on Gemini.` (`spawnChipTitle`, `src/roleSpawn.ts`). No raw `reason=ladder … why=failover`. Residual, not counted: it still doesn't name *which* provider was capped, because the hook doesn't stamp it. Optional follow-up: ` from=<family>` in `vs.route`. |
+| **m2** jargon / `rung` vs `ladder` | **Fixed** | `SPAWN_REASON.LADDER = "ladder"` is shared by the server and the UI. Old `why=rung` labels read as `ladder` (`LEGACY_SPAWN_REASONS`). The override option now reads `Claude · ladder model`. Every reason has a gloss in the tooltip (`SPAWN_REASON_GLOSS`, pinned by `test/r2-ui-badge.test.mjs`). |
+| **m3** all-capped looked healthy | **Fixed** | The `via all capped (…)` badge gets a pink border (`def-badge-warn`), and a `stat-alert` line underneath reads `All providers capped: will start on Claude and wait or fail over.` (note contrast: dark 5.55:1, light 6.66:1). Spawn stays enabled, per the lead decision. Checked on New Agent 3200/1024 and Add Buddy 1920 light (`r2-d3200-newagent-allcapped.png`, `r2-l3200-…`, `r2-d1024-…`, `r2-l1920-addbuddy-allcapped.png`). The failover badge stays neutral (`r2-d3200-newagent-failover.png`). |
+| **m4** phone / Psycho without the reason | **Partly fixed → m4b open** | Psycho `DrawerHeader` uses the same `RoleModelChip`. Phone now appends ` · <reason>` (`src/PhoneCockpit.tsx:473`), but see m4b. |
+
+### Open
+
+**m4b (minor): the phone provider line still cuts the reason first.**
+- **Job hurt:** 2/5 on phone.
+- **Evidence:** the demo Overlord has no `vs.route`, so the live line is `◆ Gemini · gemini-4-neon`. With the exact string the code builds put into the DOM, `◆ Gemini · gemini-4-neon · failover` needs 223 px but gets 217 px (the Switch button starts at 235). It renders `… · failo…` in dark and light (`r2-d390-phone.png`, `r2-l390-phone.png`). A `claude-opus-5-5` model, or the longer reasons `all-capped` / `legacy-name`, lose more.
+- **Cause:** `src/PhoneCockpit.tsx:473` builds one string inside `.phone-active-provider` (`white-space: nowrap; text-overflow: ellipsis`).
+- **Fix:** render the reason as its own non-shrinking span, the same pattern as `.rmc-main` / `.rmc-why`. Or drop the provider name when the model id already implies it.
+- **Effort:** XS.
+
+### Nits (not counted)
+- The `.def-badge.def-badge-warn { color: var(--pink-t) }` text colour is overridden by the Normal-mode rule `html[data-vibe="boring"] .def-badge.def-badge { color: var(--text-1) !important }` (`src/boring.css:1186`). Only the border turns pink. That reads fine (13.3:1 text), but the colour declaration is dead CSS in Normal mode.
+- Light theme: the pink `· failover` reason measures 4.6–5.0:1 where it sits on the chip gradient. That passes AA, but it is the lowest-contrast text in the header.
+- The all-capped note sits with no gap above the `SEAT` label (`r2-l3200-newagent-allcapped.png`).
+
+### Owner decisions
+None new. The lead settled both round-1 decisions.

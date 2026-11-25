@@ -2,10 +2,10 @@
 import { shortModel } from "./profiles";
 import { providerName, spawnChipTitle, spawnReasonLabel } from "./roleSpawn";
 
-export function RoleModelChip({ role, model, liveModel, reason, staged, provider }: { role?: string | null; model?: string | null; liveModel?: string | null; reason: string; staged?: boolean; provider?: string | null }) {
+export function RoleModelChip({ role, model, reason, staged, provider }: { role?: string | null; model?: string | null; reason: string; staged?: boolean; provider?: string | null }) {
   const short = shortModel(model);
   if (!short && !role && !reason) return null;
-  const full = liveModel ?? model ?? short;
+  const full = model ?? short;
   const title = spawnChipTitle({ role: role ?? undefined, model: full, reason, staged, provider: provider ? providerName(provider) : undefined });
   return (
     <span className="role-model-chip" data-testid="drawer-role-model" title={title}>
