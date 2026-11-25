@@ -1,4 +1,6 @@
 import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
+import { drawerSpawnWhy } from "./roleSpawn";
+import { RoleModelChip } from "./RoleModelChip";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "./agentTypes";
@@ -711,17 +713,11 @@ export function DrawerHeader({
   const { roles: storedRoles } = useProfiles();
   const labelsOf = (agent.labels ?? {}) as Record<string, string>;
   const roleName = roleNameFor(labelsOf.profile, storedRoles) ?? roleNameFor(labelsOf.role, storedRoles) ?? roleNameFor(agent.title, storedRoles);
-  const modelName = shortModel(staged?.model ?? agent.model);
-  const roleModel = roleName && modelName ? `${roleName} · ${modelName}` : roleName || modelName || "";
-  const roleModelChip = roleModel ? (
-    <span
-      className="role-model-chip"
-      data-testid="drawer-role-model"
-      title={`${roleName ? `${roleName} · ` : ""}${staged?.model ?? agent.model ?? modelName}${staged ? " (staged switch)" : ""}`}
-    >
-      {roleModel}
-    </span>
-  ) : null;
+  // R2: reason from the spawn hook's vs.route why=. A staged switch hides it; a live model switch since spawn shows override.
+  const spawnWhy = drawerSpawnWhy(labelsOf, agent.model, !!staged);
+  const roleModelChip = (
+    <RoleModelChip role={roleName} model={staged?.model ?? agent.model} reason={spawnWhy} staged={!!staged} provider={agent.provider} />
+  );
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);

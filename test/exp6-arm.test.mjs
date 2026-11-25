@@ -285,12 +285,14 @@ test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon visibly, ke
   assert.deepEqual([cr3[0].config.provider, r3.ab.reason, cr3[0].labels.profile], ["claude", "capped:antigravity-cli", "Implement"]);
 });
 
-test("spawn_worker: caller-supplied vs.arm / vs.model labels are dropped; a throwing writeLog never fails the spawn", async () => {
+test("spawn_worker: caller-supplied vs.arm / vs.model labels are replaced; a throwing writeLog never fails the spawn", async () => {
   const { ctx, creates } = ctxWith([], []);
   ctx.writeLog = async () => { throw new Error("log down"); };
   const res = await go(ctx, { profile: "Review - Gemini", labels: { "vs.arm": "neon", "vs.model": "fake", "vs.arm-reason": "x" } });
   assert.equal(res.id, "a1");
-  assert.deepEqual([creates[0].labels["vs.arm"], creates[0].labels["vs.model"], creates[0].labels["vs.arm-reason"]], [undefined, undefined, undefined]);
+  // R2: vs.model is always this tool's own pick (the model the spawn runs), never the caller's.
+  assert.deepEqual([creates[0].labels["vs.arm"], creates[0].labels["vs.model"], creates[0].labels["vs.arm-reason"]], [undefined, creates[0].config.model, undefined]);
+  assert.notEqual(creates[0].labels["vs.model"], "fake");
   const r2 = await go(ctx, { profile: SONNET, labels: { "vs.arm": "neon" } });
   assert.equal(r2.ab.arm, "sonnet");
   assert.equal(creates[1].labels["vs.arm"], "sonnet");

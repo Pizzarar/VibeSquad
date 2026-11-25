@@ -1156,6 +1156,16 @@ stubHdr("pinActions.mjs", "export const openBriefEditor = () => {};");
 stubHdr("boringHeaderStrip.mjs", "export const BORING_CTX_WARN_PCT = 72;\nexport const boringHeaderStrip = () => [];\nexport const boringNeedsYouStall = () => null;\nexport const formatToolMinutes = (s) => `${s}`;\nexport const shortToolName = (n) => n;");
 stubHdr("attentionItems.mjs", "export const openToolOf = () => null;");
 stubHdr("profiles.mjs", "export const useProfiles = () => ({ roles: undefined });\nexport const roleNameFor = () => null;\nexport const shortModel = (m) => String(m ?? '');");
+// R2: the real role chip + reason helpers (not fakes), so the header test also pins the chip's own reason span.
+const spawnReasonUrl = pathToFileURL(resolve(import.meta.dirname, "..", "server", "spawn-reason.mjs")).href;
+writeFileSync(join(hdrDir, "roleSpawn.mjs"), transformSync("roleSpawn.ts", d3src("roleSpawn.ts"), { lang: "ts" }).code.replace(/from "\.\.\/server\/spawn-reason\.mjs"/g, `from ${JSON.stringify(spawnReasonUrl)}`));
+writeFileSync(
+  join(hdrDir, "RoleModelChip.mjs"),
+  transformSync("RoleModelChip.tsx", d3src("RoleModelChip.tsx"), { lang: "tsx", jsx: { runtime: "classic" } })
+    .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
+    .replace(/from "react"/g, `from ${JSON.stringify(reactUrl)}`)
+    .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`),
+);
 const hdrCode = transformSync("BoringAgentHeader.tsx", d3src("BoringAgentHeader.tsx"), { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/g, `from ${JSON.stringify(reactUrl)}`)
@@ -1189,6 +1199,19 @@ test("idea-455: a running Normal header renders exactly one turn control, [Inter
   assert.ok(!/ConfirmButton|label="Stop"/.test(block), "no Stop ConfirmButton left in the running block");
   assert.ok(!hdr.includes("boring-hdr-stop"), "class removed from source");
   assert.ok(!d3src("boring.css").includes("boring-hdr-stop"), "unused CSS rule removed");
+});
+
+test("R2 (UX M1): the Normal header's role chip puts the reason in its own span, apart from the model that ellipsizes", () => {
+  const agent = { ...runningHeaderProps.agent, model: "claude-opus-5-5", provider: "claude", labels: { ...runningHeaderProps.agent.labels, "vs.model": "claude-opus-5-5", "vs.route": "stakes=normal reason=all-capped tier=mid role=implement why=all-capped" } };
+  const html = renderToStaticMarkup(React.createElement(BoringAgentHeader, { ...runningHeaderProps, agent }));
+  const main = /<span class="rmc-main">([^<]*)<\/span>/.exec(html);
+  assert.ok(main, "model part in its own .rmc-main span");
+  assert.match(main[1], /claude-opus-5-5/);
+  assert.doesNotMatch(main[1], /all-capped/, "the reason is not inside the shrinking model span");
+  assert.match(html, /<span class="rmc-why" data-testid="drawer-role-model-why" data-reason="all-capped"> · all-capped<\/span>/);
+  // An old why=rung label shows the ladder word.
+  const old = { ...agent, labels: { ...agent.labels, "vs.route": "reason=default tier=mid role=review why=rung" } };
+  assert.match(renderToStaticMarkup(React.createElement(BoringAgentHeader, { ...runningHeaderProps, agent: old })), /data-reason="ladder"> · ladder</);
 });
 
 // ---- R2.1: one derived selection feeds the sidebar `.on` row and the breadcrumb ---------------------------
