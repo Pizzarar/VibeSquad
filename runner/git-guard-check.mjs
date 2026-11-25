@@ -3,7 +3,11 @@
 // (an import error, a crash) is refused by the shim too, so a broken check never lets a write through.
 import { gitArgvViolation, gitGuardRefusalText } from './git-guard.mjs';
 
-const v = gitArgvViolation(process.argv.slice(2), { cwd: process.cwd(), env: process.env });
+// VS_GIT_REAL: the real git the shim found (alias lookups must not depend on PATH order); the shim always sets it.
+const git = process.env.VS_GIT_REAL || 'git';
+const env = { ...process.env };
+delete env.VS_GIT_REAL; // judge (and look aliases up in) the env the real git will get
+const v = gitArgvViolation(process.argv.slice(2), { cwd: process.cwd(), env, git });
 if (v) {
   process.stderr.write(`${gitGuardRefusalText(v)}\n`);
   process.exitCode = 77;

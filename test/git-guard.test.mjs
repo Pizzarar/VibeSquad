@@ -65,7 +65,7 @@ test('destructive git in the main checkout is refused (cwd, subdir, every listed
 test('false positives: read-only git, checkout -b, branch switches, dry runs and --help pass in the main checkout', () => {
   for (const cmd of [
     'git status', 'git status --short', 'git diff', 'git log --oneline -5', 'git show HEAD', 'git rev-parse --show-toplevel',
-    'git branch -a', 'git fetch origin', 'git worktree list', 'git reset', 'git reset --soft HEAD~1', 'git reset HEAD src/a.ts',
+    'git branch -a', 'git fetch origin', 'git worktree list', 'git reset', 'git reset HEAD src/a.ts',
     'git checkout -b feat', 'git checkout -b feat origin/master', 'git checkout -B feat', 'git checkout master', 'git switch -c feat',
     'git switch master', 'git clean -n', 'git clean -nd', 'git clean --dry-run -fd', 'git stash list', 'git stash show -p',
     'git reset --help', 'git checkout -h', 'git log --grep="reset --hard"', 'echo "git reset --hard"', 'grep -r "git clean" docs',

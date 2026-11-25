@@ -10,7 +10,7 @@ import { accessSync, chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync,
 import os from 'node:os';
 import path from 'node:path';
 import { agentEnv } from '../runner/runner.mjs';
-import { applyGitShim, findViolation, GIT_SHIM_DIR, GIT_SHIM_NODE_ENV, gitArgvViolation, scratchRootsOf } from '../runner/git-guard.mjs';
+import { applyGitShim, findViolation, GIT_GLOBAL_VALUE_OPTS, GIT_SAFE_BUILTINS, GIT_SHIM_DIR, GIT_SHIM_NODE_ENV, GIT_WRITE_VERBS, gitArgvViolation, scratchRootsOf, splitAlias } from '../runner/git-guard.mjs';
 
 const posix = process.platform !== 'win32';
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'vs-git-shim-')));
@@ -170,7 +170,7 @@ test('gitArgvViolation: the shim decision on argv (no shell parsing), same class
     assert.ok(v, argv.join(' '));
     assert.equal(v.root, MAIN);
   }
-  for (const argv of [['status'], ['log'], ['checkout', 'side'], ['checkout', '-b', 'n'], ['reset'], ['reset', '--soft', 'HEAD~1'],
+  for (const argv of [['status'], ['log'], ['checkout', 'side'], ['checkout', '-b', 'n'], ['reset'], ['reset', 'HEAD', 'a.txt'],
     ['stash', 'list'], ['commit', '--dry-run'], ['merge', '--help'], ['fetch'], ['push'], []]) {
     assert.equal(gitArgvViolation(argv, opts()), null, argv.join(' '));
   }
@@ -194,7 +194,7 @@ test('hook (findViolation) refuses the R17 shared-branch writes too: one classif
     assert.ok(findViolation(cmd, { cwd: MAIN, env }), cmd);
     if (!cmd.includes(' -C ')) assert.equal(findViolation(cmd, { cwd: WT, env }), null, `${cmd} in the worktree`);
   }
-  for (const cmd of ['git commit --dry-run', 'git merge-base a b', 'git log --merges', 'git reset --soft HEAD~1']) {
+  for (const cmd of ['git commit --dry-run', 'git merge-base a b', 'git log --merges', 'git reset HEAD a.txt']) {
     assert.equal(findViolation(cmd, { cwd: MAIN, env }), null, cmd);
   }
 });
@@ -203,4 +203,127 @@ test('leads keep current behavior: no shim, so a write in the main checkout runs
   const before = head(MAIN);
   passed(run(MAIN, ['commit', '--allow-empty', '-m', 'lead commit'], leadEnv));
   assert.notEqual(head(MAIN), before);
+});
+
+// ---- Tier A review round 1 (rn-6a6782d25ddc): every finding, failing on 77f30d4c ----
+
+const opts1 = (extra = {}) => ({ cwd: MAIN, env: { HOME: root }, scratchRoots: [], ...extra });
+
+test('F1 (High): aliases cannot smuggle a write past the shim or the hook (inline -c, --config-env, config files, !shell)', { skip: !posix }, () => {
+  writeFileSync(path.join(MAIN, 'a.txt'), 'dirty\n');
+  const before = head(MAIN);
+  // The headline: inline -c alias, through the real shim, leaves the dirty tree alone.
+  refused(run(MAIN, ['-c', 'alias.x=reset', 'x', '--hard']));
+  refused(run(MAIN, ['-c', 'alias.x=reset --hard', 'x']));
+  refused(run(MAIN, ['-c', 'ALIAS.X=checkout', 'x', '--', 'a.txt'])); // config keys are case-insensitive
+  refused(run(MAIN, ['--config-env=alias.x=VS_T_ALIAS', 'x', '--hard'], workerEnv, { VS_T_ALIAS: 'reset' }));
+  refused(run(MAIN, ['--config-env', 'alias.x=VS_T_ALIAS', 'x', '--hard'], workerEnv, { VS_T_ALIAS: 'reset' }));
+  refused(run(MAIN, ['x', '--hard'], workerEnv, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'alias.x', GIT_CONFIG_VALUE_0: 'reset' }));
+  refused(run(MAIN, ['-c', 'alias.y=-c core.pager=cat reset', 'y', '--hard'])); // an alias carrying global options
+  refused(run(MAIN, ['-c', 'alias.y=x', '-c', 'alias.x=reset', 'y', '--hard'])); // alias of an alias
+  refused(run(MAIN, ['-c', 'alias.x=!git reset --hard', 'x'])); // a !shell alias runs past the shim: refused in a main checkout
+  // A config-file alias (global ~/.gitconfig here; repo config works the same way).
+  writeFileSync(path.join(root, '.gitconfig'), '[alias]\n\tco = checkout\n\tnuke = reset --hard\n\tst = status\n');
+  try {
+    refused(run(MAIN, ['co', '--', 'a.txt']));
+    refused(run(MAIN, ['nuke']));
+    refused(run(WT, ['-C', MAIN, 'nuke']));
+    passed(run(MAIN, ['st', '--short'])); // a read alias still runs
+  } finally { rmSync(path.join(root, '.gitconfig'), { force: true }); }
+  assert.equal(readFileSync(path.join(MAIN, 'a.txt'), 'utf8'), 'dirty\n');
+  assert.equal(head(MAIN), before);
+  // Reads stay reads; a builtin can never be aliased (git ignores alias.status); worktrees keep their writes.
+  passed(run(MAIN, ['-c', 'alias.x=status', 'x', '--short']));
+  passed(run(MAIN, ['-c', 'alias.status=reset --hard', 'status', '--short']));
+  const wt = head(WT);
+  passed(run(WT, ['-c', 'alias.x=commit', 'x', '--allow-empty', '-m', 'alias in wt']));
+  assert.notEqual(head(WT), wt);
+  // The same decisions on argv (shim) and on a command line (Claude hook).
+  for (const argv of [['-c', 'alias.x=reset', 'x', '--hard'], ['-c', 'alias.x=!echo hi', 'x'], ['-c', 'alias.x="reset" --hard', 'x']]) {
+    assert.equal(gitArgvViolation(argv, opts1())?.root, MAIN, argv.join(' '));
+  }
+  assert.equal(gitArgvViolation(['-c', 'alias.x=status', 'x'], opts1()), null);
+  assert.equal(gitArgvViolation(['nosuchcmd'], opts1()), null, 'no alias, no builtin: not a write');
+  assert.equal(gitArgvViolation(['-c', 'alias.x=reset', 'x', '--hard'], opts1({ cwd: WT })), null);
+  for (const cmd of ['git -c alias.x=reset x --hard', "git -c 'alias.x=reset --hard' x", 'git -c alias.x=\'!git reset --hard\' x',
+    `cd ${WT} && git -C ${MAIN} -c alias.x=reset x --hard`]) {
+    assert.equal(findViolation(cmd, { cwd: MAIN, env: { HOME: root } })?.root, MAIN, cmd);
+  }
+  assert.equal(findViolation('git -c alias.x=reset x --hard', { cwd: WT, env: { HOME: root } }), null);
+  assert.equal(findViolation('git -c alias.x=status x', { cwd: MAIN, env: { HOME: root } }), null);
+  assert.equal(findViolation('git -c "$A" x --hard', { cwd: MAIN, env: { HOME: root } })?.root, MAIN, 'a dynamic -c fails closed');
+  assert.deepEqual(splitAlias(`reset "--hard" 'a b' c\\ d`), ['reset', '--hard', 'a b', 'c d']);
+  assert.equal(splitAlias('reset "open'), null);
+});
+
+test('F1: the shim fast path is only read builtins; anything alias-capable reaches the check (broken check -> refused)', { skip: !posix }, () => {
+  const broken = { [GIT_SHIM_NODE_ENV]: path.join(root, 'no-such-node') };
+  for (const args of [['-c', 'alias.x=reset', 'x', '--hard'], ['x'], ['--config-env=alias.x=HOME', 'x'], ['lfs', 'status']]) {
+    assert.equal(run(MAIN, args, workerEnv, broken).status, 128, args.join(' '));
+  }
+  for (const args of [['status'], ['-c', 'core.pager=cat', 'log', '-1'], ['--no-pager', 'diff'], ['-C', MAIN, 'status'], ['--version'],
+    ['-c', 'alias.status=reset', 'status']]) {
+    passed(run(MAIN, args, workerEnv, broken)); // no node start
+  }
+  // The shim's three lists match git-guard.mjs exactly.
+  const sh = readFileSync(path.join(GIT_SHIM_DIR, 'git'), 'utf8').replace(/\\\r?\n\s*/g, '');
+  const casePat = (re) => sh.match(re)[1].split('|').filter(Boolean);
+  assert.deepEqual(casePat(/\n\s*(-C\|[^)]*)\) skip=1/).sort(), [...GIT_GLOBAL_VALUE_OPTS].sort());
+  assert.deepEqual(casePat(/\n\s*''\|([^)]*)\) fast=1/).sort(), [...GIT_SAFE_BUILTINS].sort());
+  assert.deepEqual(casePat(/\n\s*(reset\|[^)]*)\) fast=; break/).sort(), [...GIT_WRITE_VERBS].sort());
+});
+
+test('F2 (Medium): a relative GIT_DIR / --git-dir resolves against the cwd, not the work tree', { skip: !posix }, () => {
+  const before = head(MAIN);
+  refused(run(MAIN, ['commit', '--allow-empty', '-m', 'x'], workerEnv, { GIT_DIR: '.git', GIT_WORK_TREE: WT }));
+  refused(run(MAIN, ['--git-dir=.git', `--work-tree=${WT}`, 'commit', '--allow-empty', '-m', 'x']));
+  refused(run(MAIN, ['--git-dir', '.git', '--work-tree', WT, 'commit', '--allow-empty', '-m', 'x']));
+  assert.equal(head(MAIN), before);
+  assert.ok(gitArgvViolation(['commit', '-m', 'x'], opts1({ env: { GIT_DIR: '.git', GIT_WORK_TREE: WT } })));
+  assert.ok(findViolation(`GIT_DIR=.git GIT_WORK_TREE=${WT} git commit -m x`, { cwd: MAIN, env: { HOME: root } }));
+  // A relative --git-dir naming the worktree's own git dir from elsewhere still passes.
+  assert.equal(gitArgvViolation(['--git-dir', path.relative(PLAIN, WT_GITDIR), '--work-tree', WT, 'commit', '-m', 'x'], opts1({ cwd: PLAIN })), null);
+});
+
+test('F3 (Medium): --attr-source / --shallow-file take a value; the write verb after them is still seen', { skip: !posix }, () => {
+  refused(run(MAIN, ['--attr-source', 'HEAD', 'reset', '--hard']));
+  refused(run(MAIN, ['--shallow-file', path.join(root, 'none'), 'commit', '--allow-empty', '-m', 'x']));
+  assert.ok(gitArgvViolation(['--attr-source', 'HEAD', 'reset', '--hard'], opts1()));
+  assert.ok(gitArgvViolation(['--attr-source=HEAD', 'reset', '--hard'], opts1()));
+  assert.ok(findViolation('git --attr-source HEAD reset --hard', { cwd: MAIN, env: { HOME: root } }));
+});
+
+test('F4 (Low): -h / --help / --dry-run count only as flags, never as an option value or after --', () => {
+  for (const argv of [['commit', '-m', '-h'], ['commit', '-m', '--dry-run'], ['commit', '-am', '--dry-run'], ['commit', '--message', '--dry-run'],
+    ['commit', '--mess', '--dry-run'], ['commit', '-F', '--dry-run'], ['clean', '-e', '-n', '-fd'], ['clean', '--exclude', '--dry-run', '-f'],
+    ['commit', '-a', '--', '--dry-run'], ['reset', '--hard', '-h'], ['merge', 'side', '--help']]) {
+    assert.ok(gitArgvViolation(argv, opts1()), argv.join(' '));
+  }
+  for (const argv of [['commit', '--dry-run', '-m', 'x'], ['commit', '-m', 'x', '--dry-run'], ['clean', '-e', 'x', '-n'], ['clean', '-fdn'],
+    ['commit', '-h'], ['reset', '--help']]) {
+    assert.equal(gitArgvViolation(argv, opts1()), null, argv.join(' '));
+  }
+  assert.ok(findViolation('git commit -m -h', { cwd: MAIN, env: { HOME: root } }));
+});
+
+test('F5 (Low): reset --merge/--keep/--soft and a branch-moving reset are refused; unstaging still passes', { skip: !posix }, () => {
+  writeFileSync(path.join(MAIN, 'a.txt'), 'dirty\n');
+  const before = head(MAIN);
+  for (const args of [['reset', '--merge'], ['reset', '--keep', 'HEAD'], ['reset', '--soft', 'HEAD~0'], ['reset', 'side'], ['reset', '--mixed', 'side'],
+    ['reset', '--ha'], ['reset', '--har', 'HEAD'], ['switch', '--disc', 'side'], ['checkout', '--forc', 'side']]) {
+    refused(run(MAIN, args));
+  }
+  assert.equal(readFileSync(path.join(MAIN, 'a.txt'), 'utf8'), 'dirty\n');
+  assert.equal(head(MAIN), before);
+  git(MAIN, 'add', 'a.txt');
+  for (const args of [['reset'], ['reset', '-q'], ['reset', 'a.txt'], ['reset', 'HEAD', 'a.txt'], ['reset', '--', 'a.txt'], ['reset', 'HEAD'], ['reset', '-p', '-h']]) {
+    const r = run(MAIN, args);
+    assert.doesNotMatch(r.stderr, /vs git-guard/, args.join(' '));
+  }
+  assert.ok(gitArgvViolation(['reset', '--soft', 'HEAD~1'], opts1()));
+  assert.ok(gitArgvViolation(['reset', 'HEAD~1'], opts1()));
+  assert.ok(findViolation('git reset --merge', { cwd: MAIN, env: { HOME: root } }));
+  assert.equal(findViolation('git reset HEAD a.txt', { cwd: MAIN, env: { HOME: root } }), null);
+  // A soft reset in a shadow repo over the checkout writes only the shadow repo.
+  assert.equal(gitArgvViolation(['reset', '--soft', 'HEAD~1'], opts1({ env: { GIT_DIR: path.join(root, 'shadow.git'), GIT_WORK_TREE: MAIN } })), null);
 });
