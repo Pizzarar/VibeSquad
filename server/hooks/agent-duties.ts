@@ -67,7 +67,7 @@ import {
   routeRoleKeyOf,
   routeTierOf,
 } from "../spawn-route.mjs";
-import { armProvider, armTier } from "../exp6-arm.mjs";
+import { armRouteFor } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { completedTurnText, createWatchEngine, finalsTextFor, maskVerdictWords, verdictBlock } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
@@ -1844,8 +1844,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             stakes: labels.stakes,
             caps: cappedFamilies(currentUsageList()),
             roles,
-            prefer: armProvider(labels["vs.arm"]),
-            tier: armTier(labels["vs.arm"]),
+            ...armRouteFor(hint, labels["vs.arm"]),
             override: parseRouteOverride(labels[ROUTE_OVERRIDE_LABEL]), // H1: the caller's provider/model still win here
           });
           if (hit) match = { profile: hit.profile as StoredProfile, explicit: true };
@@ -2149,8 +2148,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               explicitModel: rawCallerModel,
               override: routeOverride,
               // R1: an R0 implementer arm pick (spawn_worker stamps vs.arm) routes the role onto that arm's provider first.
-              prefer: armProvider(reqLabels["vs.arm"]),
-              tier: armTier(reqLabels["vs.arm"]),
+              ...armRouteFor(requestedProfileName, reqLabels["vs.arm"]),
             });
           }
         }

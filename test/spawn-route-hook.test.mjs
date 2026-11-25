@@ -999,6 +999,13 @@ test(
       // R8: vs.arm=flash routes a role-name Implement spawn onto the antigravity-cli cheap rung (gemini-3.8-flash).
       const f = await run({ "vs.arm": "flash", "vs.model": "gemini-3.8-flash" });
       assert.deepEqual([f.config.provider, f.config.model, f.labels.profile], [A, "gemini-3.8-flash", "Implement"]);
+      // armtier-gate: a non-implementer role that merely carries vs.arm gets neither the arm's provider nor the cheap tier.
+      const rv = (arm) => h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal", "vs.arm": arm }) });
+      const base = await h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal" }) });
+      for (const arm of ["flash", "neon"]) {
+        const r = await rv(arm);
+        assert.deepEqual([r.config.provider, r.config.model], [base.config.provider, base.config.model], `Review + vs.arm=${arm} routes like plain Review`);
+      }
     } finally {
       h.stop?.();
     }
