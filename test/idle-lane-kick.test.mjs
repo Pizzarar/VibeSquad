@@ -243,6 +243,11 @@ test("openPlanBlocks lists non-PASS blocks only", () => {
   assert.deepEqual(openPlanBlocks(md), ["plan block K1", "plan block T3"]);
 });
 
+test("openPlanBlocks (idea-835): with an In flight section, Decided-style lines naming PENDING are not plan blocks", () => {
+  const md = "## Decided\n- O2 review FAIL, row stays PENDING\n\n## In flight\n- K1 idle kick: todo\n- K2 done PASS\n\n## Open\n- Z9 later: pending";
+  assert.deepEqual(openPlanBlocks(md), ["plan block K1"]);
+});
+
 test("laneOpenWork (idea-569): plan blocks drop when the plan has a done PASS log entry or says COMPLETE; an unfinished plan still counts", async () => {
   const mk = (planBody, logLines) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);

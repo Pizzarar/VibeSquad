@@ -213,7 +213,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
-      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err) }));
+      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err, { cwd }) }));
       child.on('exit', (code, signal) => {
         for (const p of pending.values()) p.reject(new Error('process exited'));
         // idea-442: opencode answers a prompt with "Internal error: Internal service failure" (upstream model API) and exits 1 with

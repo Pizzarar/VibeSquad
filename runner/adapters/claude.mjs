@@ -175,7 +175,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
           interrupted = false; // an interrupt flag lasts only until the turn it interrupts produces its result
           // A failed turn must read as an error (push "Agent Error", UI status), not a normal completion.
           if (m.is_error || String(m.subtype ?? '').startsWith('error')) {
-            emit('error', { message: (typeof m.result === 'string' && m.result) || m.subtype || 'turn failed' });
+            emit('error', { message: (typeof m.result === 'string' && m.result) || m.subtype || 'turn failed', ...(m.subtype ? { subtype: String(m.subtype) } : {}) }); // subtype: server providerFaultOf tells a task failure from a provider one
           }
           emit('turn_done', { stopReason: m.stop_reason ?? m.subtype, costUsd: m.total_cost_usd });
           emit('status', { status: 'idle' });
@@ -183,7 +183,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
-      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err) }));
+      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err, { cwd }) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
       let settled = false;
       const ready = new Promise((resolve, reject) => {

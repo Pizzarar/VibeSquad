@@ -43,6 +43,8 @@ import {
   findLaneInRegistry,
   findTeamInRegistry,
   isHubLane,
+  isHiddenLane,
+  isLiveAgent,
   isDigestAgent,
   freezeLaneCodes,
   isRetiredRole,
@@ -260,6 +262,7 @@ export function parseArgs(argv) {
     "brief",
     "timeout",
     "deadline",
+    "requester",
     "needs",
     "file",
     "goal",
@@ -441,6 +444,8 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
     profile,
     digest,
     digestFor: labels.digestFor ? String(labels.digestFor) : null,
+    // idea-629: a schedule-spawned agent, from its runner record's protected label (runner/runner.mjs scheduleOf), not the env.
+    schedule: /^sch-[A-Za-z0-9_-]{1,64}$/.test(String(labels.schedule ?? "").trim()) ? String(labels.schedule).trim() : null,
     role,
     ord,
     team,
@@ -550,7 +555,8 @@ Usage:
   vs inbox reply <idea-N> "<text>"   answer an alpha tester on their card (the only agent text a tester sees; leads/Buddies of the card's Squad)
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
-  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
+  vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]   owner, the same-Squad Overlord or hub Buddy only
+  vs pin hide|unhide|remove <lane> [--team <squad>] [--force] [--json]   owner or the same-Squad Overlord only (idea-632): hide sets hidden (unhide reverses), remove sets state removed (vs pin new "<name>" reopens it); refuses the hub lane, and a lane with live agents unless --force (agents are never archived)
   vs spec [show] [--lane <lane>] [--team <team>]
   vs spec write "<markdown>" | --stdin | --file <path> [--lane <lane>] [--team <team>]
   vs task list [--lane <lane>] [--json]
@@ -559,7 +565,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
-  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"] | vs restart extend <min>   request/abort/extend: OWNER/Overlord only. extend (idea-673) pushes an open request's drain deadline out, or a vs restart still waiting for runner idle (its wait deadline and drain); abort while vs restart waits stops it before anything is stopped. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent> [--full]   status + last assistant message (compact head+tail by default; --full up to 64KB)
@@ -592,7 +598,8 @@ Storage:  VIBESQUAD_HOME (default ~/.vibesquad)
 
 Team log: the Owner writes "you"; leads and Buddies write every other type; a worker writes
 metric, or done/blocker as a self-report (refs = itself); the Pre-check - Flash digest (per its
-record, never --digest) writes done/metric for the worker it digests.`;
+record, never --digest) writes done/metric for the worker it digests; a schedule-spawned worker
+(runner-verified schedule label) may also write needs-you.`;
 
 async function commandLog(flags) {
   const identity = resolveIdentity(flags);
@@ -659,7 +666,10 @@ export function clientLogFields(identity, { type, refs, digestFlag = false } = {
   }
   if (type === "done" || type === "blocker") return { agent: id, type, refs: [id] };
   if (type === "metric") return { agent: id, type, refs: list.filter((r) => !isRunnerId(r) || r === id) };
-  throw new Error(`role=worker cannot write ${type} to the team log (only done, blocker or metric, as a self-report); put it in your final message for your lead.`);
+  // idea-629 mirror of agentLogFields: a schedule-spawned worker (protected `schedule` label on its runner record) may raise
+  // needs-you as itself. The server re-checks against the runner's verified record; this only gives a clear error earlier.
+  if (type === "needs-you" && identity.schedule) return { agent: id, type, refs: [id, ...list.filter((r) => !isRunnerId(r) && r !== id)] };
+  throw new Error(`role=worker cannot write ${type} to the team log (only done, blocker or metric, as a self-report; needs-you only from a schedule-spawned agent); put it in your final message for your lead.`);
 }
 
 function readSinceMe(flags, identity) {
@@ -1841,7 +1851,11 @@ function savePinTeams(doc, revision, flags, { prevDoc = null, writeBrief } = {})
   return { ok: true, status: res.status, file: res.file, revision: res.body?.revision, written };
 }
 
-export function commandPinMerge(flags) {
+/**
+ * `vs pin merge <from> <into>`: folds <from>'s brief into <into> and marks <from> removed. Owner, the same-Squad Overlord or
+ * the same-Squad hub Buddy only (assertPinAdminCaller allowHubBuddy): before the gate any agent could remove a lane by merging it.
+ */
+export async function commandPinMerge(flags, { env = process.env, ...gateOpts } = {}) {
   const fromRaw = String(flags._[0] ?? "").trim();
   const intoRaw = String(flags._[1] ?? "").trim();
   if (!fromRaw || !intoRaw) {
@@ -1856,12 +1870,18 @@ export function commandPinMerge(flags) {
   const target = doc.teams.find((t) => t.id === squadDef.id);
   if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
 
+  // Gate before lane lookup: an unauthorized caller gets 403, not an "unknown lane" probe of the Squad's lanes.
+  const caller = await assertPinAdminCaller("merge", target.id, doc.teams, env, { ...gateOpts, allowHubBuddy: true });
   const lanes = target.lanes ?? [];
   const fromLane = matchLaneRef(lanes, fromRaw);
   const intoLane = matchLaneRef(lanes, intoRaw);
   if (!fromLane) throw new Error(`unknown source lane "${fromRaw}" in ${squadDef.name}`);
   if (!intoLane) throw new Error(`unknown target lane "${intoRaw}" in ${squadDef.name}`);
   if (fromLane.id === intoLane.id) throw new Error("source and target lanes must be different");
+  // Merging marks <from> removed, so the hub lane is refused as the source for everyone, same as `vs pin remove`.
+  if (isHubLane(target, fromLane)) {
+    throw new Error(`vs pin merge: ${fromLane.id} is ${squadDef.name}'s hub lane (the Overlord's); it cannot be merged away. Merge a feature lane into it instead.`);
+  }
 
   const briefRoot = process.env.VIBESQUAD_ROOT ? path.resolve(process.env.VIBESQUAD_ROOT) : undefined;
   const fromBrief = readBrainstormSummary(fromLane.id, briefRoot, { teamId: squadDef.id }).content;
@@ -1921,7 +1941,7 @@ export function commandPinMerge(flags) {
 
   const logEntry = {
     ts: nowIso,
-    agent: identity.agent || "RiffBot",
+    agent: caller.owner ? identity.agent || "RiffBot" : caller.id,
     lane: intoLane.id,
     type: "decision",
     text: `Merged ${fromLane.name || fromLane.id} (${fromLane.id}) -> ${intoLane.name || intoLane.id} (${intoLane.id})${note ? `: ${note}` : ""}`.slice(0, MAX_TEXT),
@@ -1942,10 +1962,142 @@ export function commandPinMerge(flags) {
   return 0;
 }
 
+/**
+ * idea-632: who may hide, unhide or remove a pinned lane. The owner's shell (owner proof: no agent id + the local token), or
+ * the Overlord (a live lead on the hub lane) of the lane's OWN Squad, with the Overlord identified by its token (/verify-agent,
+ * the vs restart proofs). The VS_ROLE/VS_LANE/VS_TEAM env are never read. Any other agent, or another Squad's Overlord, is
+ * refused. `allowHubBuddy` also lets that Squad's hub Buddy (role brainstorm on the hub lane) through: `vs pin merge` only,
+ * since HUB_BUDDY_RULES (server/hooks/agent-duties.ts) has the hub Buddy fold lanes after the user confirms.
+ * `identity` is a DI shortcut for tests ({ role, team: { id }, lane }); `hasOwnerProof` / `verify` inject the proofs.
+ */
+export async function assertPinAdminCaller(verb, squadId, teams, env = process.env, { identity = null, hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env), allowHubBuddy = false } = {}) {
+  const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
+  if (!id || !isRunnerId(id)) {
+    if (!hasOwnerProof(env)) throw new Error(`vs pin ${verb}: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Squad's Overlord may ${verb} a lane.`);
+    return { owner: true, id: "owner" };
+  }
+  let who = identity;
+  if (!who) {
+    const token = String(env.VS_AGENT_TOKEN ?? "").trim();
+    if (!token) throw new Error(`vs pin ${verb}: 403: ${id} has no VS_AGENT_TOKEN, so it cannot be verified; refusing.`);
+    let rec;
+    try {
+      rec = await verify({ id, token });
+    } catch (e) {
+      if (e?.status === 403) throw new Error(`vs pin ${verb}: 403: ${id}'s token does not match the runner's (or the agent is gone/retired); refusing.`);
+      throw new Error(`vs pin ${verb}: could not verify ${id} with the runner: ${e?.message ?? e}`);
+    }
+    rec = rec?.agent ?? rec;
+    if (!rec || String(rec.id ?? "") !== id) throw new Error(`vs pin ${verb}: 403: the runner does not know ${id}; refusing.`);
+    who = { role: String(rec.role ?? "").trim().toLowerCase(), team: { id: rec.team ?? "" }, lane: rec.lane ?? "" };
+  }
+  const want = String(squadId ?? "").toLowerCase();
+  const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
+  const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
+  const roleOk = who.role === "lead" || (allowHubBuddy && who.role === "brainstorm");
+  if (!roleOk || !team || !lane || !isHubLane(team, lane) || String(team.id).toLowerCase() !== want) {
+    const allowed = allowHubBuddy ? "the owner, the Overlord or the hub Buddy" : "the owner or the Overlord";
+    throw new Error(`vs pin ${verb}: ${id} is a ${who.role || "worker"}${team && String(team.id).toLowerCase() !== want ? ` of Squad ${team.id}` : ""}; only ${allowed} of Squad ${squadId} may ${verb} its lanes. Ask your lead.`);
+  }
+  return { owner: false, id };
+}
+
+/** Live agents (not archived/retired/exited) in a lane of a Squad: label team + lane (or lead) on the lane's id or aliases. */
+function liveLaneAgents(agents, squadId, lane) {
+  const keys = new Set([lane.id, ...(lane.aliases ?? [])].map((x) => String(x).toLowerCase()));
+  const sq = String(squadId).toLowerCase();
+  return (agents ?? []).filter((a) => {
+    const l = a?.labels ?? {};
+    return String(l.team ?? "").toLowerCase() === sq && keys.has(String(l.lane || l.lead || "").toLowerCase()) && isLiveAgent(a);
+  });
+}
+
+/**
+ * idea-632: `vs pin hide|unhide|remove <lane> [--team <squad>] [--force] [--json]`. Owner / same-Squad Overlord only
+ * (assertPinAdminCaller). hide sets `hidden: true` (the pin grid, focus rail and Buddy roster skip it: src/pins.ts,
+ * server/lane-pure.mjs isHiddenLane); unhide sets `hidden: false`. remove sets state "removed" like the UI's Remove team
+ * (src/pinRemoveLogic.ts) but archives nothing and deletes no worktree; `vs pin new "<name>"` reopens it. hide/remove refuse
+ * a lane with live agents unless --force (an unreadable roster refuses too), and always refuse the hub lane. Logged as a
+ * decision by the verified caller.
+ */
+export async function commandPinHide(verb, flags, { env = process.env, listAgents = (e) => listRunnerAgentsLive({ env: e }), ...gateOpts } = {}) {
+  const laneRaw = String(flags._[0] ?? "").trim();
+  if (!laneRaw || flags._.length > 1) throw new Error(`usage: vs pin ${verb} <lane> [--team <squad>]${verb === "unhide" ? "" : " [--force]"} [--json]`);
+  const { file, revision, doc } = loadPinTeamsSnapshot(flags);
+  const identity = resolveIdentity({ ...flags, lane: undefined });
+  const squadDef = findSquadInDoc(doc, flags.team ? String(flags.team) : identity.team.id) ?? findSquadInDoc(doc, identity.team.name);
+  if (!squadDef) throw new Error(`unknown squad "${flags.team ?? identity.team.name}". Pass --team <squad>.`);
+  const target = doc.teams.find((t) => t.id === squadDef.id);
+  if (!target) throw new Error(`squad "${squadDef.id}" is not in ${file}`);
+  const caller = await assertPinAdminCaller(verb, target.id, doc.teams, env, gateOpts);
+  const lane = matchLaneRef(target.lanes ?? [], laneRaw);
+  if (!lane) throw new Error(`unknown lane "${laneRaw}" in ${squadDef.name}`);
+  if (isHubLane(target, lane)) throw new Error(`vs pin ${verb}: ${lane.id} is ${squadDef.name}'s hub lane (the Overlord's); it cannot be hidden or removed.`);
+
+  const already =
+    (verb === "hide" && lane.hidden === true) || (verb === "unhide" && !isHiddenLane(target, lane)) || (verb === "remove" && lane.state === "removed");
+  if (already) {
+    const out = { ok: true, squad: target.id, lane: lane.id, verb, changed: false };
+    process.stdout.write(flags.json ? JSON.stringify(out, null, 2) + "\n" : `${lane.name || lane.id} (${lane.id}) is already ${verb === "hide" ? "hidden" : verb === "unhide" ? "shown" : "removed"}; nothing changed.\n`);
+    return 0;
+  }
+
+  let live = [];
+  if (verb !== "unhide") {
+    let agents;
+    try {
+      agents = await listAgents(env);
+    } catch (e) {
+      if (!flags.force) throw new Error(`vs pin ${verb}: could not read the agent roster (${e?.message ?? e}), so live agents in ${lane.id} are unknown; refusing. Re-run with --force to ${verb} it anyway.`);
+      agents = [];
+    }
+    live = liveLaneAgents(agents, target.id, lane);
+    if (live.length && !flags.force) {
+      const names = live.map((a) => `${a.title || a.name || a.id} (${a.id}, ${a.labels?.role || "worker"})`).join(", ");
+      process.stderr.write(`vs pin ${verb}: ${lane.id} has ${live.length} live agent(s): ${names}. Retire or archive them first, or re-run with --force (they keep running).\n`);
+      return 1;
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  target.lanes = target.lanes.map((l) => {
+    if (l.id !== lane.id) return l;
+    if (verb === "hide") return { ...l, hidden: true, hiddenAt: nowIso };
+    if (verb === "unhide") {
+      const { hiddenAt, ...rest } = l;
+      return { ...rest, hidden: false };
+    }
+    const { doneAt, ...rest } = l;
+    return { ...rest, state: "removed", removedAt: nowIso };
+  });
+  const saved = savePinTeams(doc, revision, flags);
+  if (!saved.ok) return 1;
+
+  const undo = verb === "hide" ? `vs pin unhide ${lane.id}` : verb === "unhide" ? `vs pin hide ${lane.id}` : `vs pin new "${lane.name || lane.id}" --team ${target.id}`;
+  const forced = live.length ? ` with --force over ${live.length} live agent(s)` : "";
+  const homeDir = path.resolve(process.env.VIBESQUAD_HOME || BASE_DIR);
+  appendLog({ ...identity, team: squadDef, lane: lane.id, teamDir: path.join(homeDir, "teams", squadDef.id) }, {
+    ts: nowIso,
+    agent: caller.owner ? identity.agent || "owner" : caller.id,
+    lane: lane.id,
+    type: "decision",
+    text: `vs pin ${verb} ${lane.name || lane.id} (${lane.id})${forced}; undo: ${undo}`.slice(0, MAX_TEXT),
+    refs: [lane.id],
+  });
+  if (flags.json) {
+    process.stdout.write(JSON.stringify({ ok: true, squad: target.id, lane: lane.id, verb, changed: true, live: live.map((a) => a.id), undo, revision: saved.revision }, null, 2) + "\n");
+    return 0;
+  }
+  const done = verb === "hide" ? "Hid" : verb === "unhide" ? "Unhid" : "Removed";
+  process.stdout.write(`${done} ${lane.name || lane.id} (${lane.id}) in ${squadDef.name}${forced}. Undo: ${undo}\n`);
+  return 0;
+}
+
 export function commandPin(flags) {
   const sub = String(flags._.shift() ?? "").toLowerCase();
   if (sub === "merge") return commandPinMerge(flags);
-  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"]');
+  if (sub === "hide" || sub === "unhide" || sub === "remove") return commandPinHide(sub, flags);
+  if (sub !== "new") throw new Error('usage: vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force] | vs pin merge <from-lane> <into-lane> [--note "<contract>"] | vs pin hide|unhide|remove <lane> [--team <squad>] [--force]');
   const name = flags._.join(" ").trim();
   if (!name) throw new Error('pin new needs a name: vs pin new "<name>" --brief "<idea>"');
   const brief = String(flags.brief ?? "").trim() || name;
@@ -2880,21 +3032,61 @@ function ownerHubLane(teams) {
  * [--reason <why>]`. Request and abort are the owner's or the Overlord's (the vs restart gate); status is read-only. The server
  * loop (server/restart-request.mjs) sends the drain asks, collects 'drained restart <tip>', and fires vs restart once.
  */
-export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now } = {}) {
+export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now, alive, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), ackMs = 15_000 } = {}) {
   const sub = String(flags._[0] ?? "");
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
   const rr = await import("../server/restart-request.mjs");
   if (sub === "status") {
     if (flags._.length > 1) throw new Error("usage: vs restart status [--json]");
     const cur = rr.readRestartRequest(vsHome);
-    process.stdout.write((flags.json ? JSON.stringify(cur, null, 2) : rr.formatRequestStatus(cur, now())) + "\n");
+    // idea-653: a firing request shows what its vs restart script is doing (waiting for idle, its deadline, who holds it).
+    const progress = cur?.state === "firing" ? rr.readRestartProgress(vsHome, cur) : null;
+    process.stdout.write((flags.json ? JSON.stringify(progress ? { ...cur, progress } : cur, null, 2) : rr.formatRequestStatus(cur, now(), { progress })) + "\n");
     return 0;
   }
   const caller = await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   const by = caller?.owner === false ? caller.id : "owner";
+  // idea-673: a vs restart script still in its idle wait (a fired request's, or a direct run) is extended or aborted through
+  // its control file; the CLI waits (ackMs) for the script to read it, so the reply says what actually happened.
+  const scriptControl = async (opts) => {
+    const ctl = rr.controlWaitingScript(vsHome, { by, now: now(), ...(alive ? { alive } : {}), ...opts });
+    const end = now() + ackMs;
+    let ack = rr.controlAcked(vsHome, ctl, alive ? { alive } : {});
+    for (let i = 0; !ack.acked && now() < end && i < ackMs / 500; i++) { await sleep(500); ack = rr.controlAcked(vsHome, ctl, alive ? { alive } : {}); }
+    return { ctl, ack };
+  };
+  if (sub === "extend") {
+    if (flags._.length !== 2 || !/^\d+$/.test(String(flags._[1]))) throw new Error("usage: vs restart extend <min>");
+    const minutes = Number(flags._[1]);
+    let req;
+    try { req = rr.extendRestartRequest(vsHome, { by, minutes, now: now() }); } catch (e) {
+      if (e?.code !== "FIRING" && e?.code !== "NONE") throw e;
+      const fired = e.code === "FIRING" ? rr.readRestartRequest(vsHome) : null;
+      const { ctl, ack } = await scriptControl({ kind: "extend", minutes, req: fired });
+      const p = ack.progress;
+      process.stdout.write(ack.acked && p?.control?.nonce === ctl.nonce
+        ? `vs restart (pid ${ctl.pid}) now waits for runner idle until ${p.waitDeadline}${fired ? ` (${fired.id})` : ""}; the drain was refreshed to cover it.\n`
+        : ack.acked ? `vs restart (pid ${ctl.pid}) left its idle wait before reading the extend (${p?.phase ?? "exited"}); see vs restart status.\n`
+          : `extend to ${new Date(ctl.extendUntil).toISOString()} written for vs restart pid ${ctl.pid}; it reads it on its next 2 s poll (vs restart status shows the new wait deadline).\n`);
+      return 0;
+    }
+    process.stdout.write(req.state === "queued" ? `${req.id} (queued for ${req.windowAt}): the drain now runs ${req.deadlineMin} min after the window.\n` : `${req.id} (${req.state}): deadline now ${req.deadline}.\n`);
+    return 0;
+  }
   if (sub === "abort") {
     if (flags._.length > 1) throw new Error('usage: vs restart abort [--reason "<why>"]');
-    const req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() });
+    let req;
+    try { req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() }); } catch (e) {
+      if (e?.code !== "FIRING" && e?.code !== "NONE") throw e;
+      let res;
+      try { res = await scriptControl({ kind: "abort", reason: flags.reason ?? "", req: e.req ?? null }); } catch (e2) { throw e.code === "NONE" ? e : e2; } // no request and no waiting script: the old error
+      const p = res.ack.progress;
+      process.stdout.write(res.ack.acked && p?.control?.nonce === res.ctl.nonce
+        ? `vs restart (pid ${res.ctl.pid}) aborted in its idle wait: nothing was stopped${e.req ? `; ${e.req.id} ends as aborted on the server's next tick` : ""}.\n`
+        : res.ack.acked ? `vs restart (pid ${res.ctl.pid}) left its idle wait before reading the abort (${p?.phase ?? "exited"}); see vs restart status.\n`
+          : `abort written for vs restart pid ${res.ctl.pid}; it reads it on its next 2 s poll and stops nothing (vs restart status).\n`);
+      return 0;
+    }
     // idea-674: a request aborted while still queued never asked anyone, so nobody is messaged.
     process.stdout.write(Object.keys(req.asked ?? {}).length ? `${req.id} aborted; the server tells the asked leads to lift their hold.\n` : `${req.id} aborted; no lead had been asked yet, so none is messaged.\n`);
     return 0;
@@ -2926,8 +3118,13 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
 
 export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  const caller = flags.dryRun ? null : await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
+  // idea-695: the requester's own held background work (e.g. its vs restart status poll loop) never holds or defers its
+  // restart. An agent is always its own requester; the owner (and the server's restart-request fire) may name one.
+  if (flags.requester !== undefined && !/^[A-Za-z0-9][\w.-]{0,63}$/.test(String(flags.requester))) throw new Error("vs restart: --requester must be an agent id");
+  if (caller?.owner === false && flags.requester !== undefined && flags.requester !== caller.id) throw new Error(`vs restart: --requester is your own id (${caller.id}) when an agent runs it`);
+  const requester = caller?.owner === false ? caller.id : flags.requester !== undefined ? String(flags.requester) : null;
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   // idea-355: a detached launch (e.g. PowerShell Start-Process) may come without a usable cwd or home: say so, never vanish.
@@ -2973,6 +3170,7 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   if (flags.noForce) args.push("--no-force");
   if (flags.killBackground) args.push("--kill-background");
   if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
+  if (requester) args.push("--requester", requester);
   for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   if (flags.dryRun) {
@@ -3514,7 +3712,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
-    if (command === "restart") return ["request", "status", "abort"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
+    if (command === "restart") return ["request", "status", "abort", "extend"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);

@@ -2272,6 +2272,7 @@ test("B13d: Working-now focal card: busy = first running agent + activity, idle 
     .replace(/import \{ agentDisplayName \} from "\.\/identity";/, "const agentDisplayName = (a) => a.title;")
     .replace(/from "\.\/boringBusts"/, 'from "./b13dBusts.mjs"')
     .replace(/import \{ useTheme \} from "\.\/useBotFace";/, 'const useTheme = () => "dark";')
+    .replace(/import \{ etClock \} from "\.\/etTime";/, "const etClock = () => \"\";")
     .replace(/^import type .*$/gm, "");
   const f = join(dir, "b13dWorkingNow.mjs");
   writeFileSync(f, `import React from ${JSON.stringify(reactUrl)};\n` + code);

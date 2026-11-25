@@ -35,7 +35,7 @@
 // (src-tauri restart_marker_fresh: valid 120s, so refreshed every 30s) and server.pid, the desktop's server launch
 // (spawn_server_process: node server/serve.mjs, cwd = runtime dir, VIBESQUAD_RUNTIME_DIR/BUNDLED_NODE/PORT/START_RUNNER).
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
@@ -55,12 +55,54 @@ export const BOOT_TIMEOUT_DEFAULT_SEC = 120;
 // finally never leaves the runner draining; the finally clears it on every path that keeps the old runner.
 export const DRAIN_MARGIN_SEC = 120;
 export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
+// idea-653: where this run says what it is doing (pid, phase, wait deadline, running/held), for `vs restart status` and the
+// server's restart-request loop (a firing request whose script pid died with no result is aborted, not left for 3 h). Never
+// named restart-*.json: server/restart-request.mjs restartResults reads those as results.
+export const PROGRESS_FILE = 'vs-restart-progress.json';
+export function writeProgress(outDir, rec) {
+  const file = path.join(outDir, PROGRESS_FILE);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try { writeFileSync(tmp, JSON.stringify(rec)); renameSync(tmp, file); return true; } catch { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } return false; }
+}
+// idea-673: `vs restart extend <min>` / `vs restart abort` reach a script that is still waiting for runner idle through this
+// file: { pid, nonce, by, at, extendUntil (ms) | abort: { reason } }. Read (and consumed) on each 2 s poll of the wait, for
+// this pid only; past the wait (phase 'restarting') nothing reads it, so an abort never cuts a stop or relaunch halfway.
+export const CONTROL_FILE = 'vs-restart-control.json';
+/**
+ * The furthest a wait may be pushed out to, from this run's start (not from now: repeated extends are bounded, and the wait
+ * stays well under server/restart-request.mjs FIRING_TIMEOUT_MS, 3 h after the fire).
+ */
+export const EXTEND_MAX_MS = 2 * 60 * 60 * 1000;
+export function takeControl(outDir, pid = process.pid) {
+  const file = path.join(outDir, CONTROL_FILE);
+  let c;
+  try { c = JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+  if (!c || typeof c !== 'object' || c.pid !== pid) return null; // another (or an earlier) run's: left alone
+  try { rmSync(file, { force: true }); } catch { /* read once: the nonce dedupes a repeat */ }
+  return c;
+}
 export function drainTtlMs(opts) {
   const sec = (Number(opts.waitTimeoutSec) || 0) + (Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC;
   return Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, Math.round(sec * 1000)));
 }
 // Blank, non-numeric or <= 0 env values fall back to the default (a 0ms wait would fail every slow start).
 export function bootDefault(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN; return Number.isFinite(n) && n > 0 ? n : BOOT_TIMEOUT_DEFAULT_SEC; }
+
+// idea-695: the agent that asked for this restart (vs restart passes its caller; the restart-request loop its requester).
+export const REQUESTER_RE = /^[A-Za-z0-9][\w.-]{0,63}$/;
+/**
+ * idea-695 (rr-20261123212542-a218 deferred only on the requester's own `vs restart status` poll loop, pid 951750): a runner
+ * /health body with the requester's own held background work taken out, so it never holds or defers the restart that agent
+ * asked for. -> { health, excluded } (excluded: { id, work } when the requester held something, else null). Its running
+ * turns still count (it ends its turn as before); any other holder is untouched.
+ */
+export function withoutRequester(h, requester) {
+  if (!requester || !h || typeof h !== 'object' || !Array.isArray(h.heldAgents) || !h.heldAgents.includes(requester)) return { health: h, excluded: null };
+  const heldAgents = h.heldAgents.filter((id) => id !== requester);
+  const heldWork = h.heldWork && typeof h.heldWork === 'object' ? Object.fromEntries(Object.entries(h.heldWork).filter(([id]) => id !== requester)) : h.heldWork;
+  const held = typeof h.held === 'number' ? Math.max(0, h.held - (h.held === h.heldAgents.length ? 1 : 0)) : undefined;
+  return { health: { ...h, heldAgents, ...(heldWork !== undefined ? { heldWork } : {}), ...(held !== undefined ? { held } : {}) }, excluded: { id: requester, work: h.heldWork?.[requester] ?? [] } };
+}
 
 export function parseArgs(argv) {
   const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90, bootTimeoutSec: bootDefault(process.env.VS_RESTART_BOOT_TIMEOUT) };
@@ -85,6 +127,7 @@ export function parseArgs(argv) {
     else if (a === '--out-dir') o.outDir = val(i++);
     else if (a === '--log') o.log = val(i++);
     else if (a === '--vs-home') o.vsHome = val(i++);
+    else if (a === '--requester') { const v = val(i++); if (!REQUESTER_RE.test(v)) throw new Error('bad --requester (an agent id)'); o.requester = v; }
     else throw new Error(`unknown flag ${a}`);
   }
   for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
@@ -743,7 +786,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
         ...(opts.wait ? [`drain: runner POST /drain (ttl ${Math.round(drainTtlMs(opts) / 1000)}s): new background work is refused while waiting; cleared at the end`] : []),
-        opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
+        opts.wait ? `wait for runner /health running:0 and held:0${opts.requester ? ` (not counting requester ${opts.requester}'s own held work)` : ''} (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : det.runner.identity === 'unknown' && det.runner.pid ? `runner pid ${det.runner.pid} alive, identity unknown: stop only via token /shutdown (never killed by pid)` : 'runner not running: nothing to stop',
         det.systemd?.refuse ? `REFUSE: ${det.systemd.refuse}` : det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : det.systemd?.use && det.systemd.mainPid === det.server.pid ? `systemctl --user stop ${det.systemd.unit} (KillMode=process: the main pid only); a failed stop aborts the restart (no SIGTERM: Restart= would race the relaunch)` : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
         det.systemd?.use
@@ -777,6 +820,10 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     rmSync(lockFile, { force: true });
     if (!takeLock()) { result.errors.push('could not take restart lock'); return result; }
   }
+  // idea-653: progress for vs restart status and the request loop (best effort: a write failure never fails the restart).
+  const progress = (phase, extra = {}) => writeProgress(outDir, { pid: process.pid, startedAt: result.startedAt, phase, at: new Date(d.now()).toISOString(), ...extra });
+  progress('starting');
+  let lastControl = null; // idea-673: the last control read (its nonce is the CLI's acknowledgement; kept on 'finished')
   const markerFile = path.join(configDir, 'server.restarting');
   const touchMarker = () => {
     try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
@@ -833,16 +880,53 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           step('drain set', { ttlSec: Math.round(ttlMs / 1000), until: r.body?.drain?.until ? new Date(r.body.drain.until).toISOString() : null });
         } else step('drain not set', { status: r.status, error: r.status === 404 ? 'runner predates /drain' : String(r.body?.error ?? '') });
       } catch (e) { step('drain not set', { error: e.message }); }
-      const deadline = d.now() + opts.waitTimeoutSec * 1000;
-      let running = det.runner.health.running;
-      let heldAgents = det.runner.health.heldAgents ?? [];
-      let held = det.runner.health.held ?? heldAgents.length;
-      let heldWork = det.runner.health.heldWork ?? {};
+      let deadline = d.now() + opts.waitTimeoutSec * 1000; // idea-673: vs restart extend pushes it out
+      // idea-695: the requester's own held work is recorded, never waited on or deferred for.
+      const mine = (h) => {
+        const { health, excluded } = withoutRequester(h, opts.requester);
+        if (excluded) result.requesterExcluded = { id: excluded.id, work: excluded.work, at: new Date(d.now()).toISOString() };
+        return health;
+      };
+      const health0 = mine(det.runner.health);
+      let running = health0.running;
+      let heldAgents = health0.heldAgents ?? [];
+      let held = health0.held ?? heldAgents.length;
+      let heldWork = health0.heldWork ?? {};
       // idea-604: the last /health as read (the settle below reads its held list the restart request's way).
-      let lastHealth = det.runner.health;
-      step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
+      let lastHealth = health0;
+      step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec, ...(opts.requester ? { requester: opts.requester } : {}) });
+      const waitProgress = () => progress('waiting', { waitDeadline: new Date(deadline).toISOString(), waitTimeoutSec: opts.waitTimeoutSec, running, held, heldAgents: heldAgents.slice(0, 20), ...(lastControl ? { control: lastControl } : {}) });
+      // idea-673: extend or abort the wait (vs restart extend / abort). An extend refreshes the drain to cover the new deadline.
+      const applyControl = async () => {
+        const c = takeControl(outDir);
+        if (!c || (lastControl && c.nonce && c.nonce === lastControl.nonce)) return;
+        const by = String(c.by ?? 'owner').slice(0, 64);
+        if (c.abort) {
+          const reason = String(c.abort.reason ?? '').replace(/[\r\n]+/g, ' ').slice(0, 200);
+          result.controlAbort = { by, reason, at: new Date(d.now()).toISOString() };
+          lastControl = { nonce: c.nonce ?? null, kind: 'abort', by, at: result.controlAbort.at };
+          step('aborted while waiting', result.controlAbort);
+          result.errors.unshift(`aborted by ${by} while waiting for runner idle${reason ? `: ${reason}` : ''}; nothing was stopped`);
+          progress('aborted', { control: lastControl });
+          throw new Error('abort');
+        }
+        const until = Number(c.extendUntil);
+        if (!Number.isFinite(until)) return;
+        const to = Math.min(until, Date.parse(result.startedAt) + EXTEND_MAX_MS);
+        if (to > deadline) {
+          deadline = to;
+          if (drainOn) {
+            const ttlMs = Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, deadline - d.now() + ((Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC) * 1000));
+            try { await runnerCall(det, d, 'POST', '/drain', 5000, { ttlMs, reason: `vs restart pid ${process.pid}` }); } catch (e) { result.errors.push(`extend: drain refresh failed (${e.message}); the drain may lapse before the new deadline`); }
+          }
+        }
+        lastControl = { nonce: c.nonce ?? null, kind: 'extend', by, at: new Date(d.now()).toISOString(), waitDeadline: new Date(deadline).toISOString() };
+        result.waitExtended = [...(result.waitExtended ?? []), lastControl];
+        step('wait extended', lastControl);
+      };
+      waitProgress();
       let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
-      const fetchHealth = async () => (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
+      const fetchHealth = async () => mine((await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {});
       const applyHealth = (h) => {
         lastHealth = h;
         running = h.running ?? running;
@@ -852,7 +936,9 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       };
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
+        await applyControl();
         try { applyHealth(await fetchHealth()); } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
+        waitProgress();
       }
       if (held > 0 && !opts.killBackground) {
         // idea-604 (rr-20261123012408-ac64): the deadline's last /health may catch an agent whose turn just ended, listed
@@ -907,6 +993,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       } else if (waitErr) step('runner unreachable during idle wait', { error: waitErr, note: 'not confirmed idle: /health failed; re-detected below before any stop' });
       else step('runner idle');
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
+    progress('restarting'); // idea-653: past the wait: stopping and relaunching (no abort from here on)
 
     // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
     const prev = det.runner;
@@ -1388,6 +1475,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     result.finishedAt = new Date(d.now()).toISOString();
     const file = path.join(outDir, `restart-${result.startedAt.replace(/[:.]/g, '-')}.json`);
     try { writeFileSync(file, JSON.stringify(result, null, 2)); result.resultFile = file; log(`result: ${file}`); } catch (e) { log(`could not write result: ${e.message}`); }
+    // idea-673: an abort throws straight here; keeping its control nonce lets vs restart abort's ack poll still see it.
+    progress('finished', { ok: result.ok, resultFile: result.resultFile ?? null, ...(lastControl ? { control: lastControl } : {}) });
     const holder = readJson(lockFile);
     if (holder?.pid === process.pid) rmSync(lockFile, { force: true });
   }

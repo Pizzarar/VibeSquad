@@ -176,12 +176,13 @@ test("alert gating and tool-call collapse", () => {
 });
 
 test("timestamp format + getters for block 2", () => {
-  const now = new Date(2026, 10, 2, 15, 0, 0).getTime();
-  const iso = new Date(2026, 10, 2, 14, 55, 0).toISOString();
+  // R15: absolute stamps are US Eastern ("8:00 AM ET"); 2026-11-02 is EST (UTC-5).
+  const now = Date.UTC(2026, 10, 2, 20, 0, 0);
+  const iso = new Date(Date.UTC(2026, 10, 2, 19, 55, 0)).toISOString();
   assert.equal(P.formatTimestamp(iso, "relative", now), "5m ago");
-  assert.equal(P.formatTimestamp(iso, "absolute", now), "14:55");
-  assert.equal(P.formatTimestamp(iso, "both", now), "14:55 · 5m ago");
-  assert.match(P.formatTimestamp(new Date(2026, 9, 30, 9, 5).toISOString(), "absolute", now), /^2026-10-30 09:05$/);
+  assert.equal(P.formatTimestamp(iso, "absolute", now), "2:55 PM ET");
+  assert.equal(P.formatTimestamp(iso, "both", now), "2:55 PM ET · 5m ago");
+  assert.match(P.formatTimestamp(new Date(Date.UTC(2026, 9, 30, 13, 5)).toISOString(), "absolute", now), /^2026-10-30 9:05 AM ET$/);
   assert.equal(P.formatTimestamp("nope", "both", now), "");
   fresh();
   P.setPref("chat.timestampFormat", "both");

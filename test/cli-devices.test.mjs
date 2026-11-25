@@ -161,7 +161,7 @@ describe("vs devices revoke runs in another process and the server notices", () 
   });
 
   test("revoke --all empties devices.json and every token is refused", async () => {
-    const tokens = auth.listDevices().length ? [await pairDevice("A", "100.64.0.20"), await pairDevice("B", "100.64.0.21")] : [];
+    const tokens = [await pairDevice("A", "100.64.0.20"), await pairDevice("B", "100.64.0.21")]; // idea-901: always pair; not dependent on devices left by earlier tests
     assert.ok(tokens.every((t) => authAs(t)));
     ageDevicesFile();
     const r = vs(["devices", "revoke", "--all"]);
