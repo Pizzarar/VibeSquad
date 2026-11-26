@@ -1633,6 +1633,22 @@ test("split: two AgentDrawer panes side by side, the active pane is highlighted 
   }
 });
 
+test("idea-1075: split + a dormant Bugs row shows the Bugs empty card (the screen the ?slot=bugs URL names), not the split panes", () => {
+  const dormant = squad({ bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  intoChat(dormant);
+  try {
+    globalThis.__panes = splitState();
+    assert.ok(byId(render(props(dormant)), "boring-chat-split")); // before the click: the split panes
+    byId(render(props(dormant)), "boring-core-bugs").props.onClick();
+    const t = render(props(dormant));
+    assert.equal(byId(t, "boring-chat-split"), null);
+    assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+    assert.ok(!JSON.stringify(t).includes("Split · pick an agent"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
 test("split: an empty right pane shows the placeholder with Close split", () => {
   const view = squad();
   intoChat(view);

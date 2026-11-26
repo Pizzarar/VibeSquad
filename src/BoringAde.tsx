@@ -726,7 +726,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
 
   const selRaw = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
   // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
-  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
+  // idea-1075: a dormant Desk/Bugs slot picked while split has no agent to show in either pane. The URL already names it (?slot=, urlSlot),
+  // so the screen must be its empty card too, not the split panes: the split keeps its panes and returns when an agent is opened again.
+  const dormantSlot = mode === "chat" && !agent && !!selectedLaneId && !!LANE_SLOT[selectedLaneId];
+  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId && !dormantSlot;
   const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
   // idea-500: keep the selected row visible; only when the selection changes (never on re-render), nearest so it never fights user scrolling.
   useEffect(() => {
@@ -1293,7 +1296,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
+            {panes.split && !dormantSlot ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
               // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
               // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
               <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
