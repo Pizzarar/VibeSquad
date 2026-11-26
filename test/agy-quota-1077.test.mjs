@@ -215,7 +215,7 @@ test("1077-8: markQuotaTurn / reduceTurn (pure): the next turn starts clean", ()
   assert.equal(reduceTurn(t, { type: "status", status: "idle", seq: 12 }).outcome.kind, "completed");
 });
 
-// ---- 5. the respawn: only with 0 real turns, down the role chain, failover labels ----
+// ---- 5. the respawn: only with 0 finished turns and no side-effecting tool call (reads are fine), down the role chain, failover labels ----
 
 test("1077-9: upstreamRespawnPlan(quota): the closing turnEnd is the death; any earlier finished turn blocks it", () => {
   const w = { role: "worker", quota: true };
@@ -314,4 +314,55 @@ test("1077-12: under the owner's No-DeepSeek cap (opencode capped) the respawn n
   const none = await respawn("rn-qd5", { [AGY_CLAUDE_FAMILY]: { reason: "q" }, claude: { reason: "q" }, "antigravity-cli": { reason: "q" }, ...noDs });
   assert.deepEqual(none.map((a) => a.provider), []);
   assert.ok(teamLog().some((e) => e.type === "metric" && /result=skipped reason=no-alternate agent=rn-qd5 /.test(e.text)));
+});
+
+// ---- idea-1080 (@bug, PLAN_INBOX_1126I I2): the quota turnEnd guard and the read-only rule, pinned on their own ----
+
+const READ_CALLS = [
+  { item: { type: "tool_call", name: "Read AGENTS.md", detail: { kind: "read" } } },
+  { item: { type: "tool_call", name: "Grep upstreamRespawnPlan", detail: { kind: "search" } } },
+  { item: { type: "tool_call", name: "think", detail: { kind: "think" } } },
+  { item: { type: "tool_call", name: "WebFetch", detail: { kind: "fetch" } } },
+];
+
+test("1080-L1: 1 prompt + a real turnEnd + the quota turnEnd is NOT a first turn: only the LAST entry's turnEnd is the death", () => {
+  const w = { role: "worker", quota: true };
+  const tl = [
+    { item: { type: "user_message", text: "go" } },
+    { item: { type: "assistant_message", text: "done the first bit" }, turnEnd: true }, // a real finished turn (no new prompt after it)
+    { item: { type: "assistant_message", text: NOTICE.trim() }, turnEnd: true }, // the quota death
+  ];
+  assert.equal(tl.filter((e) => e.item.type === "user_message").length, 1, "one prompt: the prompt count can't be what skips it");
+  assert.deepEqual(upstreamRespawnPlan(tl, {}, w), { skip: "not-first-turn" });
+  // The guard drops exactly one entry: the closing quota turnEnd. Alone it respawns; a turnEnd anywhere before it blocks.
+  assert.deepEqual(upstreamRespawnPlan([tl[0], tl[2]], {}, w), { prompt: "go" });
+  const midTurnEnd = [tl[0], tl[1], { item: { type: "assistant_message", text: "more" } }, tl[2]];
+  assert.deepEqual(upstreamRespawnPlan(midTurnEnd, {}, w), { skip: "not-first-turn" });
+});
+
+test("1080-L1: the hook does not respawn a quota-dead worker with one prompt and an earlier finished turn", async () => {
+  const tl = [DEAD_TL[0], { item: { type: "assistant_message", text: "first turn done" }, turnEnd: true }, DEAD_TL[1]];
+  assert.equal((await respawn("rn-1080a", [AGY_CLAUDE_FAMILY], tl)).length, 0);
+  assert.ok(teamLog().some((e) => e.type === "metric" && /result=skipped reason=not-first-turn agent=rn-1080a /.test(e.text)));
+});
+
+test("1080-L2: reads don't count as work (respawned); any edit, shell or unknown-kind call does (skipped)", () => {
+  const w = { role: "worker", quota: true };
+  const readOnly = [DEAD_TL[0], ...READ_CALLS, DEAD_TL[1]];
+  assert.deepEqual(upstreamRespawnPlan(readOnly, {}, w), { prompt: DEAD_TL[0].item.text });
+  for (const [kind, name] of [["edit", "Edit a.ts"], ["execute", "git commit"], ["delete", "rm x"], ["other", "mcp tool"], [undefined, "no kind"]]) {
+    const tl = [DEAD_TL[0], ...READ_CALLS, { item: { type: "tool_call", name, detail: kind ? { kind } : {} } }, DEAD_TL[1]];
+    assert.equal(upstreamRespawnPlan(tl, {}, w).skip, `tool-edits(${name})`, String(kind));
+  }
+});
+
+test("1080-L2: a read-only agy-claude worker that hit the quota mid-turn is respawned once on native claude", async () => {
+  const tl = [DEAD_TL[0], ...READ_CALLS, DEAD_TL[1]];
+  const created = await respawn("rn-1080b", [AGY_CLAUDE_FAMILY], tl);
+  assert.equal(created.length, 1);
+  assert.equal(spawnFamily(created[0].provider, created[0].model), "claude", created[0].provider);
+  assert.equal(created[0].prompt, DEAD_TL[0].item.text);
+  const shell = [DEAD_TL[0], ...READ_CALLS, { item: { type: "tool_call", name: "npm test", detail: { kind: "execute" } } }, DEAD_TL[1]];
+  assert.equal((await respawn("rn-1080c", [AGY_CLAUDE_FAMILY], shell)).length, 0, "a shell call may have changed files: the lead decides");
+  assert.ok(teamLog().some((e) => e.type === "metric" && /result=skipped reason=tool-edits\(npm test\) agent=rn-1080c /.test(e.text)));
 });
