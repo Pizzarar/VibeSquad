@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { updateJsonFileSync } from "./file-lock.mjs";
+import { isForbiddenRealHome } from "./test-guard.mjs";
 import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
 import { GEMINI_TOP_MODEL, AGY_CLAUDE_FAMILY, AGY_CLAUDE_SUFFIXED_RE, isAgyClaudeModel } from "./model-ids.mjs";
 
@@ -206,7 +207,7 @@ function extractUsageList(usageProviders) {
 
 /** idea-705: a `vs cap set deepseek` key is the same cap as provider `opencode` (every opencode profile is DeepSeek). Read-side only; stored keys stay as written. */
 const CAP_KIN = Object.assign(Object.create(null), { opencode: ["opencode", "deepseek"], deepseek: ["deepseek", "opencode"] });
-const capKin = (family) => CAP_KIN[family] ?? [family];
+export const capKin = (family) => CAP_KIN[family] ?? [family];
 
 function matchesProvider(entry, targetFamily) {
   if (!entry || typeof entry !== "object" || !targetFamily) return false;
@@ -225,10 +226,11 @@ export function resolveCappedProvidersPath(opts = {}) {
   return join(base, "capped-providers.json");
 }
 
-/** A cap with no reset time is assumed to clear with the 5 h usage window. */
-export const CAP_DEFAULT_TTL_MS = 5 * 60 * 60 * 1000;
-
-/** When a cap stops applying, in ms epoch: its reset time if it carries one, else updatedAt + 5 h. Null = unknown age, never expires. */
+/**
+ * When a cap stops applying, in ms epoch: its reset time if it carries one. Null = no reset time, never expires.
+ * idea-1073: a cap without a reset time (`vs cap add`, a manual cap) is indefinite until `vs cap clear`. It used to lapse at
+ * updatedAt + 5 h, which silently dropped the owner's "No DeepSeek" cap twice on 11-25. Auto caps always carry resetsAt.
+ */
 export function capExpiryMs(entry) {
   if (!entry || typeof entry !== "object") return null;
   for (const k of ["resetsAt", "resetAt", "resetTime"]) {
@@ -239,8 +241,7 @@ export function capExpiryMs(entry) {
     const t = Number.isFinite(num) ? (num < 1e11 ? num * 1000 : num) : Date.parse(raw);
     if (Number.isFinite(t)) return t;
   }
-  const at = Date.parse(entry.updatedAt);
-  return Number.isFinite(at) ? at + CAP_DEFAULT_TTL_MS : null;
+  return null;
 }
 
 export function isCapExpired(entry, now = Date.now()) {
@@ -251,6 +252,26 @@ export function isCapExpired(entry, now = Date.now()) {
 /** A { family: entry } cap map without the entries whose reset time has passed (non-object entries never expire). */
 export function dropExpiredCaps(map, now = Date.now()) {
   return Object.fromEntries(Object.entries(map ?? {}).filter(([, v]) => !(v && typeof v === "object" && isCapExpired(v, now))));
+}
+
+/**
+ * idea-1073: a cap never vanishes silently. Each cap a writer drops for having passed its reset time gets a line on stderr
+ * and a metric entry in <cap file dir>/teams/_unassigned/log.jsonl (the log the breaker's cap lines go to, logRunnerMetric).
+ */
+export function logCapLapses(path, removed, now = Date.now()) {
+  for (const [key, entry] of removed) {
+    const exp = capExpiryMs(entry);
+    const msg = `cap lapsed: ${key} (reason "${String(entry?.reason ?? "").slice(0, 120)}", set ${entry?.updatedAt ?? "?"}): reset ${exp === null ? "?" : new Date(exp).toISOString()} passed, removed ${new Date(now).toISOString()}`;
+    console.error(`[vibesquad] ${msg}`);
+    try {
+      const base = join(dirname(path), "teams", "_unassigned");
+      if (isForbiddenRealHome(base)) continue;
+      mkdirSync(base, { recursive: true });
+      appendFileSync(join(base, "log.jsonl"), JSON.stringify({ ts: new Date(now).toISOString(), agent: "runner", lane: "unassigned", type: "metric", text: msg.slice(0, 240), refs: [] }) + "\n");
+    } catch {
+      /* the stderr line above is the fallback */
+    }
+  }
 }
 
 const parseCapFile = (text) => {
@@ -264,17 +285,24 @@ const parseCapFile = (text) => {
  * writer is kept, and writes atomically so a reader never sees a half-written file. Best effort: a failure leaves the file as it was.
  */
 export function pruneExpiredCapsFile(path, now = Date.now()) {
+  let removed = [];
   try {
     updateJsonFileSync(path, (doc) => {
+      removed = [];
       if (!doc || typeof doc !== "object" || Array.isArray(doc)) return doc;
       const hasWrapper = doc.capped && typeof doc.capped === "object" && !Array.isArray(doc.capped);
       const current = hasWrapper ? doc.capped : doc;
-      const live = Object.fromEntries(Object.entries(current).filter(([, v]) => !isCapExpired(v, now)));
+      const live = {};
+      for (const [k, v] of Object.entries(current)) {
+        if (isCapExpired(v, now)) removed.push([k, v]);
+        else live[k] = v;
+      }
       return { ...(hasWrapper ? doc : {}), capped: live };
     }, { fallback: { capped: {} }, timeoutMs: 0 });
   } catch {
-    /* best effort: leave file as it was */
+    return; /* best effort: leave file as it was */
   }
+  logCapLapses(path, removed, now);
 }
 
 /** Read the raw `{ capped: { ... } }` object directly from disk (never merges in-memory opts). Expired caps are dropped and pruned from the file. */
@@ -393,9 +421,11 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
 
   const path = resolveCappedProvidersPath(opts);
   const now = opts.now ?? Date.now();
+  let lapsed = [];
   const next = updateJsonFileSync(
     path,
     (doc) => {
+      lapsed = [];
       if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
         throw new Error(`Invalid capped-providers.json structure at ${path}`);
       }
@@ -404,6 +434,7 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
       const live = {};
       for (const [k, v] of Object.entries(rawMap)) {
         if (!isCapExpired(v, now)) live[k] = v;
+        else lapsed.push([k, v]);
       }
       const cur = live[key];
       const until = Number.isFinite(ttlMs) && ttlMs > 0 ? now + ttlMs : Infinity;
@@ -422,6 +453,7 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
     },
     { fallback: { capped: {} }, ...opts },
   );
+  logCapLapses(path, lapsed, now);
   return next.capped;
 }
 

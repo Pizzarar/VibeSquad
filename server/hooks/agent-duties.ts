@@ -1987,7 +1987,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * empty map means no provider is capped, so spawns are left alone when nothing declares one.
      */
     const readCappedProviderMap = (): Record<string, any> => {
-      // Drop expired caps (resetsAt / updatedAt + 5 h), exactly like provider-failover's readers: a 10-minute upstream cap must lapse here too.
+      // Drop expired caps (past resetsAt; a cap with no reset time never lapses, idea-1073), exactly like provider-failover's readers: a 10-minute upstream cap must lapse here too.
       const live = (m: Record<string, any>): Record<string, any> => dropExpiredCaps(m);
       if (deps.cappedProviders !== undefined && deps.cappedProviders !== null) {
         return live(normalizeCappedProviders(deps.cappedProviders));

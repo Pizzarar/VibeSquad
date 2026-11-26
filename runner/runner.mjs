@@ -5,7 +5,7 @@ import { stat as fspStat } from 'node:fs/promises';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
-import { LimitStore, createAgyUsagePoller, CreditStore, createCreditPoller } from './limits.mjs';
+import { LimitStore, createAgyUsagePoller, agyPollConfigFromEnv, CreditStore, createCreditPoller } from './limits.mjs';
 import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { sha256 } from './reap.mjs';
@@ -42,6 +42,31 @@ export function droppedSteerSeqs(events) {
     }
   }
   return dropped;
+}
+
+// idea-869: a slash command (`/compact`, `/compact <focus>`, `/clear`) only works as a turn's WHOLE text: the CLI parses the
+// prompt's first token. Joined to other text (either side) it reaches the model as plain text. A path ("/home/x") is not one.
+const SLASH_RE = /^\s*\/[A-Za-z][\w:.-]*(?=\s|$)/;
+export const isSlashText = (text) => typeof text === 'string' && SLASH_RE.test(text);
+
+// idea-869: texts (in order) grouped into turns: plain texts join with a blank line (one turn, as a coalesced queue job always
+// did), a slash command is always a turn of its own. Returns [{ text, slash }]. An item may be { text, seq, own, resume } (a
+// logged input, from the fold's pending): its group then lists it in `inputs` ([{ seq, own }]) for the delivery bookkeeping
+// (_turnJob). A `resume` item (a cut turn's continue) never joins a group carrying an earlier input (only a notice), and an
+// `own` input (owed a turn of its own) never joins the continue's group: the continue stays its own turn, as resume() queued it.
+export function turnGroups(items) {
+  const out = [];
+  for (const item of items) {
+    const { text, seq, own, resume } = typeof item === 'string' ? { text: item } : item;
+    const slash = isSlashText(text);
+    let last = out.at(-1);
+    const joins = last && !slash && !last.slash && !(resume === true && last.inputs?.length) && !(own === true && last.resume);
+    if (!joins) { last = { text, slash }; out.push(last); }
+    else last.text = `${last.text}\n\n${text}`;
+    if (resume === true) last.resume = true;
+    if (Number.isSafeInteger(seq)) (last.inputs ??= []).push({ seq, own: own === true });
+  }
+  return out;
 }
 
 // Values that reach a CLI as an argument must never look like a flag.
@@ -446,7 +471,7 @@ export class Runner {
     this.limits = new LimitStore(limitsFile);
     this.credits = new CreditStore(creditsFile);
     // idea-701: the default poller runs `agy -p /usage` in an isolated HOME, so it needs no busy guard; an injected run (tests) keeps the idea-349 guard.
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...agyPollConfigFromEnv(), ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
     this._pollCredits = pollCredits ? createCreditPoller({ store: this.credits, ...(creditFetch ? { fetchImpl: creditFetch } : {}), ...(creditResolveKey ? { resolveKey: creditResolveKey } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
@@ -775,7 +800,7 @@ export class Runner {
     if (prompt) this.store.append(id, 'input', { text: prompt });
     // Over a cap the agent still exists (its log says queued, N ahead) and starts when its turn comes: never refused.
     const job = {
-      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta),
+      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta), ...(isSlashText(prompt) ? { slash: true } : {}),
       run: () => {
         this._makeRoom(id, { owner: job.owner === true }); // a coalesced owner send makes the queued create an owner job
         const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
@@ -884,6 +909,7 @@ export class Runner {
         }
         if (data.status === 'idle') {
           entry.inflight = 0;
+          entry.slashTurn = false; // idea-869: the slash-command turn (if it was one) is over
           entry.turns++;
           entry.idleProgress = entry.progress;
           turnEnded = true;
@@ -1131,8 +1157,12 @@ export class Runner {
     // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
     // idea-146/312: a runtime wake into the live process that held its slot for that work (job.inPlace) needs a turn slot only;
     // FIFO behind a queued job that waits for a LIVE slot would deadlock (that job waits on this agent's slot, this turn on it).
-    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j));
-    if (!familyQueued && this._fits(job)) {
+    // A job that waits only for its own agent's open turn to end (idea-869) holds nobody else up.
+    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j) && !this._waitsOnOwnTurn(j));
+    // idea-869: one agent's jobs run in order: never ahead of an earlier job of the same agent, never into its open turn when
+    // the job must be a turn of its own (ownTurn).
+    const sameAgent = this.queue.some((j) => j.id === job.id);
+    if (!familyQueued && !sameAgent && !this._waitsOnOwnTurn(job) && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
     }
@@ -1140,11 +1170,17 @@ export class Runner {
     if (job.digest) this._pump(); // only queued owner jobs (budget spent) may be ahead of it: its own reserve may still fit
   }
 
+  // idea-869: a job that must be a turn of its own (a slash command's later messages, the next of several jobs of one agent)
+  // waits while its agent's current turn is open; it is never steered into that turn.
+  _waitsOnOwnTurn(job) { return job.ownTurn === true && this.live.get(job.id)?.inflight > 0; }
+
   // Owner jobs sit ahead of non-owner jobs of the same family (FIFO within each group). A digest sits after every queued
   // owner/digest job of its family and ahead of the first plain job of ANY family, so it also wins a freed live-process
-  // slot (the maxLive ceiling is shared across families). Everything else appends FIFO.
+  // slot (the maxLive ceiling is shared across families). Everything else appends FIFO. Never ahead of a job of the same
+  // agent (idea-869: its jobs run in send order).
   _enqueue(job) {
     job.ahead = -1;
+    job.logged = undefined; // announced afresh at its new place
     let idx = -1;
     if (job.owner) {
       idx = this.queue.findIndex((j) => j.family === job.family && !j.owner);
@@ -1153,6 +1189,8 @@ export class Runner {
       this.queue.forEach((j, i) => { if (j.family === job.family && this._rank(j) <= 1) floor = i + 1; });
       idx = this.queue.findIndex((j, i) => i >= floor && this._rank(j) === 2);
     }
+    const lastSame = this.queue.findLastIndex((j) => j.id === job.id);
+    if (idx !== -1 && idx <= lastSame) idx = lastSame + 1 < this.queue.length ? lastSame + 1 : -1;
     if (idx === -1) this.queue.push(job);
     else this.queue.splice(idx, 0, job);
     this._announceQueue();
@@ -1167,14 +1205,17 @@ export class Runner {
       // family -> highest rank that did not fit. An owner that did not fit (its over-cap budget is spent) still lets a
       // digest try its own reserve; a digest or plain job that did not fit blocks every later non-owner job of its family.
       const blocked = new Map();
+      const held = new Set(); // idea-869: agents with a job left in the queue earlier in this pass: their later jobs wait for it
       for (let i = 0; i < this.queue.length;) {
         const job = this.queue[i];
+        if (held.has(job.id) || this._waitsOnOwnTurn(job)) { held.add(job.id); i++; continue; } // waits on its own agent only: blocks no one else
         const b = blocked.get(job.family);
-        if (b !== undefined && (b > 0 || this._rank(job) === 0)) { i++; continue; }
-        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
+        if (b !== undefined && (b > 0 || this._rank(job) === 0)) { held.add(job.id); i++; continue; }
+        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); held.add(job.id); i++; continue; }
         this.queue.splice(i, 1);
         try { job.run(); } catch (err) { this._failJob(job, err); }
         i = 0; // running it may have changed what fits (a park, a new turn): rescan from the head
+        held.clear();
       }
     } finally { this._pumping = false; }
     this._announceQueue();
@@ -1186,6 +1227,7 @@ export class Runner {
     try {
       const id = job.id;
       this.store.append(id, 'error', { message: err.message });
+      this._consumed(job, 'failed'); // idea-869: a job that failed to start owes nothing after a restart (the status below says so for untagged inputs)
       if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
       else if (job.spec?.resume) {
         this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
@@ -1195,13 +1237,19 @@ export class Runner {
   }
 
   // Tells each queued agent where it stands: a `queued` status event with `ahead` (same-family jobs in front), only when it changed.
+  // idea-869: one line per agent (its first job), and none for a job that waits on its own agent's open turn: that agent's log
+  // must keep saying running until the turn's idle (its next job is announced then, if it still has to wait).
   _announceQueue() {
     const seen = {};
+    const told = new Set();
     for (const job of this.queue) {
       const ahead = seen[job.family] ?? 0;
       seen[job.family] = ahead + 1;
-      if (job.ahead === ahead) continue;
       job.ahead = ahead;
+      const first = !told.has(job.id);
+      told.add(job.id);
+      if (!first || this._waitsOnOwnTurn(job) || job.logged === ahead) continue;
+      job.logged = ahead;
       try { this.store.append(job.id, 'status', { status: 'queued', ahead, family: job.family }); } catch { /* log gone */ }
     }
   }
@@ -1336,7 +1384,16 @@ export class Runner {
     clearTimeout(entry.parkTimer);
     this._clearArchive(entry);
     this.store.append(id, 'parked', { sessionId: entry.sessionId, systemPrompt: entry.systemPrompt ?? null });
-    this.store.append(id, 'status', { status: 'parked' });
+    // idea-868: a park that only frees the live slot of an agent whose next prompt waits in the queue (_makeRoom) is tagged
+    // `queued: true` (the server must not read it as a turn end; the fold keeps the pending inputs) and the log goes back to
+    // `queued`, so status() still says queued and a runner restart re-enqueues that prompt (recoverQueued).
+    const waiting = this.queue.find((j) => j.id === id);
+    this.store.append(id, 'status', { status: 'parked', ...(waiting ? { queued: true } : {}) });
+    if (waiting) {
+      const ahead = Number.isInteger(waiting.ahead) && waiting.ahead >= 0 ? waiting.ahead : 0;
+      waiting.logged = ahead;
+      this.store.append(id, 'status', { status: 'queued', ahead, family: waiting.family });
+    }
     this.live.delete(id);
     entry.handle.kill();
     this._reapAfterEnd(id, entry, 'park');
@@ -1495,6 +1552,76 @@ export class Runner {
     };
   }
 
+  // idea-869: the unstarted inputs of `plan` (_unstartedPlan, same fold) one by one as { text, seq, own }, for turnGroups: a
+  // slash command among them must stay a turn of its own, and each turn's job must know which logged inputs it delivers.
+  // plan.text keeps its full-read shape (idea-307's legacy-spec invariant); this falls back to it (no seqs: legacy bookkeeping).
+  // A cut turn's continue (`resume`) goes first: resume() queued it ahead of the owed inputs logged before it (lower seq), so
+  // a restart while both sit queued must not run an owed input (or a /compact) before the interrupted turn is continued.
+  _pendingTexts(id, plan) {
+    const inputs = this._fold(id)?.pending;
+    const items = Array.isArray(inputs) ? inputs.map((e) => ({ text: e.text, seq: e.seq, own: e.own === true, ...(e.resume === true ? { resume: true } : {}) })) : [];
+    if (!items.length || items.map((e) => e.text).join('\n\n') !== plan.text) return [plan.text];
+    return [...items.filter((e) => e.resume), ...items.filter((e) => !e.resume)];
+  }
+
+  // idea-869: the delivery bookkeeping of one turn group's job. A job that is a turn of its own (ownTurn), or that carries an
+  // input logged as owed to one (`own`), names the last input seq it delivers (`upTo`): _deliverJob/_failJob log an
+  // `inputs-consumed` marker for it, the only thing that takes such inputs off the fold's pending (a status of another turn
+  // never does). Untagged inputs re-admitted as a later turn of their own (an older runner's coalesced queue split here)
+  // are tagged now with one `inputs-held` line, so the turn before them does not read as their delivery.
+  _turnJob(id, g, ownTurn) {
+    const inputs = g.inputs ?? [];
+    if (!inputs.length || !(ownTurn || inputs.some((i) => i.own))) return {};
+    const untagged = ownTurn ? inputs.filter((i) => !i.own).map((i) => i.seq) : [];
+    if (untagged.length) this.store.append(id, 'inputs-held', { seqs: untagged });
+    return { upTo: Math.max(...inputs.map((i) => i.seq)) };
+  }
+
+  // idea-869: logs that the job's inputs left the queue (delivered, failed or dropped), for the fold's pending (_turnJob).
+  _consumed(job, how) {
+    if (job.upTo === undefined) return;
+    try { this.store.append(job.id, 'inputs-consumed', { upTo: job.upTo, ...(how ? { how } : {}) }); } catch { /* log gone */ }
+  }
+
+  // idea-869: the inputs still owed to turns of their own (the fold's pending tagged `own`) that no job carries: the previous
+  // runner went away while they waited behind their agent's OPEN turn. Such a job logs no `queued` line (_announceQueue), so
+  // the log ends running/starting and _unstartedPlan (queued logs only) never sees them. Every path that brings the agent back
+  // takes them over (resume: behind a cut turn's continue; send: ahead of its text): queued again as jobs that consume them
+  // (deliverable), or dropped with an `inputs-consumed` marker (_dropOwed) when the agent may not act on them (exited,
+  // archived, retired, superseded, or stale: the bounds of _unstartedPlan/_cutTurn). Either way none stays in the fold's
+  // pending, where a later queued restart would replay it. Null: nothing owed, or a live process / queued job has them.
+  _owedOwn(id) {
+    if (!this.store.exists(id) || this.live.has(id) || this.queue.some((j) => j.id === id)) return null;
+    const f = this._fold(id);
+    const own = (f?.pending ?? []).filter((p) => p.own === true && Number.isSafeInteger(p.seq));
+    if (!own.length) return null;
+    const meta = f.meta ?? {};
+    const stale = this.queueMaxAgeMs > 0 && Date.now() - (f.lastStatus?.ts ?? 0) > this.queueMaxAgeMs;
+    return {
+      items: own.map((p) => ({ text: p.text, seq: p.seq, own: true })),
+      upTo: Math.max(...own.map((p) => p.seq)),
+      owner: own.some((p) => p.owner === true),
+      deliverable: !f.exit && !f.archived && !stale && !isRetiredMeta(meta) && !this._successorOf(id, meta),
+    };
+  }
+
+  _dropOwed(id, owed) {
+    try { this.store.append(id, 'inputs-consumed', { upTo: owed.upTo, how: 'dropped' }); } catch { /* log gone */ }
+  }
+
+  // idea-869: queues owed inputs (_owedOwn) as one job per turn group, in input order. behind: after a job of this agent (a cut
+  // turn's continue), so every group is a turn of its own. Each job names its inputs (_turnJob: upTo) and consumes them.
+  _admitOwed(id, spec, owed, behind) {
+    turnGroups(owed.items).forEach((g, i) => {
+      const ownTurn = behind || i > 0;
+      const job = {
+        id, spec, family: providerFamily(spec.provider), needsTurn: true, kind: 'send', owner: owed.owner, digest: this._isDigest(id, spec), text: g.text, images: [],
+        run: () => this._deliverJob(job), ...(g.slash ? { slash: true } : {}), ...(ownTurn ? { ownTurn: true } : {}), ...this._turnJob(id, g, ownTurn),
+      };
+      this._admit(job);
+    });
+  }
+
   // A lead/Buddy whose replacement was spawned while it sat queued is superseded, whatever became of the replacement (it may have
   // exited, been archived or itself retired by the time of a restart). Reviving the old one would make `vs who lead` CONFLICT.
   // Superseded = any NEWER agent (created later; id breaks a tie) in the same team + lane + role family (lead/former-lead,
@@ -1558,8 +1685,12 @@ export class Runner {
     const rank = (p) => (p.plan.owner ? 0 : isDigestMeta(p.plan.spec.meta) ? 1 : 2);
     plans.sort((a, b) => rank(a) - rank(b) || a.plan.ts - b.plan.ts);
     for (const { id, plan } of plans) {
-      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: plan.text, images: [], run: () => this._deliverJob(job) };
-      this._admit(job);
+      // idea-869: one job per turn group, in input order (a queued /compact stays its own turn after the restart too).
+      // A cut turn's continue (g.resume, first: _pendingTexts) keeps _continueJob's unwedge retry, as resume() queued it.
+      turnGroups(this._pendingTexts(id, plan)).forEach((g, i) => {
+        const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: g.text, images: [], run: () => { this._deliverJob(job); const e = g.resume ? this.live.get(id) : null; if (e) e.continueJob = job; }, ...(g.slash ? { slash: true } : {}), ...(i > 0 ? { ownTurn: true } : {}), ...this._turnJob(id, g, i > 0) };
+        this._admit(job);
+      });
     }
     lap('admit');
     return plans.map((p) => p.id);
@@ -1575,14 +1706,21 @@ export class Runner {
     const parked = this._parkedSpec(id);
     const spec = parked ?? this._lostSpec(id);
     if (!spec) return false;
+    // idea-869: inputs owed to turns of their own that waited behind the turn the restart cut (_owedOwn), read before anything
+    // below is logged. A fresh queued log is recoverQueued's/the next send's (_unstartedPlan carries all its inputs).
+    const owed = this._unstartedPlan(id) ? null : this._owedOwn(id);
     if (!parked && this._cutTurn(id, spec.meta)) {
       // The cut turn is closed first (tagged: never a completed turn on the server): the inputs before it were delivered, so
       // a runner restart while the continue sits queued replays only what comes after it (recoverQueued's cut).
       this.store.append(id, 'status', { status: 'lost', resume: true, reason: 'turn cut by a runner restart; continuing' });
       this.store.append(id, 'input', { text: CONTINUE_PROMPT, resume: true });
       this._admit(this._continueJob(id, spec, CONTINUE_PROMPT));
+      if (owed?.deliverable) this._admitOwed(id, spec, owed, true); // each its own turn after the continue (as they were queued)
+      else if (owed) this._dropOwed(id, owed);
       return true;
     }
+    if (owed?.deliverable) { this._admitOwed(id, spec, owed, false); return true; } // they bring the agent back, as a send would
+    if (owed) this._dropOwed(id, owed); // the turn is not continued (stale, retired, superseded): neither are they
     if (this.adapters[spec.provider]?.lazyResume) {
       if (!parked) {
         this.store.append(id, 'parked', { sessionId: spec.resume, systemPrompt: spec.systemPrompt ?? null });
@@ -1788,6 +1926,7 @@ export class Runner {
     const fresh = entry.inflight === 0;
     if (fresh) {
       entry.inflight = 1;
+      entry.slashTurn = isSlashText(text); // idea-869: a slash-command turn takes no steer; later sends queue behind it (send)
       entry.lastEvent = Date.now();
       entry.quiet = false;
       this._turnStarted(entry);
@@ -1795,7 +1934,7 @@ export class Runner {
     try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) {
       // The turn never opened: give back its slot and any over-cap owner/digest mark _noteOverCap took for it (marks are
       // only taken for a fresh turn, so this releases exactly that one; every deliver path comes through here).
-      if (fresh) { entry.inflight = 0; this._releaseOverCap(entry, 1); }
+      if (fresh) { entry.inflight = 0; entry.slashTurn = false; this._releaseOverCap(entry, 1); }
       throw err;
     }
   }
@@ -1813,23 +1952,35 @@ export class Runner {
     if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
     // Coalesce into a job still waiting in this process's queue first (a queued create or send): one entry, one turn.
-    const queued = this.queue.find((j) => j.id === id && (j.kind === 'send' || j.kind === 'create'));
+    // idea-869: only into the agent's LAST queued job, and never when either side is a slash command (`/compact` joined to a
+    // wake, or a wake joined to `/compact`, reaches the CLI as plain text): that send becomes its own job behind the others.
+    const mine = this.queue.filter((j) => j.id === id);
+    const tail = mine.at(-1);
+    const slash = isSlashText(text);
+    const queued = tail && (tail.kind === 'send' || tail.kind === 'create') && !tail.slash && !slash ? tail : null;
     let spec = null;
     let pending = null; // inputs queued before a runner restart that this send must carry along (they never ran)
-    if (!live && !queued) {
+    if (!live && !mine.length) {
       pending = this._unstartedPlan(id); // checked even when the agent has a session: those inputs are not in the session yet
       if (pending?.supersededBy) throw new Error(`agent ${id} is superseded by ${pending.supersededBy}; send to the successor`);
       spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? pending?.spec ?? null;
     }
-    if (!live?.handle && !spec && !queued) throw new Error(`agent ${id} is not running`);
+    if (!live?.handle && !spec && !mine.length) throw new Error(`agent ${id} is not running`);
+    // idea-869: inputs owed to turns of their own that a restart left behind a cut turn (_owedOwn) ride ahead of this text, as
+    // queued inputs that never ran do; ones the agent may no longer act on are dropped, never left to resurrect.
+    let owed = !live && !mine.length && !pending ? this._owedOwn(id) : null;
+    if (owed && !owed.deliverable) { this._dropOwed(id, owed); owed = null; }
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     if (opts.activeTurnBehavior === 'interrupt' && live?.status === 'running') this.cancel(id);
     const owner = opts.owner === true;
-    const family = live?.family ?? queued?.family ?? providerFamily(spec.provider);
+    const family = live?.family ?? tail?.family ?? providerFamily(spec.provider);
 
     // Texts join in order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     if (queued) {
-      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
+      // idea-869: a text joining a job that tracks its inputs (_turnJob) is owed to that job's turn: tagged, and the job's upTo moves.
+      const tracked = queued.ownTurn === true || queued.upTo !== undefined;
+      const seq = this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...(tracked ? { ownTurn: true } : {}), ...senderId }).seq;
+      if (tracked && Number.isSafeInteger(seq)) queued.upTo = seq;
       queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
       queued.needsTurn = true; // a create without a prompt now has one
       queued.images = [...(queued.images ?? []), ...images];
@@ -1845,16 +1996,34 @@ export class Runner {
     const bgStopNotice = spec?.bgStopNotice ?? live?.bgStopNotice ?? null; // idea-230: a live idle agent carries it on its entry, a parked one folds it from the log
     if (live) live.bgStopNotice = null;
     if (bgStopNotice) this.store.append(id, 'bg-stop-notice', { text: bgStopNotice });
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
-    const lead = [spec?.drainNotice, bgStopNotice, pending?.text].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
-    const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
-      run: () => this._deliverJob(job),
-      ...(opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
-      ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
-    };
-    if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
-    else this._admit(job);
+    const lead = [spec?.drainNotice, bgStopNotice, ...(pending ? this._pendingTexts(id, pending) : owed ? owed.items : [])].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
+    // idea-869: one job per turn: plain texts join as always, a slash command is a job of its own (images ride with this text).
+    // A job behind another job of this agent, or sent while its agent's turn is open and either side is a slash command (a
+    // running /compact takes no other text; a /compact is never steered into a running plain turn), must be a turn of its own.
+    const groups = turnGroups([...lead, text]);
+    const behind = mine.length > 0 || (live?.inflight > 0 && (live.slashTurn === true || slash));
+    const mineAt = groups.length - 1; // the group this text lands in
+    // An input that waits for a turn of its own is tagged (the fold keeps it owed through the turn before it: _turnJob).
+    const own = behind || mineAt > 0;
+    const seq = this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...(own ? { ownTurn: true } : {}), ...senderId }).seq;
+    if (Number.isSafeInteger(seq)) (groups[mineAt].inputs ??= []).push({ seq, own });
+    const jobs = groups.map((g, i) => {
+      const ownTurn = i > 0 || behind;
+      const job = {
+        id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true || owed?.owner === true, digest: this._isDigest(id, spec), text: g.text, images: i === groups.length - 1 ? images : [],
+        run: () => this._deliverJob(job),
+        ...(g.slash ? { slash: true } : {}),
+        ...(ownTurn ? { ownTurn: true } : {}),
+        ...this._turnJob(id, g, ownTurn),
+        ...(i === 0 && opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
+        ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
+      };
+      return job;
+    });
+    const [first, ...rest] = jobs;
+    if (live?.inflight > 0 && !behind) first.run(); // steering a running turn: it already holds its slot
+    else this._admit(first);
+    for (const job of rest) this._admit(job); // queued behind `first` (same agent): each waits for the turn before it to end
     return this.queuePosition(id);
   }
 
@@ -1871,6 +2040,7 @@ export class Runner {
     if (this.queue.some((j) => j.id === id)) return drop('queued');
     if (!live?.handle) return drop('not-running');
     if (!(live.inflight > 0)) return drop('idle');
+    if (live.slashTurn === true) return drop('slash-turn'); // idea-869: a slash command's turn takes no other text
     if (typeof live.handle.steerable === 'function' && !live.handle.steerable()) return drop('turn-ending');
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
     // The input's seq rides along (inputSeq) so every steer_dropped names the input it drops; the fresh-session primer skips those.
@@ -1892,6 +2062,7 @@ export class Runner {
   _deliverJob(job) {
     const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false, owner: job.owner === true });
     this._noteOverCap(job, entry);
+    this._consumed(job); // idea-869: before the hand-off (a send that throws goes to _failJob, which drops them all the same)
     this._deliver(entry, job.text, job.images ?? []);
   }
 
@@ -1967,7 +2138,13 @@ export class Runner {
   // cancel and parks as soon as its turn ends. kill() (which logs an exit) is only for agents that can't park.
   archive(id) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    for (const j of this.queue) if (j.id === id) this._consumed(j, 'dropped'); // idea-869: never replayed after an unarchive + restart
     this.queue = this.queue.filter((j) => j.id !== id); // an archived agent's waiting prompts are dropped
+    // idea-869: so are the inputs no job of this runner carries (owed `own` inputs a restart left behind a cut turn, a queued
+    // log's unstarted ones): one marker with no upTo empties the fold's pending, so an unarchive + send/resume never replays them.
+    let left = [];
+    try { left = this._fold(id)?.pending ?? []; } catch { /* unreadable log */ }
+    if (left.length) { try { this.store.append(id, 'inputs-consumed', { how: 'dropped' }); } catch { /* log gone */ } }
     this._announceQueue();
     const e = this.live.get(id);
     if (e?.handle) {

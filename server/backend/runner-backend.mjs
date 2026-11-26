@@ -39,7 +39,7 @@ const STATUS = { starting: "initializing", queued: "initializing", running: "run
 // permission / session / resume_fallback). Everything else is setup, lifecycle or noise: meta / stderr / raw / limit
 // (the runner's NON_PROGRESS_EVENTS) plus the events the runner appends directly (created/input/status starting|queued|parked/
 // parked/error/exit/archive/unarchive/cancel). `lastProgressAt`/`lastPromptAt` are derived from this split for staleness.
-const NON_PROGRESS_LOG_EVENTS = new Set(["meta", "stderr", "raw", "limit", "archive", "unarchive", "cancel", "created", "input", "parked", "error", "exit", "park-held", "park-forced", "park-probe-error"]);
+const NON_PROGRESS_LOG_EVENTS = new Set(["meta", "stderr", "raw", "limit", "archive", "unarchive", "cancel", "created", "input", "parked", "error", "exit", "park-held", "park-forced", "park-probe-error", "inputs-consumed", "inputs-held"]); // inputs-*: the runner's queue bookkeeping (idea-869), never turn progress
 export function isTurnProgressEvent(e) {
   if (!e || typeof e !== "object") return false;
   if (e.type === "status") return e.status === "running" || e.status === "idle";
@@ -501,8 +501,10 @@ async function injectedPrefix(role, cwd) {
  */
 export function reduceTurn(t, e) {
   const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
-  if (e.type === "input") { t.awaiting = true; return null; }
-  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
+  // A fresh prompt opens a new awaited turn. `errored` stays (the shown status keeps "error" until that turn runs); only
+  // `errSinceInput` (idea-868: did THIS prompt's wait see an error) starts over.
+  if (e.type === "input") { if (!inTurn) t.errSinceInput = false; t.awaiting = true; return null; }
+  if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; t.errSinceInput = true; } return null; }
   if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
   if (e.type === "status" && e.status && e.resume === true) {
     // A prompt-less resume (Runner._settleResume / unwedge): the process came back (or gave up), no turn ran. Never a
@@ -510,6 +512,13 @@ export function reduceTurn(t, e) {
     t.status = STATUS[e.status] ?? e.status;
     t.queued = undefined;
     if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; }
+    return null;
+  }
+  if (e.type === "status" && e.status === "parked" && (e.queued === true || (t.queued && !t.errSinceInput))) {
+    // idea-868: the runner parked an idle process whose next prompt still waits in its family queue (to free a live slot).
+    // Nothing ran and nothing ended: that prompt's turn is still owed, so the turn state (queued, awaiting) stays as it is.
+    // The runner tags such a park `queued: true`; an untagged one (older runner) is read the same way while the log says
+    // queued and no error came in. _failJob's park (error, then parked) is a real end: the queued prompt failed to start.
     return null;
   }
   if (e.type === "status" && e.status) {
