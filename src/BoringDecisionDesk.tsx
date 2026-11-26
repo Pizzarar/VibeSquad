@@ -165,6 +165,45 @@ export function sourceExcerptText(item: Pick<DecisionItem, "context" | "rawText"
   return "No source message excerpt available.";
 }
 
+function SourceDisclosure({
+  item,
+  open: isSourceOpen,
+  onToggle,
+}: {
+  item: DecisionItem;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!hasSourceDisclosure(item)) return null;
+  const bodyId = `boring-decision-source-body-${item.id}`;
+  return (
+    <div className="boring-decision-source" data-testid={`boring-decision-source-${item.id}`}>
+      <button
+        type="button"
+        className="boring-decision-source-toggle"
+        data-testid={`boring-decision-source-toggle-${item.id}`}
+        aria-expanded={isSourceOpen}
+        aria-controls={bodyId}
+        onClick={onToggle}
+      >
+        {isSourceOpen ? "Hide source ▴" : "Show source ▾"}
+      </button>
+      {isSourceOpen && (
+        <div
+          id={bodyId}
+          className="boring-decision-source-body"
+          data-testid={bodyId}
+          role="region"
+          aria-label={`Source excerpt for ${item.ask}`}
+          tabIndex={0}
+        >
+          {sourceExcerptText(item)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Group open feed items (excluding offscreen) by Squad, preserving oldest-first order inside each Squad and across Squads. */
 export function groupFeedBySquad(items: DecisionItem[]): { squad: string; squadName: string; items: DecisionItem[] }[] {
   const sorted = [...items].sort((a, b) => a.ts - b.ts);
@@ -953,8 +992,6 @@ export function BoringDecisionDesk({
               {grp.items.map((item) => {
                 const rowType = classifyDecisionRow(item);
                 const hasOptions = hasDecisionOptions(item);
-                const showSource = hasSourceDisclosure(item);
-                const isSourceOpen = Boolean(sourceOpen[item.id]);
                 const sel = staged[item.id];
                 const isStaged = Boolean(sel);
                 const age = formatAge(item.ts, now);
@@ -996,32 +1033,11 @@ export function BoringDecisionDesk({
                       </div>
                     )}
 
-                    {showSource && (
-                      <div className="boring-decision-source" data-testid={`boring-decision-source-${item.id}`}>
-                        <button
-                          type="button"
-                          className="boring-decision-source-toggle"
-                          data-testid={`boring-decision-source-toggle-${item.id}`}
-                          aria-expanded={isSourceOpen}
-                          aria-controls={`boring-decision-source-body-${item.id}`}
-                          onClick={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
-                        >
-                          {isSourceOpen ? "Hide source ▴" : "Show source ▾"}
-                        </button>
-                        {isSourceOpen && (
-                          <div
-                            id={`boring-decision-source-body-${item.id}`}
-                            className="boring-decision-source-body"
-                            data-testid={`boring-decision-source-body-${item.id}`}
-                            role="region"
-                            aria-label={`Source excerpt for ${item.ask}`}
-                            tabIndex={0}
-                          >
-                            {sourceExcerptText(item)}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
 
                     {hasOptions && (
                       <div className="boring-decision-choices" role="group" aria-label={`Options for ${item.ask}`}>
@@ -1137,32 +1153,11 @@ export function BoringDecisionDesk({
                         <span className="boring-decision-decides-label">Decides:</span> {item.decides}
                       </div>
                     )}
-                    {hasSourceDisclosure(item) && (
-                      <div className="boring-decision-source" data-testid={`boring-decision-source-${item.id}`}>
-                        <button
-                          type="button"
-                          className="boring-decision-source-toggle"
-                          data-testid={`boring-decision-source-toggle-${item.id}`}
-                          aria-expanded={Boolean(sourceOpen[item.id])}
-                          aria-controls={`boring-decision-source-body-${item.id}`}
-                          onClick={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
-                        >
-                          {sourceOpen[item.id] ? "Hide source ▴" : "Show source ▾"}
-                        </button>
-                        {sourceOpen[item.id] && (
-                          <div
-                            id={`boring-decision-source-body-${item.id}`}
-                            className="boring-decision-source-body"
-                            data-testid={`boring-decision-source-body-${item.id}`}
-                            role="region"
-                            aria-label={`Source excerpt for ${item.ask}`}
-                            tabIndex={0}
-                          >
-                            {sourceExcerptText(item)}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
                   </div>
                   <div className="boring-decision-offscreen-actions">
                     <button

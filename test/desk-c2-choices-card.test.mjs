@@ -109,9 +109,9 @@ test("C2 mixed asks: picking an option plus typing a reply preserves both and bu
 
   // Server validateAnswerBatch + buildAnswerPrompt produce ONE prompt with BOTH lines
   const [validated] = validateAnswerBatch({ answers: batch });
-  const prompt = buildAnswerPrompt(item, validated, { ownerName: "Aub" });
+  const prompt = buildAnswerPrompt(item, validated, { ownerName: "Owner" });
   assert.match(prompt, /Owner's answer: Go with option 2: "B: keep the partial fill and resize the stop to the filled size"\./);
-  assert.match(prompt, /--- BEGIN owner reply \(Aub\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
+  assert.match(prompt, /--- BEGIN owner reply \(Owner\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
 
   // Unselecting B keeps the typed reply as a reply choice
   const onlyReply = applyChoiceToggle(staged, item.id, { choice: "alt:1" });

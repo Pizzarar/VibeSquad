@@ -31,7 +31,7 @@ const server = createServer((req, res) => {
   if (p === "/api/teams") { res.end(JSON.stringify({ teams: TEAMS, folders: [], revision: "r47" })); return; }
   if (p === "/__vibesquad/decisions" && req.method === "GET") { res.end(JSON.stringify({ ok: true, items, count: items.length, agentsOk: true, generatedAt: new Date().toISOString() })); return; }
   if (p === "/__vibesquad/decisions/answer") { let raw = ""; req.on("data", (c) => (raw += c)); req.on("end", () => { const body = JSON.parse(raw || "{}"); const results = [];
-    for (const ans of validateAnswerBatch(body)) { const it = items.find((i) => i.id === ans.id); const prompt = buildAnswerPrompt(it, ans, { ownerName: "Aub", target: it.asker.title, via: "asker" }); delivered.push({ raw: body, ans, prompt }); items = items.filter((i) => i.id !== ans.id); results.push({ id: ans.id, choice: ans.choice, status: "delivered", target: it.askerId, via: "asker", logged: true }); }
+    for (const ans of validateAnswerBatch(body)) { const it = items.find((i) => i.id === ans.id); const prompt = buildAnswerPrompt(it, ans, { ownerName: "Owner", target: it.asker.title, via: "asker" }); delivered.push({ raw: body, ans, prompt }); items = items.filter((i) => i.id !== ans.id); results.push({ id: ans.id, choice: ans.choice, status: "delivered", target: it.askerId, via: "asker", logged: true }); }
     res.end(JSON.stringify({ ok: true, results })); }); return; }
   if (p.startsWith("/__vibesquad") || p.startsWith("/api")) { res.end("[]"); return; }
   let fp = path.join(dist, p === "/" ? "index.html" : p); if (!existsSync(fp) || statSync(fp).isDirectory()) fp = path.join(dist, "index.html");

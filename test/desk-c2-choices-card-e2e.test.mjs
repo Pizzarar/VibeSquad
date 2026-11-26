@@ -141,7 +141,7 @@ before(async () => {
         for (const ans of validated) {
           const item = state.items.find((i) => i.id === ans.id);
           if (!item) { results.push({ id: ans.id, choice: ans.choice, status: "rejected", error: "unknown" }); continue; }
-          const prompt = buildAnswerPrompt(item, ans, { ownerName: "Aub", target: item.asker?.title, via: "asker" });
+          const prompt = buildAnswerPrompt(item, ans, { ownerName: "Owner", target: item.asker?.title, via: "asker" });
           state.deliveredPrompts.push({ id: ans.id, choice: ans.choice, altIndex: ans.altIndex, text: ans.text, prompt });
           state.items = state.items.filter((i) => i.id !== ans.id);
           results.push({ id: ans.id, choice: ans.choice, status: ans.choice === "dismiss" ? "dismissed" : "delivered", target: item.askerId, via: "asker", logged: true });
@@ -277,7 +277,7 @@ for (const cfg of [
         assert.equal(delivered.altIndex, 1);
         assert.equal(delivered.text, "Yes, add a 30s veto window");
         assert.match(delivered.prompt, /Owner's answer: Go with option 2: "B: keep the partial fill and resize the stop to the filled size"\./);
-        assert.match(delivered.prompt, /--- BEGIN owner reply \(Aub\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
+        assert.match(delivered.prompt, /--- BEGIN owner reply \(Owner\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
       }
 
       assert.deepEqual(errs, [], `no pageerrors: ${errs.join("; ")}`);
