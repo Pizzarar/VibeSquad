@@ -3342,3 +3342,19 @@ test("idea-942: a completed turn on a closed+archived worker is done (the archiv
   const r = await archivedRun([U, A("PASS 0/0/0 deadbee", true)], "closed");
   assert.equal(r.item.state, "done", JSON.stringify(r.item));
 });
+
+// ---- idea-1083: archived worker whose last-seen status is stale "running" (remove event, no fresh snapshot) ----
+
+test("idea-1083: archived worker with a stale running status and a completed final report is done with the report", async () => {
+  const r = await archivedRun([U, A("PASS 0/0/3 abc1234 TOTAL 9 specs", true)], "running");
+  assert.equal(r.item.state, "done", JSON.stringify(r.item));
+  assert.match(JSON.stringify(r.pings), /PASS 0\/0\/3 abc1234/);
+});
+
+test("idea-1083: archived worker with a stale running status and NO completed report still stalls as archived", async () => {
+  for (const entries of [[U], [U, A("working on it"), TOOL]]) {
+    const r = await archivedRun(entries, "running");
+    assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+    assert.equal(r.item.reason, "archived");
+  }
+});
