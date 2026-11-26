@@ -10,25 +10,25 @@ import { Runner } from '../runner/runner.mjs';
 import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
 import { RunnerBackend } from '../server/backend/runner-backend.mjs';
-import { CAP_DEFAULT_TTL_MS, isCapExpired, readCappedProviders } from '../server/provider-failover.mjs';
+import { isCapExpired, readCappedProviders } from '../server/provider-failover.mjs';
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-r5-'));
 const hoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
 
-test('cap TTL: updatedAt older than 5 h (no reset given) is ignored and pruned from the file', () => {
+test('cap TTL: a passed resetsAt is ignored and pruned from the file; a cap with no reset time stays (idea-1073)', () => {
   const dir = tmp();
   const file = path.join(dir, 'capped-providers.json');
   try {
-    writeFileSync(file, JSON.stringify({ capped: { claude: { reason: 'old', updatedAt: hoursAgo(6) }, gemini: { reason: 'fresh', updatedAt: hoursAgo(1) } } }), 'utf8');
+    writeFileSync(file, JSON.stringify({ capped: { claude: { reason: 'old', updatedAt: hoursAgo(6), resetsAt: Date.now() - 1000 }, gemini: { reason: 'fresh', updatedAt: hoursAgo(1), resetsAt: Date.now() + 3600_000 }, opencode: { reason: 'cli cap', updatedAt: hoursAgo(48) } } }), 'utf8');
     const caps = readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true });
-    assert.deepEqual(Object.keys(caps), ['antigravity-cli'], 'only the fresh gemini cap (normalized family)');
-    assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).capped), ['gemini'], 'expired cap pruned from disk');
+    assert.deepEqual(Object.keys(caps).sort(), ['antigravity-cli', 'opencode'], 'the fresh gemini cap (normalized family) and the indefinite cli cap');
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).capped).sort(), ['gemini', 'opencode'], 'expired cap pruned from disk');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('cap TTL: a stated reset time overrides the 5 h default in both directions', () => {
+test('cap TTL: a stated reset time decides expiry in both directions; no reset time never expires', () => {
   const now = Date.now();
-  assert.equal(CAP_DEFAULT_TTL_MS, 5 * 3600_000);
+  assert.equal(isCapExpired({ reason: 'cli cap', updatedAt: hoursAgo(500) }, now), false, 'idea-1073: no reset time = indefinite');
   assert.equal(isCapExpired({ updatedAt: hoursAgo(10), resetsAt: new Date(now + 3600_000).toISOString() }, now), false, 'reset still ahead');
   assert.equal(isCapExpired({ updatedAt: hoursAgo(1), resetsAt: new Date(now - 1000).toISOString() }, now), true, 'reset passed');
   assert.equal(isCapExpired({ reason: 'no timestamp' }, now), false, 'unknown age never expires');
@@ -41,10 +41,10 @@ test('cap TTL: epoch-seconds resetsAt is read as seconds, a BOM does not hide th
   const dir = tmp();
   const file = path.join(dir, 'c.json');
   try {
-    writeFileSync(file, '\uFEFF' + JSON.stringify({ capped: { claude: { updatedAt: hoursAgo(8) }, deepseek: { updatedAt: hoursAgo(1) } } }), 'utf8');
+    writeFileSync(file, '\uFEFF' + JSON.stringify({ capped: { claude: { updatedAt: hoursAgo(8), resetsAt: now - 60_000 }, deepseek: { updatedAt: hoursAgo(1) } } }), 'utf8');
     assert.deepEqual(Object.keys(readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true })), ['deepseek']);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, 'utf8')).capped), ['deepseek']);
-    assert.deepEqual(readdirSync(dir), ['c.json'], 'no tmp file left behind');
+    assert.deepEqual(readdirSync(dir).filter((f) => f !== 'teams'), ['c.json'], 'no tmp file left behind (teams/ holds the idea-1073 lapse log line)');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -53,7 +53,7 @@ test('vs cap list never shows an expired cap', () => {
   const home = path.join(dir, '.vibesquad');
   mkdirSync(home, { recursive: true });
   try {
-    writeFileSync(path.join(home, 'capped-providers.json'), JSON.stringify({ capped: { claude: { reason: 'stale cap', updatedAt: hoursAgo(9) } } }), 'utf8');
+    writeFileSync(path.join(home, 'capped-providers.json'), JSON.stringify({ capped: { claude: { reason: 'stale cap', updatedAt: hoursAgo(9), resetsAt: Date.now() - 60_000 } } }), 'utf8');
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(PASEO_(AGENT_|CLI)|VS_)/.test(k)));
     const r = spawnSync(process.execPath, [path.resolve(import.meta.dirname, '..', 'cli', 'vs.mjs'), 'cap', 'list'], {
       encoding: 'utf8', env: { ...env, VIBESQUAD_HOME: home, PASEO_HOME: path.join(dir, '.paseo') },
