@@ -9,11 +9,13 @@ import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
   SB_CATEGORY_HELP, buildListItems, chainToMermaid, checkLabel, plainText, characterViews, speakerKeyOf, countByCategory, entityCard, filterItems, fmtSource, fmtWindow,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  indexEntities, interpretLoad, interpretRefresh, locationView, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, interpretLoad, interpretRefresh, locationView, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import { StorybookText, type TextFocus } from "./StorybookText";
+import { buildReviewRows } from "./storybookReview";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
@@ -422,7 +424,7 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
   return (
     <div>
       {allowed.length > 1 && <div className="sb-seg" role="group" aria-label="Findings scope" data-testid="sb-scope">
-        {allowed.map((s) => (
+        {allowed.filter((s) => s === "problems" || s === "story" || scopes[s] > 0 || scope === s).map((s) => (
           <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); }}>
             {FINDING_SCOPE_LABEL[s]} <span className="sb-count">{scopes[s]}</span>
           </button>
@@ -479,7 +481,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [sel, setSelAll] = useState<Record<Tab, string | null>>(NO_SEL);
   // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
   const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
-  const [activeReview, setActiveReview] = useState<Set<SbCategory>>(new Set());
+  const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
@@ -502,6 +504,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
   const problems = useMemo(() => problemCount(items), [items]);
   const card = useCard(idx);
+  const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -535,7 +538,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     card.quiet();
     if (e.kind === "location") { pick("world")(e.id); setTab("world"); }
     else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); setJump(`${e.kind}\u0000${e.id}`); }
-    else if (e.kind === "line" || e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
+    else if (e.kind === "line" || e.kind === "contract") { setTextFocus({ id: entityKey(e.kind, e.id), n: Date.now() }); setTab("review"); } // the Text row itself, not the speaker's list
+    else if (e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
       pick("cast")(speakerKeyOf(e) ?? "system:system"); setTab("cast");
     } else {
       const el = [...document.querySelectorAll("[data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === `${e.kind}\u0000${e.id}`); // attribute compare, not a selector built from the id
@@ -597,17 +601,17 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <nav className="sb-tabs" role="tablist" aria-label="Storybook views">
             {TABS.filter((t) => t.built).map(({ id: t, label }) => (
               <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => setTab(t)}>
-                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review">{problems}</span>}
+                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review, code TODOs under Dev TODOs">{problems}</span>}
               </button>
             ))}
           </nav>
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} />}
-            {tab === "review" && <Findings items={items} idx={idx} card={card} active={activeReview} setActive={setActiveReview} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} renderChip={(e, label) => <Chip e={e} card={card} label={label} />} />}
             {tab === "quests" && <QuestWeb idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} />}
             {tab === "world" && <Locations idx={idx} card={card} sel={sel.world} setSel={pick("world")} />}
             {tab === "cast" && <Characters idx={idx} card={card} sel={sel.cast} setSel={pick("cast")} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope === "story" ? "story" : "problems"} setScope={setScope} scopes={["problems", "story"]} goTo={goTo} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} />}
           </main>
         </>
       )}

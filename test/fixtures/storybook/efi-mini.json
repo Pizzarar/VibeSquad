@@ -560,7 +560,19 @@
           "level": 1
         },
         "qty_min": 68,
-        "qty_max": 135
+        "qty_max": 135,
+        "rendered": {
+          "title": "Deliver 68–135 × Scrap Metal for Popper",
+          "detail": "needs Scavenging 1",
+          "key": "d_popper_scrap_metal",
+          "parts": {
+            "trader": "popper",
+            "item": "scrap_metal",
+            "enemy": null,
+            "location": null,
+            "qty": "68–135"
+          }
+        }
       }
     },
     {
@@ -600,7 +612,19 @@
         "trader": "doc",
         "location": "sealed_vault",
         "qty_min": 1,
-        "qty_max": 2
+        "qty_max": 2,
+        "rendered": {
+          "title": "Extract from Sealed Vault 1–2 times for Doc",
+          "detail": "",
+          "key": "x_doc_vault",
+          "parts": {
+            "trader": "doc",
+            "item": null,
+            "enemy": null,
+            "location": "sealed_vault",
+            "qty": "1–2"
+          }
+        }
       }
     },
     {
@@ -635,7 +659,19 @@
         "trader": "popper",
         "enemy": "scav",
         "qty_min": 10,
-        "qty_max": 20
+        "qty_max": 20,
+        "rendered": {
+          "title": "Eliminate 10–20 × Scav for Popper",
+          "detail": "",
+          "key": "k_popper_scav",
+          "parts": {
+            "trader": "popper",
+            "item": null,
+            "enemy": "scav",
+            "location": null,
+            "qty": "10–20"
+          }
+        }
       }
     },
     {
