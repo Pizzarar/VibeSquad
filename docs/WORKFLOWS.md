@@ -24,7 +24,7 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Bug Runner | "queue the bug", "bug chip" | docs/PLAN_BUG_RUNNER.md:6; R11 `server/profiles.mjs:42` | @bug |
 | Workaround gate | "is that a workaround?" | docs/PLAN_WORKAROUND_GATE.md:8 | @bug |
 | Find the lead | "who's the lead" | `cli/vs.mjs:500` (`vs who`); STANDING_RULES `server/lessons.mjs:158`; docs/PLAN_VS_WHO.md:3 | @bug |
-| Team log write | "log that", "record the decision", "needs-you" | `cli/vs.mjs:557` (`vs log`, structured `vs log needs-you "<ask>" --decides "<what it changes>" --lean "<option>" [--alt "<opt>"]... [--kind yesno\|answer\|offscreen]`); MCP `report` `server/mcp/tools.mjs:886` | @bug / @desk |
+| Team log write | "log that", "record the decision", "needs-you" | `cli/vs.mjs:557` (`vs log`, structured `vs log needs-you "<ask>" --decides "<what it changes>" --lean "<option>" [--alt "<opt>"]... [--kind yesno\|answer\|offscreen]`; never log "A, B or C?" without one `--alt` per option, each defined in one line; the CLI warns on stderr when lettered options have no `--alt`); MCP `report` `server/mcp/tools.mjs:886` | @bug / @desk |
 | Catch up on Squad state | "catch me up" | `cli/vs.mjs:503` (`vs log --since-me`) | @bug |
 | Handoff packet | "write a handoff" | `cli/vs.mjs:504` (`vs handoff --judgment-file <file>` or `--judgment -`; leads never hand-edit ~/.vibesquad files) | @bug |
 | Lane spec / tasks | "update the spec", "show tasks" | `cli/vs.mjs:510,511,512` (`vs spec`, `vs task list`) | @bug |
