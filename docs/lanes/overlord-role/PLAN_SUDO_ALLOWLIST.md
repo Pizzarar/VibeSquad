@@ -5,6 +5,8 @@ Goal: remove the sudo stalls agents really hit, while `sudo -n true` keeps faili
 [PLAN_CI_RUNNERS.md §7](../forge-host/PLAN_CI_RUNNERS.md) Decided + 7a tail). Model: §7a S8/S10 `forge-runner-ctl`.
 
 ## Decided
+- Installed 11-26 by the owner (rev 2); done-check PASS: `sudo -n true` rc=1, `sudo -l` NOPASSWD only forge-runner-ctl +
+  vs-root-ctl, `disk-usage` rc=0 (40 lines), `apt-repair` rc=0 (unit collected), 5 refusals rc=64.
 - Primitives checked: `vs --help` (no root/sudo verb; `vs restart` drives the VS **user** unit), `sudo -n -l` (11-26 05:00Z:
   `(ALL : ALL) ALL` with password, `(root) NOPASSWD: /usr/local/sbin/forge-runner-ctl`), `/etc/sudoers.d/forge-runner`
   (root 0440), `/usr/local/sbin/forge-runner-ctl` (root 0755), `~/.config/systemd/user/vibesquad.service.d/*` (VS-owned).
@@ -32,7 +34,7 @@ Goal: remove the sudo stalls agents really hit, while `sudo -n true` keeps faili
 | I8 | `sudo nft delete table inet ghrunner_egress` (§7b A4 on failure) | forge-host plan, agent step | rare | nft |
 | I9 | Docker on forge (sudo) | forge-host early plan; superseded by rootless podman | 0 | - |
 | I10 | `xvfb-run`, `lsof` "sudo apt" | EFI runner card, LINUX_AUDIT #3 | covered by I2 / installed | packages |
-| I11 | playwright `install-deps`; `sudo apt-get install sysbench` | rosserlogic host; gh-runner VM (RUNNER_HOST_PROBE.md:27) | other hosts | - |
+| I11 | playwright `install-deps`; `sudo apt-get install sysbench` | another project's host; gh-runner VM (RUNNER_HOST_PROBE.md:27) | other hosts | - |
 | I12 | restart/drop-ins for `vibesquad.service`; journals | RUNBOOK.md:43-44, PLAN_GODOT_LOCAL G2 | daily | user unit |
 | I13 | sudo password in a file for agents | owner 11-25, deleted | 0 | all of root |
 
