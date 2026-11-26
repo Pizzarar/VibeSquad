@@ -59,7 +59,7 @@ test('L1: a pending reopen keeps the reopen flag armed when the dir vanishes bef
 test('L1: a replaced dir keeps the guard armed when the reopen races the dir away', async () => {
   const { dir, r } = mkRunner();
   try {
-    r.statusAll(); // opens a real watch and captures its identity
+    r.statusAll(); // opens the (fake) watch and captures its identity
     assert.ok(r._rosterWatch, 'watch is open');
     r.rosterWatchStat = async () => ({ ino: 999n, birthtimeMs: 999n }); // the dir looks replaced (new identity)
     rmSync(dir, { recursive: true, force: true }); // ...but it is gone before the reopen
@@ -208,4 +208,46 @@ test('P5: shutdown during the backoff leaves no watcher, timer, or later open', 
   await new Promise((res) => setTimeout(res, 150));
   assert.equal(calls, before, 'no retry after shutdown');
   assert.equal(r._rosterWatchGuard, null);
+});
+
+test("P5 review: a stale handle's late errors (transient or not) leave the live watch open and not failed", async () => {
+  const { r } = mkRunner();
+  try {
+    const first = fakeWatchFactory();
+    const second = fakeWatchFactory();
+    let calls = 0;
+    r.rosterWatchFactory = () => (++calls === 1 ? first : second);
+    r.statusAll();
+    first.emit('error', coded('EMFILE')); // transient: drops `first`, schedules a retry
+    await until(() => r._rosterWatch === second);
+    first.emit('error', coded('EMFILE'));
+    first.emit('error', coded('EPERM'));
+    assert.equal(r._rosterWatch, second, 'the live watcher is untouched');
+    assert.equal(r._rosterWatchFailed, false);
+    assert.ok(r._rosterWatchGuard, 'the guard is still running');
+  } finally { r.shutdown(); }
+});
+
+test('P5 review: a late non-transient error after shutdown does not set the failed flag', async () => {
+  const { r } = mkRunner();
+  const w = fakeWatchFactory();
+  r.rosterWatchFactory = () => w;
+  r.statusAll();
+  r.shutdown();
+  w.emit('error', coded('EPERM'));
+  assert.equal(r._rosterWatchFailed, false);
+});
+
+test('P5 review: the guard tick clears the retry gate so a ~1ms-early timer still reopens (no doubled backoff)', async () => {
+  const { r } = mkRunner();
+  try {
+    let calls = 0;
+    r.rosterWatchFactory = () => (++calls === 1 ? (() => { throw coded('EMFILE'); })() : fakeWatchFactory());
+    r.statusAll();
+    assert.equal(r._rosterWatchBackoff, 1);
+    r._rosterWatchRetryAt = Date.now() + 60_000; // the wall-clock gate still looks closed when the timer fires
+    await until(() => !!r._rosterWatch);
+    assert.equal(r._rosterWatchBackoff, 0, 'opened on the first scheduled retry; the backoff was not doubled');
+    assert.equal(calls, 2);
+  } finally { r.shutdown(); }
 });

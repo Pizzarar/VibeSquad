@@ -2294,8 +2294,8 @@ export class Runner {
     }
     if (!w) { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
     w.on?.('error', (err) => {
+      if (this._rosterWatch !== w || this._shutDown) return; // a replaced/closed handle's late error must not touch the live watch
       if (ROSTER_WATCH_TRANSIENT.has(err?.code)) {
-        if (this._rosterWatch !== w || this._shutDown) return; // a stale handle's late error
         this._closeRosterWatchHandle();
         this._rosterWatchIdentity = null;
         this._rosterWatchTransientFailure();
@@ -2326,7 +2326,7 @@ export class Runner {
     return Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
   }
 
-  // interval * 2^(n-1), capped at ROSTER_WATCH_BACKOFF_MAX_MS; 0 when no transient failure is pending.
+  // interval * 2^(n-1), capped at ROSTER_WATCH_BACKOFF_MAX_MS; the plain guard interval when no transient failure is pending.
   _rosterWatchBackoffMs() {
     const n = this._rosterWatchBackoff || 0;
     const base = this._rosterWatchGuardIntervalMs();
@@ -2395,6 +2395,7 @@ export class Runner {
         this._ensureRosterWatch();
       }
     } else if (this._rosterWatchReopen && st) {
+      this._rosterWatchRetryAt = 0; // the tick IS the scheduled retry: the monotonic timer may fire ~1ms before the wall-clock gate
       this._ensureRosterWatch(); // the dir is back: reopen on it; the reopen flag clears only on success (L1)
     }
     this._ensureRosterWatchGuard(); // reschedule only while the watch (or a pending reopen) is still live
