@@ -23,7 +23,7 @@ test("D4: collapsed rail shows worst-state badge (err else attn) with count", ()
   assert.match(css, /\.boring-hdr-btn\[data-testid="boring-dock-toggle"\] \{ display: none; \}/);
   assert.match(panel, /data-testid="boring-ctx-rail-badge"/);
   assert.match(d4, /\.boring-ctx-rail-badge\.st-err \{ background: var\(--st-err\)/);
-  assert.match(d4, /\.boring-ctx-rail-badge \{[^}]*background: var\(--st-attn\)/);
+  assert.match(d4, /\.boring-ctx-rail-badge \{[^}]*color: var\(--on-accent\);[^}]*background: var\(--st-attn\)/);
 });
 
 test("D4: 36px tabs with 2px accent underline on the active tab", () => {
