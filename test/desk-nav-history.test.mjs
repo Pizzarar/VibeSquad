@@ -88,7 +88,7 @@ const adeCode = transformSync("BoringAde.tsx", src, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/attentionItems"/, `from "./attentionItemsBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringLandingFromUrl, boringAgentLanding, boringSelectionForAgent, boringLaneKnown } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringLandingFromUrl, boringAgentLanding, boringSelectionForAgent, boringLaneKnown, boringBugsLeadCard } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -531,4 +531,37 @@ test("idea-1075 r3: split, right pane active, B17 right card shown; popstate to 
   } finally {
     globalThis.__panes = undefined;
   }
+});
+
+// ── P3 R43 m2: ?slot=bugs&role=lead on a project with no Bugs lane lands on Brainstorm, so the URL (role dropped) and breadcrumb agree ──
+test("P3 R43 m2: ?slot=bugs&role=lead without a Bugs pin: landing, reload and pop all select Brainstorm (URL = breadcrumb = reload)", () => {
+  const noBugs = () => squad({ team: { id: "efi", name: "Main Game Project" }, pins: [], bugs: { pin: null, leadRunning: false, needsYou: 0 } });
+  const crumb = (t) => {
+    const txt = (n) => (n == null || typeof n === "boolean" ? "" : typeof n === "string" || typeof n === "number" ? String(n) : Array.isArray(n) ? n.map(txt).join("|") : txt(n.props?.children));
+    return txt(byId(t, "boring-breadcrumb"));
+  };
+  assert.equal(boringBugsLeadCard(noBugs(), "bugs", "lead"), false);
+  assert.equal(boringBugsLeadCard(squad(), "bugs", "lead"), true, "a project with a Bugs lane keeps its Lead card");
+  assert.equal(boringBugsLeadCard(squad(), "overlord", "lead"), false);
+  assert.equal(boringBugsLeadCard(squad(), "bugs", null), false);
+  assert.deepEqual(boringLandingFromUrl([noBugs()], "?team=efi&slot=bugs&role=lead"), { mode: "slot", teamId: "efi", slot: "bugs" }, "no Bugs lane: no role");
+  assert.deepEqual(boringLandingFromUrl([squad()], "?team=vs&slot=bugs&role=lead"), { mode: "slot", teamId: "vs", slot: "bugs", role: "lead" });
+  // reload
+  reset();
+  globalThis.location = { search: "?team=efi&slot=bugs&role=lead" };
+  render(props(noBugs()));
+  let t = render(props(noBugs()));
+  assert.deepEqual(globalThis.__screenKeys, { team: "efi", slot: "bugs", lane: null, role: null, tab: null });
+  assert.doesNotMatch(crumb(t), /Lead/, "breadcrumb is not Lead when the URL has no role");
+  assert.match(crumb(t), /Brainstorm/);
+  // pop (navGen)
+  reset();
+  globalThis.location = { search: "?team=efi" };
+  render(props(noBugs()));
+  globalThis.location = { search: "?team=efi&slot=bugs&role=lead" };
+  render(props(noBugs(), { navGen: 1 }));
+  t = render(props(noBugs(), { navGen: 1 }));
+  assert.equal(globalThis.__screenKeys.role, null);
+  assert.doesNotMatch(crumb(t), /Lead/);
+  assert.match(crumb(t), /Brainstorm/);
 });

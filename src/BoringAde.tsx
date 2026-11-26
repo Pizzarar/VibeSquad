@@ -134,7 +134,7 @@ export function boringLandingFromUrl(
   // U2 (UX R33 r2 m3): a team that is not a known view (?team=gone) shows the fallback project's plain Overview: its slot/tab belong to
   // the gone team, never to the fallback (teamId null = stay on the view App falls back to).
   if (team && !views.some((v) => v.team.id === team)) return { mode: "project", teamId: null, tab: null };
-  if (team && slot) return { mode: "slot", teamId: team, slot, ...(slot === "bugs" && role === "lead" ? { role } : {}) };
+  if (team && slot) return { mode: "slot", teamId: team, slot, ...(boringBugsLeadCard(views.find((x) => x.team.id === team), slot, role) ? { role: "lead" as const } : {}) };
   // P3 (idea-1000): a feature lane's empty card. A lane this project no longer has (removed, hidden, done) is its plain Overview.
   if (team && lane) {
     const v = views.find((x) => x.team.id === team);
@@ -149,6 +149,12 @@ export function boringLandingFromUrl(
 export function boringLaneKnown(view: TeamView, laneId: string): boolean {
   const bugsLane = quickBugsChipState(view).pin?.lane.id;
   return pinsForSquad(view).pinned.some((p) => p.lane.id === laneId && !isHubPin(p) && p.lane.id !== view.team.id && p.lane.id !== bugsLane);
+}
+
+/** P3 R43 m2: `?slot=bugs&role=lead` names the Bugs Lead card only when the project has a Bugs lane. With none, the card is the "start
+ * the Bugs lane" Brainstorm card and the URL drops role=lead, so the selection must land on Brainstorm too (URL = breadcrumb = reload). */
+export function boringBugsLeadCard(view: TeamView | null | undefined, slot: UrlSlot | null | undefined, role: string | null | undefined): boolean {
+  return slot === "bugs" && role === "lead" && !!view && !!quickBugsChipState(view).pin;
 }
 
 export { boringLaneLabel };
@@ -458,7 +464,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
   }, []);
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (urlKeys0?.slot ? SLOT_LANE[urlKeys0.slot] : urlLane0));
-  const [selectedRole, setSelectedRole] = useState<Role>(() => ((urlKeys0?.slot || urlLane0) && urlKeys0?.role === "lead" ? "lead" : "brainstorm"));
+  const [selectedRole, setSelectedRole] = useState<Role>(() => ((urlLane0 && urlKeys0?.role === "lead") || boringBugsLeadCard(view, urlKeys0?.slot, urlKeys0?.role) ? "lead" : "brainstorm"));
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const decisionCount = useDecisionCount();
@@ -733,7 +739,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       const lane = p.slot ? SLOT_LANE[p.slot] : p.lane && view && boringLaneKnown(view, p.lane) ? p.lane : null; // P3: ?lane=
       if (lane) {
         enterSlotLane(lane); // idea-1075: the one slot/lane entry
-        setSelectedRole(p.role === "lead" ? "lead" : "brainstorm");
+        setSelectedRole((p.slot ? boringBugsLeadCard(view, p.slot, p.role) : p.role === "lead") ? "lead" : "brainstorm"); // R43 m2
       }
       setTabFor({ team: screenTeam, tab: (p.tab && TAB_FROM_URL[p.tab]) || "overview" });
       return;
