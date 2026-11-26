@@ -67,3 +67,73 @@ Measured in the DOM (not token arithmetic). For each container I took every dist
 ## Verdict
 
 B18a passes: floors hold, gradients are sticky-safe, and every measured text stop is ≥4.5:1 in both themes. B18c's live path works, but dormant other-project pills switch project without the card, drop the URL agent, or fold the split (M1, Major). **FAIL 0/1/3.**
+
+---
+
+## Round 2 · tip `5a020127` (fix for M1 + L2; L1/L3 accepted as-is)
+
+- **Method:** `dist` rebuilt from `5a020127` (`UI_OVERLAP_REBUILD=1`, bundle contains `pendingRightCard`/`openOtherDormant` logic). Same multi-project demo registry as R1, plus a fully dormant lane in two projects (`Site · docs`, `Plugins · empty-p`, as in `test/bor-b18-visual.test.mjs`) so a dormant **Lead** pill exists. Start state each time: VibeSquad › `Audit - token scout` (pending Allow/Deny) on the left, split open, right picker, `Other projects` expanded. Throwaway scripts: `/tmp/uxr41/{r2,r2b,r2c,r2d,run}.mjs`.
+- **Evidence:** `docs/shots/ux-r41-bor-b18ac/r2/`.
+
+### Status vs round 1
+
+| R1 | Status | Evidence |
+|---|---|---|
+| M1 dormant other-project pills switch project with no card / drop `&agent=` / fold split | **Resolved** (see the path table) | `r2/2560-dark-{efi-ui-lab-brainstorm,site-site-polish-brainstorm,site-docs-lead,site-docs-brainstorm,plugins-empty-p-lead}.png` |
+| L2 dormant Trinity rows bury the live pills | **Resolved.** Dormant Overlord/RiffBot/Bugs rows are gone from Other projects (`efi-_overlord`, `efi-_bugs`, `site-_riffbot` = 0 nodes). The live `Plugins · ★ Overlord` stays. Expanded, the disclosure is now 4 compact rows (`r2/4k-light-split-expanded.png`). | pill inventory below |
+| L1 4K lower canvas ~63% empty when collapsed | Accepted as-is (lane decision). Unchanged. | `r2/4k-dark-split-collapsed.png` |
+| L3 dark `--text-3` on main-pin warm stop 4.69:1 | Accepted as-is. Still 4.69, unchanged. | contrast table below |
+
+### M1: every path, measured live (2560x1440 dark, plus the ui-lab path at all 6 size/theme combos)
+
+The Other-projects pills in the demo were: live `efi-main-game-{brainstorm,lead}`, `efi-ui-lab-lead`, `plugins-_overlord-open`, `site-site-polish-lead`; dormant `efi-ui-lab-brainstorm`, `site-site-polish-brainstorm`, `site-docs-{brainstorm,lead}`, `plugins-empty-p-{brainstorm,lead}`. **Dormant Overlord/RiffBot/Bugs pills no longer exist** under Other projects (the L2 filter keeps a Trinity row only if it is live or needs you), so the R1 split-folding path can't be reached. If a dormant Trinity row does need you, it goes through the same `openOtherDormant(tid, {key:"_overlord"|"_bugs", …})` as the lanes (`src/BoringAde.tsx:833-852`). That is the same right-card renderer the same-project dormant Overlord card uses, and that card was verified working here (`VibeSquad › Overlord`, right pane).
+
+| Click | URL after | Breadcrumb | Panes | Left pane | Right pane |
+|---|---|---|---|---|---|
+| Dormant `Main Game · UI-lab · Buddy` | `?team=efi&agent=demo-aud` | `Main Game › UI-lab` | left,right | Audit (unchanged, Allow/Deny intact) | `UI-lab · No Brainstorm session… [Start Brainstorm]`, plus "Available in this lane: Lead" |
+| Dormant `Site · site-polish · Buddy` | `?team=site&agent=demo-aud` | `Site › site-polish` | left,right | Audit | site-polish Brainstorm card |
+| Dormant `Site · docs · Lead` | `?team=site&agent=demo-aud` | `Site › docs` | left,right | Audit | `docs · No Lead is running yet… [Switch to Brainstorm]` |
+| Dormant `Site · docs · Buddy` | same | `Site › docs` | left,right | Audit | docs Brainstorm card |
+| Dormant `Plugins · empty-p · Lead` | `?team=plugins&agent=demo-aud` | `Plugins › empty-p` | left,right | Audit | empty-p Lead card |
+| Live `Main Game · main-game · Buddy` | `?team=efi&agent=demo-bs-efi-1` | `Main Game › main-game › Brainstorm` | left,right | Audit | live Brainstorm chat; the sidebar row is selected |
+| Live `Plugins · ★ Overlord` | `?team=plugins&agent=demo-lead-pl` | `Plugins › Desk › Overlord` | left,right | Audit | live Overlord; `★ Overlord` row selected |
+
+Follow-ons inside the cross-project card: `Switch to Brainstorm` swaps to that lane's Buddy card in the right pane (split stays). `← All lanes` returns to the **switched** project's picker (`Site › Split · pick an agent`), whose Other projects now lists VibeSquad (`5 needs you`). Both are consistent (`r2/2560-dark-cross-card-switch-to-buddy.png`, `r2/2560-dark-cross-all-lanes.png`).
+
+**Normal project switch still clears the right card.** Cross-project card → click the `Main Game` name in the sidebar lands on `?team=efi` `Main Game › Overview` with no panes (`r2/2560-dark-switch-after-dormant.png`). Same-project dormant Overlord card → click `Site` lands on `Site › Overview`. Going back to VibeSquad's Audit then shows the split with a **fresh picker**, not the stale card.
+
+**Back/Forward/reload:**
+
+| Step | Dormant cross-project card | Live cross-project pill |
+|---|---|---|
+| Back | `?team=vibesquad&agent=demo-aud`, split + VibeSquad picker. Correct. | Back to VibeSquad; right pane keeps the live agent (pane-local, as at B17). |
+| Forward | `?team=vibesquad&agent=demo-aud`, split + **VibeSquad picker**. The Site card is not restored (L4). | Restores `?team=plugins&agent=demo-lead-pl`. |
+| Reload | Lands on `VibeSquad › Desk › Worker` (Audit, single pane). The split is dropped. | Split + both agents survive. |
+
+The reload behaviour is **pre-existing, not a regression**. A split whose right side is the picker or a pane-local card doesn't survive reload at all: plain picker → reload gives `panes=""`, and same-project dormant Overlord card → reload gives `panes=""` (`r2c.mjs`). The cross-project card now behaves exactly like the same-project card, and the left agent is kept (R1 lost it, landing on `Site › Overview`). Deep-linking the intermediate URL `?team=site&agent=demo-aud` normalises to `team=vibesquad`, which is why Forward appears to do nothing.
+
+### B18a regression (1280x720, 2560x1440, 3200x1800 @1.2 DPR; dark + light)
+
+| Check | R1 (`3b536c80`) | R2 (`5a020127`) |
+|---|---|---|
+| Pin closed/open, tree closed/open, footer bottom (1280) | 60/220, 120/120, 911 | **identical** |
+| same (2560) | 60/561, 649/148, 1424 | **identical** |
+| same (4K) | 60/561, 1009/508, 1784 | **identical** |
+| Tree fade + seam (`treeMid` scroll 168/456 at 1280) | ok | **identical** (`r2/1280-{dark,light}-sidebar-tree-mid.png`) |
+| Min contrast dark: pin / open / ctx / split | 4.69 / 5.53 / 5.32 / 8.89 | **identical** at all 3 sizes |
+| Min contrast light: pin / open / ctx / split | 5.07 / 6.14 / 5.33 / 4.95 | **identical** at all 3 sizes |
+| Dormant ui-lab Buddy path at each size/theme | n/a (broken) | split kept, `?team=efi&agent=demo-aud`, `Main Game › UI-lab` at all 6 (`r2/{1280-dark,4k-light}-after-dormant-efi-ui-lab-brainstorm.png`) |
+
+### Round 2 findings
+
+| # | Sev | Finding | Job hurt | Evidence | Fix | Files | Effort |
+|---|---|---|---|---|---|---|---|
+| L4 | Minor | A dormant cross-project click pushes a history entry, `?team=<other>&agent=<left agent>`, that the app can't reproduce: Forward and deep-link normalise it back to the left agent's project and show the old project's picker. Back works correctly. Harmless (nothing is lost), but Forward looks like a no-op. | Browser nav in split | Back/Forward table; `r2c.mjs` `deepLinkCross` | Optional: `replaceState` instead of `pushState` for the `onSelectSquad` from `openOtherDormant`, so the pane-local card adds no history step, matching the same-project card. Or accept it. | `src/BoringAde.tsx:833-837` (or the squad-select URL writer) | XS |
+
+Checked, no issue: exactly one selected row on live opens. Zero selected rows on dormant cards and on the plain picker is B17 behaviour, the same as same-project cards. The breadcrumb names the switched project and lane on every dormant path. No agent is listed more than twice. No new truncation. The Other-projects badge (`1 needs you`) agrees with Main Game's `main-game · Needs you` row.
+
+### Round 2 verdict
+
+M1 is fixed on every reachable path: the split is kept, the left pane and `&agent=` are kept, the card shows in the right pane, and the breadcrumb names the switched project. L2 is fixed. B18a shows no regression: geometry and contrast are identical at all 6 size/theme combos. One new minor (L4, history Forward). L1/L3 were accepted by the lane.
+
+PASS 0/0/1 5a020127
