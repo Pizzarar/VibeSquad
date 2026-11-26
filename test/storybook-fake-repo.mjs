@@ -35,6 +35,7 @@ export const FILES = {
   "data/skills.json": JSON.stringify({ meta: {}, skills: { combat: { xp: 0 }, medicine: { xp: 0 } }, mastery: {} }, null, 2),
   "data/contracts.json": JSON.stringify({ meta: {}, templates: [
     { id: "d_popper_scrap_metal", trader: "popper", type: "deliver", item: "scrap_metal", requires: { skill: "scavenging", level: 1 }, qty_min: 68, qty_max: 135 },
+    { id: "x_doc_vault", trader: "doc", type: "extract", location: "sealed_vault", qty_min: 1, qty_max: 2 },
     { id: "k_popper_scav", trader: "popper", type: "kill", enemy: "scav", qty_min: 10, qty_max: 20 },
   ] }, null, 2),
   "data/recipes.json": JSON.stringify({ meta: {}, recipes: { bandage: { ingredients: { cloth: 2 }, result_id: "bandage", result_qty: 1, description: "Wrap a wound.", skill_req: "medicine", level_req: 1, required_workshop: "workshop" } } }, null, 2),
@@ -61,8 +62,12 @@ static func lines(obs, ctx):
 `,
   "docs/review/text_review.csv": "﻿group,source,file,line,data_path,id,current_text,where_seen,length_budget,tags,confidence,appendix,owner_rewrite,status,speaker,owner_note,reviewed_hash\r\n" +
     'Screen: Armory,gd,scenes/armory/armory_view.gd,14,,,Build the Armory (Hideout),armory page,none,,verify,,,STORY-TODO,,,\r\n' +
-    'Trader questlines,data,data/questlines.json,12,questlines.popper.steps[0].story,popper_1,"Bring thirty casings,\nand ""he\'ll"" know you.",quests,,,verify,,"Bring me thirty clean casings.",DRAFT,Popper,"keep it short",\r\n' +
-    'Trader relations,data,data/trader_relations.json,5,traders.doc.lines.wary,,Doc frowns.,relations,,,verify,,,OWNER-OK,Saint,,abc123\r\n',
+    'Trader questlines,data,data/questlines.json,12,"[""questlines"", ""popper"", ""steps"", 1, ""story""]",popper_2,"Bring thirty casings,\nand ""he\'ll"" know you.",quests,,,verify,,"Bring me thirty clean casings.",DRAFT,Popper,"keep it short",\r\n' +
+    'Trader relations,data,data/trader_relations.json,5,"[""traders"", ""doc"", ""lines"", ""wary""]",,Doc frowns.,relations,,,verify,,,OWNER-OK,Saint,,abc123\r\n' +
+    'Trader questlines,data,data/questlines.json,20,"[""questlines"", ""popper"", ""steps"", 1, ""title""]",,Dock Runs,quests,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,3,"[""members"", 0, ""bio""]",,A former paramedic.,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,4,"[""members"", 0, ""trait_text""]",,Medic: meds heal more,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Screen: Raids,gd,scenes/raids/corridor/raid_story.gd,30,,,%s slip into %s.,raids page,,,verify,,,DRAFT,,,\r\n',
   "docs/narrative/VOICE_BIBLE.md": `# Voice Bible
 
 ## How to use

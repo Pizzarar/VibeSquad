@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": "efi",
   "ref": "origin/main",
-  "sha": "9da5fac452f730eb6b23ee5e9121cea96a7c5941",
+  "sha": "e08f04ad50dd6491854719b81637bcbc6f09fb83",
   "generatedAt": "2026-01-01T00:00:00.000Z",
   "entities": [
     {
@@ -564,13 +564,53 @@
       }
     },
     {
+      "id": "x_doc_vault",
+      "kind": "contract",
+      "display": "x_doc_vault",
+      "aliases": [],
+      "source": {
+        "path": "data/contracts.json",
+        "line": 17
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "sealed_vault"
+        },
+        {
+          "rel": "trader",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "location",
+          "kind": "location",
+          "id": "sealed_vault"
+        }
+      ],
+      "production": null,
+      "data": {
+        "type": "extract",
+        "trader": "doc",
+        "location": "sealed_vault",
+        "qty_min": 1,
+        "qty_max": 2
+      }
+    },
+    {
       "id": "k_popper_scav",
       "kind": "contract",
       "display": "k_popper_scav",
       "aliases": [],
       "source": {
         "path": "data/contracts.json",
-        "line": 17
+        "line": 25
       },
       "links": [
         {
@@ -1012,7 +1052,7 @@
         "speakerKind": "squad",
         "speakerId": "doc",
         "speakerSource": "explicit",
-        "rowClass": "story",
+        "rowClass": "ui",
         "field": "trait_text"
       }
     },
@@ -1040,7 +1080,7 @@
         "speakerKind": "squad",
         "speakerId": "doc",
         "speakerSource": "explicit",
-        "rowClass": "story",
+        "rowClass": "ui",
         "field": "flaw"
       }
     },
@@ -1068,7 +1108,7 @@
         "speakerKind": "squad",
         "speakerId": "doc",
         "speakerSource": "explicit",
-        "rowClass": "story",
+        "rowClass": "ui",
         "field": "synergy"
       }
     },
@@ -1196,7 +1236,7 @@
       }
     },
     {
-      "id": "csv:data/questlines.json:12:questlines.popper.steps[0].story",
+      "id": "csv:data/questlines.json:12:[\"questlines\", \"popper\", \"steps\", 1, \"story\"]",
       "kind": "line",
       "display": "Bring thirty casings, and \"he'll\" know you.",
       "aliases": [],
@@ -1209,6 +1249,11 @@
           "rel": "spoken_by",
           "kind": "trader",
           "id": "popper"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
         }
       ],
       "production": "ai-draft",
@@ -1217,8 +1262,8 @@
         "source": "data",
         "file": "data/questlines.json",
         "line": "12",
-        "data_path": "questlines.popper.steps[0].story",
-        "id": "popper_1",
+        "data_path": "[\"questlines\", \"popper\", \"steps\", 1, \"story\"]",
+        "id": "popper_2",
         "current_text": "Bring thirty casings,\nand \"he'll\" know you.",
         "where_seen": "quests",
         "length_budget": "",
@@ -1241,7 +1286,7 @@
       }
     },
     {
-      "id": "csv:data/trader_relations.json:5:traders.doc.lines.wary",
+      "id": "csv:data/trader_relations.json:5:[\"traders\", \"doc\", \"lines\", \"wary\"]",
       "kind": "line",
       "display": "Doc frowns.",
       "aliases": [],
@@ -1262,7 +1307,7 @@
         "source": "data",
         "file": "data/trader_relations.json",
         "line": "5",
-        "data_path": "traders.doc.lines.wary",
+        "data_path": "[\"traders\", \"doc\", \"lines\", \"wary\"]",
         "id": "",
         "current_text": "Doc frowns.",
         "where_seen": "relations",
@@ -1282,6 +1327,185 @@
         "speakerId": "doc",
         "speakerSource": "explicit",
         "screen": "Trader relations",
+        "rowClass": "story"
+      }
+    },
+    {
+      "id": "csv:data/questlines.json:20:[\"questlines\", \"popper\", \"steps\", 1, \"title\"]",
+      "kind": "line",
+      "display": "Dock Runs",
+      "aliases": [],
+      "source": {
+        "path": "data/questlines.json",
+        "line": 20
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Trader questlines",
+        "source": "data",
+        "file": "data/questlines.json",
+        "line": "20",
+        "data_path": "[\"questlines\", \"popper\", \"steps\", 1, \"title\"]",
+        "id": "",
+        "current_text": "Dock Runs",
+        "where_seen": "quests",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "Dock Runs",
+        "origin": "csv",
+        "csv_line": 6,
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "speakerSource": "inferred",
+        "screen": "Trader questlines",
+        "rowClass": "story"
+      }
+    },
+    {
+      "id": "csv:data/squad.json:3:[\"members\", 0, \"bio\"]",
+      "kind": "line",
+      "display": "A former paramedic.",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 3
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Data: squad",
+        "source": "data",
+        "file": "data/squad.json",
+        "line": "3",
+        "data_path": "[\"members\", 0, \"bio\"]",
+        "id": "",
+        "current_text": "A former paramedic.",
+        "where_seen": "squad page",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "A former paramedic.",
+        "origin": "csv",
+        "csv_line": 7,
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "inferred",
+        "screen": "Data: squad",
+        "rowClass": "story"
+      }
+    },
+    {
+      "id": "csv:data/squad.json:4:[\"members\", 0, \"trait_text\"]",
+      "kind": "line",
+      "display": "Medic: meds heal more",
+      "aliases": [],
+      "source": {
+        "path": "data/squad.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "squad",
+          "id": "doc"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Data: squad",
+        "source": "data",
+        "file": "data/squad.json",
+        "line": "4",
+        "data_path": "[\"members\", 0, \"trait_text\"]",
+        "id": "",
+        "current_text": "Medic: meds heal more",
+        "where_seen": "squad page",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "Medic: meds heal more",
+        "origin": "csv",
+        "csv_line": 8,
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "inferred",
+        "screen": "Data: squad",
+        "rowClass": "ui"
+      }
+    },
+    {
+      "id": "csv:scenes/raids/corridor/raid_story.gd:30:",
+      "kind": "line",
+      "display": "%s slip into %s.",
+      "aliases": [],
+      "source": {
+        "path": "scenes/raids/corridor/raid_story.gd",
+        "line": 30
+      },
+      "links": [],
+      "production": "ai-draft",
+      "data": {
+        "group": "Screen: Raids",
+        "source": "gd",
+        "file": "scenes/raids/corridor/raid_story.gd",
+        "line": "30",
+        "data_path": "",
+        "id": "",
+        "current_text": "%s slip into %s.",
+        "where_seen": "raids page",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "%s slip into %s.",
+        "origin": "csv",
+        "csv_line": 9,
+        "speakerKind": "party",
+        "speakerId": "squad",
+        "speakerSource": "inferred",
+        "screen": "Screen: Raids",
         "rowClass": "story"
       }
     },

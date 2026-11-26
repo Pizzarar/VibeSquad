@@ -280,7 +280,7 @@ function resolveSpeakerName(name, nameIndex) {
   const k = clean(name).toLowerCase();
   if (!k) return null;
   if (k === "squad") return SPEAKER_PARTY;
-  if (NON_ENTITY_SPEAKERS[k]) return { kind: NON_ENTITY_SPEAKERS[k], id: k };
+  if (Object.hasOwn(NON_ENTITY_SPEAKERS, k)) return { kind: NON_ENTITY_SPEAKERS[k], id: k };
   const c = nameIndex.get(k) ?? [];
   return c.length === 1 ? c[0] : null;
 }
@@ -296,7 +296,7 @@ function parseDataPath(s) {
  */
 function inferCsvSpeaker(row, { traders, squadMembers }) {
   const dp = parseDataPath(row.data_path);
-  if (dp && (dp[0] === "traders" || dp[0] === "questlines") && typeof dp[1] === "string" && traders[dp[1]]) return { kind: "trader", id: dp[1] };
+  if (dp && (dp[0] === "traders" || dp[0] === "questlines") && typeof dp[1] === "string" && Object.hasOwn(traders, dp[1])) return { kind: "trader", id: dp[1] };
   if (dp && dp[0] === "members" && Number.isInteger(dp[1]) && squadMembers[dp[1]]) return { kind: "squad", id: squadMembers[dp[1]].id };
   if (row.file === P.raidStory) return SPEAKER_PARTY;
   return SPEAKER_SYSTEM;
@@ -307,8 +307,10 @@ function inferCsvSpeaker(row, { traders, squadMembers }) {
  * First matching rule wins; table order matters. `line` = { origin, file, dataPath(array|null) }.
  */
 const ROW_CLASS_RULES = [
-  [(l) => ["trader_relations", "squad", "raid_story", "long_haul"].includes(l.origin), "story"],
-  [(l) => l.origin === "encouragement", "flavor"],
+  [(l) => ["trader_relations", "raid_story", "long_haul"].includes(l.origin), "story"],
+  [(l) => l.origin === "squad" && ["bio", "name"].includes(l.field), "story"],
+  [(l) => l.origin === "squad", "ui"],
+  [(l) => l.origin === "encouragement" || (l.file === P.relations && l.dataPath?.[2] === "encouragement"), "flavor"],
   [(l) => l.file === P.questlines || l.file === P.relations || l.file === P.raidStory || l.file === P.squad && ["bio", "name"].includes(String(l.dataPath?.at(-1))), "story"],
   [(l) => l.file === P.squad && l.dataPath?.[0] === "members", "ui"],
   [(l) => l.file === P.contracts || l.file === P.traders || l.file === P.enemies || l.file === P.recipes || l.file === P.items, "flavor"],
@@ -518,7 +520,7 @@ async function load(reader, sha) {
     for (const [field, text] of [["name", m.name], ["bio", m.bio], ["trait_text", m.trait_text], ["flaw", m.flaw?.text], ["synergy", m.synergy?.text]]) {
       if (!text) continue;
       const L = linker(); L("spoken_by", "squad", m.id);
-      E({ id: `squad:${m.id}:${field}`, kind: "line", display: clean(text).slice(0, 60), source: src(P.squad, sline), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "squad", speaker: m.id, ...speakerData({ kind: "squad", id: m.id }, "explicit"), rowClass: rowClass({ origin: "squad" }), field } });
+      E({ id: `squad:${m.id}:${field}`, kind: "line", display: clean(text).slice(0, 60), source: src(P.squad, sline), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "squad", speaker: m.id, ...speakerData({ kind: "squad", id: m.id }, "explicit"), rowClass: rowClass({ origin: "squad", field }), field } });
     }
   }
   // narrative lines: raid_story templates
