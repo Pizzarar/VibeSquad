@@ -382,6 +382,7 @@ test('real (Linux): through the Runner: a worker\'s leftovers are reaped on exit
       const exitAfter = exitNext ? '3000' : '0'; // the exit case: the CLI ends by itself after its script leaked
       exitNext = false;
       const c = spawn(process.execPath, [fx, 'cli', d, tag, exitAfter], { env: { ...env, VS_FIXTURE_RUN: run }, stdio: 'ignore' });
+      clis.push(c);
       c.on('exit', (code) => onExit({ code }));
       setImmediate(() => { emit('session', { sessionId: `s-${tag}` }); emit('status', { status: 'idle' }); });
       tags.set(id, tag);
@@ -392,7 +393,15 @@ test('real (Linux): through the Runner: a worker\'s leftovers are reaped on exit
   let exitNext = false;
   const reports = [];
   const runner = new Runner({ dir: tmp(), adapters: { fake: adapter }, parkGraceMs: 600_000, bgProbe: null, reapDelayMs: 50, reaper: createDevServerReaper({ leftovers: createLeftoverReaper() }), onReap: (r) => reports.push(r) });
-  t.after(() => { runner.shutdown(); cleanup(d, [run]); });
+  const clis = [];
+  // Teardown: every fake CLI ends (and its onExit is logged) before the log dir is removed.
+  t.after(async () => {
+    for (const c of clis) { try { c.kill('SIGKILL'); } catch { /* gone */ } }
+    await until(() => clis.every((c) => c.exitCode !== null || c.signalCode !== null), 5000).catch(() => {});
+    await tick(50);
+    runner.shutdown();
+    cleanup(d, [run]);
+  });
   const report = (id) => reports.find((r) => r.id === id && r.leftovers);
 
   // exit: the CLI exits by itself 3 s after its script left the family behind.
