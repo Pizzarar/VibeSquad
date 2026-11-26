@@ -20,6 +20,7 @@ import {
   scanWorktreeNoFollow,
   worktreeOwner,
   indexAgentCwds,
+  linkVenv,
 } from "../server/team-worktrees.mjs";
 
 const DAY = 86_400_000;
@@ -213,6 +214,29 @@ test("owner state: no roster agent references the tree reads as lost (no-record)
     assert.deepEqual(worktreeOwner(wt, indexAgentCwds([{ id: "x", cwd: root + "-other", status: "idle" }])), { state: "lost", detail: "no-record", agents: [] });
     assert.equal(worktreeOwner(wt, indexAgentCwds([])).state, "unknown");
     assert.equal(worktreeOwner(wt, indexAgentCwds([archivedAgent("a", wt), { id: "b", cwd: wt, status: "idle" }])).state, "live");
+  }));
+
+test("idea-1090 .venv link: not counted as ignoredLost, archive (forced remove) leaves main's .venv intact, restore relinks it", () =>
+  withTmp((root) => {
+    const { repo, sanctuary } = setup(root);
+    writeFile(repo, ".venv/lib/site-packages/SENTINEL", "keep-me");
+    const wt = addUnit(repo, sanctuary, "unit-venv");
+    assert.equal(linkVenv(repo, wt), "linked");
+    writeFile(wt, "notes/todo.md", "untracked wip\n");
+    const dry = retentionSweep({ root: sanctuary, agents: [archivedAgent("a1", wt)], ...OPTS });
+    assert.equal(dry.candidates.length, 1);
+    assert.equal(dry.candidates[0].ignoredLost, 0, JSON.stringify(dry.candidates[0]));
+    const res = retentionSweep({ root: sanctuary, agents: [archivedAgent("a1", wt)], apply: true, refreshAgents: () => [archivedAgent("a1", wt)], ...OPTS });
+    const r = byUnit(res)["unit-venv"];
+    assert.equal(r.action, "archived", JSON.stringify(r));
+    assert.ok(!existsSync(wt), "tree removed");
+    assert.equal(readFileSync(join(repo, ".venv/lib/site-packages/SENTINEL"), "utf8"), "keep-me");
+    assert.deepEqual(readdirSync(join(repo, ".venv")), ["lib"]);
+    const back = restoreArchivedWorktree("unit-venv", { root: sanctuary });
+    assert.equal(back.ok, true, JSON.stringify(back));
+    assert.equal(back.verified, true);
+    assert.ok(lstatSync(join(wt, ".venv")).isSymbolicLink());
+    assert.equal(readFileSync(join(wt, ".venv/lib/site-packages/SENTINEL"), "utf8"), "keep-me");
   }));
 
 test("WIP round trip: archive keeps the branch, removes the tree; restore brings back tracked + untracked + index byte-for-byte", () =>

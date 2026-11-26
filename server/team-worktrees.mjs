@@ -43,7 +43,7 @@ const gitError = (e) => {
  * Remove each worktree and its branch. `items` are { path, branch? } from the confirm dialog.
  * Returns one result per item: { path, branch, worktree: "removed" | "kept" | "missing", branchResult, reason? }.
  */
-export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSync } = {}) {
+export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSync, lstat } = {}) {
   const out = [];
   for (const raw of Array.isArray(items) ? items : []) {
     const path = String(raw?.path ?? "").trim();
@@ -79,9 +79,14 @@ export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSy
       } catch {}
       r.branch = branch || null;
     }
-    // A node_modules junction (see linkNodeModules) must be detached, never recursed into: git/rm walking it
-    // would delete the main checkout's real node_modules.
-    unlinkNodeModulesLink(path);
+    // A node_modules or .venv junction (see linkNodeModules, linkVenv) must be detached, never recursed into: git/rm
+    // walking it would delete the main checkout's real node_modules or .venv. A link that will not detach keeps the worktree.
+    try {
+      detachDependencyLinks(path, lstat ? { lstat } : {}); // `lstat`: test seam only
+    } catch (e) {
+      r.reason = `dependency link not detached (${e?.code ?? "error"})`;
+      continue;
+    }
     try {
       git(["worktree", "remove", path], repoRoot);
       r.worktree = "removed";
@@ -159,7 +164,13 @@ export function createManagedWorktree(repoRoot, branch, { baseRef = "HEAD", git 
   } catch {
     // best-effort: a worker can still npm ci
   }
-  return { path: dest, branch, repoRoot: resolve(repoRoot), nodeModules };
+  let venv = "none";
+  try {
+    venv = linkVenv(repoRoot, dest, git);
+  } catch {
+    // best-effort: a worker can still build its own venv
+  }
+  return { path: dest, branch, repoRoot: resolve(repoRoot), nodeModules, venv };
 }
 
 /**
@@ -170,9 +181,35 @@ export function createManagedWorktree(repoRoot, branch, { baseRef = "HEAD", git 
  * Returns "linked" | "exists" | "no-source".
  */
 export function linkNodeModules(repoRoot, dest, git = defaultGit) {
-  const src = resolve(repoRoot, "node_modules");
-  const link = resolve(dest, "node_modules");
-  if (!existsSync(src) || !statSync(src).isDirectory()) return "no-source";
+  return linkMainCheckoutDir(repoRoot, dest, "node_modules", { git });
+}
+
+/**
+ * idea-1090: junction the worktree's .venv to the main checkout's, the same way as node_modules, so a Python project's
+ * worktree runs its tests with the project's interpreter and packages instead of a bare python3. Only when the main
+ * checkout has a real .venv directory (not a link); idempotent; never replaces a .venv (real or link) already in the
+ * worktree; `/.venv` goes to info/exclude so the link stays untracked. Removal must detach it first (detachDependencyLinks).
+ * Returns "linked" | "exists" | "no-source".
+ */
+export function linkVenv(repoRoot, dest, git = defaultGit) {
+  return linkMainCheckoutDir(repoRoot, dest, ".venv", { git, realDirOnly: true });
+}
+
+/** Top-level folders a managed worktree links to the main checkout's copy. Every removal path detaches these first. */
+export const DEPENDENCY_LINK_DIRS = Object.freeze(["node_modules", ".venv"]);
+
+function linkMainCheckoutDir(repoRoot, dest, name, { git = defaultGit, realDirOnly = false } = {}) {
+  const src = resolve(repoRoot, name);
+  const link = resolve(dest, name);
+  if (realDirOnly) {
+    let st;
+    try {
+      st = lstatSync(src);
+    } catch {
+      return "no-source";
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) return "no-source";
+  } else if (!existsSync(src) || !statSync(src).isDirectory()) return "no-source";
   let present = false;
   try {
     lstatSync(link);
@@ -185,8 +222,8 @@ export function linkNodeModules(repoRoot, dest, git = defaultGit) {
     const exclude = resolve(common, "info", "exclude");
     mkdirSync(dirname(exclude), { recursive: true });
     const cur = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-    if (!cur.split(/\r?\n/).includes("/node_modules")) {
-      appendFileSync(exclude, (cur && !cur.endsWith("\n") ? "\n" : "") + "/node_modules\n");
+    if (!cur.split(/\r?\n/).includes(`/${name}`)) {
+      appendFileSync(exclude, (cur && !cur.endsWith("\n") ? "\n" : "") + `/${name}\n`);
     }
   } catch {}
   return "linked";
@@ -194,7 +231,12 @@ export function linkNodeModules(repoRoot, dest, git = defaultGit) {
 
 /** Remove only the link itself when <wt>/node_modules is a symlink/junction. Returns true if detached. */
 export function unlinkNodeModulesLink(wtPath) {
-  const link = resolve(wtPath, "node_modules");
+  return unlinkWorktreeDirLink(wtPath, "node_modules");
+}
+
+/** Remove only the link itself when <wt>/<name> is a symlink/junction (never its target). Returns true if detached. */
+function unlinkWorktreeDirLink(wtPath, name) {
+  const link = resolve(wtPath, name);
   try {
     if (!lstatSync(link).isSymbolicLink()) return false;
   } catch {
@@ -206,6 +248,37 @@ export function unlinkNodeModulesLink(wtPath) {
     rmdirSync(link); // non-recursive: fails on a real dir rather than emptying it
   }
   return true;
+}
+
+/**
+ * Detach every dependency link (DEPENDENCY_LINK_DIRS: node_modules, .venv) at the worktree root, link only, never the
+ * target; a real folder of that name is left alone. Fails closed: an lstat error other than ENOENT (EPERM, EACCES,
+ * EBUSY, ENAMETOOLONG, and ENOTDIR too: the root was already read as a worktree dir), an unlink that throws, or a link
+ * still there afterwards (code ELINK) throws, so the caller must not remove the worktree. Paths go through toLongPath
+ * (Windows >260 chars). `unlinkLink(absPath)` and `lstat(absPath)` are test seams. Returns the names detached.
+ */
+export function detachDependencyLinks(wtPath, { unlinkLink = unlinkLinkOnly, lstat = lstatSync } = {}) {
+  const detached = [];
+  for (const name of DEPENDENCY_LINK_DIRS) {
+    const p = toLongPath(resolve(wtPath, name));
+    let isLink = false;
+    try {
+      isLink = lstat(p).isSymbolicLink();
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e; // unreadable: not known to be link-free, so nothing may be removed
+    }
+    if (!isLink) continue;
+    unlinkLink(p);
+    let still = true;
+    try {
+      lstat(p);
+    } catch (e) {
+      if (e?.code === "ENOENT") still = false;
+    }
+    if (still) throw Object.assign(new Error(`${name} link still attached`), { code: "ELINK" });
+    detached.push(name);
+  }
+  return detached;
 }
 
 /**
@@ -865,6 +938,8 @@ export function removeSweptWorktree(
 ) {
   try {
     const wtRoot = normPath(wtPath);
+    // idea-1090: the root node_modules/.venv junctions first, by name (detachUntrackedLinks below would also find them).
+    detachDependencyLinks(resolve(wtPath), { unlinkLink });
     for (const rel of buildOutput) {
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
       // before `git worktree remove` could walk it.
@@ -1707,7 +1782,18 @@ function captureWipTree(wtPath, plan, git) {
 function ignoredNonBuild(wtPath, git) {
   const out = tryGit(git, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], wtPath);
   if (out === null) return null;
-  return out.split("\0").filter((p) => p && !isBuildOutputEntry(wtPath, p));
+  return out.split("\0").filter((p) => p && !isBuildOutputEntry(wtPath, p) && !isDependencyLink(wtPath, p));
+}
+
+/** A root .venv/node_modules link (idea-1090): not lost on archive, restore relinks it. */
+function isDependencyLink(wtPath, rel) {
+  const name = String(rel).replace(/[\\/]+$/, "");
+  if (!DEPENDENCY_LINK_DIRS.includes(name)) return false;
+  try {
+    return lstatSync(resolve(wtPath, name)).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -2131,6 +2217,9 @@ function restoreUnlocked(unit, ref, repo, { root, git, now, fail }) {
   }
   try {
     linkNodeModules(repo, dest, git);
+  } catch {}
+  try {
+    linkVenv(repo, dest, git); // idea-1090: ignored, so not archived; recreated like node_modules
   } catch {}
   out.links = links;
   // Verify: the restored tree re-captures to the archived WIP tree, and the index to the archived index tree.
