@@ -13,7 +13,7 @@
 //   read-only and the server refuses legacy writes that would change a role (roles-api.mjs legacyProfilesConflict).
 import { buildRolesFromProfiles, loadRoles } from "./profiles-v2.mjs";
 import { legacyProfileRole } from "./profiles.mjs";
-import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota, spawnFamily } from "./provider-failover.mjs";
+import { QUOTA_FAILOVER_THRESHOLD, isInterruptibleWork, isProviderOverQuota, spawnFamily } from "./provider-failover.mjs";
 import { AGY_CLAUDE_FAMILY } from "./model-ids.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
 import { TIERS, loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
@@ -87,6 +87,27 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
 }
 
 /**
+ * Families past their soft quota line (under hard) for non-interruptible work (@per PLAN_PER_QUOTA_FIT_1126 C).
+ * Returns { [family]: softReason } so resolveRoute can name the soft line in its route reason/label.
+ * Empty object when the spawn is interruptible (mechanical, docs, audit, spike, Pre-check).
+ */
+export function softCappedFamilies(usageList, extra = [], opts = {}) {
+  if (isInterruptibleWork(opts)) return {};
+  const fams = new Set(ROUTE_FAMILIES);
+  for (const e of extra) {
+    const f = routeProviderFamily(e);
+    if (f) fams.add(f);
+  }
+  const list = Array.isArray(usageList) ? usageList : [];
+  const out = {};
+  for (const f of fams) {
+    const q = isProviderOverQuota(f, list, opts.threshold ?? QUOTA_FAILOVER_THRESHOLD, opts);
+    if (!q.overQuota && q.softOverQuota && q.softReason) out[f] = q.softReason;
+  }
+  return out;
+}
+
+/**
  * The profile a role-name spawn runs as. {profile, route, explicitCapped, override} | null (hint is not a role).
  * `override` (H1, idea-974): the caller's own provider and/or model (spawn_worker's ROUTE_OVERRIDE_LABEL). They win:
  *   - provider given: the role runs on that provider; stakes still pick the tier rung (model + effort) of THAT
@@ -108,20 +129,24 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
  * `directClaude` (R10): the walk skips agy-claude (resolveRoute), so the route is exactly the pre-R10 one.
  * @param {string} hint
- * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
+ * @param {{stakes?: string, kind?: string, caps?: string[], softCaps?: Record<string, string | boolean> | string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel, prefer, tier, override, directClaude = false } = {}) {
+export function roleSpawnProfile(hint, { stakes, kind, caps = [], softCaps = {}, roles, ladder, explicitModel, prefer, tier, override, directClaude = false } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
   const fam = routeProviderFamily(prefer);
   const order = found0.role.providers ?? [];
   const capList = caps instanceof Set || Array.isArray(caps) ? [...caps] : Object.keys(caps ?? {}).filter((k) => caps[k]);
+  const softList = softCaps instanceof Set || Array.isArray(softCaps) ? [...softCaps] : Object.keys(softCaps ?? {}).filter((k) => softCaps[k]);
   const preferCapped = Boolean(fam && capList.some((c) => routeProviderFamily(c) === fam));
+  const preferSoftCapped = Boolean(
+    fam && !isInterruptibleWork({ stakes, kind, role: found0.key }) && softList.some((c) => routeProviderFamily(c) === fam),
+  );
   const tierNorm = TIERS.includes(String(tier ?? "").trim().toLowerCase()) ? String(tier).trim().toLowerCase() : "";
   const preferHit = Boolean(fam && order.includes(fam) && order[0] !== fam);
   // R8: an arm tier (e.g. flash -> cheap) applies when the preferred family is not capped (failover keeps the role's tier).
-  const tierHit = Boolean(tierNorm && !preferCapped && found0.role.tier !== tierNorm);
+  const tierHit = Boolean(tierNorm && !preferCapped && !preferSoftCapped && found0.role.tier !== tierNorm);
   if (preferHit || tierHit) {
     table = {
       ...table,
@@ -134,7 +159,7 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   }
   const found = roleNameHit(hint, table);
   const rungs = ladder ?? loadTierLadder();
-  const base = { role: found.key, stakes, caps, ladder: rungs, directClaude: Boolean(directClaude) };
+  const base = { role: found.key, stakes, kind, caps, softCaps, ladder: rungs, directClaude: Boolean(directClaude) };
   const ovModelRaw = String(override?.model ?? "").trim();
   // R10: an override of antigravity-cli + a Claude id is the agy-claude family (own cap/pool), so the cap check and
   // failover hop judge agy-claude, never Gemini.
@@ -211,16 +236,16 @@ export function roleMcpExtras(name, profiles, provider, profilesPath) {
  * resolveRoute for an old profile name/alias (or null when it is not one): the tier/role stamp + `legacy-name`, and
  * whether a caller model on a capped family was dropped. Never decides the old name's routing (today's walk does).
  * @param {string} name
- * @param {{stakes?: string, caps?: string[], explicitModel?: string, stakesLadder?: Record<string, any>}} [opts]
+ * @param {{stakes?: string, kind?: string, caps?: string[], softCaps?: Record<string, string | boolean> | string[], explicitModel?: string, stakesLadder?: Record<string, any>}} [opts]
  */
-export function legacyRouteMeta(name, { stakes, caps = [], explicitModel, stakesLadder } = {}) {
+export function legacyRouteMeta(name, { stakes, kind, caps = [], softCaps = {}, explicitModel, stakesLadder } = {}) {
   if (!legacyProfileRole(name)) return null;
   // The hook applies the user's stakes-ladder.json override on top of the landed profile: the replay must too.
   const sl = stakesLadder ?? loadStakesLadder();
-  const route = resolveRoute({ role: name, stakes, caps, stakesLadder: sl });
+  const route = resolveRoute({ role: name, stakes, kind, caps, softCaps, stakesLadder: sl });
   if (!route) return null;
   const exModel = String(explicitModel ?? "").trim();
-  const probe = exModel ? resolveRoute({ role: name, stakes, caps, stakesLadder: sl, explicit: { model: exModel } }) : null;
+  const probe = exModel ? resolveRoute({ role: name, stakes, kind, caps, softCaps, stakesLadder: sl, explicit: { model: exModel } }) : null;
   return { route, explicitCapped: Boolean(probe?.reasons?.includes("explicit-capped")) };
 }
 
@@ -296,7 +321,7 @@ export function routeRoleKeyOf(name) {
  * replay of an old name disagrees with today's walk (legacyShadowMismatch). `family=` (R10): the quota family when the
  * route ran on agy-claude, or `claude` when agy-claude was walked past as capped (then reason/why is failover).
  */
-export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, modelDropped = false, shadow = "", family = "" }) {
+export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, modelDropped = false, shadow = "", family = "", softReason = "" }) {
   const r = legacyName ? (reason === "default" ? "legacy-name" : `${reason}+legacy-name`) : reason;
   return (
     `stakes=${normalizeStakes(stakes)} model=${model || "-"} effort=${effort || "-"} reason=${r}` +
@@ -304,7 +329,8 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
     (explicitCapped ? " explicit-capped=dropped" : "") +
     (modelDropped ? " model-dropped=family" : "") +
     (shadow ? ` shadow=${shadow}` : "") +
-    (family ? ` family=${family}` : "")
+    (family ? ` family=${family}` : "") +
+    (softReason ? ` soft="${softReason}"` : "")
   );
 }
 
@@ -314,11 +340,12 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
  * the same values it would pick. null = not a role name (callers keep their profile path). `override` = the caller's own
  * provider/model (spawn_worker, H1): routed as in roleSpawnProfile, so the spawn config already names that provider's rung.
  */
-export function roleSpawnConfig(name, { profiles, profilesPath, stakes, usageList = [], prefer, tier, override } = {}) {
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, kind, usageList = [], prefer, tier, override, softThreshold, softThresholds, env } = {}) {
   const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
-  const hit = roleSpawnProfile(name, { stakes, caps, roles, prefer, tier, override });
+  const softCaps = softCappedFamilies(usageList, [], { ignoreDiskCaps: true, stakes, kind, role: name, softThreshold, softThresholds, env });
+  const hit = roleSpawnProfile(name, { stakes, kind, caps, softCaps, roles, prefer, tier, override });
   if (!hit) return null;
   const p = hit.profile;
   return {

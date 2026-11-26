@@ -42,10 +42,21 @@ test("G2: fresh claude 5h >= 95% fails Lead - Claude over to Lead - Gemini", () 
   assert.match(fo.reason, /claude usage 96% >= 95%/);
 });
 
-test("G2: claude at 94% does not fail over", () => {
-  const u = usage([row("claude", 94), row("antigravity-cli", 12)]);
-  assert.equal(u.find((e) => e.id === "claude").windows[0].usedPct, 94, "the reading is kept");
-  assert.equal(leadFo(u).failedOver, false);
+test("G2: claude under soft (69%) does not fail over; 94% is under hard (95%) and soft-fails-over when another family is under soft", () => {
+  const u69 = usage([row("claude", 69), row("antigravity-cli", 12)]);
+  assert.equal(u69.find((e) => e.id === "claude").windows[0].usedPct, 69, "the reading is kept");
+  assert.equal(leadFo(u69).failedOver, false);
+
+  // 94% is under the 95% hard line, but >= 70% soft line -> Lead (non-interruptible) prefers Gemini (12%).
+  const u94 = usage([row("claude", 94), row("antigravity-cli", 12)]);
+  assert.equal(isProviderOverQuota("claude", u94).overQuota, false, "hard line unchanged at 95%");
+  const fo94 = leadFo(u94);
+  assert.equal(fo94.failedOver, true);
+  assert.equal(fo94.profile.name, "Lead - Gemini");
+  assert.match(fo94.reason, /pool 94% >= soft 70: interruptible only -> antigravity-cli/);
+  // When every family is past soft, 94% (under hard) stays on Lead - Claude.
+  const allSoft = usage([row("claude", 94), row("antigravity-cli", 80), row("opencode", 80)]);
+  assert.equal(leadFo(allSoft).failedOver, false);
 });
 
 test("G2: a stale reading (last check older than the 5h bound) never triggers a switch", () => {
@@ -158,10 +169,10 @@ test(
 );
 
 test(
-  "G2 hook: 94%, rolled-over or a throwing source keep Lead - Claude",
+  "G2 hook: under-soft (69%), rolled-over or a throwing source keep Lead - Claude",
   withHome(async ({ vsHome }) => {
     for (const [name, setup, overrides] of [
-      ["94%", () => writeLimits(vsHome, 94), {}],
+      ["69%", () => writeLimits(vsHome, 69), {}],
       ["resetsAt passed", () => writeLimits(vsHome, 100, { resetInMs: -MIN }), {}],
       ["source throws", () => writeLimits(vsHome, 100), { usageProviders: () => { throw new Error("boom"); } }],
     ]) {
@@ -222,16 +233,22 @@ const oldClaudeLead = (profile = "Lead - Claude") => ({ provider: "claude", mode
 const freshClaude = (pct) => usageFromLimits([{ ...row("claude", pct), at: iso(Date.now() - MIN), checkedAt: iso(Date.now() - MIN), resetsAt: iso(Date.now() + 3600_000) }]);
 
 test(
-  "G2 lead successor: resolveLeadProfile fails a stored Lead - Claude over at >=95% (not at 94%); `vs cap` still wins",
+  "G2 lead successor: resolveLeadProfile fails a stored Lead - Claude over at >=95% (hard) and >=70% (soft); stays under 70%; `vs cap` still wins",
   leadEnv(async ({ profilesPath, noDisk }) => {
     const over = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: [], usageProviders: freshClaude(96) });
     assert.equal(over.profileName, "Lead - Gemini");
     assert.equal(over.spawnCfg.provider, "antigravity-cli");
     assert.deepEqual(over.failover, { from: "Lead - Claude", to: "Lead - Gemini", reason: "claude usage 96% >= 95%" });
 
-    const under = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: [], usageProviders: freshClaude(94) });
+    const under = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: [], usageProviders: freshClaude(69) });
     assert.equal(under.profileName, "Lead - Claude");
     assert.equal(under.failover, null);
+
+    // 94% is >= soft 70% and < hard 95%: leads are not interruptible, so handoff prefers Gemini (under soft).
+    const softOver = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: [], usageProviders: freshClaude(94) });
+    assert.equal(softOver.profileName, "Lead - Gemini");
+    assert.equal(softOver.spawnCfg.provider, "antigravity-cli");
+    assert.match(softOver.failover?.reason ?? "", /pool 94% >= soft 70: interruptible only -> antigravity-cli/);
 
     // Gemini capped (`vs cap`) while Claude is >=95%: never hop onto the capped counterpart (the walk goes on, as the hook's).
     const gemCapped = resolveLeadProfile(oldClaudeLead(), profilesPath, { ...noDisk, cappedProviders: ["antigravity-cli"], usageProviders: freshClaude(99) });

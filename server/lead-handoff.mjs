@@ -591,25 +591,32 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
   // Only the lead role: a worker/Buddy role name here ("Implement") falls back like any unknown profile.
   const roleCfg = roleHit?.profile?.role === "lead" ? roleHit : null;
   if (roleCfg) {
-    // The role route already skipped capped/over-quota families; name them (the families walked before the landed one).
+    // The role route already skipped capped/over-quota/soft-quota families; name them (the families walked before the landed one).
     let failover = null;
     if (roleCfg.route?.reasons?.includes("failover")) {
       const landed = roleCfg.route.provider;
       const head = ROLE_PROVIDER_CHAINS.lead.slice(0, Math.max(0, ROLE_PROVIDER_CHAINS.lead.indexOf(landed)));
-      const why = head.map((f) => isProviderOverQuota(f, usageList, undefined, { ignoreDiskCaps: true }).reason).filter(Boolean);
-      failover = { from: desiredKey, to: roleCfg.profileName, reason: why.join("; ") || "capped provider skipped" };
+      const why = head
+        .map((f) => {
+          const q = isProviderOverQuota(f, usageList, undefined, { ignoreDiskCaps: true, role: "lead" });
+          return q.reason || (q.softOverQuota ? `${q.softReason} -> ${landed}` : null);
+        })
+        .filter(Boolean);
+      failover = { from: desiredKey, to: roleCfg.profileName, reason: why.join("; ") || roleCfg.route.softReason || "capped provider skipped" };
     }
     return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg, failover };
   }
   let profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
-  // G2 (idea-1012) + L1: a stored lead profile whose provider is capped (`vs cap`) or >=95% on live quota starts on its
-  // counterpart, the same resolveProfileWithFailover walk the spawn hook runs (caps first, so a capped counterpart is
-  // skipped), so the successor's profile, prompt (NON_CLAUDE_LEAD_CAP_RULES), labels and env match the provider it runs on.
+  // G2 (idea-1012) + L1 + soft quota (@per PLAN_PER_QUOTA_FIT_1126 C): a stored lead profile whose provider is capped (`vs cap`),
+  // >=95% on live quota, or >=soft line (leads are not interruptible) starts on its counterpart, the same resolveProfileWithFailover
+  // walk the spawn hook runs (caps first, so a capped counterpart is skipped), so the successor's profile, prompt
+  // (NON_CLAUDE_LEAD_CAP_RULES), labels and env match the provider it runs on.
   // usageList already holds the caps (in-memory + disk) ahead of quota rows, so disk is not re-read here.
   let failover = null;
-  if (profile && isProviderOverQuota(profile.provider, usageList, undefined, { ignoreDiskCaps: true }).overQuota) {
-    const fo = resolveProfileWithFailover(profile, profiles, usageList, { ignoreDiskCaps: true });
+  const leadCheck = profile ? isProviderOverQuota(profile.provider, usageList, undefined, { ignoreDiskCaps: true, role: "lead" }) : null;
+  if (profile && (leadCheck?.overQuota || leadCheck?.softOverQuota)) {
+    const fo = resolveProfileWithFailover(profile, profiles, usageList, { ignoreDiskCaps: true, role: "lead" });
     if (fo.failedOver && fo.profile) {
       failover = { from: profile.name, to: fo.profile.name, reason: fo.reason };
       profile = fo.profile;

@@ -441,7 +441,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     ab = await decideArm({
       profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
       arms: ctx.implementerArms,
-      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
+      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env, stakes: stakesNow, kind: clean(args.labels?.kind), role: profileName })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
     if (ab?.swapped && !ab.role) pickedProfile = ab.profile;

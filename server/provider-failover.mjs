@@ -8,11 +8,97 @@ import { GEMINI_TOP_MODEL, AGY_CLAUDE_FAMILY, AGY_CLAUDE_SUFFIXED_RE, isAgyClaud
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 /**
+ * Per-family soft quota line (@per PLAN_PER_QUOTA_FIT_1126 C): at or above this pool % (and under the hard line),
+ * only interruptible work (stakes=mechanical, or kind/role in docs, audit, spike, pre-check) routes to that family.
+ */
+export const QUOTA_SOFT_THRESHOLD = 70;
+export const INTERRUPTIBLE_KINDS = Object.freeze(new Set(["docs", "audit", "spike", "pre-check"]));
+/**
  * R10: agy-claude fails over to direct claude at this pool %, below the 95 default. agy polls its pool at most every
  * 30 min (runner/limits.mjs), so a reading can lag a busy pool by that long; 85 leaves the headroom. A caller's lower
  * threshold still wins (min).
  */
 export const AGY_CLAUDE_FAILOVER_THRESHOLD = 85;
+
+function parseSoftPct(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : null;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+}
+
+/**
+ * Resolve the soft quota % threshold for a provider family.
+ * Precedence: opts.softThresholds[family] > numeric/map opts.softThreshold > env VS_QUOTA_SOFT_PCT_<FAMILY> > env VS_QUOTA_SOFT_PCT > 70.
+ * Whitespace or unparseable values fall back to the next level and finally QUOTA_SOFT_THRESHOLD (70).
+ */
+export function resolveSoftQuotaThreshold(providerId, opts = {}) {
+  const family = normalizeProviderFamily(providerId);
+  const env = opts?.env ?? process.env;
+  const lookupMap = (map) => {
+    if (!map || typeof map !== "object" || Array.isArray(map)) return null;
+    if (family && Object.hasOwn(map, family)) {
+      const v = parseSoftPct(map[family]);
+      if (v !== null) return v;
+    }
+    if (family) {
+      for (const [k, raw] of Object.entries(map)) {
+        if (normalizeProviderFamily(k) === family) {
+          const v = parseSoftPct(raw);
+          if (v !== null) return v;
+        }
+      }
+    }
+    return null;
+  };
+  const fromMap = lookupMap(opts?.softThresholds);
+  if (fromMap !== null) return fromMap;
+  if (opts?.softThreshold && typeof opts.softThreshold === "object") {
+    const fromObj = lookupMap(opts.softThreshold);
+    if (fromObj !== null) return fromObj;
+  } else {
+    const fromNum = parseSoftPct(opts?.softThreshold);
+    if (fromNum !== null) return fromNum;
+  }
+  if (family && env) {
+    const envKey = `VS_QUOTA_SOFT_PCT_${family.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+    const fromFamEnv = parseSoftPct(env[envKey]);
+    if (fromFamEnv !== null) return fromFamEnv;
+  }
+  if (env) {
+    const fromEnv = parseSoftPct(env.VS_QUOTA_SOFT_PCT);
+    if (fromEnv !== null) return fromEnv;
+  }
+  return QUOTA_SOFT_THRESHOLD;
+}
+
+/**
+ * Interruptible work may still route to a family past its soft quota line (under its hard line).
+ * Interruptible = stakes=mechanical, or kind/role of docs, audit, spike or Pre-check.
+ */
+export function isInterruptibleWork({ stakes, kind, role } = {}) {
+  if (String(stakes ?? "").trim().toLowerCase() === "mechanical") return true;
+  const normKey = (v) => String(v ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  const k = normKey(kind);
+  if (k && INTERRUPTIBLE_KINDS.has(k)) return true;
+  const r = normKey(role);
+  if (r && INTERRUPTIBLE_KINDS.has(r)) return true;
+  if (
+    r &&
+    (r.startsWith("pre-check-") ||
+      r.startsWith("audit-") ||
+      r.startsWith("mechanical-") ||
+      r.startsWith("docs-") ||
+      r.startsWith("spike-") ||
+      r === "check-haiku")
+  ) {
+    return true;
+  }
+  return false;
+}
 
 // Role failover chains (R1, docs/PLAN_PER_ROLES_LADDER_1125.md): role key -> provider families in hop order, the most
 // capable provider for that role first. The one source for server/role-route.mjs ROLE_TABLE.providers; a role spawn
@@ -460,12 +546,12 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
 export function isProviderOverQuota(providerId, usageProviders = [], threshold = QUOTA_FAILOVER_THRESHOLD, opts = {}) {
   const targetFamily = normalizeProviderFamily(providerId);
   if (!targetFamily) {
-    return { overQuota: false, reason: null, usedPct: null };
+    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null };
   }
 
   // In-memory cap overrides are checked first.
   if (opts.cappedProviders && isFamilyCapped(opts.cappedProviders, targetFamily)) {
-    return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100 };
+    return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null };
   }
 
   const list = extractUsageList(usageProviders);
@@ -476,16 +562,17 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
   if (!entry && opts.ignoreDiskCaps !== true) {
     const readDisk = opts.useDiskCaps === true || !!process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
     if (readDisk && (() => { const c = readCappedProviders(opts); return capKin(targetFamily).some((f) => c[f]); })()) {
-      return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100 };
+      return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null };
     }
   }
 
   if (!entry) {
-    return { overQuota: false, reason: null, usedPct: null };
+    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null };
   }
 
   let limitThreshold = typeof threshold === "number" && Number.isFinite(threshold) ? threshold : QUOTA_FAILOVER_THRESHOLD;
   if (targetFamily === AGY_CLAUDE_FAMILY) limitThreshold = Math.min(limitThreshold, AGY_CLAUDE_FAILOVER_THRESHOLD);
+  const softLimit = resolveSoftQuotaThreshold(targetFamily, opts);
   const status = String(entry.status ?? entry?.report?.status ?? "")
     .trim()
     .toLowerCase();
@@ -526,6 +613,9 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
       overQuota: true,
       reason: `${targetFamily} status is ${status}`,
       usedPct: effectiveUsedPct,
+      softOverQuota: false,
+      softThreshold: softLimit,
+      softReason: null,
     };
   }
 
@@ -541,13 +631,39 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
       overQuota: true,
       reason: `${targetFamily} usage ${reportedPct}% >= ${limitThreshold}%`,
       usedPct: effectiveUsedPct,
+      softOverQuota: false,
+      softThreshold: softLimit,
+      softReason: null,
     };
+  }
+
+  // Soft quota line (@per PLAN_PER_QUOTA_FIT_1126 C): under hard line, >= soft line -> interruptible work only.
+  if (!isInterruptibleWork(opts)) {
+    const softRemainingTrigger = 100 - softLimit;
+    const softByTopUsed = topUsed !== null && topUsed >= softLimit;
+    const softByTopRemaining = topRemaining !== null && topRemaining <= softRemainingTrigger;
+    const softByWinUsed = maxWinUsed !== null && maxWinUsed >= softLimit;
+    const softByWinRemaining = minWinRemaining !== null && minWinRemaining <= softRemainingTrigger;
+    if (softByTopUsed || softByTopRemaining || softByWinUsed || softByWinRemaining) {
+      const reportedPct = effectiveUsedPct ?? softLimit;
+      return {
+        overQuota: false,
+        reason: null,
+        usedPct: effectiveUsedPct,
+        softOverQuota: true,
+        softThreshold: softLimit,
+        softReason: `pool ${reportedPct}% >= soft ${softLimit}: interruptible only`,
+      };
+    }
   }
 
   return {
     overQuota: false,
     reason: null,
     usedPct: effectiveUsedPct,
+    softOverQuota: false,
+    softThreshold: softLimit,
+    softReason: null,
   };
 }
 
@@ -588,8 +704,9 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
   }
 
   const threshold = opts?.threshold ?? QUOTA_FAILOVER_THRESHOLD;
-  const check = isProviderOverQuota(profile.provider, usageProviders, threshold, opts);
-  if (!check.overQuota) {
+  const checkOpts = { ...opts, role: opts?.role ?? profile.name };
+  const check = isProviderOverQuota(profile.provider, usageProviders, threshold, checkOpts);
+  if (!check.overQuota && !check.softOverQuota) {
     return {
       profile,
       failedOver: false,
@@ -622,22 +739,52 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
     }
   }
 
+  // Pass 1: prefer a candidate under both hard and soft lines. Remember the first candidate under the hard line
+  // in case every family is past its soft line.
+  let firstUnderHard = null;
   for (const name of candidates) {
     const cand =
       lookupProfileInList(name, effectiveProfiles) ||
       lookupProfileInList(name, defaultPool);
     if (!cand || !cand.provider) continue;
     if (cand.name === profile.name) continue;
-    const candCheck = isProviderOverQuota(cand.provider, usageProviders, threshold, opts);
-    if (!candCheck.overQuota) {
+    const candCheck = isProviderOverQuota(cand.provider, usageProviders, threshold, checkOpts);
+    if (!candCheck.overQuota && !candCheck.softOverQuota) {
+      const softOnly = !check.overQuota && check.softOverQuota;
+      const candFam = normalizeProviderFamily(cand.provider);
       return {
         profile: cand,
         failedOver: true,
         fromProfile: profile.name,
         toProfile: cand.name,
-        reason: check.reason,
+        reason: softOnly ? `${check.softReason} -> ${candFam}` : check.reason,
+        ...(softOnly ? { softFailover: true } : {}),
       };
     }
+    if (!candCheck.overQuota && !firstUnderHard) {
+      firstUnderHard = cand;
+    }
+  }
+
+  // Pass 2: every candidate is past its soft line (or hard). Don't strand the spawn: use the first family under hard.
+  if (!check.overQuota) {
+    // Primary itself is under the hard line -> keep primary.
+    return {
+      profile,
+      failedOver: false,
+      fromProfile: null,
+      toProfile: null,
+      reason: null,
+    };
+  }
+  if (firstUnderHard) {
+    return {
+      profile: firstUnderHard,
+      failedOver: true,
+      fromProfile: profile.name,
+      toProfile: firstUnderHard.name,
+      reason: check.reason,
+    };
   }
 
   return {
