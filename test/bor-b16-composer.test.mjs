@@ -162,3 +162,95 @@ test("DOM: Psycho (data-vibe=fun) does not pick up the bar layout rules", { skip
   const d = await launch(page("dark", "fun", 900), (p) => p.evaluate(() => getComputedStyle(document.querySelector(".boring-composer-cfg")).flexWrap));
   assert.notEqual(d, "wrap");
 });
+
+const measureBar = () => {
+  const card = document.querySelector(".boring-composer-row").getBoundingClientRect();
+  const kids = [...document.querySelectorAll(".boring-composer-bar button, .boring-composer-bar select, .boring-composer-bar input")]
+    .map((e) => ({ id: e.getAttribute("data-testid") || e.getAttribute("aria-label"), r: e.getBoundingClientRect() }))
+    .sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left);
+  const rows = [];
+  for (const k of kids) {
+    const cy = (k.r.top + k.r.bottom) / 2;
+    const hit = rows.find((row) => Math.abs(row.cy - cy) < 16);
+    if (hit) hit.ids.push(k.id);
+    else rows.push({ cy, ids: [k.id] });
+  }
+  const overlaps = [];
+  for (let i = 0; i < kids.length; i++) for (let j = i + 1; j < kids.length; j++) {
+    const a = kids[i].r, b = kids[j].r;
+    if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps.push([kids[i].id, kids[j].id]);
+  }
+  const outside = kids.filter((k) => k.r.right > card.right + 0.5 || k.r.left < card.left - 0.5).map((k) => k.id);
+  const rowLists = rows.map((r) => r.ids);
+  const thinkRow = rowLists.findIndex((r) => r.includes("drawer-thinking-select") || r.includes("Thinking"));
+  const modeRow = rowLists.findIndex((r) => r.includes("drawer-mode-select") || r.includes("Mode"));
+  return { rowCount: rowLists.length, rows: rowLists, overlaps, outside, thinkRow, modeRow, modeOrphan: modeRow >= 0 && rowLists[modeRow].length === 1 };
+};
+
+test("B18b DOM: at 530px (1280x720 ctx open, 482px card) and 550px split-pane width, <= 2 rows and Mode never orphans alone", { skip }, async () => {
+  const sw = React.createElement("button", { type: "button", className: "btn small", "data-testid": "drawer-switch-provider-btn" }, "⇄ Switch to Claude");
+  for (const width of [530, 550]) {
+    const r = await launch(page("dark", "boring", width, { isBs: false, running: true, providerSwitchBtn: sw }), (p) => p.evaluate(measureBar));
+    assert.deepEqual(r.overlaps, [], `no overlaps at ${width}px`);
+    assert.deepEqual(r.outside, [], `no clipping at ${width}px`);
+    assert.ok(r.rowCount <= 2, `at most 2 rows at ${width}px, got ${r.rowCount}: ${JSON.stringify(r.rows)}`);
+    assert.equal(r.modeOrphan, false, `Mode must not orphan alone at ${width}px: ${JSON.stringify(r.rows)}`);
+    assert.equal(r.thinkRow, r.modeRow, `Think and Mode stay paired at ${width}px: ${JSON.stringify(r.rows)}`);
+  }
+});
+
+test("B18b browser: real app at 1280x720 (ctx panel open) and narrow ~550px split keeps <= 2 composer rows and no orphaned Mode", { skip, timeout: 120000 }, async () => {
+  const E = await import(pathToFileURL(join(root, "scripts", "ui-overlap", "env.mjs")).href);
+  await E.ensureDist();
+  const { server, baseUrl } = await E.serveDist();
+  const b = await chromium.launch({ executablePath: exe, args: ["--no-sandbox"] });
+  try {
+    for (const [label, w, h, ctxOpen, split] of [["1280x720 ctx open", 1280, 720, true, false], ["narrow split (~550px pane)", 1400, 800, false, true]]) {
+      const ctx = await b.newContext({ viewport: { width: w, height: h }, colorScheme: "dark" });
+      await ctx.addInitScript(`try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");localStorage.setItem("vs.context-panel.open","${ctxOpen ? "1" : "0"}");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"boring","app.theme":"dark"}));}catch{}`);
+      await E.installRoutes(ctx);
+      const p = await ctx.newPage();
+      await p.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded" });
+      await p.locator('[data-testid="boring-worker-demo-aud"]').click({ timeout: 15000 });
+      await p.locator('[data-testid="boring-composer-bar"]').first().waitFor({ timeout: 10000 });
+      await p.waitForTimeout(300);
+      if (split) {
+        await p.locator('[data-testid="boring-split-toggle"]').click();
+        await p.locator('[data-testid="boring-pp-active"] [data-testid^="boring-pp-agent-"]').nth(1).click({ timeout: 5000 });
+        await p.waitForTimeout(300);
+      }
+      const bars = await p.evaluate(() => [...document.querySelectorAll(".boring-composer-row")].map((row) => {
+        const card = row.getBoundingClientRect();
+        const kids = [...row.querySelectorAll(".boring-composer-bar button, .boring-composer-bar select, .boring-composer-bar input")]
+          .map((e) => ({ id: e.getAttribute("data-testid") || e.getAttribute("aria-label"), r: e.getBoundingClientRect() }))
+          .sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left);
+        const rows = [];
+        for (const k of kids) {
+          const cy = (k.r.top + k.r.bottom) / 2;
+          const hit = rows.find((rw) => Math.abs(rw.cy - cy) < 16);
+          if (hit) hit.ids.push(k.id);
+          else rows.push({ cy, ids: [k.id] });
+        }
+        const rowLists = rows.map((rw) => rw.ids);
+        const overlaps = [];
+        for (let i = 0; i < kids.length; i++) for (let j = i + 1; j < kids.length; j++) {
+          const a = kids[i].r, bb = kids[j].r;
+          if (a.left < bb.right - 1 && bb.left < a.right - 1 && a.top < bb.bottom - 1 && bb.top < a.bottom - 1) overlaps.push([kids[i].id, kids[j].id]);
+        }
+        const outside = kids.filter((k) => k.r.right > card.right + 0.5 || k.r.left < card.left - 0.5).map((k) => k.id);
+        const thinkRow = rowLists.findIndex((rw) => rw.includes("drawer-thinking-select") || rw.includes("Thinking"));
+        const modeRow = rowLists.findIndex((rw) => rw.includes("drawer-mode-select") || rw.includes("Mode"));
+        return { cardW: Math.round(card.width), rowCount: rowLists.length, rows: rowLists, overlaps, outside, thinkRow, modeRow, modeOrphan: modeRow >= 0 && rowLists[modeRow].length === 1 };
+      }));
+      assert.ok(bars.length >= (split ? 2 : 1), `${label}: expected composer bar(s)`);
+      for (const r of bars) {
+        assert.deepEqual(r.overlaps, [], `${label}: overlaps`);
+        assert.deepEqual(r.outside, [], `${label}: clipped`);
+        assert.ok(r.rowCount <= 2, `${label} (${r.cardW}px): <= 2 rows, got ${r.rowCount}: ${JSON.stringify(r.rows)}`);
+        assert.equal(r.modeOrphan, false, `${label} (${r.cardW}px): Mode orphaned: ${JSON.stringify(r.rows)}`);
+        assert.equal(r.thinkRow, r.modeRow, `${label} (${r.cardW}px): Think+Mode paired: ${JSON.stringify(r.rows)}`);
+      }
+      await ctx.close();
+    }
+  } finally { await b.close(); server.close(); }
+});
