@@ -2,7 +2,7 @@
 // diff old vs new vibeMode per Squad. OFF->ON: every live Buddy and Lead of that Squad gets the Crunch rules + "Pick your lean
 // and go". ON->OFF: the same agents get "Crunch mode is OFF: back to asking before scope calls.". Idle agents get a normal
 // prompt (runner.sendAgentPrompt); busy agents (the BUSY set) get a steer (steerOnly, as token-watch.mjs sendLeadNotice).
-// Asleep Squads (asleepTeamIds) are skipped; unchanged and other Squads get nothing. No new endpoint or verb. Never throws out
+// Asleep Squads (asleepTeamIds) are skipped; unchanged and other Squads get nothing. No new endpoint or verb.
 // The hub Buddy (role=brainstorm in the Squad's hub lane, RiffBot) is skipped: it keeps the crunch rules via rolePack and a flip
 // must not wake it (PLAN_INBOX_1126O O1); one skipped=hub-buddy metric line is logged instead. Never throws out
 // of onTeamsSave: errors are caught and logged so a toggle never fails or delays the save. All I/O is injected for tests.
@@ -66,11 +66,15 @@ export function createCrunchToggle({
             const laneKey = m.laneId.toLowerCase();
             const laneObj = (teamObj.lanes || []).find((l) => String(l?.id ?? "").toLowerCase() === laneKey) ?? { id: m.laneId };
             if (isHubLane(teamObj, laneObj)) {
-              log({
-                teamId: ch.teamId,
-                laneId: m.laneId,
-                text: `crunch-${ch.to ? "on" : "off"} team=${ch.teamId} lane=${m.laneId} agent=${m.agent.id} role=brainstorm skipped=hub-buddy`,
-              });
+              try {
+                log({
+                  teamId: ch.teamId,
+                  laneId: m.laneId,
+                  text: `crunch-${ch.to ? "on" : "off"} team=${ch.teamId} lane=${m.laneId} agent=${m.agent.id} role=brainstorm skipped=hub-buddy`,
+                });
+              } catch (e) {
+                console.warn(`[vibesquad] crunch-toggle: skip log for ${m.agent.id} failed: ${e?.message ?? e}`); // keep notifying the rest
+              }
               continue;
             }
           }

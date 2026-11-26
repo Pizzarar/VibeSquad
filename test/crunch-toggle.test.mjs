@@ -166,3 +166,16 @@ test("hub Buddy skipped by the fallback rule (no hub flag, lane id equals team i
   assert.deepEqual(s.sent.map((x) => x.id).sort(), ["HL", "TB"]);
   assert.ok(s.logs.some((l) => l.endsWith("agent=HB role=brainstorm skipped=hub-buddy")));
 });
+
+test("a throwing logger on the hub-buddy skip line does not stop the other members (O1 review)", async () => {
+  const sent = [];
+  const toggle = createCrunchToggle({
+    listAgents: async () => [ag("HB", "brainstorm", "vs", "vibesquad"), ag("HL", "lead", "vs", "vibesquad"), ag("TB", "brainstorm", "vs", "bug")],
+    send: async (id) => sent.push(id),
+    asleepTeams: () => new Set(),
+    log: (e) => { if (/skipped=hub-buddy/.test(e.text)) throw new Error("log boom"); },
+  });
+  const mk = (v) => [{ id: "vs", vibeMode: v, lanes: [{ id: "vibesquad", hub: true }, { id: "bug" }] }];
+  await toggle.onTeamsSave(mk(false), mk(true));
+  assert.deepEqual(sent.sort(), ["HL", "TB"]);
+});
