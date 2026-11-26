@@ -104,10 +104,10 @@ export const Field = ({ label, children }: { label: string; children: React.Reac
 
 /** Which model a role row will run: the ladder's pick for these stakes (after capped failover), or the override.
  *  `warn` = every provider is capped (Spawn stays enabled; the note says what happens). */
-function roleBadges(roleKey: string, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, quota: QuotaCaps): { badges: [string, string][]; note: string } {
+function roleBadges(roleKey: string, roleDef: { name: string; tier: string; providers: string[] }, ladder: Parameters<typeof landingPick>[1], stakes: string, override: Override | null, quota: QuotaCaps): { badges: [string, string][]; note: string; viaTitle?: string } {
   // C fu1 L2: soft-capped + no-row families from the same roles GET as `capped`, so the badge matches the server route.
   const l = roleLandingPick(roleKey, roleDef, ladder, stakes, override, quota);
-  return { badges: [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]], note: l.allCapped ? allCappedNote(l.provider) : "" };
+  return { badges: [["provider/model", `${providerName(l.provider)}/${l.model}`], ["via", l.via], ["stakes", stakes]], note: l.allCapped ? allCappedNote(l.provider) : "", viaTitle: l.detail };
 }
 
 /** Optional model override, grouped by the role's providers: "From ladder (stakes)" | "<provider> · ladder model" | "<provider> · <model>". */
@@ -424,7 +424,7 @@ export function NewAgentModal({ view, onClose, onCreated }: { view: TeamView; on
               // R2 (UX m3): the landing badge reads as a warning when every provider is capped.
               const warn = k === "via" && Boolean(landing?.note);
               return (
-                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"} title={k === "via" ? landing?.viaTitle : undefined}>
                   <b>{k}</b> {v}
                 </span>
               );
@@ -947,7 +947,7 @@ export function AddBuddyModal({
             {buddyBadges.map(([k, v]) => {
               const warn = k === "via" && Boolean(buddyLanding?.note);
               return (
-                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"}>
+                <span key={k} className={warn ? "def-badge def-badge-warn" : "def-badge"} title={k === "via" ? buddyLanding?.viaTitle : undefined}>
                   <b>{k}</b> {v}
                 </span>
               );

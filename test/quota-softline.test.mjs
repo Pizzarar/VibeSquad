@@ -27,7 +27,8 @@ import { decideArm, readArmCaps } from "../server/exp6-arm.mjs";
 import { resolveLeadProfile } from "../server/lead-handoff.mjs";
 import { seedDefaultPack } from "../server/vibesquad-api.mjs";
 import { createPlugin, ROUTE_LABEL } from "../server/hooks/agent-duties.ts";
-import { drawerSoftReason, drawerSpawnWhy, isInterruptibleRole, landingPick, roleLandingPick, spawnChipTitle } from "../src/roleSpawn.ts";
+import { SPAWN_REASON, formatSoftReason } from "../server/spawn-reason.mjs";
+import { SPAWN_REASON_GLOSS, drawerSoftReason, drawerSpawnWhy, isInterruptibleRole, landingPick, roleLandingPick, spawnChipTitle } from "../src/roleSpawn.ts";
 
 const iso = (ms) => new Date(ms).toISOString();
 const MIN = 60_000;
@@ -448,7 +449,8 @@ test("fu1 L2: the New Agent badge (roles GET capped + softCapped + quotaUnknown)
     assert.deepEqual(soft.quotaUnknown, ["opencode"]);
     assert.ok(getRolesState({ ...paths, usage: cases[2] }).capped.includes("claude"), "a family past its hard line is capped on the badge too");
     const badge = roleLandingPick("implement", soft.roles.implement, soft.ladder, "normal", null, soft);
-    assert.match(badge.via, /^soft \(.*pool 78% >= soft 70: interruptible only.* → Gemini\)$/);
+    assert.equal(badge.via, "soft"); // C fu2 m2: short badge label, no repeated route text
+    assert.equal(badge.detail, "Claude (AGY) pool at 78%, soft line 70%; Claude pool at 78%, soft line 70%. Runs on Gemini.");
     // The dialog feeds the badge from that same GET (useProfiles), not the bare capped list.
     const tsx = readFileSync(new URL("../src/TeamActions.tsx", import.meta.url), "utf8");
     assert.match(tsx, /roleLandingPick\(roleKey, roleDef, ladder, stakes, override, quota\)/);
@@ -520,19 +522,21 @@ test("fu1 L3: the soft reason is its own reason (result, drawer, tooltip) and a 
     // Hook route skips both Claude pools for their soft line.
     const res = await callTool(ctxFor(async () => ({})), "spawn_worker", { title: "t", prompt: "go", profile: "Implement", stakes: "normal", labels: { ab: "pin" } });
     assert.match(res.spawned, / · soft$/);
-    assert.equal(res.soft, "pool 78% >= soft 70: interruptible only -> antigravity-cli");
+    assert.equal(res.soft, "Claude pool at 78%, soft line 70%");
     assert.equal(res.ab?.capped, undefined);
     // Arm pick skipped the soft Claude arm: result.ab.soft, never capped, and the soft line named in the result.
     const armRes = await callTool(ctxFor(async () => softCaps), "spawn_worker", { title: "t2", prompt: "go", profile: "Implement", stakes: "normal" });
     assert.equal(armRes.ab.soft, true);
     assert.equal(armRes.ab.capped, undefined);
-    assert.match(armRes.soft, /^pool 75% >= soft 70: interruptible only -> antigravity-cli$/);
+    assert.equal(armRes.soft, "Claude pool at 75%, soft line 70%");
+    assert.match(armRes.spawned, / · soft$/, "C fu2 L1: arm soft skip shows soft, not capped");
     // Drawer badge + tooltip read the same label.
     const labels = agents[0].labels;
     assert.equal(drawerSpawnWhy(labels, agents[0].model, false), "soft");
     assert.equal(drawerSoftReason(labels), "pool 78% >= soft 70: interruptible only -> antigravity-cli");
     const title = spawnChipTitle({ role: "Implement", model: agents[0].model, reason: "soft", provider: "Gemini", softReason: drawerSoftReason(labels) });
-    assert.match(title, /Soft line: .*Runs on Gemini\. \(pool 78% >= soft 70: interruptible only -> antigravity-cli\)$/);
+    assert.equal(title, `Implement · ${agents[0].model}. Soft line: the preferred provider passed its soft line, so a fallback ran. Runs on Gemini. Claude pool at 78%, soft line 70%.`);
+    assert.doesNotMatch(title, />=|->/);
     assert.doesNotMatch(title, /capped/);
   } finally {
     stop?.();
@@ -651,3 +655,24 @@ test("fu1 L5: a kind=docs worker respawned after a quota death stays interruptib
 function ladderFirst(roleKey, stakes) {
   return resolveRoute({ role: roleKey, stakes }).provider;
 }
+
+test("C fu2 m1/m3/L1: shared soft formatter, short soft gloss, arm soft-skip label distinct from cap", () => {
+  assert.equal(formatSoftReason("pool 78% >= soft 70: interruptible only -> antigravity-cli"), "Claude pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("pool 78% >= soft 70: interruptible only -> claude"), "Claude (AGY) pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("pool 61% >= soft 55: interruptible only", { family: "antigravity-cli" }), "Gemini pool at 61%, soft line 55%");
+  assert.equal(formatSoftReason("no quota row for opencode: ranked after known under soft -> claude"), "No quota row for OpenCode");
+  assert.equal(formatSoftReason(""), "");
+  for (const t of [formatSoftReason("pool 78% >= soft 70: x -> claude"), formatSoftReason("soft quota: interruptible only -> claude")]) assert.doesNotMatch(t, />=|->/);
+  const words = (t) => t.replace(/^\w[\w ]*:\s*/, (m) => m).split(/\s+/).length;
+  assert.ok(words(SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT]) <= 13, SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT]);
+  // same provider wording as failover gloss
+  assert.match(SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT], /preferred provider/);
+  assert.match(SPAWN_REASON_GLOSS[SPAWN_REASON.FAILOVER], /preferred provider/);
+  // drawer: arm soft skip (no hook soft= text) reads soft; a hard cap skip does not.
+  const armSoft = { "vs.route": "reason=default why=arm", "vs.arm-reason": "pool 75% >= soft 70: interruptible only -> antigravity-cli" };
+  assert.equal(drawerSpawnWhy(armSoft, "m", false), "soft");
+  assert.equal(drawerSoftReason(armSoft), "pool 75% >= soft 70: interruptible only -> antigravity-cli");
+  const armCap = { "vs.route": "reason=default why=arm", "vs.arm-reason": "capped:claude" };
+  assert.equal(drawerSpawnWhy(armCap, "m", false), "arm");
+  assert.equal(drawerSoftReason(armCap), "");
+});
