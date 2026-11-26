@@ -10,6 +10,7 @@ import { after, test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { transformSync } from "rolldown/utils";
+import { resolvePlaywright, PLAYWRIGHT_INSTALL_CMD } from "../scripts/ui-overlap/env.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
@@ -112,15 +113,9 @@ test("bar renders the switch button, visible Think/Mode hints and the staged hin
   assert.ok(!renderToStaticMarkup(React.createElement(BoringComposerBar, base())).includes("boring-composer-staged"));
 });
 
-const { chromium } = await (async () => {
-  try {
-    const d = process.env.PLAYWRIGHT_DIR;
-    const pw = d ? await import(pathToFileURL(join(d, "playwright-core", "index.mjs")).href).catch(() => import(pathToFileURL(join(d, "playwright-core", "index.js")).href)) : null;
-    return { chromium: pw?.chromium ?? pw?.default?.chromium ?? null };
-  } catch { return { chromium: null }; }
-})();
+const chromium = resolvePlaywright()?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-const skip = chromium && exe ? false : "no Playwright/Chromium (set PLAYWRIGHT_DIR + PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)";
+const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 const page = (theme, vibe, width, over = {}) => `<!doctype html><html data-vibe="${vibe}" data-theme="${theme}"><head><meta charset="utf-8"><style>${read("src", "styles.css")}\n${read("src", "boring.css")}</style></head><body style="margin:0;width:${width}px"><footer class="composer"><div class="composer-row boring-composer-row"><textarea placeholder="Message Worker…"></textarea>${renderToStaticMarkup(React.createElement(BoringComposerBar, base({ running: true, isBs: true, ...over })))}</div></footer></body></html>`;
 const launch = async (html, fn) => {
   const b = await chromium.launch({ executablePath: exe, args: ["--no-sandbox"] });

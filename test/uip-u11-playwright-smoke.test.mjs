@@ -15,20 +15,18 @@
 //      while `pinFocus` (the right rail) stays active.
 //   5. Click `SQUADS` / Breadcrumb / `⊞` → one-click return to the Squad hub home and Squads Home.
 //
-// The test is self-contained: it resolves Playwright (local, `PLAYWRIGHT_DIR`, or the global
-// `@playwright/mcp` bundle), launches the system Edge/Chrome with `playwright-core` (no browser
+// The test is self-contained: it resolves Playwright via the shared resolvePlaywrightInfo (scripts/ui-overlap/env.mjs:
+// PLAYWRIGHT_DIR, local, the durable ~/.vibesquad/tools/playwright dir, or the npx cache), launches the system Edge/Chrome with `playwright-core` (no browser
 // download required), and serves the prebuilt `dist/` bundle over a loopback static server.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureDist } from "../scripts/ui-overlap/env.mjs";
+import { ensureDist, PLAYWRIGHT_MISSING, resolvePlaywrightInfo } from "../scripts/ui-overlap/env.mjs";
 
-const require2 = createRequire(import.meta.url);
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "..");
 
@@ -64,29 +62,6 @@ const BUDDY_ID = "demo-bs-vs"; // the demo Brainstorm: a character on the Office
 const WORKER_ID = "demo-art-o"; // claude worker, status running
 
 // ── Playwright / browser resolution ──────────────────────────────────────────
-function resolvePlaywright() {
-  const candidates = [];
-  if (process.env.PLAYWRIGHT_DIR) candidates.push(path.join(process.env.PLAYWRIGHT_DIR, "playwright-core"));
-  try {
-    candidates.push(require2.resolve("playwright-core"));
-  } catch {}
-  try {
-    candidates.push(require2.resolve("playwright"));
-  } catch {}
-  candidates.push(
-    process.env.APPDATA && path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright-core"),
-    process.env.APPDATA && path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright"),
-  );
-  for (const c of candidates) {
-    try {
-      return { mod: require2(c), from: c };
-    } catch {
-      /* keep trying */
-    }
-  }
-  return null;
-}
-
 const CANDIDATE_EXECUTABLES = [
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
@@ -136,9 +111,9 @@ function resetErrors() {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 before(async () => {
-  pw = resolvePlaywright();
+  pw = resolvePlaywrightInfo();
   if (!pw) {
-    unavailable = "Playwright not found (set PLAYWRIGHT_DIR, or install playwright locally/globally).";
+    unavailable = PLAYWRIGHT_MISSING;
     return;
   }
   executablePath = CANDIDATE_EXECUTABLES.find((p) => {

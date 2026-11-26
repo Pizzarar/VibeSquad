@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,20 +26,59 @@ export const TEAMS_REGISTRY = {
   ],
 };
 
-export function resolvePlaywright() {
-  const candidates = [];
-  if (process.env.PLAYWRIGHT_DIR) candidates.push(path.join(process.env.PLAYWRIGHT_DIR, "playwright-core"));
+// Playwright lookup order (idea-1147). The durable dir is under ~/.vibesquad because that is per-user state that
+// survives /tmp clears and reboots; the npx cache is only a last resort because npm may prune it at any time.
+export const DURABLE_TOOLS_DIR = path.join(os.homedir(), ".vibesquad", "tools", "playwright");
+export const PLAYWRIGHT_INSTALL_CMD = `npm i --prefix ${DURABLE_TOOLS_DIR} playwright-core`;
+export const PLAYWRIGHT_MISSING = `Playwright not found (set PLAYWRIGHT_DIR, or install it: ${PLAYWRIGHT_INSTALL_CMD})`;
+const NPX_SCAN_LIMIT = 50; // bounded: at most this many ~/.npm/_npx entries are stat'ed
+
+/**
+ * Ordered candidate paths for Playwright's playwright-core/playwright entry (no loading here, so tests can inject
+ * env/home/fs): PLAYWRIGHT_DIR; normal require resolution (+ Windows APPDATA mcp copy); the durable per-user dir;
+ * then the newest `~/.npm/_npx/<hash>/node_modules/playwright-core` found by a bounded scan.
+ */
+export function playwrightCandidates({
+  env = process.env, home = os.homedir(), resolveLocal = (n) => require2.resolve(n),
+  readdir = fs.readdirSync, exists = fs.existsSync, mtime = (p) => fs.statSync(p).mtimeMs,
+} = {}) {
+  const out = [];
+  if (env.PLAYWRIGHT_DIR) out.push(path.join(env.PLAYWRIGHT_DIR, "playwright-core"));
   for (const n of ["playwright-core", "playwright"]) {
-    try { candidates.push(require2.resolve(n)); } catch {}
+    try { out.push(resolveLocal(n)); } catch {}
   }
-  if (process.env.APPDATA) {
-    candidates.push(path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright-core"));
-    candidates.push(path.join(process.env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright"));
+  if (env.APPDATA) {
+    out.push(path.join(env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright-core"));
+    out.push(path.join(env.APPDATA, "npm/node_modules/@playwright/mcp/node_modules/playwright"));
   }
-  for (const c of candidates) {
-    try { return require2(c); } catch {}
+  const durable = path.join(home, ".vibesquad", "tools", "playwright", "node_modules");
+  out.push(path.join(durable, "playwright-core"), path.join(durable, "playwright"));
+  const npx = path.join(home, ".npm", "_npx");
+  let dirs = [];
+  try { dirs = readdir(npx).slice(0, NPX_SCAN_LIMIT); } catch {}
+  const hits = [];
+  for (const d of dirs) {
+    const p = path.join(npx, d, "node_modules", "playwright-core");
+    if (!exists(path.join(p, "package.json"))) continue;
+    let t = 0;
+    try { t = mtime(p); } catch {}
+    hits.push({ p, t });
+  }
+  hits.sort((a, b) => b.t - a.t);
+  for (const h of hits) out.push(h.p);
+  return out;
+}
+
+/** { mod, from } for the first candidate that loads, or null. `load` is injectable for tests. */
+export function resolvePlaywrightInfo({ load = (c) => require2(c), ...opts } = {}) {
+  for (const c of playwrightCandidates(opts)) {
+    try { return { mod: load(c), from: c }; } catch {}
   }
   return null;
+}
+
+export function resolvePlaywright(opts) {
+  return resolvePlaywrightInfo(opts)?.mod ?? null;
 }
 
 // Linux browser names, looked up on PATH and in the standard install dirs (forge audit R8).
@@ -73,7 +113,10 @@ export function findBrowser({ platform = process.platform, env = process.env, ex
 /** Why browser-gated tests cannot run, or false when they can. Used for a loud, counted skip. */
 export function browserSkipReason({ pw, exe }) {
   if (pw && exe) return false;
-  return `no ${[!pw && "Playwright", !exe && "Chromium/Chrome/Edge"].filter(Boolean).join(" and ")} found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH / PLAYWRIGHT_DIR)`;
+  const parts = [];
+  if (!pw) parts.push(`no Playwright found (set PLAYWRIGHT_DIR, or run: ${PLAYWRIGHT_INSTALL_CMD})`);
+  if (!exe) parts.push("no Chromium/Chrome/Edge found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
+  return parts.join("; ");
 }
 
 /** Newest mtime (ms) among the given files and, for directories, every file beneath them. 0 when none exist. */

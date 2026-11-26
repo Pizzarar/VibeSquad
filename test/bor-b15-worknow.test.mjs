@@ -10,6 +10,7 @@ import { after, test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { transformSync } from "rolldown/utils";
+import { resolvePlaywright, PLAYWRIGHT_INSTALL_CMD } from "../scripts/ui-overlap/env.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
@@ -53,13 +54,9 @@ test("markup: more than six others collapse to a +N badge; needs-you suppresses 
   assert.match(blocked, /data-state="needs-you"/);
 });
 
-let chromium = null;
-try {
-  const pw = process.env.PLAYWRIGHT_DIR ? await import(pathToFileURL(join(process.env.PLAYWRIGHT_DIR, "playwright-core", "index.mjs")).href).catch(() => import(pathToFileURL(join(process.env.PLAYWRIGHT_DIR, "playwright-core", "index.js")).href)) : null;
-  chromium = (pw?.chromium ?? pw?.default?.chromium) || null;
-} catch { chromium = null; }
+const chromium = resolvePlaywright()?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-const skip = chromium && exe ? false : "no Playwright/Chromium (set PLAYWRIGHT_DIR + PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)";
+const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 
 const page = (strip, perm = false) => `<!doctype html><html data-vibe="boring" data-theme="dark"><head><meta charset="utf-8"><style>${read("src", "boring.css")}</style></head><body style="margin:0;width:1280px;height:720px;display:flex">
 <div class="boring-drawer drawer" id="d"><div id="hdr" style="height:56px;flex:none">header</div>${strip}

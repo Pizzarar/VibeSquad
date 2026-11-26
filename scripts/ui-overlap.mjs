@@ -398,7 +398,7 @@ export async function run(opts = {}) {
 
   const pw = E.resolvePlaywright();
   const exe = E.findBrowser();
-  if (!pw || !exe) throw new Error(!pw ? "Playwright not found (set PLAYWRIGHT_DIR)" : "No Edge/Chrome found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
+  if (!pw || !exe) throw new Error(!pw ? E.PLAYWRIGHT_MISSING : "No Edge/Chrome found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
   await E.ensureDist();
   const { server, baseUrl } = await E.serveDist();
   BASE = baseUrl;
