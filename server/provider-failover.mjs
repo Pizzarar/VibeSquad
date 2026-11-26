@@ -640,7 +640,7 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
         usedPct: effectiveUsedPct,
         softOverQuota: true,
         softThreshold: softLimit,
-        softReason: `pool ${reportedPct}% >= soft ${softLimit}: interruptible only`,
+        softReason: `${targetFamily} pool ${reportedPct}% >= soft ${softLimit}: interruptible only`,
         hasRow: true,
       };
     }
