@@ -549,8 +549,7 @@ export function reduceTurn(t, e) {
     }
     if (inTurn && t.status === "idle") {
       t.awaiting = false;
-      // idea-1101 M1: `quota` marks a provider quota/credit wall (markQuotaTurn), so A4 never resends it as a transient error.
-      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed"), ...(t.quotaFault ? { quota: true } : {}) } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
+      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
       return { kind: "turn_ended", turnId: String(e.seq), outcome };
     }
     return null;
@@ -559,7 +558,7 @@ export function reduceTurn(t, e) {
     t.status = "closed";
     t.awaiting = false;
     if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
-    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`), ...(t.quotaFault ? { quota: true } : {}) } } } : null;
+    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } } : null;
   }
   return null;
 }
@@ -1867,10 +1866,16 @@ export class RunnerBackend {
     const shown = { ...agentNoQueue, status: to, ...(t.queued ? { queued: t.queued } : {}), ...(toolFields ?? {}) };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
-    if (e.type === "exit" && lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && !lifecycle.outcome.error?.quota) {
-      // idea-1101 M1: a mid-turn exit whose own reason is this provider's quota/credit wall is flagged like markQuotaTurn's.
-      const f = providerFaultOf(e, { cwd: agent.cwd });
-      if ((f?.kind === "quota" || f?.kind === "balance") && faultMatchesFamily(f, normalizeProviderFamily(capFamilyOf(agent)))) lifecycle.outcome.error.quota = true;
+    if (lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && !t.cancelled) {
+      // idea-1101 M1: a turn that failed on a provider quota/credit wall (markQuotaTurn, or a mid-turn exit whose own reason is
+      // this provider's wall) carries outcome.error.quota, so A4 never resends it as a transient error (a Gemini 429 names
+      // googleapis). Set here, not in the pure reduceTurn, whose outcome shape stays as idea-1077 pinned it.
+      let quotaWall = !!t.quotaFault;
+      if (!quotaWall && e.type === "exit") {
+        const f = providerFaultOf(e, { cwd: agent.cwd });
+        quotaWall = (f?.kind === "quota" || f?.kind === "balance") && faultMatchesFamily(f, normalizeProviderFamily(capFamilyOf(agent)));
+      }
+      if (quotaWall) lifecycle = { ...lifecycle, outcome: { ...lifecycle.outcome, error: { ...lifecycle.outcome.error, quota: true } } };
     }
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     // idea-1077 + idea-1101: a turn that ended on any provider quota/credit wall goes to the upstream-respawn hook
