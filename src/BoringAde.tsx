@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
@@ -27,7 +27,7 @@ import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLast
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
-import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type CardTarget, type PickerHandlers, type StripItem } from "./BoringPanePicker";
+import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type CardTarget, type OtherProject, type PickerHandlers, type StripItem } from "./BoringPanePicker";
 import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
@@ -471,6 +471,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const overviewTab: OverviewTab = tabFor.team === (view?.team.id ?? null) ? tabFor.tab : "overview";
   const setOverviewTab = (tab: OverviewTab, team: string | null = view?.team.id ?? null) => setTabFor({ team, tab });
   const [rightCard, setRightCard] = useState<CardTarget | null>(null); // B17: the split's right-pane card target (pane-local)
+  const pendingRightCard = useRef<{ teamId: string; card: CardTarget } | null>(null); // B18c: cross-project dormant pill -> right card after project switch
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
   const inboxCount = useInboxCards().length;
   const storybookPresent = useStorybookPresent(view?.team.id ?? null);
@@ -704,7 +705,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     rosterLoaded: !!rosterLoaded,
     landingPending: activeLandable && landedFor !== activeAgentId,
     activeAgentId,
-    shownAgentId: mode === "chat" && agent ? agent.id : null,
+    shownAgentId: mode === "chat" ? (agent?.id ?? (panes.split && panes.leftActiveId && agents.has(panes.leftActiveId) ? panes.leftActiveId : null)) : null,
   });
   useEffect(() => setBoringShownAgent(urlAgent), [urlAgent]);
   useEffect(() => () => setBoringShownAgent(undefined), []);
@@ -748,7 +749,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId && !dormantSlot;
   useEffect(() => { if (rightCard && (!panes.split || panes.rightActiveId)) setRightCard(null); }, [rightCard, panes.split, panes.rightActiveId]);
   useEffect(() => { setRightCard(null); }, [view?.team.id]);
-  const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
+  useEffect(() => {
+    const p = pendingRightCard.current;
+    if (p && p.teamId === view?.team.id) { pendingRightCard.current = null; setRightCard(p.card); }
+  }, [view?.team.id]);
+  const sel = splitEmptyActive ? { ...selRaw, teamId: activeTeamId, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
   // idea-500: keep the selected row visible; only when the selection changes (never on re-render), nearest so it never fights user scrolling.
   useEffect(() => {
     if (!sel.rowKey) return;
@@ -833,6 +838,39 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const running = view.members.filter((m) => m.agent.status === "running" && !seen.has(m.agent.id) && !m.agent.archivedAt).map((m): StripItem => ({ id: m.agent.id, needs: false, sub: "Working", title: memberTitle(m) }));
     return [...rows.map((r): StripItem => ({ id: r.item.id, needs: true, err: r.item.kind === "error", title: r.who, sub: r.who.includes(r.lane) ? needsYouReason(r.item) : `${r.lane} · ${needsYouReason(r.item)}` })), ...running];
   };
+  // B18c: every other awake project's lanes for the picker's "Other projects (N)" disclosure. Live -> right pane (split stays);
+  // dormant -> switch project + show that lane/role's empty card in the right pane (split stays, left pane untouched).
+  const openOtherDormant = (tid: string, card: CardTarget) => {
+    pendingRightCard.current = { teamId: tid, card };
+    setActivePane("right");
+    onSelectSquad(tid);
+  };
+  const pickerOpen = mode === "chat" && panes.split && !(panes.rightActiveId && agents.has(panes.rightActiveId)) && !dormantSlot;
+  const otherOps = useRef<{ openOtherDormant: typeof openOtherDormant } | null>(null);
+  otherOps.current = { openOtherDormant };
+  const otherProjects = useMemo((): OtherProject[] => {
+    if (!pickerOpen) return [];
+    const ops = () => otherOps.current!;
+    return filterAwakeViews(allViews, folders).filter((v) => v.team.id !== view?.team.id).map((v) => {
+      const m = boringSidebarModel(v, now);
+      const tid = v.team.id;
+      const h: PickerHandlers = {
+        glyphCls,
+        openAgent: (id) => openAgentInTab(id, "right"),
+        openCore: (laneId, id) => (id ? openAgentInTab(id, "right") : ops().openOtherDormant(tid, { key: laneId, pill: "open" })),
+        openBugs: () => (m.core.bugs.agentId ? openAgentInTab(m.core.bugs.agentId, "right") : ops().openOtherDormant(tid, { key: "_bugs", pill: "open" })),
+        openRole: (laneId, role) => {
+          const c = m.conversations.find((x) => x.laneId === laneId);
+          const mem = c && (role === "lead" ? c.pin.lead : c.pin.brainstorm);
+          if (mem) openAgentInTab(mem.agent.id, "right");
+          else if (c) ops().openOtherDormant(tid, { key: laneId, pill: role });
+        },
+      };
+      // B18c (UX R41 L2): hide dormant Trinity rows so live/feature lanes are not buried.
+      const lanes = buildPickerData(m, h).lanes.filter((l) => (l.key !== "_overlord" && l.key !== "_riffbot" && l.key !== "_bugs") || l.needs || l.pills.some((p) => p.live));
+      return { id: tid, name: v.team.name, needsYou: m.totalNeedsYou, lanes };
+    });
+  }, [pickerOpen, views, view, folders, now]);
   // Every open action on the right card lands in the right pane (live -> openAgentInTab("right"); dormant -> update rightCard, never fold split or clobber selectedLaneId).
   const rightHandlers: PickerHandlers = {
     glyphCls,
@@ -901,7 +939,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
+            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} otherProjects={otherProjects} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
               <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={closeSplitToButton}>Close split</button>
             </BoringPanePicker>
             <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>
