@@ -116,3 +116,21 @@ test('fu4: env overrides the floors and level; bad values are ignored', () => {
   assert.deepEqual(agyPollConfigFromEnv({ VS_AGY_POLL_SLOW_MS: '-1', VS_AGY_POLL_FAST_MS: 'x', VS_AGY_POLL_FAST_AT_PCT: '150' }), {});
   assert.deepEqual(agyPollConfigFromEnv({}), {});
 });
+
+test('fu4 r1 L1: a whitespace-only env value is ignored, not read as 0', () => {
+  assert.deepEqual(agyPollConfigFromEnv({ VS_AGY_POLL_SLOW_MS: ' ', VS_AGY_POLL_FAST_MS: '\t', VS_AGY_POLL_FAST_AT_PCT: '  ' }), {});
+  assert.deepEqual(agyPollConfigFromEnv({ VS_AGY_POLL_FAST_MS: ' 120000 ' }), { fastIntervalMs: 120_000 });
+});
+
+test('fu4 r1 L2: empty or unparseable /usage output keeps a hot fast floor', async () => {
+  let t = 1_000_000_000, calls = 0, next = table({ claude5h: 80 });
+  const poll = createAgyUsagePoller({ store: new LimitStore(path.join(tmp(), 'limits.jsonl')), run: async () => { calls++; return next; }, now: () => t });
+  await poll('rn-a');
+  assert.equal(poll.floorMs(), AGY_POLL_FAST_MS);
+  for (const out of ['', 'agy: signed out\n']) {
+    t += AGY_POLL_FAST_MS + 1000; next = out;
+    assert.deepEqual(await poll('rn-b'), []);
+    assert.equal(poll.floorMs(), AGY_POLL_FAST_MS, `kept fast after ${JSON.stringify(out)}`);
+  }
+  assert.equal(calls, 3);
+});

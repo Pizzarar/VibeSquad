@@ -161,7 +161,7 @@ export const AGY_POLL_FAST_AT_PCT = 60;
 export const AGY_POLL_PROJECT_PCT = 85; // = AGY_CLAUDE_FAILOVER_THRESHOLD (test/r10-fu4 keeps them equal)
 
 export function agyPollConfigFromEnv(env = process.env) {
-  const num = (v, ok) => { const n = Number(v); return v !== undefined && v !== '' && ok(n) ? n : undefined; };
+  const num = (v, ok) => { const t = String(v ?? '').trim(); const n = Number(t); return t !== '' && ok(n) ? n : undefined; }; // ' ' is Number 0: never a floor/level
   const out = {};
   const slow = num(env.VS_AGY_POLL_SLOW_MS, (n) => Number.isInteger(n) && n >= 0);
   const fast = num(env.VS_AGY_POLL_FAST_MS, (n) => Number.isInteger(n) && n >= 0);
@@ -207,7 +207,8 @@ export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minInte
       if (stopped) return [];
       const rows = parseAgyUsage(text);
       const at = now();
-      floorMs = agyNextPollMs(rows, readings, { at, slowMs: minIntervalMs, fastMs: fastIntervalMs, fastAtPct, projectPct });
+      // Empty/unparseable output keeps the current floor (like a rejected run): no reading is not a cool reading.
+      if (rows.length) floorMs = agyNextPollMs(rows, readings, { at, slowMs: minIntervalMs, fastMs: fastIntervalMs, fastAtPct, projectPct });
       for (const r of rows) readings.set(`${r.provider}|${r.window}`, { usedPct: r.usedPct, resetsAt: r.resetsAt, at });
       return rows.map((r) => store.record({ ...r, source: 'provider', agentId }, at)).filter(Boolean);
     } catch { return []; } finally { busy = false; current = null; }
