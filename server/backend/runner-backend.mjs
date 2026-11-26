@@ -654,10 +654,12 @@ const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient bala
  * shortened. Never throws. Returns the cap written or null.
  */
 /**
- * R10 fu2: the agy Claude/GPT pool is polled at most every 30 min (runner/limits.mjs createAgyUsagePoller; it also waits while an
- * agy agent is mid-turn), so a 10 min fault cap on agy-claude lapsed before the next pool reading and routing walked back onto an
- * exhausted pool (the next spawn died again). agy-claude faults hold at least one poll interval plus a margin, and until the live
- * pool row's resetsAt when that row is still at/over the failover threshold.
+ * R10 fu2: the agy Claude/GPT pool is polled at most every 30 min while cool (runner/limits.mjs createAgyUsagePoller, AGY_POLL_SLOW_MS;
+ * it also waits while an agy agent is mid-turn). Since unit-per-r10-fu4 (agyNextPollMs) the floor drops to 3 min (AGY_POLL_FAST_MS)
+ * while any 5h pool row reads >= 60% (AGY_POLL_FAST_AT_PCT) or any row's last two readings in the same window project to >= 85%
+ * (AGY_POLL_PROJECT_PCT) within the slow interval. A 10 min fault cap on agy-claude could lapse before the next (slow) pool reading
+ * and routing walked back onto an exhausted pool (the next spawn died again). agy-claude faults hold at least one slow poll interval
+ * plus a margin, and until the live pool row's resetsAt when that row is still at/over the failover threshold.
  */
 export const AGY_CLAUDE_MIN_CAP_TTL_MS = 35 * 60 * 1000;
 

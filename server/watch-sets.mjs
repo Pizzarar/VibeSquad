@@ -313,7 +313,10 @@ export function classifyItem(item, set, ctx) {
       const ps = since("pending", created);
       return t - ps > stallMs ? { phase: "pending", state: "stalled", reason: "no-events", ...(done ? { report: done.text } : {}) } : { phase: "pending", state: "waiting" };
     }
-    const busy = o.status === "running" || o.status === "initializing";
+    // idea-1083: an archived worker is never mid-turn (archiving ends the session), but its last-seen status can be stale
+    // "running" (the remove event sets archived without a snapshot, and the runner no longer lists it): that read as busy,
+    // skipped the final-message branch and stalled a worker that had already reported. completedTurnText guards a mid-turn archive.
+    const busy = !o.archived && (o.status === "running" || o.status === "initializing");
     // idea-352: the worker's final message is forwarded with the completion ping unless the worker filed its own report (no double delivery).
     const selfReported = reps.some((r) => r.type === "done" && r.agent === item.ref);
     const fin = !selfReported && o.finalText ? { final: String(o.finalText) } : {};
@@ -992,7 +995,7 @@ export function createWatchEngine({
     if (lastMessage) {
       for (const ref of refs) {
         const o = agents.get(ref);
-        if (!o || !(o.status === "idle" || (o.archived && o.status === "closed")) || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
+        if (!o || !(o.status === "idle" || (o.archived && o.status !== "error")) || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
         o.finalChecked = t;
         try {
           o.finalText = String((await lastMessage(ref, o.archived ? { completedOnly: true } : undefined)) ?? "").trim();

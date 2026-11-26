@@ -131,19 +131,22 @@ test('R1 M2: a worker in alias worktree `sb2-x` is not also credited to the unit
   assert.equal(r.implementer, null, 'no double credit');
 });
 
-test('R1 M3: byRef multi-profile ambiguity reports ambiguous-implementers; later-created ref worker is not "claimed"', () => {
+test('R1 M3 (usa-68): byRef multi-profile is split into shares (earliest is the implementer), no longer a miss; later-created ref worker is not "claimed"', () => {
   const m = '/home/x/projects/R';
   const a = ag('a', m, { unitRef: 'unit-q', profile: 'Implement - Sonnet' });
   const b = ag('b', m, { unitRef: 'unit-q', profile: 'Mechanical - DSF' });
-  assert.equal(resolve({ unit: 'unit-q' }, [a, b]).miss, 'ambiguous-implementers');
+  const r = resolve({ unit: 'unit-q' }, [a, b]);
+  assert.equal(r.miss, null);
+  assert.equal(r.implementer.agentId, 'a');
+  assert.equal(r.shareCands.length, 2);
   const late = ag('late', m, { unitRef: 'unit-q', createdAt: 9000 }); // created after mergedAt 5000: filtered, falls through
   assert.notEqual(resolve({ unit: 'unit-q' }, [late]).miss, 'evidence-claimed-by-other-merge');
 });
 
-test('R1 L1: primary implementer is the costliest worked run; 0-turn loses; ties break by createdAt then agentId', () => {
+test('R1 L1 (usa-68): multi-profile worktree: implementer is the EARLIEST worked run (cost no longer picks); 0-turn loses; ties break by agentId', () => {
   const wt = '/h/.vibesquad/worktrees/R/unit-t';
   const pick = (agents) => resolve({ unit: 'unit-t' }, agents).implementer.agentId;
-  assert.equal(pick([ag('p', wt, { costUsd: 1, profile: 'Implement - Sonnet' }), ag('q', wt, { costUsd: 5, profile: 'Mechanical - DSF' })]), 'q');
+  assert.equal(pick([ag('p', wt, { costUsd: 1, profile: 'Implement - Sonnet' }), ag('q', wt, { costUsd: 5, profile: 'Mechanical - DSF' })]), 'p');
   assert.equal(pick([ag('p', wt, { costUsd: 9, turns: 0, profile: 'Implement - Sonnet' }), ag('q', wt, { costUsd: 1, profile: 'Mechanical - DSF' })]), 'q');
   assert.equal(pick([ag('p', wt, { createdAt: 2000, profile: 'Implement - Sonnet' }), ag('q', wt, { createdAt: 1000, profile: 'Mechanical - DSF' })]), 'q');
   assert.equal(pick([ag('z', wt, { createdAt: null, profile: 'Implement - Sonnet' }), ag('b', wt, { createdAt: null, profile: 'Mechanical - DSF' })]), 'b');

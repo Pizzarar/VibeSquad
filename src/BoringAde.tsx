@@ -617,6 +617,14 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
+  // idea-1075 r3: the ONE way a slot lane becomes the screen (sidebar pick, Back/Forward landing, cold-load ?slot=). It clears B17's
+  // pane-local right card, so ?slot= (urlSlot) and the rendered card can never name different screens.
+  const enterSlotLane = (laneId: string) => {
+    setRightCard(null);
+    setSelectedLaneId(laneId);
+    setSelectedWorkerId(null);
+    setMode("chat");
+  };
   const navGen0 = useRef(navGen); // B1: a remount starts with the current navGen; only a pop after mount re-lands
   // U2 (idea-983): the pop whose landing this render shows (set with the landing's own state, so it commits in the same render).
   const [landedGen, setLandedGen] = useState(navGen);
@@ -644,11 +652,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     } else if (land.mode === "decisions") {
       setMode("decisions");
     } else if (land.mode === "slot" || land.mode === "lane") {
-      setSelectedLaneId(land.mode === "slot" ? SLOT_LANE[land.slot] : land.laneId); // P3: a lane's empty card, like a Desk slot
+      enterSlotLane(land.mode === "slot" ? SLOT_LANE[land.slot] : land.laneId); // P3: a lane's empty card enters like a Desk slot (idea-1075)
       setSelectedRole(land.role === "lead" ? "lead" : "brainstorm");
-      setSelectedWorkerId(null);
       if (land.mode === "lane") setProjectOpen((o) => ({ ...o, [land.teamId]: true })); // its lane row is visible (like revealAgent)
-      setMode("chat");
     } else {
       setOverviewTab((land.tab && TAB_FROM_URL[land.tab]) || "overview", land.teamId ?? view?.team.id ?? null); // Back to ?team= alone = the Overview tab
       setMode("project");
@@ -669,16 +675,12 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   });
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null, teamId?: string) => {
     if (teamId && teamId !== view?.team.id) onSelectSquad(teamId);
-    setSelectedLaneId(laneId);
-    setSelectedWorkerId(null);
-    setMode("chat");
+    enterSlotLane(laneId);
     if (agentId) openHere(agentId);
   };
   const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
-    setSelectedLaneId("_bugs");
+    enterSlotLane("_bugs");
     setSelectedRole("brainstorm");
-    setSelectedWorkerId(null);
-    setMode("chat");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
     if (b.pin && b.agentId) openHere(b.agentId);
   };
@@ -730,10 +732,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       pendingUrl0.current = null;
       const lane = p.slot ? SLOT_LANE[p.slot] : p.lane && view && boringLaneKnown(view, p.lane) ? p.lane : null; // P3: ?lane=
       if (lane) {
-        setSelectedLaneId(lane);
+        enterSlotLane(lane); // idea-1075: the one slot/lane entry
         setSelectedRole(p.role === "lead" ? "lead" : "brainstorm");
-        setSelectedWorkerId(null);
-        setMode("chat");
       }
       setTabFor({ team: screenTeam, tab: (p.tab && TAB_FROM_URL[p.tab]) || "overview" });
       return;
@@ -750,7 +750,13 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
 
   const selRaw = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
   // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
-  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
+  // idea-1075: a dormant Desk/Bugs slot picked from the sidebar while split has no agent to show in either pane. The URL already names it
+  // (?slot=, urlSlot), so the screen must be its empty card too, not the split panes (the split keeps its panes and returns when an agent
+  // opens). B17's pane-local right card is the exception: while the right pane is active and showing one, that card is the screen. A sidebar
+  // pick (pickBugs/pickCore) clears it, so the two never both claim the screen.
+  const rightCardShown = !!rightCard && panes.activePane === "right";
+  const dormantSlot = mode === "chat" && !agent && !!selectedLaneId && !!LANE_SLOT[selectedLaneId] && !rightCardShown;
+  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId && !dormantSlot;
   useEffect(() => { if (rightCard && (!panes.split || panes.rightActiveId)) setRightCard(null); }, [rightCard, panes.split, panes.rightActiveId]);
   useEffect(() => { setRightCard(null); }, [view?.team.id]);
   const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
@@ -906,7 +912,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton}>
+            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
               <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={closeSplitToButton}>Close split</button>
             </BoringPanePicker>
             <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>
@@ -1380,7 +1386,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
+            {panes.split && !dormantSlot ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
               // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
               // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
               <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : currentPin && isLive(currentPin.lead) ? `Lead ${leadStatus === "running" ? "working" : "idle"} · no Brainstorm` : currentPin && isLive(currentPin.brainstorm) ? "Brainstorm ready · no Lead" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>

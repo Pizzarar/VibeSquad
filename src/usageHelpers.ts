@@ -147,6 +147,8 @@ export type MergedUnit = {
   fixRounds?: number | null;
   fixAfterMerge?: boolean | null;
   implementerShared?: boolean | null;
+  /** usa-68: pre-first-FAIL implementer runs of a multi-profile unit (share sums to 1) */
+  implementerShares?: { agentId?: string; model?: string | null; profile?: string | null; family?: string | null; costUsd?: number | null; share: number }[] | null;
   costUsd?: number | null;
 };
 export type UsageData = {
@@ -1163,25 +1165,34 @@ export function buildQualityByModel(units: readonly MergedUnit[] | null | undefi
   }>();
   for (const u of units) {
     if (!u) continue;
-    const label = String(u.implementerModel || u.implementerProfile || "").trim().replace(/-(?:low|medium|high|xhigh|max)$/i, "");
-    if (!label) continue;
-    const model = label.toLowerCase();
-    let g = groups.get(model);
-    if (!g) {
-      g = { model: label, units: 0, firstTryPassCount: 0, firstTryKnown: 0, fixRounds: 0, fixAfterMergeCount: 0, costUnits: 0, costUsd: 0 };
-      groups.set(model, g);
-    }
-    g.units += 1;
     const ft = unitFirstTry(u);
-    if (ft !== null) {
-      g.firstTryKnown += 1;
-      if (ft) g.firstTryPassCount += 1;
-    }
-    if (typeof u.fixRounds === "number" && Number.isFinite(u.fixRounds) && u.fixRounds > 0) g.fixRounds += u.fixRounds;
-    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
-    if (!u.implementerShared) {
-      g.costUnits += 1;
-      if (typeof u.costUsd === "number" && Number.isFinite(u.costUsd) && u.costUsd > 0) g.costUsd += u.costUsd;
+    // usa-68: a split unit credits each share's own model: units/first-try/fix by share, cost by that share's own spend
+    const rawSh = u.implementerShares;
+    const sh = rawSh && rawSh.length > 1 ? rawSh : null;
+    const wsum = sh ? sh.reduce((n: number, x: NonNullable<MergedUnit["implementerShares"]>[number]) => n + (x.share ?? 0), 0) : 0;
+    const parts = sh
+      ? sh.map((x: NonNullable<MergedUnit["implementerShares"]>[number]) => ({ label: x.model || x.profile || u.implementerModel || u.implementerProfile, w: wsum > 0 ? (x.share ?? 0) / wsum : 1 / sh.length, cost: x.costUsd }))
+      : [{ label: u.implementerModel || u.implementerProfile, w: 1, cost: u.costUsd }];
+    for (const p of parts) {
+      const label = String(p.label || "").trim().replace(/-(?:low|medium|high|xhigh|max)$/i, "");
+      if (!label) continue;
+      const model = label.toLowerCase();
+      let g = groups.get(model);
+      if (!g) {
+        g = { model: label, units: 0, firstTryPassCount: 0, firstTryKnown: 0, fixRounds: 0, fixAfterMergeCount: 0, costUnits: 0, costUsd: 0 };
+        groups.set(model, g);
+      }
+      g.units += p.w;
+      if (ft !== null) {
+        g.firstTryKnown += p.w;
+        if (ft) g.firstTryPassCount += p.w;
+      }
+      if (typeof u.fixRounds === "number" && Number.isFinite(u.fixRounds) && u.fixRounds > 0) g.fixRounds += u.fixRounds * p.w;
+      if (u.fixAfterMerge) g.fixAfterMergeCount += p.w;
+      if (!u.implementerShared) {
+        g.costUnits += p.w;
+        if (typeof p.cost === "number" && Number.isFinite(p.cost) && p.cost > 0) g.costUsd += p.cost;
+      }
     }
   }
   return [...groups.values()]
