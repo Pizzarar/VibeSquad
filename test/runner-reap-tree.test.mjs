@@ -92,6 +92,29 @@ test('planAgentLeftovers: the runner, its parent, the runtime, a held pid and ev
   assert.ok(!r2.reap.some((e) => e.pids.some((x) => x.pid === 70 || x.pid === 71)), 'resumed CLI tree untouched');
 });
 
+test('review L1: a held root passed alone protects its whole subtree; the runner\'s ancestors stay single pids (never trees)', () => {
+  // 300 is a held background shell (of this worker's last hold or another agent's): none of its tree is planned or env-read.
+  const r = plan({ protectedPids: [SELF, 49, 300] });
+  assert.deepEqual(r.reap, []);
+  assert.deepEqual(heldTreeRoots({ procs: table(), protectedPids: [SELF, 49, 300], selfPid: SELF }), [300], 'the runner and its parent 49 are not tree roots');
+  const f = fakeLeftover();
+  return f.reaper(job({ protectedPids: [SELF, 49, 300] })).then((res) => {
+    assert.deepEqual(f.kills, []);
+    assert.deepEqual(res.reaped, []);
+    for (const p of [300, 301, 302, 310]) assert.ok(!(f.envReads[0] ?? []).includes(p), `held tree pid ${p} not even read`);
+  });
+});
+
+test('review L1: the runner\'s parent as the subreaper (selfAncestors) never hides the leftovers hanging off it', () => {
+  // systemd --user (2) is the runner's ancestor and the subreaper Chromium was reparented to.
+  const procs = table().map((p) => (p.pid === 49 ? { ...p, ppid: 2 } : p));
+  const r = plan({ procs, protectedPids: [SELF, 49, 2], selfAncestors: [2] });
+  assert.deepEqual(r.reap.map((e) => e.root), [300]);
+  assert.deepEqual(heldTreeRoots({ procs, protectedPids: [SELF, 49, 2], selfPid: SELF, selfAncestors: [2] }), []);
+  // Even unnamed: 2 is a live ancestor of the runner in the table, so it is not a tree root either.
+  assert.deepEqual(heldTreeRoots({ procs, protectedPids: [2], selfPid: SELF }), []);
+});
+
 test('planAgentLeftovers: only processes created before the end; a later member also drops the group kill', () => {
   const r = plan({ endedAt: T + 1150 }); // 302 and 310 started after the agent ended
   assert.deepEqual(r.reap[0].pids.map((x) => x.pid), [301, 300]);
