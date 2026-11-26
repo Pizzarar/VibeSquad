@@ -16,7 +16,7 @@
 //               and no current token is unattributed: logged (`left`), never killed.
 // Linux only (the unit hosts). Fail closed everywhere: no snapshot, an env that cannot be read, an undated pid: nothing killed.
 import { readFileSync } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnCaptureOffLoop } from './spawn-off-loop.mjs';
 import { killPids, liveAncestors, liveSubtree, readEnvMarkers, reapCmdText, redatePids, sha256, snapshotListeners, VS_RUNTIME } from './reap.mjs';
@@ -206,21 +206,73 @@ export function planLedgerReap({ procs, markers, ledger, cliPids = [], protected
 //   - a tree that holds another agent's marker (or a half marker) is skipped whole; an unread / unreadable member is not killed;
 //   - leaf-first exact pids; the process group only when the root leads it and EVERY member of the group in the table is one
 //     of the verified pids (the group signal then also reaches what they forked meanwhile);
-//   - the executor brackets the env proof with exact start reads (before the env read, again right before the kill): a pid
-//     whose start moved or vanished is dropped (pid reuse).
+//   - every pid's exact start id is taken with the table the plan is built from and re-read right before the kill: a pid whose
+//     start moved or vanished is dropped (pid reuse), unmarked descendants included (review M1);
+//   - a held shell's whole subtree is protected, not only the shell (review L1: heldTreeRoots).
+
+/** One /proc/<pid>/stat: { ppid, pgid, starttime, comm } or null. comm may hold spaces and parens (fields after its LAST ')'). */
+export function parseProcStat(text) {
+  const t = String(text ?? '');
+  const i = t.lastIndexOf(')');
+  const o = t.indexOf('(');
+  if (i < 0 || o < 0 || o > i) return null;
+  const f = t.slice(i + 1).trim().split(/\s+/); // f[0] state, f[1] ppid, f[2] pgrp, ... f[19] starttime
+  if (!/^\d+$/.test(f[1] ?? '') || !/^\d+$/.test(f[2] ?? '') || !/^\d+$/.test(f[19] ?? '')) return null;
+  return { ppid: Number(f[1]), pgid: Number(f[2]), starttime: f[19], comm: t.slice(o + 1, i) };
+}
+
+// Review M1 (rn-aa9de22ea612): the leftover reap's Linux table comes from /proc itself, so every row carries the exact start
+// id (`<boot_id>/<starttime>`, the readStartIds format) of the very process whose ppid / pgid / start the plan attributes. The
+// executor re-reads that id right before the kill: a pid reused at any point after this table (also before the env read) is
+// refused, unmarked descendants included (they are attributed by this row's ppid + start only). createdMs is the process's
+// start on the wall clock, counted back from /proc/uptime (the boot clock, as ps etimes does) and rounded up a tick, so a
+// process never reads as older than it is (the created-before-end gate stays an upper bound). USER_HZ is 100 on Linux.
+const USER_HZ = 100;
+export async function snapshotProcTable({ uid = process.getuid?.(), fs = { readdir, readFile, stat } } = {}) {
+  const now = Date.now();
+  const boot = String(await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const up = Number(String(await fs.readFile('/proc/uptime', 'utf8')).trim().split(/\s+/)[0]);
+  if (!/^[\w-]{8,64}$/.test(boot) || !Number.isFinite(up)) throw new Error('proc table: no boot id or uptime');
+  const bootMs = now - up * 1000;
+  const out = [];
+  for (const name of await fs.readdir('/proc')) {
+    if (!/^\d+$/.test(name)) continue;
+    const pid = Number(name);
+    try {
+      if (Number.isInteger(uid) && (await fs.stat(`/proc/${pid}`)).uid !== uid) continue;
+      const st = parseProcStat(await fs.readFile(`/proc/${pid}/stat`, 'utf8'));
+      if (!st) continue;
+      let cmd = '';
+      try { cmd = String(await fs.readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').filter(Boolean).join(' '); } catch { /* gone */ }
+      out.push({ pid, ppid: st.ppid, pgid: st.pgid, createdMs: Math.ceil(bootMs + ((Number(st.starttime) + 1) * 1000) / USER_HZ), createdTolMs: 50, name: st.comm, cmd: cmd || st.comm, start: `${boot}/${st.starttime}` });
+    } catch { /* gone between the readdir and the read */ }
+  }
+  return out;
+}
+
+// Review L1: a held shell's whole subtree is protected (its work is held, as planReap does), so every protected pid that is not
+// the runner or one of its ancestors is a tree root like a live CLI. The runner's ancestors (its parent may be the very
+// subreaper the leftovers hang off: idea-697 review M1) stay protected as single pids, never as trees.
+export function heldTreeRoots({ procs, protectedPids = [], selfPid = null, selfAncestors = [] }) {
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const up = new Set([selfPid, ...selfAncestors, ...(Number.isInteger(selfPid) ? liveAncestors(selfPid, byPid).map((a) => a.pid) : [])]);
+  return [...new Set(protectedPids)].filter((p) => Number.isInteger(p) && p > 1 && !up.has(p));
+}
 
 /**
  * Pure. What agentId (token sha tokenSha) left running after it ended at endedAt.
  *   procs: [{ pid, ppid, pgid?, createdMs, name, cmd }]   markers: Map<pid, { agentId, tokenSha } | { error }>
- *   cliPids: live CLI pids   selfPid: the runner   protectedPids: never killed (runner, its parent, held shells)
+ *   cliPids: live CLI pids   selfPid: the runner   protectedPids: never killed (runner, its parent, held shells; a held
+ *   shell's subtree too: heldTreeRoots)   selfAncestors: the runner's parent(s), protected as single pids only
  * Returns { reap: [{ agentId, tokenSha, root, pgid, cmd, pids: [{ pid, createdMs }] (leaf-first) }], skipped: [{ pid, root, reason }] }.
  */
-export function planAgentLeftovers({ procs, markers, agentId, tokenSha, endedAt, cliPids = [], protectedPids = [], selfPid = null }) {
+export function planAgentLeftovers({ procs, markers, agentId, tokenSha, endedAt, cliPids = [], protectedPids = [], selfPid = null, selfAncestors = [] }) {
   const reap = [];
   const skipped = [];
   if (!agentId || !tokenSha || !Number.isFinite(endedAt)) return { reap, skipped };
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const entries = planDetached({ procs, markers, agents: new Map([[tokenSha, agentId]]), cliPids, protectedPids, selfPid });
+  const trees = [...cliPids, ...heldTreeRoots({ procs, protectedPids, selfPid, selfAncestors })];
+  const entries = planDetached({ procs, markers, agents: new Map([[tokenSha, agentId]]), cliPids: trees, protectedPids, selfPid });
   for (const e of entries) {
     const foreign = e.pids.find((x) => { const m = markers.get(x.pid); return m && !m.error && (m.agentId !== null || m.tokenSha !== null) && (m.agentId !== agentId || m.tokenSha !== tokenSha); });
     if (foreign) { skipped.push({ pid: foreign.pid, root: e.root, reason: 'foreign-in-tree' }); continue; }
@@ -256,14 +308,16 @@ function posixKillEntry(pids, pgid, { killImpl = process.kill.bind(process), sel
 /**
  * The end reap's executor: (job) -> Promise<{ reaped: [{ agentId, root, pgid, pids, cmd }], skipped: [...], error? }>.
  *   job: { agentId, token, since (token mint), endedAt, protectedPids, liveCliPids, selfPid, stillOk }
- * Linux: the uid's ps table (with pgid), /proc environ, exact start ids (boot id + starttime) before the env read and again
- * right before the kill, SIGKILL group / leaf-first pids. Windows: the CIM table (exact CreationDate ms), the PEB env reader
- * (WIN_ENV_CS), the CreationDate re-read right before the kill, one taskkill /F /PID per pid (never /T). Anything else: fails
- * closed (the snapshot rejects). Every seam is injectable; the runner reaches it through createDevServerReaper({ leftovers }).
+ * Every table row carries `start`, the exact start id of the process the plan attributed (Linux: snapshotProcTable's boot id +
+ * starttime; Windows: the CIM CreationDate ms); each pid's start is re-read right before the kill and must equal its row's
+ * (review M1: this brackets table -> kill, not only env -> kill). A row without one is never killed. Linux: /proc environ,
+ * SIGKILL group / leaf-first pids. Windows: the PEB env reader (WIN_ENV_CS), one taskkill /F /PID per pid (never /T).
+ * Anything else: fails closed (the snapshot rejects). Every seam is injectable; the runner reaches it through
+ * createDevServerReaper({ leftovers }).
  */
 export function createLeftoverReaper({ platform = process.platform, snapshot = null, markers = null, starts = null, kill = null } = {}) {
   const win = platform === 'win32';
-  const snap = snapshot ?? (win ? async () => (await snapshotListeners({ platform })).procs : platform === 'linux' ? () => snapshotDetachedTable() : async () => { throw new Error(`leftover reap: unsupported platform ${platform}`); });
+  const snap = snapshot ?? (win ? async () => (await snapshotListeners({ platform })).procs.map((p) => ({ ...p, start: p.createdMs > 0 ? String(p.createdMs) : null })) : platform === 'linux' ? () => snapshotProcTable() : async () => { throw new Error(`leftover reap: unsupported platform ${platform}`); });
   const env = markers ?? ((pids) => readEnvMarkers(pids, { platform }));
   // Map<pid, string>: an exact start (Linux boot id + starttime; Windows CreationDate ms). Absent = gone or unreadable.
   const startIds = starts ?? (win ? async (pids) => new Map([...(await redatePids(pids, { platform }))].map(([p, i]) => [p, String(i.createdMs)])) : (pids) => readStartIds(pids));
@@ -274,13 +328,15 @@ export function createLeftoverReaper({ platform = process.platform, snapshot = n
     const protectedPids = [...new Set([...held, process.pid, process.ppid])].filter((p) => Number.isInteger(p) && p > 0); // the runner and its parent, whatever the caller passed
     let procs;
     try { procs = await snap(); } catch (err) { return { reaped: [], skipped: [], error: `snapshot: ${err?.message ?? err}` }; }
-    const want = detachedCandidates({ procs, cliPids: liveCliPids, protectedPids, selfPid, since }).filter((p) => !SYSTEM_PID.has(p));
+    const selfAncestors = [process.ppid];
+    const trees = [...liveCliPids, ...heldTreeRoots({ procs, protectedPids, selfPid, selfAncestors })];
+    const want = detachedCandidates({ procs, cliPids: trees, protectedPids, selfPid, since }).filter((p) => !SYSTEM_PID.has(p));
     if (!want.length) return { reaped: [], skipped: [] };
-    // Windows: the CIM row's CreationDate is already exact (ms) and was read before the env; Linux: read the start ids now.
-    const before = win ? new Map(procs.filter((p) => p.createdMs > 0).map((p) => [p.pid, String(p.createdMs)])) : await startsOf(want);
+    // The table's own start ids: the identity the plan attributes (ppid, pgid, start) is the one re-checked before the kill.
+    const before = new Map(procs.filter((p) => typeof p.start === 'string' && p.start).map((p) => [p.pid, p.start]));
     let m;
     try { m = await env(want); } catch (err) { return { reaped: [], skipped: [], error: `env: ${err?.message ?? err}` }; }
-    const plan = planAgentLeftovers({ procs, markers: m, agentId, tokenSha: sha256(token), endedAt, cliPids: liveCliPids, protectedPids, selfPid });
+    const plan = planAgentLeftovers({ procs, markers: m, agentId, tokenSha: sha256(token), endedAt, cliPids: liveCliPids, protectedPids, selfPid, selfAncestors });
     const reaped = [];
     const skipped = [...plan.skipped];
     if (!plan.reap.length) return { reaped, skipped };
@@ -293,7 +349,7 @@ export function createLeftoverReaper({ platform = process.platform, snapshot = n
         const a = before.get(x.pid);
         const b = now.get(x.pid);
         if (a && b && a === b) pids.push(x.pid);
-        else skipped.push({ pid: x.pid, root: r.root, reason: b ? 'pid-changed' : 'gone' });
+        else skipped.push({ pid: x.pid, root: r.root, reason: !a ? 'undated-start' : b ? 'pid-changed' : 'gone' });
       }
       if (!pids.length) continue;
       const pgid = r.pgid !== null && pids.length === r.pids.length ? r.pgid : null; // a dropped member: exact pids only

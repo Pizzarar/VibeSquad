@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import os from 'node:os';
 import path from 'node:path';
 import { createDevServerReaper, killPids, sha256 } from '../runner/reap.mjs';
-import { createLeftoverReaper, planAgentLeftovers } from '../runner/detached.mjs';
+import { createLeftoverReaper, heldTreeRoots, parseProcStat, readStartIds, planAgentLeftovers, snapshotProcTable } from '../runner/detached.mjs';
 import { Runner } from '../runner/runner.mjs';
 import { reapReporter } from '../runner/server.mjs';
 
@@ -131,49 +131,93 @@ test('planAgentLeftovers: a group with a stranger in it is never signalled; a fo
 
 // ---- createLeftoverReaper (executor, injected seams) ---------------------------------------------------------------
 
-function fakeLeftover({ platform = 'linux', startsSeq = null, procs = table() } = {}) {
+// Rows as the executor gets them: each carries the exact start id of the process the plan attributes (snapshotProcTable).
+const startOf = (p) => `boot/${p.createdMs}`;
+const stamped = (procs = table()) => procs.map((p) => ({ ...p, start: startOf(p) }));
+function fakeLeftover({ platform = 'linux', atKill = null, procs = stamped(), markers = marks() } = {}) {
   const kills = [];
   const envReads = [];
   const startReads = [];
-  const exact = new Map(procs.map((p) => [p.pid, `boot/${p.createdMs}`]));
-  let call = 0;
+  const exact = new Map(procs.filter((p) => p.start).map((p) => [p.pid, p.start]));
   const reaper = createLeftoverReaper({
     platform,
     snapshot: async () => procs,
-    markers: async (pids) => { envReads.push([...pids]); const m = marks(); return new Map(pids.filter((p) => m.has(p)).map((p) => [p, m.get(p)])); },
-    starts: async (pids) => { startReads.push([...pids]); const s = startsSeq?.[call++] ?? exact; return new Map(pids.filter((p) => s.has(p)).map((p) => [p, s.get(p)])); },
+    markers: async (pids) => { envReads.push([...pids]); return new Map(pids.filter((p) => markers.has(p)).map((p) => [p, markers.get(p)])); },
+    starts: async (pids) => { startReads.push([...pids]); const s = atKill ?? exact; return new Map(pids.filter((p) => s.has(p)).map((p) => [p, s.get(p)])); },
     kill: async (pids, pgid) => { kills.push({ pids, pgid }); },
   });
   return { reaper, kills, envReads, startReads, exact };
 }
 const job = (over = {}) => ({ agentId: 'w1', token: 'tok-w1', since: T, endedAt: END, protectedPids: [SELF, 49], liveCliPids: [60], selfPid: SELF, stillOk: () => true, ...over });
 
-test('createLeftoverReaper: env proof bracketed by start reads; kills the verified pids leaf-first with the group', async () => {
+test('createLeftoverReaper: the table\'s start ids are re-read once, right before the kill; kills the verified pids leaf-first with the group', async () => {
   const f = fakeLeftover();
   const r = await f.reaper(job());
   assert.equal(r.error, undefined);
   assert.deepEqual(f.kills, [{ pids: [310, 302, 301, 300], pgid: 300 }]);
   assert.deepEqual(r.reaped.map((x) => [x.root, x.pgid, x.pids]), [[300, 300, [310, 302, 301, 300]]]);
-  assert.equal(f.startReads.length, 2, 'one start read before the env read, one right before the kill');
-  assert.ok(f.startReads[0].includes(300) && f.envReads[0].includes(300));
+  assert.deepEqual(f.startReads, [[310, 302, 301, 300]], 'one start read, right before the kill, of the planned pids only');
   for (const p of [SELF, 49, 60, 61]) assert.ok(!f.envReads[0].includes(p), `protected/live-tree pid ${p} is not even read`);
 });
 
-test('createLeftoverReaper: pid reuse (start moved between the env read and the kill) is refused; a gone pid too; no group kill then', async () => {
+test('createLeftoverReaper: pid reuse (start moved since the table) is refused; a gone pid too; no group kill then', async () => {
   const f0 = fakeLeftover();
   const moved = new Map(f0.exact); moved.set(302, 'boot/999'); moved.delete(310);
-  const f = fakeLeftover({ startsSeq: [f0.exact, moved] });
+  const f = fakeLeftover({ atKill: moved });
   const r = await f.reaper(job());
   assert.deepEqual(f.kills, [{ pids: [301, 300], pgid: null }], 'only the unchanged pids, exact (no group signal)');
   assert.deepEqual(r.skipped.map((s) => [s.pid, s.reason]).sort(), [[302, 'pid-changed'], [310, 'gone']]);
-  // A reused ROOT pid (the whole entry moved): nothing of it, and nothing whose start the first read missed.
-  const allMoved = new Map([...f0.exact].map(([p, s]) => [p, `${s}x`]));
-  const g = fakeLeftover({ startsSeq: [f0.exact, allMoved] });
+  // A reused ROOT pid (the whole entry moved): nothing of it.
+  const g = fakeLeftover({ atKill: new Map([...f0.exact].map(([p, st]) => [p, `${st}x`])) });
   await g.reaper(job());
   assert.deepEqual(g.kills, []);
-  const h = fakeLeftover({ startsSeq: [new Map(), f0.exact] });
-  await h.reaper(job());
-  assert.deepEqual(h.kills, [], 'no start before the env read: never killed');
+  // A row the table could not date exactly (no start id): never killed, whatever the kill-time read says.
+  const h = fakeLeftover({ procs: stamped().map((p) => (p.pid === 301 ? { ...p, start: null } : p)) });
+  const hr = await h.reaper(job());
+  assert.deepEqual(h.kills, [{ pids: [310, 302, 300], pgid: null }]);
+  assert.deepEqual(hr.skipped.map((s) => [s.pid, s.reason]), [[301, 'undated-start']]);
+});
+
+test('review M1: an UNMARKED descendant whose pid a stranger reused between the table and the env read is refused', async () => {
+  // The table saw 302 as Chromium's (unmarked, env cleared) child; before the env read it died and a stranger took pid 302.
+  // The stranger's env is unmarked too, so the env proof cannot tell; its start differs from the table row's: never killed.
+  const m = marks(); m.set(302, NONE);
+  const f0 = fakeLeftover({ markers: m });
+  const atKill = new Map(f0.exact); atKill.set(302, 'boot/stranger');
+  const f = fakeLeftover({ markers: m, atKill });
+  const r = await f.reaper(job());
+  assert.ok(!f.kills.some((k) => k.pids.includes(302)), JSON.stringify(f.kills));
+  assert.deepEqual(f.kills, [{ pids: [310, 301, 300], pgid: null }]);
+  assert.deepEqual(r.skipped.map((s) => [s.pid, s.reason]), [[302, 'pid-changed']]);
+});
+
+test('snapshotProcTable: /proc rows carry ppid, pgid, comm with spaces/parens, cmdline, the exact start id and an upper-bound createdMs; other uids skipped', async () => {
+  const files = {
+    '/proc/sys/kernel/random/boot_id': 'b00t-1d-0000\n',
+    '/proc/uptime': '1000.00 5000.00\n',
+    '/proc/300/stat': '300 (chromium) S 2 300 300 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 50000 1 1',
+    '/proc/300/cmdline': '/usr/bin/chromium-browser\0--headless\0',
+    '/proc/301/stat': '301 (we (ird) name) S 300 300 300 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 50010 1 1',
+    '/proc/301/cmdline': '',
+    '/proc/400/stat': '400 (root-owned) S 1 400 400 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 1 1 1',
+  };
+  const uids = { 300: 1000, 301: 1000, 400: 0 };
+  const fs = {
+    readdir: async () => ['300', '301', '400', 'self', 'uptime', '555'], // 555: gone before its read
+    stat: async (f) => { const pid = Number(f.split('/')[2]); if (!(pid in uids)) throw Object.assign(new Error('gone'), { code: 'ENOENT' }); return { uid: uids[pid] }; },
+    readFile: async (f) => { if (!(f in files)) throw Object.assign(new Error('gone'), { code: 'ENOENT' }); return files[f]; },
+  };
+  const before = Date.now();
+  const rows = await snapshotProcTable({ uid: 1000, fs });
+  assert.deepEqual(rows.map((r) => [r.pid, r.ppid, r.pgid, r.name, r.cmd, r.start]), [
+    [300, 2, 300, 'chromium', '/usr/bin/chromium-browser --headless', 'b00t-1d-0000/50000'],
+    [301, 300, 300, 'we (ird) name', 'we (ird) name', 'b00t-1d-0000/50010'],
+  ]);
+  // boot = now - 1000 s; 300 started at tick 50000 (500 s after boot): created ~500 s ago, rounded UP one tick.
+  const age = before - rows[0].createdMs;
+  assert.ok(age > 499_000 && age <= 500_100, `age ${age}`);
+  assert.ok(rows[1].createdMs > rows[0].createdMs);
+  assert.equal(parseProcStat('garbage'), null);
 });
 
 test('createLeftoverReaper: nothing once the agent is live again; no token; a failing snapshot or env read: no kill, error reported', async () => {
@@ -184,15 +228,15 @@ test('createLeftoverReaper: nothing once the agent is live again; no token; a fa
   assert.match((await f.reaper(job({ token: '' }))).error, /token/);
   const broken = createLeftoverReaper({ platform: 'linux', snapshot: async () => { throw new Error('ps gone'); }, kill: () => { throw new Error('must not kill'); } });
   assert.match((await broken(job())).error, /snapshot: ps gone/);
-  const noEnv = createLeftoverReaper({ platform: 'linux', snapshot: async () => table(), starts: async () => new Map(), markers: async () => { throw new Error('proc'); }, kill: () => { throw new Error('must not kill'); } });
+  const noEnv = createLeftoverReaper({ platform: 'linux', snapshot: async () => stamped(), starts: async () => new Map(), markers: async () => { throw new Error('proc'); }, kill: () => { throw new Error('must not kill'); } });
   assert.match((await noEnv(job())).error, /env: proc/);
   const mac = createLeftoverReaper({ platform: 'darwin' });
   assert.match((await mac(job())).error, /unsupported platform darwin/);
 });
 
-test('createLeftoverReaper (win32 planning): the CIM CreationDate is the first start read; a moved CreationDate is refused; no group', async () => {
-  // Windows rows: no pgid, exact CreationDate ms. The killer gets exact pids only.
-  const win = table().map(({ pgid, ...p }) => p);
+test('createLeftoverReaper (win32 planning): the CIM CreationDate is the row\'s start; a moved CreationDate is refused; no group', async () => {
+  // Windows rows: no pgid, exact CreationDate ms (the default snapshot stamps start = String(createdMs)). Exact pids only.
+  const win = table().map(({ pgid, ...p }) => ({ ...p, start: String(p.createdMs) }));
   const later = new Map(win.map((p) => [p.pid, String(p.createdMs)]));
   later.set(301, String(T + 1101)); // pid 301 reused between the CIM table and the kill
   const kills = [];
@@ -204,7 +248,7 @@ test('createLeftoverReaper (win32 planning): the CIM CreationDate is the first s
     starts: async (pids) => { startReads.push(pids); return new Map(pids.filter((p) => later.has(p)).map((p) => [p, later.get(p)])); },
     kill: async (pids, pgid) => { kills.push({ pids, pgid }); },
   })(job());
-  assert.equal(startReads.length, 1, 'win32: only the re-read before the kill (the table was exact)');
+  assert.equal(startReads.length, 1, 'win32: one re-read before the kill (the table was exact)');
   assert.deepEqual(kills, [{ pids: [310, 302, 300], pgid: null }]);
   assert.deepEqual(r.skipped.map((s) => [s.pid, s.reason]), [[301, 'pid-changed']]);
 });
@@ -348,7 +392,7 @@ test('real (Linux): a detached tree (setsid group + own-session crashpad + doubl
     spawn(process.execPath, [fx, 'cli', d, 'forged', '300'], { env: env(id, randomBytes(16).toString('hex')), stdio: 'ignore' });
     for (const tag of ['me', 'none', 'other', 'forged']) await waitFamily(d, tag);
     const me = pidsIn(d, 'me');
-    // ps dates rows to the second (createdMs is an upper bound): wait so the family reads as created before the end.
+    // Let the family settle well before the end (createdMs is an upper bound, rounded up a tick).
     await tick(1500);
     cli.kill('SIGKILL');
     await until(() => !alive(me.cli) || cli.exitCode !== null || cli.signalCode !== null, 5000);
@@ -436,8 +480,8 @@ test('real (Linux): through the Runner: a worker\'s leftovers are reaped on exit
   await waitFamily(d, prTag);
   const prFam = pidsIn(d, prTag);
   await tick(1500);
-  let reads = 0;
-  const refusing = createLeftoverReaper({ starts: async (pids) => { reads++; const { readStartIds } = await import('../runner/detached.mjs'); const m = await readStartIds(pids); return reads === 1 ? m : new Map([...m].map(([p, s]) => [p, `${s}-reused`])); } });
+  // The real /proc table is planned; the start read right before the kill says every pid was reused since: nothing is killed.
+  const refusing = createLeftoverReaper({ starts: async (pids) => { const m = await readStartIds(pids); return new Map([...m].map(([p, s]) => [p, `${s}-reused`])); } });
   const res = await refusing({ agentId: pr, token: runner.tokenFor(pr), since: 0, endedAt: Date.now(), protectedPids: [process.pid, process.ppid], liveCliPids: [], selfPid: process.pid });
   assert.deepEqual(res.reaped, [], JSON.stringify(res));
   assert.ok(res.skipped.some((s) => s.reason === 'pid-changed'), JSON.stringify(res.skipped));
