@@ -101,8 +101,12 @@ function assertNoLabelDrift(res, c, at) {
   assert.equal(routeWhy(c.out.labels[ROUTE_LABEL]), res.spawned.split(" · ")[2], `${at}: the result reason = the hook's why=`);
 }
 
-test("spawn-reason helpers: precedence failover > override > all-capped > arm > legacy-name > ladder; why= read back; line drops blanks", () => {
-  assert.deepEqual(SPAWN_REASONS, ["ladder", "override", "arm", "failover", "legacy-name", "all-capped"]);
+test("spawn-reason helpers: precedence soft > failover > override > all-capped > arm > legacy-name > ladder; why= read back; line drops blanks", () => {
+  // C fu1 L3 (@per PLAN_PER_QUOTA_FIT_1126): `soft` = a family skipped for its soft quota line, never shown as a capped failover.
+  assert.deepEqual(SPAWN_REASONS, ["ladder", "override", "arm", "failover", "soft", "legacy-name", "all-capped"]);
+  assert.equal(shownSpawnReason({ soft: true, failover: true, hookReason: "failover" }), "soft");
+  assert.equal(shownSpawnReason({ soft: true, override: true }), "soft");
+  assert.equal(routeWhy('reason=failover tier=mid role=implement soft="pool 78% >= soft 70: interruptible only -> claude" why=soft'), "soft");
   assert.deepEqual(Object.values(SPAWN_REASON), [...SPAWN_REASONS], "named constants = the reason list");
   assert.equal(shownSpawnReason({}), "ladder");
   assert.equal(shownSpawnReason({ hookReason: "all-capped", arm: true }), "all-capped", "all-capped beats the arm");

@@ -314,7 +314,7 @@ test("7. lead-handoff prefers a family under its soft line and preserves G2 disk
   }
 });
 
-test("8. spawn hook stamps soft line reason into vs.route label and keeps why=failover", async () => {
+test("8. spawn hook stamps soft line reason into vs.route label and shows why=soft (C fu1 L3)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "vs-soft-hook-"));
   const vsHome = join(dir, ".vibesquad");
   mkdirSync(vsHome, { recursive: true });
@@ -346,13 +346,13 @@ test("8. spawn hook stamps soft line reason into vs.route label and keeps why=fa
       assert.equal(normal.config.provider, "antigravity-cli");
       assert.match(normal.config.model, /^gemini-/);
       assert.match(normal.labels[ROUTE_LABEL], /pool 78% >= soft 70: interruptible only -> antigravity-cli/);
-      assert.match(normal.labels[ROUTE_LABEL], /why=failover$/);
+      assert.match(normal.labels[ROUTE_LABEL], /why=soft$/);
 
       // Interruptible kind=docs -> stays on agy-claude (no soft failover).
       const docs = await spawn({ profile: "Implement", stakes: "normal", kind: "docs" });
       assert.equal(docs.config.provider, "antigravity-cli");
       assert.match(docs.config.model, /^claude-sonnet-/);
-      assert.doesNotMatch(docs.labels[ROUTE_LABEL], /why=failover$/);
+      assert.doesNotMatch(docs.labels[ROUTE_LABEL], /why=(failover|soft)$/);
     } finally {
       stop?.();
     }

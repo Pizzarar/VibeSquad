@@ -4,7 +4,8 @@
 //   - no model unless the spawner picked an override; stakes go in labels.stakes (as spawn_worker does);
 //   - an override sends provider (+ model) AND the `vs.route-override` label (same shape spawn_worker stamps).
 
-import { LEGACY_SPAWN_REASONS, SPAWN_REASON, routeWhy } from "../server/spawn-reason.mjs";
+import { LEGACY_SPAWN_REASONS, SPAWN_REASON, routeSoftReason, routeWhy } from "../server/spawn-reason.mjs";
+import { INTERRUPTIBLE_KINDS, isInterruptibleWork } from "../server/interruptible-work.mjs";
 
 /** Same shape as routeOverrideLabel in server/route-override.mjs (no .d.ts for it; test/r1-fix-ui-r2-spawn.test.mjs pins parity). */
 const routeOverrideLabel = ({ provider, model }: { provider?: string; model?: string }) =>
@@ -19,6 +20,11 @@ export function drawerSpawnWhy(labels: Record<string, string>, liveModel: string
   return routeWhy(labels["vs.route"]);
 }
 
+/** C fu1 L3: the soft-line text the hook put on `vs.route` (` soft="..."`), "" when the route skipped no soft family. */
+export function drawerSoftReason(labels: Record<string, string>): string {
+  return routeSoftReason(labels["vs.route"]);
+}
+
 /** One word per reason in the UI: the server's SPAWN_REASONS words (server/spawn-reason.mjs); an old label value still on a
  *  live agent reads as today's word (LEGACY_SPAWN_REASONS). */
 export const spawnReasonLabel = (reason: string) => (Object.hasOwn(LEGACY_SPAWN_REASONS, reason) ? LEGACY_SPAWN_REASONS[reason] : reason);
@@ -29,18 +35,21 @@ export const SPAWN_REASON_GLOSS: Record<string, string> = {
   [SPAWN_REASON.ARM]: "Arm: an alternating Sonnet/Gemini trial picked this model.",
   [SPAWN_REASON.OVERRIDE]: "Override: you or the caller picked the provider or model.",
   [SPAWN_REASON.FAILOVER]: "Failover: the preferred provider was capped, so a fallback ran instead.",
+  [SPAWN_REASON.SOFT]: "Soft line: the preferred pool is past its soft quota line, so only interruptible work runs there and this ran on the next pool with room.",
   [SPAWN_REASON.LEGACY_NAME]: "Legacy name: an old profile name ran its stored profile.",
   [SPAWN_REASON.ALL_CAPPED]: "All capped: every provider was capped, so it started on the first and waits or fails over.",
 };
 
 /** Chip tooltip: plain words only (never the raw route text). */
-export function spawnChipTitle(opts: { role?: string; model?: string; reason: string; staged?: boolean; provider?: string }): string {
+export function spawnChipTitle(opts: { role?: string; model?: string; reason: string; staged?: boolean; provider?: string; softReason?: string }): string {
   const head = [opts.role, opts.model].filter(Boolean).join(" · ");
   if (opts.staged) return `${head} (staged switch: applies on your next message)`;
   const reason = spawnReasonLabel(opts.reason);
   const gloss = reason ? (SPAWN_REASON_GLOSS[reason] ?? "") : "";
-  const on = reason === SPAWN_REASON.FAILOVER && opts.provider ? ` Runs on ${opts.provider}.` : "";
-  return [head, gloss + on].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
+  const on = (reason === SPAWN_REASON.FAILOVER || reason === SPAWN_REASON.SOFT) && opts.provider ? ` Runs on ${opts.provider}.` : "";
+  // C fu1 L3: the soft line's own words (e.g. "pool 78% >= soft 70: interruptible only -> antigravity-cli").
+  const soft = reason === SPAWN_REASON.SOFT && opts.softReason ? ` (${opts.softReason})` : "";
+  return [head, gloss + on + soft].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
 }
 
 /** Provider id -> the name the role editor shows. */
@@ -50,29 +59,10 @@ export const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
 const AGY_CLAUDE_FAMILY = "agy-claude";
 const AGY_CLAUDE_EXCLUDED_ROLES = new Set(["lead", "brainstorm"]);
 
-/** Mirror of server/provider-failover.mjs INTERRUPTIBLE_KINDS + isInterruptibleWork (@per PLAN_PER_QUOTA_FIT_1126 C). */
-export const INTERRUPTIBLE_KINDS: ReadonlySet<string> = new Set(["docs", "audit", "spike", "pre-check"]);
-
-export function isInterruptibleRole({ stakes, kind, role }: { stakes?: string; kind?: string; role?: string } = {}): boolean {
-  if (String(stakes ?? "").trim().toLowerCase() === "mechanical") return true;
-  const normKey = (v?: string) => String(v ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
-  const k = normKey(kind);
-  if (k && INTERRUPTIBLE_KINDS.has(k)) return true;
-  const r = normKey(role);
-  if (r && INTERRUPTIBLE_KINDS.has(r)) return true;
-  if (
-    r &&
-    (r.startsWith("pre-check-") ||
-      r.startsWith("audit-") ||
-      r.startsWith("mechanical-") ||
-      r.startsWith("docs-") ||
-      r.startsWith("spike-") ||
-      r === "check-haiku")
-  ) {
-    return true;
-  }
-  return false;
-}
+/** C fu1 L1: the server's own isInterruptibleWork (server/interruptible-work.mjs, pure), no longer a hand copy: one
+ *  definition, so legacy names (Check - Haiku, Scout - Flash, Audit - DSF) count the same on the badge and the route. */
+export { INTERRUPTIBLE_KINDS };
+export const isInterruptibleRole = isInterruptibleWork;
 
 export const STAKES_CHOICES = ["normal", "tierA-security", "tierA-invariant", "mechanical"] as const;
 export type Stakes = (typeof STAKES_CHOICES)[number];
@@ -150,7 +140,7 @@ export function landingPick(
   role: RoleLike,
   ladder: LadderLike | undefined,
   stakes: string,
-  opts: { capped?: readonly string[]; softCapped?: readonly string[] | Record<string, string | boolean>; kind?: string; override?: Override | null; roleKey?: string } = {},
+  opts: { capped?: readonly string[]; softCapped?: readonly string[] | Record<string, string | boolean>; unknown?: readonly string[]; kind?: string; override?: Override | null; roleKey?: string } = {},
 ): { provider: string; model: string; via: string; allCapped: boolean } {
   const ov = opts.override ?? null;
   const capped = opts.capped ?? [];
@@ -163,21 +153,31 @@ export function landingPick(
   const interruptible = isInterruptibleRole({ stakes, kind: opts.kind, role: opts.roleKey ?? role.key ?? role.name });
   const softMap = interruptible ? new Map<string, string>() : normalizeSoftCapped(opts.softCapped);
 
-  // Pass 1: prefer a family under both hard and soft lines (soft line skipped for interruptible work).
-  const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
-  for (const provider of providers) {
-    if (ov && provider === ov.provider) continue;
-    if (capped.includes(provider)) {
-      skipped.push(`${providerName(provider)} capped`);
-      continue;
-    }
-    if (softMap.has(provider)) {
-      const msg = softMap.get(provider);
-      skipped.push(msg ? `${providerName(provider)} (${msg})` : `${providerName(provider)} soft`);
-      continue;
+  // Pass 1: prefer a family under both hard and soft lines (soft line skipped for interruptible work). C fu1 L4, as
+  // server/role-route.mjs resolveRoute: while a family on the walk is past soft, known-under-soft ranks before no-row.
+  const unknownSet = interruptible ? new Set<string>() : new Set(opts.unknown ?? []);
+  const walk = providers.filter((p) => !(ov && p === ov.provider));
+  const free = walk.filter((p) => !capped.includes(p) && !softMap.has(p));
+  const softInPlay = walk.some((p) => !capped.includes(p) && softMap.has(p));
+  const pick = softInPlay ? (free.find((p) => !unknownSet.has(p)) ?? free[0]) : free[0];
+  if (pick) {
+    const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
+    let soft = false;
+    for (const provider of walk) {
+      if (provider === pick) break;
+      if (capped.includes(provider)) skipped.push(`${providerName(provider)} capped`);
+      else if (softMap.has(provider)) {
+        soft = true;
+        const msg = softMap.get(provider);
+        skipped.push(msg ? `${providerName(provider)} ${msg}` : `${providerName(provider)} past soft line`);
+      } else if (unknownSet.has(provider)) {
+        soft = true;
+        skipped.push(`${providerName(provider)} no quota row`);
+      }
     }
     // The hook keeps the caller's model only when it belongs to the hop target's family; this badge has no family table, so it shows the ladder model.
-    return { provider, model: modelOf(provider), via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder", allCapped: false };
+    const via = skipped.length ? `${soft ? "soft" : "failover"} (${skipped.join(", ")} → ${providerName(pick)})` : "ladder";
+    return { provider: pick, model: modelOf(pick), via, allCapped: false };
   }
 
   // Pass 2: every family is past soft (or hard). Fall back to the first family under the hard line.
@@ -197,7 +197,17 @@ export function landingPick(
   // fall back to direct claude when it is in the walk instead of agy-claude.
   const allCappedFallback = providers[0] === AGY_CLAUDE_FAMILY && providers.includes("claude") ? "claude" : (providers[0] ?? "claude");
   const stay = ov?.provider ?? allCappedFallback;
+  const skipped = [...(ov ? [`${providerName(ov.provider)} capped`] : []), ...walk.filter((p) => capped.includes(p)).map((p) => `${providerName(p)} capped`)];
   return { provider: stay, model: ov?.model ?? modelOf(stay), via: `all capped (${skipped.join(", ")})`, allCapped: true };
+}
+
+/** The caps a New Agent / Add Buddy badge walks: GET /__vibesquad/roles `capped`, `softCapped`, `quotaUnknown` (C fu1 L2). */
+export type QuotaCaps = { capped?: readonly string[]; softCapped?: Record<string, string | boolean>; quotaUnknown?: readonly string[] };
+
+/** C fu1 L2: where a role row lands, fed from the roles GET's capped + soft-capped + no-row families (server/roles-api.mjs
+ *  quotaRouteState, the spawn hook's list), so the badge names the provider the server routes to at the soft line too. */
+export function roleLandingPick(roleKey: string, role: RoleLike, ladder: LadderLike | undefined, stakes: string, override: Override | null, quota: QuotaCaps = {}, kind?: string) {
+  return landingPick(role, ladder, stakes, { capped: quota.capped ?? [], softCapped: quota.softCapped, unknown: quota.quotaUnknown, kind, override, roleKey });
 }
 
 /** What an all-capped landing will do, in plain words (shown under the badges; Spawn stays enabled). */

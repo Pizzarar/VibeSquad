@@ -70,6 +70,7 @@ import {
   routeRoleKeyOf,
   routeTierOf,
   softCappedFamilies,
+  unknownQuotaFamilies,
 } from "../spawn-route.mjs";
 import { armRouteFor } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
@@ -2059,9 +2060,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
+          // C fu1 L5: the same soft line (+ kind, no-row ranking) as before(agent.create), so a re-route never undoes it.
+          const usageNow = currentUsageList();
+          const softOpts = { stakes: labels.stakes, kind: labels.kind, role: hint };
           const hit = roleSpawnProfile(hint, {
             stakes: labels.stakes,
-            caps: cappedFamilies(currentUsageList()),
+            kind: labels.kind,
+            caps: cappedFamilies(usageNow),
+            softCaps: softCappedFamilies(usageNow, [], softOpts),
+            unknown: unknownQuotaFamilies(usageNow, [], softOpts),
             roles,
             ...armRouteFor(hint, labels["vs.arm"]),
             override: parseRouteOverride(labels[ROUTE_OVERRIDE_LABEL]), // H1: the caller's provider/model still win here
@@ -2225,7 +2232,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * idea-504 reuses it for a worker that died on an upstream failure (`name` = the worker's profile; `executes` false keeps a
      * plan/read-only pick for a worker that was read-only itself).
      */
-    const alternateProfileFor = (name: string, failedProviders: string[], executes = true): StoredProfile | null => {
+    const alternateProfileFor = (name: string, failedProviders: string[], executes = true, work: { stakes?: string; kind?: string } = {}): StoredProfile | null => {
       const failed = new Set(failedProviders.map((p) => normalizeProviderFamily(p)).filter(Boolean));
       const skipped = new Set<string>(); // families with no profile that can run the digest's vs command
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
@@ -2235,7 +2242,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (;;) {
         // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
         const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
-        const fo = resolveProfileWithFailover(name, stored, usage);
+        // C fu1 L5: the respawned task's stakes/kind decide the soft line (kind=docs stays interruptible).
+        const fo = resolveProfileWithFailover(name, stored, usage, { stakes: work.stakes || undefined, kind: work.kind || undefined });
         const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
         const fam = normalizeProviderFamily(alt?.provider);
         if (!alt?.provider || !fam || failed.has(fam) || skipped.has(fam)) return null;
@@ -2253,7 +2261,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * as caps (the legacy failover returns null for role names); an old/stored profile name uses the idea-218 failover order.
      * null when nothing off the failed family is available.
      */
-    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string): StoredProfile | null => {
+    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string, kind = ""): StoredProfile | null => {
       const stored = loadStoredProfiles();
       const roles = liveRoles(stored);
       const failedFam = normalizeProviderFamily(failedProvider);
@@ -2261,10 +2269,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
         const quota = quotaList();
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
+        const softOpts = { stakes: stakes || undefined, kind: kind || undefined, role: fromProfile };
         const route = roleSpawnProfile(fromProfile, {
           stakes: stakes || undefined,
+          kind: kind || undefined,
           caps: cappedFamilies(usage, failedFam ? [failedFam] : []),
-          softCaps: softCappedFamilies(usage, failedFam ? [failedFam] : [], { stakes: stakes || undefined, role: fromProfile }),
+          softCaps: softCappedFamilies(usage, failedFam ? [failedFam] : [], softOpts),
+          unknown: unknownQuotaFamilies(usage, failedFam ? [failedFam] : [], softOpts),
           roles,
         });
         const p = (route?.profile ?? null) as StoredProfile | null;
@@ -2276,7 +2287,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return p?.provider && fam && fam !== failedFam ? p : null;
       }
       const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
-      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true);
+      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true, { stakes, kind });
     };
 
     // ---- Hook 1: before agent.create ---------------------------------------
@@ -2404,6 +2415,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               roles,
               explicitModel: rawCallerModel,
               override: routeOverride,
@@ -2430,6 +2442,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: reroute.stakes, kind: kindRaw, role: reroute.role }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: reroute.stakes, kind: kindRaw, role: reroute.role }),
               roles: liveRoles(loadStoredProfiles()),
               explicitModel: rawCallerModel,
             };
@@ -2793,6 +2806,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               explicitModel: rawModel,
             });
             if (meta) {
@@ -2844,6 +2858,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // result) rides the label as ` why=<reason>` (server/spawn-reason.mjs); the `route:` metric above keeps its fields.
           const why = shownSpawnReason({
             hookReason: reason,
+            // C fu1 L3: a route that skipped a family only for its soft line shows `soft`, never a capped-provider failover.
+            soft: Boolean(roleRoute?.route?.softFailover) || Boolean(softFailoverReason),
             // A role route that skipped a capped provider is a failover even when the metric names `ladder` (stakes win there).
             // G2: a caller that already failed over before spawning (lead-handoff successor) says so in `vs.failover` / VS_FAILOVER.
             failover:
@@ -3542,7 +3558,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const fromProfile = String(labels.profile ?? "").trim();
       if (!fromProfile) return skip("no-profile");
-      const alt = alternateWorkerProfile(fromProfile, fromFam === "?" ? fromProvider : fromFam, String(labels.stakes ?? ""));
+      const alt = alternateWorkerProfile(fromProfile, fromFam === "?" ? fromProvider : fromFam, String(labels.stakes ?? ""), String(labels.kind ?? ""));
       if (!alt?.provider) return skip("no-alternate");
       // R2 H1: the claim, synchronously before the create (no await since the A4 check).
       if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");

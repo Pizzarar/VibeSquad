@@ -576,7 +576,7 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs lesson add "<title>" "<rule>" [--category <cat>] [--cause <c>] | list [query] | retire <title|id> [--reason "<why>"]   retire keeps the line in lessons.jsonl (audit trail) but drops it from the boot "Recent lessons" digest
-  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>] [--kind <docs|audit|spike|pre-check|...>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
   vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] [--urgent [--reason "<why>"]] | vs restart status [--json] | vs restart abort [--reason "<why>"] | vs restart extend <min>   request/abort/extend: OWNER/Overlord only. extend (idea-673) pushes an open request's drain deadline out, or a vs restart still waiting for runner idle (its wait deadline and drain); abort while vs restart waits stops it before anything is stopped. Restart windows (idea-674): a non-urgent request is QUEUED for the next fixed UTC window (13:00Z / 21:00Z; VS_RESTART_WINDOWS="HH:MM,HH:MM" overrides) and nobody is asked or held until then; more non-urgent requests fold into it (latest tip, needs merged). --urgent (security fix, broken server, a blocker for all lanes; --reason says why, only with --urgent) drains now and pulls any queued request in with it. A durable server-side restart request: at the window (or at once with --urgent) the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
@@ -2301,6 +2301,8 @@ export async function runAgentVerb(verb, flags, ctx) {
       prompt: flags.prompt ?? flags._.join(" "),
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
       ...(flags.stakes !== undefined ? { stakes: String(flags.stakes) } : {}),
+      // C fu1 L5 (@per PLAN_PER_QUOTA_FIT_1126): labels.kind; docs/audit/spike/pre-check may run on a pool past its soft line.
+      ...(flags.kind !== undefined && String(flags.kind).trim() ? { kind: String(flags.kind).trim() } : {}),
     };
   } else if (verb === "handoff_lead") {
     args = {
@@ -2417,7 +2419,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     flags.watchAction = sub;
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
-    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
+    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>] [--kind <k>]');
   }
   // A role=lead profile must never be silently spawned as a worker (that leaves the lane with no lead and `vs who lead`
   // returns NONE): refuse and point at `vs lead handoff --profile <name>` instead (idea-376).

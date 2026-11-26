@@ -281,7 +281,8 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     if (hardKey) return keep(`capped:${hardKey}`, { capped: true });
     if (allKey && !armCapKey(requested.wf, rawCaps, { role: roleSpawn })) {
       const sr = softReasonForArm(optInKey, rawCaps, { role: roleSpawn }) || "soft quota: interruptible only";
-      return keep(`${sr} -> ${requested.provider}`, { capped: true, softFailover: true });
+      // C fu1 L3: a soft-line skip is not a cap: report soft (spawn_worker result.ab.soft), never capped.
+      return keep(`${sr} -> ${requested.provider}`, { soft: true, softFailover: true });
     }
     const swapped = optInArm.wf !== requested.wf;
     const profileOut = swapped && !roleSpawn ? optInArm.profile : String(profile);
@@ -341,7 +342,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   return {
     mode: "arm", arm: arm.wf, requestedArm: requested.wf, swapped, reason, counts, profile: profileOut,
     ...(roleSpawn ? { role: true, provider: arm.provider } : {}),
-    ...(reason !== "alternation" ? { capped: true } : {}),
-    ...(softFailover ? { softFailover: true } : {}),
+    ...(reason !== "alternation" && !softFailover ? { capped: true } : {}),
+    ...(softFailover ? { soft: true, softFailover: true } : {}),
   };
 }

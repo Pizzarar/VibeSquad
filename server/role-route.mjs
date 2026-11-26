@@ -299,6 +299,9 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  * @param {string} [input.stakes]   tierA-security | tierA-invariant | normal | mechanical; missing/unknown = normal
  * @param {object} [input.explicit] caller-passed {provider, model, effort | thinkingOptionId, modeId}; each given field wins
  * @param {Iterable<string>|Record<string, boolean>} [input.caps] capped/over-quota providers (any alias)
+ * @param {string} [input.kind]     labels.kind (docs | audit | spike | pre-check = interruptible: the soft line never applies)
+ * @param {Iterable<string>|Record<string, string|boolean>} [input.softCaps] families past their soft line (under hard), name -> reason
+ * @param {Iterable<string>} [input.unknown] families with no fresh quota row; ranked after known-under-soft while the soft line is in play
  * @param {object} [input.ladder]       tier ladder (role names); default DEFAULT_TIER_LADDER. Pass loadTierLadder().
  * @param {object} [input.stakesLadder] old per-stakes ladder (legacy names); default DEFAULT_STAKES_LADDER. Pass loadStakesLadder().
  * @param {boolean} [input.directClaude] R10: never walk agy-claude (a caller's explicit Claude model/effort pins direct claude)
@@ -311,7 +314,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  *   or "explicit-capped" (an explicit provider, or a model naming its own family, on a capped provider: the resolver
  *   only reports it; P5c lets the cap win for profile spawns, as agent-duties.ts does today).
  */
-export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
+export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, unknown, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
   const ex = explicit && typeof explicit === "object" ? explicit : {};
   const exProvider = nonEmpty(ex.provider);
   const exModel = nonEmpty(ex.model);
@@ -357,6 +360,7 @@ export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, lad
   const capped = cappedSet(caps);
   const interruptible = isInterruptibleWork({ stakes: s, kind, role: found?.key ?? role });
   const softMap = interruptible ? new Map() : softCapMap(softCaps);
+  const unknownSet = interruptible ? new Set() : new Set(softCapMap(unknown).keys());
   const modelFam = !exProvider && exModel ? routeProviderFamily(exModel) : "";
   let provider;
   /** R10: the walk chose `provider` (an uncapped family), so the capped ones before it were really walked past. */
@@ -367,7 +371,12 @@ export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, lad
     provider = exProvider ? routeProviderFamily(exProvider) || exProvider : modelFam;
     if (capped.has(provider)) reasons.push("explicit-capped");
   } else {
-    const underSoft = order.find((p) => !capped.has(p) && !softMap.has(p));
+    // C fu1 L4: while the soft line is in play (a family on the walk is past soft, under hard), a family with a known
+    // reading under soft ranks before one with no fresh quota row (`unknown`: limits-read drops stale rows). No family
+    // past soft = walk order, exactly as before C.
+    const free = order.filter((p) => !capped.has(p) && !softMap.has(p));
+    const softInPlay = order.some((p) => !capped.has(p) && softMap.has(p));
+    const underSoft = softInPlay ? (free.find((p) => !unknownSet.has(p)) ?? free[0]) : free[0];
     if (underSoft) {
       provider = underSoft;
       walked = true;
@@ -375,9 +384,12 @@ export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, lad
         reasons.push("failover");
         const head = order.slice(0, order.indexOf(provider));
         const softHit = head.find((p) => !capped.has(p) && softMap.has(p));
-        if (softHit) {
+        const unknownHit = head.filter((p) => !capped.has(p) && !softMap.has(p) && unknownSet.has(p));
+        if (softHit || (softInPlay && unknownHit.length)) {
           softFailover = true;
-          const baseMsg = softMap.get(softHit) || "soft quota: interruptible only";
+          const baseMsg = softHit
+            ? softMap.get(softHit) || "soft quota: interruptible only"
+            : `no quota row for ${unknownHit.join("+")}: ranked after known under soft`;
           softReason = `${baseMsg} -> ${provider}`;
         }
       }
@@ -443,6 +455,6 @@ export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, lad
     // R10: the walk order and the capped/soft-capped families walked past before `provider` (label family=/why=failover). An
     // explicit provider/model or an all-capped route walked nothing: [].
     walk: [...order],
-    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p) || (softFailover && softMap.has(p))) : [],
+    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p) || (softFailover && (softMap.has(p) || unknownSet.has(p)))) : [],
   };
 }

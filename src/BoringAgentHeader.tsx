@@ -1,4 +1,4 @@
-import { drawerSpawnWhy } from "./roleSpawn";
+import { drawerSoftReason, drawerSpawnWhy } from "./roleSpawn";
 import { RoleModelChip } from "./RoleModelChip";
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "./agentTypes";
@@ -207,7 +207,7 @@ function BoringAgentHeaderBody({ p, cfg }: { p: BoringAgentHeaderProps; cfg: Ret
         <span className="boring-agent-role muted" data-testid="boring-agent-role" title={`${prov.name}${agent.model ? ` · ${agent.model}` : ""}`}>
           {roleLine}
         </span>
-        <RoleModelChip model={cfg.staged?.model ?? agent.model} reason={chipReason} staged={!!cfg.staged} provider={agent.provider} />
+        <RoleModelChip model={cfg.staged?.model ?? agent.model} reason={chipReason} staged={!!cfg.staged} provider={agent.provider} softReason={drawerSoftReason(labels)} />
         {showMeter && (
           <span
             className={`boring-ctx-meter${ctxPct! >= 90 ? " crit" : ""}`}
