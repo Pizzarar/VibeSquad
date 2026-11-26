@@ -1,0 +1,126 @@
+{
+ "1920": {
+  "cols": "10px 31.6406px 0px 46.2031px 488.781px 19.8125px",
+  "stateSpreadPx": 150,
+  "eventSpreadPx": 177,
+  "rows": [
+   {
+    "name": "Desk",
+    "state": 1290,
+    "event": 1344
+   },
+   {
+    "name": "Plugins",
+    "state": 1367,
+    "event": 1447
+   },
+   {
+    "name": "UI Bois",
+    "state": 1364,
+    "event": 1444
+   },
+   {
+    "name": "Art Direction",
+    "state": 1440,
+    "event": 1521
+   },
+   {
+    "name": "Runner Pilot",
+    "state": 1429,
+    "event": 1510
+   },
+   {
+    "name": "wiki",
+    "state": 1326,
+    "event": 1361
+   },
+   {
+    "name": "Desk",
+    "state": 1290,
+    "event": 1344
+   },
+   {
+    "name": "Main Game",
+    "state": 1405,
+    "event": 1472
+   },
+   {
+    "name": "UI Lab",
+    "state": 1353,
+    "event": 1434
+   },
+   {
+    "name": "Desk",
+    "state": 1290,
+    "event": 1344
+   },
+   {
+    "name": "Site Polish",
+    "state": 1412,
+    "event": 1493
+   }
+  ]
+ },
+ "3200": {
+  "cols": "10px 31.6406px 0px 46.2031px 694.344px 19.8125px",
+  "stateSpreadPx": 150,
+  "eventSpreadPx": 176,
+  "rows": [
+   {
+    "name": "Desk",
+    "state": 1995,
+    "event": 2049
+   },
+   {
+    "name": "Plugins",
+    "state": 2071,
+    "event": 2152
+   },
+   {
+    "name": "UI Bois",
+    "state": 2068,
+    "event": 2149
+   },
+   {
+    "name": "Art Direction",
+    "state": 2145,
+    "event": 2225
+   },
+   {
+    "name": "Runner Pilot",
+    "state": 2134,
+    "event": 2214
+   },
+   {
+    "name": "wiki",
+    "state": 2031,
+    "event": 2065
+   },
+   {
+    "name": "Desk",
+    "state": 1995,
+    "event": 2049
+   },
+   {
+    "name": "Main Game",
+    "state": 2109,
+    "event": 2176
+   },
+   {
+    "name": "UI Lab",
+    "state": 2058,
+    "event": 2138
+   },
+   {
+    "name": "Desk",
+    "state": 1995,
+    "event": 2049
+   },
+   {
+    "name": "Site Polish",
+    "state": 2116,
+    "event": 2197
+   }
+  ]
+ }
+}
