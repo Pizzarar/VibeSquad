@@ -50,15 +50,21 @@ export function urlSyncAgent(o: { boring: boolean; liveShown: string | null | un
 
 // U1 (idea-997/895): the screen keys that are not an agent: an empty Desk slot card (?slot=) and the Overview sub-tab (?tab=). BoringApp
 // publishes them tagged with their project (setBoringScreenKeys); like urlSyncAgent they are trusted only for the team being written.
-type ScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
-/** The ?slot= / ?tab= App's URL sync writes. Psycho / phone: none. Normal: the live published keys (`live`, read at effect time) when they
- * belong to `team`, else the render-time ones (`rendered`) when those do, else none (that project's default Overview). BoringApp not
- * mounted (live undefined, e.g. the Storybook takeover): keep the URL's own keys (`kept`), so its entry still names the screen to return to. */
-export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined; rendered: ScreenKeys | undefined; team: string | null; kept: { slot?: ScreenKeys["slot"]; tab?: ScreenKeys["tab"] } }): { slot: ScreenKeys["slot"]; tab: ScreenKeys["tab"] } {
+// P3 (idea-1000): a feature lane's empty card (?lane=<laneId>) and the role whose card it is (?role=lead, also for ?slot=bugs).
+type ScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; lane?: string | null; role?: "lead" | null; tab: "inbox" | "standup" | null };
+type ScreenOut = { slot: ScreenKeys["slot"]; lane?: string; role?: "lead"; tab: ScreenKeys["tab"] };
+// lane/role only when set (like parseUrlState), so a screen without them reads exactly as before P3.
+const screenOut = (k: { slot?: ScreenKeys["slot"]; lane?: string | null; role?: "lead" | null; tab?: ScreenKeys["tab"] }): ScreenOut =>
+  ({ slot: k.slot ?? null, ...(k.lane ? { lane: k.lane } : {}), ...(k.role ? { role: k.role } : {}), tab: k.tab ?? null });
+/** The ?slot= / ?lane= / ?role= / ?tab= App's URL sync writes. Psycho / phone: none. Normal: the live published keys (`live`, read at
+ * effect time) when they belong to `team`, else the render-time ones (`rendered`) when those do, else none (that project's default
+ * Overview). BoringApp not mounted (live undefined, e.g. the Storybook takeover): keep the URL's own keys (`kept`), so its entry still
+ * names the screen to return to. */
+export function urlSyncScreen(o: { boring: boolean; live: ScreenKeys | undefined; rendered: ScreenKeys | undefined; team: string | null; kept: { slot?: ScreenKeys["slot"]; lane?: string | null; role?: "lead" | null; tab?: ScreenKeys["tab"] } }): ScreenOut {
   if (!o.boring) return { slot: null, tab: null };
-  if (o.live === undefined) return { slot: o.kept.slot ?? null, tab: o.kept.tab ?? null };
+  if (o.live === undefined) return screenOut(o.kept);
   const k = o.live.team === o.team ? o.live : o.rendered && o.rendered.team === o.team ? o.rendered : null;
-  return k ? { slot: k.slot, tab: k.tab } : { slot: null, tab: null };
+  return k ? screenOut(k) : { slot: null, tab: null };
 }
 
 // D4 r2/r3 (UX R37 m3, R38 m1): a load with no ?team= / ?agent= lands on the Decision Desk (bare, or ?view=decisions itself), so the

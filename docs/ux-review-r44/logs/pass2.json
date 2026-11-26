@@ -1,0 +1,805 @@
+{
+ "dark-1920": [
+  {
+   "label": "a Split",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "a picker: Overlord -> right",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-lead-vs",
+   "hist": 3,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / working"
+   ],
+   "crumb": "VibeSquad › Desk › Overlord",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "● / ★ VIBESQUAD ord1 / Lead / gemini-4-neon / 89% / Interrupt / ⋯ / Context 89% full / Han",
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-lead-vs"
+   ],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Desk›Overlord"
+   ]
+  },
+  {
+   "label": "a activate left pane",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 4,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "● / ★ VIBESQUAD ord1 / Lead / gemini-4-neon / 89% / Interrupt / ⋯ / Context 89% full / Han",
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+   ],
+   "frames": [
+    " @ VibeSquad›Desk›Overlord",
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "a topbar Lead · none pill (split open)",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 5,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead"
+   ],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm",
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a card chip Brainstorm (split back?)",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+   ],
+   "frames": [
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "a Back (Lead card)",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a reload on Lead card",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [],
+   "frames": [
+    " @ -",
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a Forward (agent; split?)",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "errsA",
+   "errs": []
+  },
+  {
+   "label": "b Split",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "b picker: Runner Pilot Buddy (right card)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Runner Pilot",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Runner Pilot"
+   ]
+  },
+  {
+   "label": "b activate left pane",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "b topbar Brainstorm pill (no Brainstorm, split open)",
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 3,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+   ],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+   ]
+  },
+  {
+   "label": "b Back",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 3,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "b Forward",
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 3,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+   ]
+  },
+  {
+   "label": "b sidebar Runner Pilot row (Lead)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 4,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [
+    "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "errsB",
+   "errs": []
+  },
+  {
+   "label": "c Split",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "c picker: Runner Pilot Buddy (right card)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Runner Pilot",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Runner Pilot"
+   ]
+  },
+  {
+   "label": "c sidebar Runner Pilot row while right card active",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "c picker again: Runner Pilot Buddy",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "c sidebar efi Bugs (no agent)",
+   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+  },
+  {
+   "label": "c Back",
+   "url": "",
+   "hist": 2,
+   "selected": [],
+   "crumb": null,
+   "head": null,
+   "empty": false,
+   "title": "",
+   "split": false,
+   "right": null,
+   "h": [],
+   "frames": [
+    " @ -"
+   ]
+  },
+  {
+   "label": "errsC",
+   "errs": []
+  }
+ ],
+ "light-1600": [
+  {
+   "label": "a Split",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "a picker: Overlord -> right",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-lead-vs",
+   "hist": 3,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / working"
+   ],
+   "crumb": "VibeSquad › Desk › Overlord",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "● / ★ VIBESQUAD ord1 / Lead / gemini-4-neon / 89% / Interrupt / ⋯ / Context 89% full / Han",
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-lead-vs"
+   ],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Desk›Overlord"
+   ]
+  },
+  {
+   "label": "a activate left pane",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 4,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": true,
+   "right": "● / ★ VIBESQUAD ord1 / Lead / gemini-4-neon / 89% / Interrupt / ⋯ / Context 89% full / Han",
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+   ],
+   "frames": [
+    " @ VibeSquad›Desk›Overlord",
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "a topbar Lead · none pill (split open)",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 5,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead"
+   ],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm",
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a card chip Brainstorm (split back?)",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+   ],
+   "frames": [
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "a Back (Lead card)",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm",
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a reload on Lead card",
+   "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Lead",
+   "head": "Bug Chaser · Brainstorm ready · no Lead",
+   "empty": true,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [],
+   "frames": [
+    " @ -",
+    "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+   ]
+  },
+  {
+   "label": "a Forward (agent; split?)",
+   "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+   "hist": 6,
+   "selected": [
+    "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+   ],
+   "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+   "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+   "empty": false,
+   "title": "(6) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    " @ VibeSquad›Bug Chaser›Brainstorm"
+   ]
+  },
+  {
+   "label": "errsA",
+   "errs": []
+  },
+  {
+   "label": "b Split",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "b picker: Runner Pilot Buddy (right card)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Runner Pilot",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Runner Pilot"
+   ]
+  },
+  {
+   "label": "b activate left pane",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "b topbar Brainstorm pill (no Brainstorm, split open)",
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 3,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+   ],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+   ]
+  },
+  {
+   "label": "b Back",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 3,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "b Forward",
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 3,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "split": false,
+   "right": null,
+   "h": [
+    "POP"
+   ],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+   ]
+  },
+  {
+   "label": "b sidebar Runner Pilot row (Lead)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 4,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [
+    "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "errsB",
+   "errs": []
+  },
+  {
+   "label": "c Split",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Split · pick an agent",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead",
+    " @ VibeSquad›Split · pick an agent"
+   ]
+  },
+  {
+   "label": "c picker: Runner Pilot Buddy (right card)",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [],
+   "crumb": "VibeSquad › Runner Pilot",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Split · pick an agent",
+    " @ VibeSquad›Runner Pilot"
+   ]
+  },
+  {
+   "label": "c sidebar Runner Pilot row while right card active",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot",
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "c picker again: Runner Pilot Buddy",
+   "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+   "hist": 2,
+   "selected": [
+    "boring-lead-runner-pilot | Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Lead",
+   "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "split": true,
+   "right": "Pick an agent or lane / Close split / ← All lanes / Runner Pilot /  / No Brainstorm sessio",
+   "h": [],
+   "frames": [
+    " @ VibeSquad›Runner Pilot›Lead"
+   ]
+  },
+  {
+   "label": "c sidebar efi Bugs (no agent)",
+   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+  },
+  {
+   "label": "c Back",
+   "url": "",
+   "hist": 2,
+   "selected": [],
+   "crumb": null,
+   "head": null,
+   "empty": false,
+   "title": "",
+   "split": false,
+   "right": null,
+   "h": [],
+   "frames": [
+    " @ -"
+   ]
+  },
+  {
+   "label": "errsC",
+   "errs": []
+  }
+ ]
+}

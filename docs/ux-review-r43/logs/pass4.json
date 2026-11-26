@@ -1,0 +1,79 @@
+[
+ {
+  "q": "?demo=&team=vibesquad&lane=nope",
+  "url": "?demo=&team=vibesquad",
+  "hist": 2,
+  "selected": [
+   "boring-project-header-vibesquad | VibeSquad"
+  ],
+  "crumb": "VibeSquad › Overview",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "errs": []
+ },
+ {
+  "q": "?demo=&team=efi&lane=runner-pilot",
+  "url": "?demo=&team=efi",
+  "hist": 2,
+  "selected": [
+   "boring-project-header-efi | Main Game Project"
+  ],
+  "crumb": "Main Game Project › Overview",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "errs": []
+ },
+ {
+  "q": "?demo=&team=vibesquad&lane=runner-pilot&role=lead",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 2,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "errs": []
+ },
+ {
+  "q": "?demo=&team=efi&slot=bugs&role=lead",
+  "url": "?demo=&team=efi&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "Main Game Project › Bugs › Lead",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "errs": []
+ },
+ {
+  "q": "?demo=&team=vibesquad&lane=vibesquad",
+  "url": "?demo=&team=vibesquad",
+  "hist": 2,
+  "selected": [
+   "boring-project-header-vibesquad | VibeSquad"
+  ],
+  "crumb": "VibeSquad › Overview",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "errs": []
+ },
+ {
+  "q": "3200",
+  "url": "?demo=&team=vibesquad&lane=runner-pilot",
+  "hist": 2,
+  "selected": [
+   "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+  "head": "Runner Pilot · Lead idle · no Brainstorm",
+  "empty": true,
+  "title": "(5) VibeSquad"
+ }
+]
