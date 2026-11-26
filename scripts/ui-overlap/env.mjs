@@ -29,7 +29,12 @@ export const TEAMS_REGISTRY = {
 // Playwright lookup order (idea-1147). The durable dir is under ~/.vibesquad because that is per-user state that
 // survives /tmp clears and reboots; the npx cache is only a last resort because npm may prune it at any time.
 export const DURABLE_TOOLS_DIR = path.join(os.homedir(), ".vibesquad", "tools", "playwright");
-export const PLAYWRIGHT_INSTALL_CMD = `npm i --prefix ${DURABLE_TOOLS_DIR} playwright-core`;
+/** Quote for the install hint: cmd.exe takes double quotes as-is; POSIX sh needs backslash, dollar, backtick and quote escaped. */
+export function shellQuote(s, platform = process.platform) {
+  if (platform === "win32") return `"${s}"`;
+  return `"${s.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+export const PLAYWRIGHT_INSTALL_CMD = `npm i --prefix ${shellQuote(DURABLE_TOOLS_DIR)} playwright-core`;
 export const PLAYWRIGHT_MISSING = `Playwright not found (set PLAYWRIGHT_DIR, or install it: ${PLAYWRIGHT_INSTALL_CMD})`;
 const NPX_SCAN_LIMIT = 50; // bounded: at most this many ~/.npm/_npx entries are stat'ed
 
@@ -53,16 +58,22 @@ export function playwrightCandidates({
   }
   const durable = path.join(home, ".vibesquad", "tools", "playwright", "node_modules");
   out.push(path.join(durable, "playwright-core"), path.join(durable, "playwright"));
-  const npx = path.join(home, ".npm", "_npx");
-  let dirs = [];
-  try { dirs = readdir(npx).slice(0, NPX_SCAN_LIMIT); } catch {}
+  // npx caches: ~/.npm/_npx, plus %LOCALAPPDATA%/npm-cache/_npx when LOCALAPPDATA is set (Windows npm).
+  const roots = [path.join(home, ".npm", "_npx")];
+  if (env.LOCALAPPDATA) roots.push(path.join(env.LOCALAPPDATA, "npm-cache", "_npx"));
   const hits = [];
-  for (const d of dirs) {
-    const p = path.join(npx, d, "node_modules", "playwright-core");
-    if (!exists(path.join(p, "package.json"))) continue;
-    let t = 0;
-    try { t = mtime(p); } catch {}
-    hits.push({ p, t });
+  for (const npx of roots) {
+    let dirs = [];
+    try { dirs = readdir(npx).slice(0, NPX_SCAN_LIMIT); } catch {}
+    for (const d of dirs) {
+      const p = path.join(npx, d, "node_modules", "playwright-core");
+      let has = false;
+      try { has = exists(path.join(p, "package.json")); } catch {}
+      if (!has) continue;
+      let t = 0;
+      try { t = mtime(p); } catch {}
+      hits.push({ p, t });
+    }
   }
   hits.sort((a, b) => b.t - a.t);
   for (const h of hits) out.push(h.p);
