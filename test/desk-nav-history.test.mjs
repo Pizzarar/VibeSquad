@@ -533,6 +533,111 @@ test("idea-1075 r3: split, right pane active, B17 right card shown; popstate to 
   }
 });
 
+// ── idea-1099 (rn-2f29a2215924 M1): a feature lane's empty card (?lane=) exits an open split exactly like a Desk slot ──────────────
+const splitCrumb = (t) => {
+  const txt = (n) => (n == null || typeof n === "boolean" ? "" : typeof n === "string" || typeof n === "number" ? String(n) : Array.isArray(n) ? n.map(txt).join("|") : txt(n.props?.children));
+  return txt(byId(t, "boring-breadcrumb"));
+};
+const splitOpen = () => ({ split: true, activePane: "right", leftActiveId: "ade-ld", rightActiveId: null });
+
+test("idea-1099: split, right pane active, B17 right card shown; popstate to ?lane=per&role=lead clears the card and shows the lane's Lead card (URL = screen)", () => {
+  reset();
+  const view = p3Squad();
+  globalThis.__agents.set("ade-ld", { id: "ade-ld" });
+  try {
+    globalThis.__panes = splitOpen();
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view));
+    render(props(view, { navGen: 1 }));
+    let t = render(props(view, { navGen: 1 }));
+    walk(t, (n) => n.props && typeof n.props.onEmptyTarget === "function")[0].props.onEmptyTarget({ key: "_overlord", pill: "open" }); // B17
+    t = render(props(view, { navGen: 1 }));
+    assert.ok(byId(t, "boring-chat-split"), "the right card lives inside the split");
+    globalThis.location = { search: "?team=vs&lane=per&role=lead" };
+    render(props(view, { navGen: 2 }));
+    t = render(props(view, { navGen: 2 }));
+    assert.equal(byId(t, "boring-chat-split"), null, "the split yields to the lane card the URL names");
+    assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+    assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+    assert.doesNotMatch(splitCrumb(t), /Split · pick an agent/, "breadcrumb names the lane, not the empty split");
+    assert.match(splitCrumb(t), /Lane per/);
+    // ?lane=solo (no right card involved): the split, right pane empty, still yields
+    globalThis.location = { search: "?team=vs&lane=solo" };
+    render(props(view, { navGen: 3 }));
+    t = render(props(view, { navGen: 3 }));
+    assert.equal(byId(t, "boring-chat-split"), null);
+    assert.equal(headOf(t), "Lane solo · no Lead or Brainstorm running");
+    // Forward to the agent: the split and its panes come back, with no stale right card
+    globalThis.__panes = splitOpen();
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view, { navGen: 4 }));
+    t = render(props(view, { navGen: 4 }));
+    assert.ok(byId(t, "boring-chat-split"), "an agent on screen brings the split back");
+    assert.equal(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget ?? null, null);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("idea-1099: a cold load (reload, or pendingUrl0 when the team resolves after mount) at ?lane= with the split open shows the lane card, not the split", () => {
+  try {
+    // reload: the URL's team is the mounted view (useState init)
+    reset();
+    globalThis.__panes = splitOpen();
+    globalThis.location = { search: "?team=vs&lane=per&role=lead" };
+    render(props(p3Squad()));
+    let t = render(props(p3Squad()));
+    assert.equal(byId(t, "boring-chat-split"), null, "reload: no split panes over the lane card");
+    assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+    assert.doesNotMatch(splitCrumb(t), /Split · pick an agent/);
+    // pendingUrl0: the URL's team loads after mount
+    reset();
+    globalThis.__panes = splitOpen();
+    const vs = p3Squad();
+    const efi = efiSquad();
+    globalThis.location = { search: "?team=vs&lane=per&role=lead" };
+    render({ ...props(efi), views: [efi] });
+    render({ ...props(vs), views: [efi, vs] });
+    t = render({ ...props(vs), views: [efi, vs] });
+    assert.equal(byId(t, "boring-chat-split"), null, "pendingUrl0: no split panes over the lane card");
+    assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+    assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("idea-1099: pickRole on a lane with no member (sidebar click on a dormant lane) clears B17's right card, so the lane card is the screen", () => {
+  reset();
+  const view = p3Squad();
+  globalThis.__agents.set("ade-ld", { id: "ade-ld" });
+  try {
+    globalThis.__panes = splitOpen();
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view));
+    render(props(view, { navGen: 1 }));
+    let t = render(props(view, { navGen: 1 }));
+    walk(t, (n) => n.props && typeof n.props.onEmptyTarget === "function")[0].props.onEmptyTarget({ key: "_overlord", pill: "open" }); // B17
+    t = render(props(view, { navGen: 1 }));
+    assert.ok(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget, "the right card is shown");
+    const title = walk(byId(t, "boring-conv-solo"), (n) => n.props?.className === "boring-conv-title")[0];
+    title.props.onClick(); // openLane -> pickRole(pin, "solo", "brainstorm"), no member
+    assert.ok(globalThis.__calls.some((c) => c[0] === "onOpenPin" && c[1] === "solo"), "the dormant lane still goes through onOpenPin");
+    t = render(props(view, { navGen: 1 }));
+    assert.equal(byId(t, "boring-chat-split"), null, "the split yields to the lane card");
+    assert.equal(headOf(t), "Lane solo · no Lead or Brainstorm running");
+    assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "solo", role: null, tab: null });
+    // the cleared card does not come back when an agent brings the split back
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view, { navGen: 2 }));
+    t = render(props(view, { navGen: 2 }));
+    assert.ok(byId(t, "boring-chat-split"));
+    assert.equal(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget ?? null, null);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
 // ── P3 R43 m2: ?slot=bugs&role=lead on a project with no Bugs lane lands on Brainstorm, so the URL (role dropped) and breadcrumb agree ──
 test("P3 R43 m2: ?slot=bugs&role=lead without a Bugs pin: landing, reload and pop all select Brainstorm (URL = breadcrumb = reload)", () => {
   const noBugs = () => squad({ team: { id: "efi", name: "Main Game Project" }, pins: [], bugs: { pin: null, leadRunning: false, needsYou: 0 } });

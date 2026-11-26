@@ -601,7 +601,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const m = role === "lead" ? pin.lead : pin.brainstorm;
     // Lead and Brainstorm both open through openHere: openPinMember would fold an open split (and Shift+click could never target the right pane).
     if (m) openHere(m.agent.id);
-    else void onOpenPin(pin);
+    else {
+      setRightCard(null); // idea-1099: an empty card enters like a slot (enterSlotLane), so B17's right card never outlives ?lane= / ?slot=bugs
+      void onOpenPin(pin);
+    }
   };
   /** Open every parent of a jumped-to agent (project, lane): an explicit collapse never hides the selected row. */
   const revealAgent = (v: TeamView, s: { laneId: string; role: Role | "worker" } | null, id: string) => {
@@ -759,9 +762,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // idea-1075: a dormant Desk/Bugs slot picked from the sidebar while split has no agent to show in either pane. The URL already names it
   // (?slot=, urlSlot), so the screen must be its empty card too, not the split panes (the split keeps its panes and returns when an agent
   // opens). B17's pane-local right card is the exception: while the right pane is active and showing one, that card is the screen. A sidebar
-  // pick (pickBugs/pickCore) clears it, so the two never both claim the screen.
+  // pick (pickBugs/pickCore/pickRole) clears it, so the two never both claim the screen. idea-1099: a feature lane's empty card (?lane=, urlLane)
+  // is the same kind of screen, so it exits the split too (Back/Forward or a cold load onto ?lane= while split is open).
   const rightCardShown = !!rightCard && panes.activePane === "right";
-  const dormantSlot = mode === "chat" && !agent && !!selectedLaneId && !!LANE_SLOT[selectedLaneId] && !rightCardShown;
+  const dormantSlot = Boolean(urlSlot || urlLane) && !rightCardShown;
   const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId && !dormantSlot;
   useEffect(() => { if (rightCard && (!panes.split || panes.rightActiveId)) setRightCard(null); }, [rightCard, panes.split, panes.rightActiveId]);
   useEffect(() => { setRightCard(null); }, [view?.team.id]);
