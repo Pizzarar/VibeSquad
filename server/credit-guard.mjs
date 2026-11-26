@@ -17,8 +17,8 @@ export const CREDIT_GUARD_LANE = "usage";
 const STATE_FILE = "credit-alerts.json";
 
 // Auto circuit-breaker reasons written by server/backend/runner-backend.mjs capProviderOnUpstreamExit
-// ("insufficient balance...", "upstream failure...", "binary missing...") plus BALANCE_ERROR_RE patterns.
-const AUTO_FAULT_REASON_RE = /^(?:insufficient balance|upstream failure|binary missing)\b|insufficient[ _](?:account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|\b402\W{0,3}payment required/i;
+// ("insufficient balance...", "upstream failure...", "binary missing...", "third-party quota..." idea-1077) plus BALANCE_ERROR_RE patterns.
+const AUTO_FAULT_REASON_RE = /^(?:insufficient balance|upstream failure|binary missing|third-party quota)\b|insufficient[ _](?:account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|\b402\W{0,3}payment required/i;
 const AUTO_CAP_SOURCES = new Set(["auto", "breaker", "circuit-breaker", "balance", "upstream", "fault", "runner"]);
 const DELIBERATE_CAP_SOURCES = new Set(["cli", "manual", "owner", "user"]);
 const DELIBERATE_REASON_RE = /^(?:cli|manual|owner|user)\b|\b(?:cli|manual|owner)\s+cap\b/i;

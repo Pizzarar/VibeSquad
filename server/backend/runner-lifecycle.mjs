@@ -40,6 +40,7 @@ export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), sta
     const payload = { agent: ev.agent };
     if (ev.kind === "turn_ended") Object.assign(payload, { turnId: ev.turnId, outcome: ev.outcome });
     if (ev.kind === "upstream_exit") Object.assign(payload, { error: ev.error, ts: ev.ts });
+    if (ev.kind === "upstream_exit" && ev.quota === true) payload.quota = true; // idea-1077: the turn ended on agy's quota notice
     if (host) dispatch([hook, payload]);
     else buffer.push([hook, payload]);
   });

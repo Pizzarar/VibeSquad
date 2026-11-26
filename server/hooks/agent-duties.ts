@@ -17,6 +17,7 @@ import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
+  FAILOVER_FROM_LABEL,
   createLeadHandoffCoordinator,
 } from "../lead-handoff.mjs";
 import {
@@ -190,7 +191,7 @@ const RESPAWN_DROPPED_LABELS = new Set([
 export function upstreamRespawnPlan(
   entries: Array<{ item?: any; turnEnd?: boolean }>,
   labels: Labels,
-  { ageMs = 0, role = "" }: { ageMs?: number; role?: string } = {},
+  { ageMs = 0, role = "", quota = false }: { ageMs?: number; role?: string; quota?: boolean } = {},
 ): { prompt: string } | { skip: string } {
   if (labels[RESPAWN_OF_LABEL]) return { skip: "already-a-respawn" };
   if (labels[RESPAWNED_AS_LABEL]) return { skip: "already-respawned" };
@@ -198,7 +199,10 @@ export function upstreamRespawnPlan(
   if (!(ageMs <= UPSTREAM_RESPAWN_MAX_AGE_MS)) return { skip: "stale-exit" };
   if (entries.length >= UPSTREAM_RESPAWN_TIMELINE_LIMIT) return { skip: "not-first-turn" };
   const prompts = entries.filter((e) => e.item?.type === "user_message");
-  if (prompts.length !== 1 || entries.some((e) => e.turnEnd)) return { skip: "not-first-turn" };
+  // idea-1077: an agy quota death ends its turn (end_turn) instead of exiting: that one closing turnEnd, on the last entry, is the
+  // death itself. Any earlier turnEnd is a real finished turn.
+  const finished = quota ? entries.slice(0, -1) : entries;
+  if (prompts.length !== 1 || finished.some((e) => e.turnEnd)) return { skip: "not-first-turn" };
   const edit = entries.find((e) => e.item?.type === "tool_call" && !RESPAWN_SAFE_TOOL_KINDS.has(String(e.item?.detail?.kind ?? "").toLowerCase()));
   if (edit) return { skip: `tool-edits(${String(edit.item?.name ?? "tool").slice(0, 40)})` };
   const prompt = String(prompts[0].item?.text ?? "");
@@ -3258,7 +3262,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // synchronously, so the two can never both act on one exit in either order.
     const upstreamRespawnClaimed = new Set<string>();
 
-    async function respawnAfterUpstreamExit(paseo: Paseo, agent: any, { error = "", ts }: { error?: string; ts?: number } = {}) {
+    async function respawnAfterUpstreamExit(paseo: Paseo, agent: any, { error = "", ts, quota = false }: { error?: string; ts?: number; quota?: boolean } = {}) {
       const deadId = String(agent?.id ?? "").trim();
       if (!deadId || upstreamRespawnSeen.has(deadId)) return;
       upstreamRespawnSeen.add(deadId);
@@ -3292,7 +3296,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       } catch {
         return skip("timeline-unreadable");
       }
-      const plan = upstreamRespawnPlan(entries, labels, { ageMs, role: effectiveAgentRole({ labels }) });
+      const plan = upstreamRespawnPlan(entries, labels, { ageMs, role: effectiveAgentRole({ labels }), quota: quota === true });
       if ("skip" in plan) return skip(plan.skip);
       // At most once per task, across restarts: a replacement already carrying respawnOf=<dead> ends it.
       try {
@@ -3311,7 +3315,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");
       upstreamRespawnClaimed.add(deadId);
       const title = String(me?.title ?? agent?.title ?? "").trim() || `respawn of ${deadId}`;
-      const newLabels = respawnLabels(labels, alt.name, deadId);
+      const toFam = spawnFamily(alt.provider, alt.model) || alt.provider;
+      const why = String(error || "upstream failure").replace(/\s+/g, " ").slice(0, 160);
+      const died = quota ? `hit the ${fromFam} quota` : `died on an upstream ${fromFam} failure`;
+      // idea-1077: the replacement says it failed over (`vs.failover`: why=failover on its route; `vs.failover-from`: the profile
+      // it was meant to run), like a failed-over lead successor (lead-handoff.mjs).
+      const newLabels: Labels = {
+        ...respawnLabels(labels, alt.name, deadId),
+        "vs.failover": `${fromProfile} -> ${alt.name} (${quota ? "quota" : "upstream"} ${fromFam})`.slice(0, 200),
+        [FAILOVER_FROM_LABEL]: fromProfile,
+      };
       let newId = "";
       try {
         const handle = await paseo.agents.create({
@@ -3333,22 +3346,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (!newId) return skip("spawn-no-id");
       await deps.setLabels(deadId, { [RESPAWNED_AS_LABEL]: newId }).catch((e: unknown) => log(`respawnedAs label failed for ${deadId}: ${e}`));
-      const toFam = spawnFamily(alt.provider, alt.model) || alt.provider;
-      const why = String(error || "upstream failure").replace(/\s+/g, " ").slice(0, 160);
       // The lead's notice (decision wakes it): both ids, so it re-points its watch from the dead worker to the replacement.
       appendLog(where.team, {
         agent: "plugin",
         lane: where.lane,
         type: "decision",
-        text: `RESPAWNED ${deadId} -> ${newId}: worker "${title}" died on an upstream ${fromFam} failure in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
+        text: `RESPAWNED ${deadId} -> ${newId}: worker "${title}" ${died} in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
         refs: [deadId, newId],
       });
-      metric(`result=respawned agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s`);
+      metric(`result=respawned agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s${quota ? " cause=quota" : ""}`);
     }
 
     try {
       stops.push(
-        server.on("agent.upstream_exit" as any, async (payload: { agent: any; error?: string; ts?: number }, { paseo }: { paseo: any }) => {
+        server.on("agent.upstream_exit" as any, async (payload: { agent: any; error?: string; ts?: number; quota?: boolean }, { paseo }: { paseo: any }) => {
           paseoApi = paseo;
           try {
             await respawnAfterUpstreamExit(paseo, payload?.agent, payload ?? {});
