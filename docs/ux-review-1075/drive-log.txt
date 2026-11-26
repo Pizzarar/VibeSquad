@@ -1,0 +1,180 @@
+dark1920-s1-bugs 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-bugs 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-overlord 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1-riffbot 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1b-bugs 01 split right picker
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s1b-bugs 02 focus left
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout [active]","right":"picker","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1b-bugs 03 sidebar bugs
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1b-bugs 04 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s1b-bugs 05 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s1b-bugs 06 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-bugs 01 right pane B17 card
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Bugs","split":true,"left":"agent:Audit - token scout","right":"card:Bugs No Brainstorm session is running for this conversation  [active]","head":"Audit - token scout","card":"Bugs No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER AC","selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s3-bugs 02 sidebar same slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-bugs 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s3-bugs 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-bugs 05 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-overlord 01 right pane B17 card
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Overlord","split":true,"left":"agent:Audit - token scout","right":"card:Overlord No Overlord is running for this project yet. Start  [active]","head":"Audit - token scout","card":"Overlord No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI","selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s3-overlord 02 sidebar same slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-overlord 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+dark1920-s3-overlord 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s3-overlord 05 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+dark1920-s4-bugs 01 sidebar slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":null}
+dark1920-s4-bugs 02 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"false"}
+dark1920-s4-bugs 03 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":null}
+dark1920-s4-bugs 04 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Mechanical - rename sweep","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"false"}
+dark1920-s4-overlord 01 sidebar slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":null}
+dark1920-s4-overlord 02 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"false"}
+dark1920-s4-overlord 03 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":null}
+dark1920-s4-overlord 04 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Mechanical - rename sweep","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"false"}
+light3200-s1-bugs 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-bugs 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-overlord 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 01 split both panes
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 02 sidebar dormant slot
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 05 click agent mech
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 06 back from agent
+   {"url":"?demo=1&team=vibesquad&slot=riffbot","crumb":"VibeSquad › Desk › RiffBot","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"RiffBot is sleeping. Start RiffBot OTHER ACTIVE LANES UI Bois Lead idle","selected":["boring-core-riffbot","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1-riffbot 07 back again
+   {"url":"?demo=1&team=vibesquad&agent=demo-rev","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Review - Sonnet · drawer [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-rev","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1b-bugs 01 split right picker
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s1b-bugs 02 focus left
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout [active]","right":"picker","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1b-bugs 03 sidebar bugs
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1b-bugs 04 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s1b-bugs 05 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s1b-bugs 06 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-bugs 01 right pane B17 card
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Bugs","split":true,"left":"agent:Audit - token scout","right":"card:Bugs No Brainstorm session is running for this conversation  [active]","head":"Audit - token scout","card":"Bugs No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER AC","selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s3-bugs 02 sidebar same slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-bugs 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s3-bugs 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-bugs 05 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-overlord 01 right pane B17 card
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Overlord","split":true,"left":"agent:Audit - token scout","right":"card:Overlord No Overlord is running for this project yet. Start  [active]","head":"Audit - token scout","card":"Overlord No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI","selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s3-overlord 02 sidebar same slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-overlord 03 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Split · pick an agent","split":true,"left":"agent:Audit - token scout","right":"picker [active]","head":"Audit - token scout","card":null,"selected":["boring-crumb-lane"],"splitToggle":"true"}
+light3200-s3-overlord 04 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s3-overlord 05 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":true,"left":"agent:Audit - token scout","right":"agent:Mechanical - rename sweep [active]","head":"Audit - token scout","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"true"}
+light3200-s4-bugs 01 sidebar slot
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":null}
+light3200-s4-bugs 02 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"false"}
+light3200-s4-bugs 03 forward
+   {"url":"?demo=1&team=vibesquad&slot=bugs","crumb":"VibeSquad › Bugs › Brainstorm","split":false,"left":null,"right":null,"head":null,"card":"No Brainstorm session is running for this conversation yet. Start Brainstorm OTHER ACTIVE ","selected":["boring-core-bugs","boring-crumb-agent"],"splitToggle":null}
+light3200-s4-bugs 04 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Mechanical - rename sweep","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"false"}
+light3200-s4-overlord 01 sidebar slot
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":null}
+light3200-s4-overlord 02 back
+   {"url":"?demo=1&team=vibesquad&agent=demo-aud","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Audit - token scout","card":null,"selected":["boring-worker-demo-aud","boring-crumb-agent"],"splitToggle":"false"}
+light3200-s4-overlord 03 forward
+   {"url":"?demo=1&team=vibesquad&slot=overlord","crumb":"VibeSquad › Desk › Overlord","split":false,"left":null,"right":null,"head":"Desk · no Overlord or RiffBot running","card":"No Overlord is running for this project yet. Start Overlord OTHER ACTIVE LANES UI Bois Lea","selected":["boring-core-overlord","boring-crumb-agent"],"splitToggle":null}
+light3200-s4-overlord 04 click agent
+   {"url":"?demo=1&team=vibesquad&agent=demo-mech","crumb":"VibeSquad › Desk › Worker","split":false,"left":null,"right":null,"head":"Mechanical - rename sweep","card":null,"selected":["boring-worker-demo-mech","boring-crumb-agent"],"splitToggle":"false"}
