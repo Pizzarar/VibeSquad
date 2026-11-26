@@ -20,7 +20,7 @@ import { FOLD_INDEX_FILE } from './fold-index.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { createDevServerReaper } from './reap.mjs';
-import { DETACHED_FILE, createDetachedProbe, detachedSupported } from './detached.mjs';
+import { DETACHED_FILE, createDetachedProbe, createLeftoverReaper, detachedSupported } from './detached.mjs';
 import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
 import { buildHealthLiveDiag, createHealthSnapshotCache } from './health-diag.mjs';
 
@@ -419,11 +419,13 @@ export function teamLogWriter(vsHome) {
 // idea-515 (Z1): what a worker's reap did, as one runner.log line ({ reap: ... }) and, per reaped listener, a team-log metric
 // in the worker's lane (agent id, pid, port, redacted command). Skips are runner.log only (fail-closed reasons, no kill).
 export function reapReporter(teamLog, log = (o) => console.log(JSON.stringify(o))) {
-  return ({ id, why, team, lane, reaped = [], skipped = [], error }) => {
-    log({ reap: { agent: id, why, reaped: reaped.map((r) => ({ pid: r.pid, port: r.port, root: r.root, pids: r.pids, cmd: r.cmd })), ...(skipped.length ? { skipped } : {}), ...(error ? { error } : {}) } });
-    for (const r of reaped) {
-      try { teamLog({ team: team || 'vibesquad', lane, agent: 'runner', type: 'metric', text: `reap: worker ${id} left a listener after its process ended (${why}): killed pid ${r.pid} port ${r.port} (tree root ${r.root}, ${r.pids.length} pids): ${r.cmd}`, refs: [id] }); } catch (err) { console.error('reap team log failed', err); }
-    }
+  return ({ id, why, team, lane, reaped = [], skipped = [], error, leftovers = null }) => {
+    // idea-1140: leftovers = the non-listener processes an ended worker left (exit / archive stop), reaped by token proof.
+    const lo = leftovers ? { leftovers: { reaped: (leftovers.reaped ?? []).map((r) => ({ root: r.root, pgid: r.pgid ?? null, pids: r.pids, cmd: r.cmd })), ...(leftovers.skipped?.length ? { skipped: leftovers.skipped } : {}), ...(leftovers.error ? { error: leftovers.error } : {}) } } : {};
+    log({ reap: { agent: id, why, reaped: reaped.map((r) => ({ pid: r.pid, port: r.port, root: r.root, pids: r.pids, cmd: r.cmd })), ...(skipped.length ? { skipped } : {}), ...(error ? { error } : {}), ...lo } });
+    const metric = (text) => { try { teamLog({ team: team || 'vibesquad', lane, agent: 'runner', type: 'metric', text, refs: [id] }); } catch (err) { console.error('reap team log failed', err); } };
+    for (const r of reaped) metric(`reap: worker ${id} left a listener after its process ended (${why}): killed pid ${r.pid} port ${r.port} (tree root ${r.root}, ${r.pids.length} pids): ${r.cmd}`);
+    for (const r of leftovers?.reaped ?? []) metric(`reap: worker ${id} left processes running outside its CLI after it ended (${why}): killed tree root ${r.root} (${r.pids.length} pids${r.pgid ? `, group ${r.pgid}` : ''}): ${r.cmd}`);
   };
 }
 // idea-697: what a detached-work scan did (runner/detached.mjs, Runner.scanDetached / reapBootLedger), as one runner.log line
@@ -502,7 +504,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const teamLog = teamLogWriter(path.dirname(home));
-  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, pollCredits: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog), detachedProbe: detachedSupported() ? createDetachedProbe() : null, detachedFile: path.join(home, DETACHED_FILE), onDetached: detachedReporter(teamLog) });
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, pollCredits: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper({ leftovers: createLeftoverReaper() }) : null, onReap: reapReporter(teamLog), detachedProbe: detachedSupported() ? createDetachedProbe() : null, detachedFile: path.join(home, DETACHED_FILE), onDetached: detachedReporter(teamLog) });
   // idea-697: /shutdown (vs restart) records the agents' detached work in the ledger first (bounded 5 s); the next runner reaps it.
   const server = createServer(runner, { token, onShutdown: () => runner.recordDetached(5000).finally(() => stop({ keepResumable: true })), teamLog });
   phase('init');

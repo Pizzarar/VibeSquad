@@ -446,6 +446,7 @@ export class Runner {
   constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), creditsFile = path.join(path.dirname(limitsFile), 'credits.json'), pollAgy = false, agyUsage, pollCredits = false, creditFetch, creditResolveKey, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS, detachedProbe = null, detachedFile = null, detachedScanMs = 15_000, onDetached = null }) {
     this.store = new LogStore(dir);
     this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
+    this._startGen = new Map(); // id -> how many processes this runner started for it (idea-1140 review L2: a reap armed before a restart of the agent never fires)
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
     this.hubLane = hubLane;
@@ -884,6 +885,7 @@ export class Runner {
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
+    this._startGen.set(id, (this._startGen.get(id) ?? 0) + 1); // before the start: a reap armed by an earlier end sees it at once
     const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null, progress: 0, idleProgress: 0, turnGen: 0, work: null, heldSince: null, role: roleOf(meta), team: meta?.team ?? meta?.labels?.team ?? null, lane: meta?.lane ?? meta?.labels?.lane ?? null };
     this.live.set(id, entry);
     const emit = (type, data) => {
@@ -1413,6 +1415,12 @@ export class Runner {
   // this.reaper (runner/reap.mjs: env-token proof, never held work, never another agent's, fail closed). Protected: every live
   // agent's last-probed shells (held or not) and this entry's own last hold, the runner and its parent. Nothing is killed once
   // the agent is live again or the runner is shutting down. One reap per process (entry.reapArmed).
+  // idea-1140: when the worker is really done (why 'exit' or 'stop' = archive), the job also asks for its leftovers: every
+  // non-listener process still carrying its id + token outside every live CLI tree (headless Chromium's crashpad and helpers,
+  // reparented to the subreaper), created before the end (runner/detached.mjs createLeftoverReaper). Not on 'park': a parked
+  // worker resumes with the same token, and work it detached on purpose (`nohup suite &`, checked next turn) is still its
+  // work; only its leaked listeners are reaped there, as before. If such work outlives a later exit or archive, that end reaps it
+  // (an archive of the already-parked worker too: _reapArchivedNotLive).
   _reapAfterEnd(id, entry, why) {
     if (!this.reaper || entry.reapArmed || entry.role !== 'worker' || this._shutDown) return;
     const token = this.tokensById.get(id);
@@ -1422,14 +1430,34 @@ export class Runner {
     const cliPid = Number.isInteger(entry.handle?.pid) ? entry.handle.pid : null;
     const shellPids = (e) => [e.heldNow, e.heldWork, e.work].flatMap((w) => (Array.isArray(w) ? w : [])).map((w) => w?.pid);
     const own = shellPids(entry);
-    const stillOk = () => !this._shutDown && !this.live.has(id);
-    const report = (res) => { if (res.reaped?.length || res.skipped?.length || res.error) { try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}) }); } catch { /* reporting is best effort */ } } };
+    // Review L2: not live is not enough: the agent may have been started again since this end (resumed, then parked or exited
+    // again inside reapDelayMs). That later process's end arms its own reap; this one never kills.
+    const gen = this._startGen.get(id) ?? 0;
+    const stillOk = () => !this._shutDown && !this.live.has(id) && (this._startGen.get(id) ?? 0) === gen;
+    const leftovers = why === 'exit' || why === 'stop';
+    const report = (res) => {
+      const lo = res.leftovers;
+      const loAny = !!lo && (lo.reaped?.length || lo.skipped?.length || lo.error);
+      if (!(res.reaped?.length || res.skipped?.length || res.error || loAny)) return;
+      try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}), ...(loAny ? { leftovers: { reaped: lo.reaped ?? [], skipped: lo.skipped ?? [], ...(lo.error ? { error: lo.error } : {}) } } : {}) }); } catch { /* reporting is best effort */ }
+    };
     const t = setTimeout(() => {
       if (!stillOk()) return; // resumed (its new process owns the tree now) or shutting down: nothing to reap
       const protectedPids = [...own, ...[...this.live.values()].flatMap(shellPids), process.pid, process.ppid].filter((p) => Number.isInteger(p) && p > 0);
-      Promise.resolve().then(() => this.reaper({ agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk })).then(report, (err) => report({ error: String(err?.message ?? err) }));
+      const job = { agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk, ...(leftovers ? { leftovers: true, liveCliPids: this._liveCliPids(), selfPid: process.pid } : {}) };
+      Promise.resolve().then(() => this.reaper(job)).then(report, (err) => report({ error: String(err?.message ?? err) }));
     }, this.reapDelayMs);
     t.unref?.();
+  }
+
+  // Review M2: archiving a worker that is not live (it auto-parked, or exited) reaches no _stopKeepingSession, so its
+  // leftovers are reaped from here: this runner lifetime still holds its token, the folded role says worker. endedAt = now.
+  _reapArchivedNotLive(id) {
+    if (!this.reaper || this._shutDown || this.live.has(id) || !this.tokensById.has(id)) return;
+    let meta = {};
+    try { meta = this._fold(id)?.meta ?? {}; } catch { return; }
+    const stub = { handle: null, role: roleOf(meta), team: meta.team ?? meta.labels?.team ?? null, lane: meta.lane ?? meta.labels?.lane ?? null };
+    this._reapAfterEnd(id, stub, 'stop');
   }
 
   // Ends an agent's process for good measure but leaves it resumable: with a session it is logged as parked (so unarchive + send
@@ -2155,7 +2183,7 @@ export class Runner {
         e.archiveTimer = setTimeout(() => { if (this.live.get(id) === e) this._stopKeepingSession(id, e); this._pump(); }, this.archiveKillMs); // hung or ignoring cancel
         e.archiveTimer.unref?.();
       }
-    }
+    } else this._reapArchivedNotLive(id);
     this.store.append(id, 'archive', {});
     for (const a of new Set(Object.values(this.adapters))) a.cleanup?.(id); // drop per-agent prompt file; a resume rewrites it
     this._pump();
