@@ -262,6 +262,12 @@ export function setActivePane(pane: Pane) {
   commit({ ...state, activePane: pane });
 }
 
+/** B18e: clear the right pane's active tab without collapsing the split (so the picker / right card can show). */
+export function clearRightPane() {
+  if (!state.split || !state.rightActiveId) return;
+  commit({ ...state, rightActiveId: null, activePane: "right" });
+}
+
 /** Split on: an empty right pane waits for Shift+click. Split off: right tabs fold into the left. */
 export function toggleSplit() {
   if (!state.split) return commit({ ...state, split: true, activePane: "right" });

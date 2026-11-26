@@ -12,7 +12,7 @@ import { captureFocusReturn } from "./ctxMenuLogic";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useFocusedInboxCard, useInboxCards } from "./IdeaInbox";
-import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
+import { clearRightPane, closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { setBoringLandedGen, setBoringScreenKeys, setBoringShownAgent, spinUpPin } from "./pinFocus";
@@ -658,12 +658,21 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     window.addEventListener(BORING_OPEN_AGENT_EVENT, onOpen);
     return () => window.removeEventListener(BORING_OPEN_AGENT_EVENT, onOpen);
   });
+  const openRightSlotCard = (key: "_overlord" | "_riffbot" | "_bugs") => {
+    clearRightPane();
+    setActivePane("right");
+    setRightCard({ key, pill: "open" });
+    setSelectedLaneId((cur) => (cur && LANE_SLOT[cur] ? null : cur));
+    setMode("chat");
+  };
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null, teamId?: string) => {
+    if (!agentId && (!teamId || teamId === view?.team.id) && panes.split && shiftHeld()) return openRightSlotCard(laneId);
     if (teamId && teamId !== view?.team.id) onSelectSquad(teamId);
     enterSlotLane(laneId);
     if (agentId) openHere(agentId);
   };
-  const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
+  const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs, teamId?: string) => {
+    if (!(b.pin && b.agentId) && (!teamId || teamId === view?.team.id) && panes.split && shiftHeld()) return openRightSlotCard("_bugs");
     enterSlotLane("_bugs");
     setSelectedRole("brainstorm");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
@@ -1032,7 +1041,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const bugsWorkers = b.pin?.workers ?? [];
     const bugsExpandable = bugsWorkers.length > 0 || Boolean(bugsLead);
     const bugsStatus = b.pin?.running ? "running" : b.pin?.brainstorm?.agent.status ?? "none";
-    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(b); };
+    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(b, v.team.id); };
     const bugsMenu = b.pin ? () => laneCtxItems(v, b.pin!, { displayName: b.label }) : null;
     const bugsLeadKey = "lane:_bugs:lead";
     return (
@@ -1273,9 +1282,19 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
             <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
             {mode === "chat" && (agent || panes.split) && (
-              <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => { if (!panes.split && !panes.leftActiveId && agent) openAgent(agent.id); if (panes.split) collapseSplit("active"); else toggleSplit(); }}>
-                {panes.split ? "◫ Unsplit" : "◫ Split"}
-              </button>
+              dormantSlot && panes.split ? (
+                <button type="button" className="boring-switch-pill" data-testid="boring-split-toggle" aria-pressed={false} title="Return to your parked split panes" onClick={() => {
+                  const backId = (panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId) ?? panes.leftActiveId ?? panes.rightActiveId;
+                  if (backId) { const v = allViews.find((x) => boringSelectionForAgent(x, backId)); if (v) return openAgentIn(v, backId); }
+                  setSelectedLaneId(null);
+                }}>
+                  ◫ Back to split
+                </button>
+              ) : (
+                <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => { if (!panes.split && !panes.leftActiveId && agent) openAgent(agent.id); if (panes.split) collapseSplit("active"); else toggleSplit(); }}>
+                  {panes.split ? "◫ Unsplit" : "◫ Split"}
+                </button>
+              )
             )}
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
