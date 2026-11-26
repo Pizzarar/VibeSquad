@@ -436,6 +436,16 @@ test('vs spawn --stakes parses and the stakes value reaches the spawn request (i
   await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
 });
 
+test('vs spawn --kind parses and labels.kind reaches the spawn request; blank --kind sets none (@per C fu1 L5)', async () => {
+  assert.equal(parseArgs(['--kind', 'docs']).kind, 'docs');
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  await runAgentVerb('spawn', { _: [], title: 'CLI docs', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'normal', kind: ' docs ' }, ctx);
+  assert.equal(runnerBackend.calls[0][1].labels.kind, 'docs');
+  await runAgentVerb('spawn', { _: [], title: 'CLI none', profile: 'Implement - Sonnet', prompt: 'do x', kind: '  ' }, ctx);
+  assert.equal(runnerBackend.calls.at(-1)[1].labels.kind, undefined);
+});
+
 test('vs status --full returns the whole lastMessage; the default stays capped (idea-466)', async () => {
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
