@@ -90,7 +90,10 @@ export const getSquadsHome = () => state.home && !state.focus && state.squadsHom
 export const useSquadsHome = () => useSyncExternalStore(subscribe, getSquadsHome);
 
 const show = (id: string, into?: "right") => {
-  if (into === "right" && getPanes().split) return openAgentInTab(id, "right"); // B17: a start from the split's right pane keeps the split
+  if (into === "right") {
+    if (getPanes().split) openAgentInTab(id, "right");
+    return; // B18d (UX N9): if the split closed mid-start, don't steal single-pane focus
+  }
   if (getPanes().split) toggleSplit(); // one drawer on screen: fold the split, nothing remounts
   openAgent(id);
 };
