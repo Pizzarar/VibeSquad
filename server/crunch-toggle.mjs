@@ -2,12 +2,14 @@
 // diff old vs new vibeMode per Squad. OFF->ON: every live Buddy and Lead of that Squad gets the Crunch rules + "Pick your lean
 // and go". ON->OFF: the same agents get "Crunch mode is OFF: back to asking before scope calls.". Idle agents get a normal
 // prompt (runner.sendAgentPrompt); busy agents (the BUSY set) get a steer (steerOnly, as token-watch.mjs sendLeadNotice).
-// Asleep Squads (asleepTeamIds) are skipped; unchanged and other Squads get nothing. No new endpoint or verb. Never throws out
+// Asleep Squads (asleepTeamIds) are skipped; unchanged and other Squads get nothing. No new endpoint or verb.
+// The hub Buddy (role=brainstorm in the Squad's hub lane, RiffBot) is skipped: it keeps the crunch rules via rolePack and a flip
+// must not wake it (PLAN_INBOX_1126O O1); one skipped=hub-buddy metric line is logged instead. Never throws out
 // of onTeamsSave: errors are caught and logged so a toggle never fails or delays the save. All I/O is injected for tests.
 
 import { appendVsLogEntry } from "./brainstorm.mjs";
 import { BUSY, effectiveAgentRole, isLiveAgent } from "./idle-lane-kick.mjs";
-import { asleepTeamIds, readTeamsConfig } from "./identity.mjs";
+import { asleepTeamIds, readTeamsConfig, isHubLane } from "./identity.mjs";
 import { CRUNCH_MODE_RULES } from "./hooks/agent-duties.ts";
 
 export const CRUNCH_ON_MESSAGE = `${CRUNCH_MODE_RULES}\n\nPick your lean and go`;
@@ -53,11 +55,29 @@ export function createCrunchToggle({
         if (!byTeam.has(team)) byTeam.set(team, []);
         byTeam.get(team).push({ agent: a, role, laneId: String(a?.labels?.lane ?? "").trim() });
       }
+      const nextTeam = (id) => (Array.isArray(nextTeams) ? nextTeams : []).find((t) => String(t?.id ?? "").toLowerCase() === id);
       for (const ch of changes) {
         const team = String(ch.teamId).toLowerCase();
+        const teamObj = nextTeam(team) ?? { id: ch.teamId };
         if (asleep.has(team)) continue; // asleep Squads get nothing
         const members = byTeam.get(team) ?? [];
         for (const m of members) {
+          if (m.role === "brainstorm") {
+            const laneKey = m.laneId.toLowerCase();
+            const laneObj = (teamObj.lanes || []).find((l) => String(l?.id ?? "").toLowerCase() === laneKey) ?? { id: m.laneId };
+            if (isHubLane(teamObj, laneObj)) {
+              try {
+                log({
+                  teamId: ch.teamId,
+                  laneId: m.laneId,
+                  text: `crunch-${ch.to ? "on" : "off"} team=${ch.teamId} lane=${m.laneId} agent=${m.agent.id} role=brainstorm skipped=hub-buddy`,
+                });
+              } catch (e) {
+                console.warn(`[vibesquad] crunch-toggle: skip log for ${m.agent.id} failed: ${e?.message ?? e}`); // keep notifying the rest
+              }
+              continue;
+            }
+          }
           const busy = BUSY.has(String(m.agent.status ?? "").toLowerCase());
           const text = ch.to ? CRUNCH_ON_MESSAGE : CRUNCH_OFF_MESSAGE;
           try {
