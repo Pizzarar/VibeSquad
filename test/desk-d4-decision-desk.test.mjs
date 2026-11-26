@@ -342,5 +342,6 @@ test("D4 P2 (UX R38 m2 + m4, idea-1070): wide rail grows past 580px; stacked lay
   assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip\s*\{[^}]*max-height:\s*min\(320px,\s*35vh\);[^}]*overflow-y:\s*auto;/, "m4: stacked strip has capped scroll height");
   assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip-squad-btn\s*\{[^}]*position:\s*sticky;/, "P2b m2: sticky Squad heads in stacked strip");
   assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip\.has-scroll-more\s+\.boring-decision-strip-fade\s*\{[^}]*position:\s*sticky;/, "P2b m2: bottom fade scroll cue when stacked strip overflows");
-  assert.match(tail, /\.is-wide\s+\.boring-decision-strip-line\s*\{[^}]*grid-template-columns:\s*10px\s+minmax\(0,\s*max-content\)\s+minmax\(0,\s*max-content\)\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/, "P2b m3: rail strip gives event column slack from name/code columns");
+  assert.match(tail, /\.is-wide\s+\.boring-decision-strip-groups\s*\{[^}]*grid-template-columns:\s*10px\s+max-content\s+max-content\s+max-content\s+minmax\(0,\s*1fr\)\s+auto;/, "P2b r2 m1: rail lines share one column set");
+  assert.match(tail, /\.is-wide\s+\.boring-decision-strip-line\s*\{[^}]*grid-template-columns:\s*subgrid;/, "P2b r2 m1: rail lines subgrid from the shared columns");
 });

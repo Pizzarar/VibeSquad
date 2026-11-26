@@ -645,6 +645,7 @@ export function BoringDecisionDesk({
   const jumpToOffscreen = () => document.querySelector('[data-testid="boring-decision-offscreen"]')?.scrollIntoView?.({ block: "start", behavior: "smooth" });
   const offscreenCount = offscreenItems.length;
   const stripRef = useRef<HTMLElement | null>(null);
+  const stripLaneCount = stripGroups.reduce((n, g) => n + g.lanes.length, 0);
   const [stripScrollMore, setStripScrollMore] = useState(false);
   const updateStripScroll = () => {
     const el = stripRef.current;
@@ -661,13 +662,18 @@ export function BoringDecisionDesk({
     if (typeof window !== "undefined") window.addEventListener("resize", onResize);
     const el = stripRef.current;
     const ro = typeof ResizeObserver === "function" && el ? new ResizeObserver(updateStripScroll) : null;
-    if (ro && el) ro.observe(el);
+    if (ro && el) {
+      ro.observe(el);
+      // Also watch the inner content: lane add/remove without a group-count change resizes it, not the capped box.
+      const inner = el.querySelector(".boring-decision-strip-groups");
+      if (inner) ro.observe(inner);
+    }
     return () => {
       if (raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(raf);
       if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
       ro?.disconnect();
     };
-  }, [wide, stripGroups.length, quietOpen]);
+  }, [wide, stripGroups.length, stripLaneCount, quietOpen]);
   const leadStateLabel = (l: StatusLaneLine) => {
     const s = l.leadState;
     if (l.openDecisions > 0 && (s === "idle" || s === "none" || s === "running")) return `waiting · ${l.openDecisions}`;
@@ -970,7 +976,7 @@ export function BoringDecisionDesk({
             </div>
           ))}
         </div>
-        <div className="boring-decision-strip-fade" data-testid="boring-decision-strip-fade" aria-hidden="true" />
+        {!wide && <div className="boring-decision-strip-fade" data-testid="boring-decision-strip-fade" aria-hidden="true" />}
       </section>
 
       {/* 4. Sticky batch Send bar with 5s Undo */}

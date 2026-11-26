@@ -421,7 +421,7 @@ for (const cfg of [
         const feed = feedEl.getBoundingClientRect();
         const off = offEl.getBoundingClientRect();
         const strip = stripEl.getBoundingClientRect();
-        const fade = fadeEl.getBoundingClientRect();
+        const fade = fadeEl ? fadeEl.getBoundingClientRect() : { height: 0 };
         const bar = document.querySelector('[data-testid="boring-decision-bar"]').getBoundingClientRect();
         const cards = [...document.querySelectorAll(".boring-decision-card")].map((c) => c.getBoundingClientRect());
         const eventSpans = [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].map((el) => ({
@@ -457,7 +457,14 @@ for (const cfg of [
             hasScrollMore: stripEl.classList.contains("has-scroll-more"),
             scrollMoreAttr: stripEl.getAttribute("data-scroll-more"),
           },
-          fade: { display: getComputedStyle(fadeEl).display, height: fade.height },
+          fade: { present: Boolean(fadeEl), display: fadeEl ? getComputedStyle(fadeEl).display : "none", height: fade.height },
+          cols: [...document.querySelectorAll(".boring-decision-strip-line")].map((l) => {
+            const st = l.querySelector(".boring-decision-strip-state").getBoundingClientRect().left;
+            const ev = l.querySelector(".boring-decision-strip-event").getBoundingClientRect().left;
+            return { st, ev };
+          }),
+          widths: [...document.querySelector(".boring-decision-strip-line").children].map((c) => Math.round(c.getBoundingClientRect().width)),
+          eventTrunc: [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent),
           squadHeadPosition: getComputedStyle(squadBtn).position,
           barTop: bar.top,
           innerHeight,
@@ -477,6 +484,31 @@ for (const cfg of [
       if (cfg.wide) {
         assert.ok(g.strip.left >= g.feed.right, `wide rail sits right of feed (${JSON.stringify(g)})`);
         assert.ok(Math.abs(g.strip.top - g.feed.top) < 40, "wide rail aligns with top of feed");
+        assert.equal(g.fade.present, false, "P2b r2 L1: no strip fade element in wide mode");
+        {
+          const stL = g.cols.map((c) => c.st), evL = g.cols.map((c) => c.ev);
+          assert.ok(g.cols.length >= 10, `rail has many lines (${g.cols.length})`);
+          assert.ok(Math.max(...stL) - Math.min(...stL) <= 1, `P2b r2 m1: state column left edges equal (spread ${Math.max(...stL) - Math.min(...stL)})`);
+          assert.ok(Math.max(...evL) - Math.min(...evL) <= 1, `P2b r2 m1: event column left edges equal (spread ${Math.max(...evL) - Math.min(...evL)})`);
+          console.log(`P2b r2 ${cfg.name}: lines=${g.cols.length} stateSpread=${Math.max(...stL) - Math.min(...stL)} eventSpread=${Math.max(...evL) - Math.min(...evL)} state@${stL[0]} event@${evL[0]} truncated=${g.eventTrunc.length} widths=${g.widths}`);
+        }
+        if (cfg.checkWideRail) {
+          const q = page.locator('[data-testid^="boring-decision-strip-quiet-"]').first();
+          if (await q.count()) {
+            await q.click();
+            await page.waitForTimeout(150);
+            const t2 = await page.evaluate(() => {
+              const ls = [...document.querySelectorAll(".boring-decision-strip-line")];
+              const st = ls.map((l) => l.querySelector(".boring-decision-strip-state").getBoundingClientRect().left);
+              const ev = ls.map((l) => l.querySelector(".boring-decision-strip-event").getBoundingClientRect().left);
+              const tr = [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent);
+              return { n: ls.length, st: Math.max(...st) - Math.min(...st), ev: Math.max(...ev) - Math.min(...ev), tr };
+            });
+            console.log(`P2b r2 ${cfg.name} quiet open: ${JSON.stringify({ n: t2.n, st: t2.st, ev: t2.ev, trunc: t2.tr.length })}`);
+            assert.ok(t2.st <= 1 && t2.ev <= 1, `columns aligned with quiet fold open (${JSON.stringify(t2)})`);
+            assert.deepEqual(t2.tr, [], "0 event texts truncated at 3200 with quiet fold open");
+          }
+        }
         if (cfg.check1920Events) {
           const r39Named = [
             "Decision Desk approved",
@@ -513,6 +545,24 @@ for (const cfg of [
           assert.ok(g.fade.height >= 20, `P2b m2: bottom fade cue has visible height (got ${g.fade.height})`);
         }
         // Expanding the +N quiet fold keeps the strip within its cap and scrollable with the scroll cue active.
+        // P2b r2 M1: content growth without a group-count change refreshes the cue with no scroll/resize event.
+        const cueGrow = await page.evaluate(async () => {
+          const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+          stripEl.scrollTop = stripEl.scrollHeight;
+          stripEl.dispatchEvent(new Event("scroll"));
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const before = stripEl.classList.contains("has-scroll-more");
+          const filler = document.createElement("div");
+          filler.style.height = "400px";
+          stripEl.querySelector(".boring-decision-strip-groups").appendChild(filler);
+          await new Promise((r) => setTimeout(r, 200));
+          const after = stripEl.classList.contains("has-scroll-more");
+          filler.remove();
+          return { before, after };
+        });
+        assert.equal(cueGrow.before, false, "cue clear at bottom before content grows");
+        assert.equal(cueGrow.after, true, "P2b r2 M1: cue refreshes when inner content grows (no scroll/resize)");
+        await page.evaluate(() => { const s = document.querySelector('[data-testid="boring-decision-strip"]'); s.scrollTop = 0; s.dispatchEvent(new Event("scroll")); });
         const quietBtn = page.locator('[data-testid^="boring-decision-strip-quiet-"]').first();
         assert.ok(await quietBtn.count(), "quiet fold button present with ?lanes=24");
         await quietBtn.click();
