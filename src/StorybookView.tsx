@@ -7,7 +7,7 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  SB_CATEGORY_HELP, buildListItems, chainToMermaid, checkLabel, plainText, characterViews, countByCategory, entityCard, filterItems, fmtSource, fmtWindow,
+  SB_CATEGORY_HELP, buildListItems, chainToMermaid, checkLabel, plainText, characterViews, speakerKeyOf, countByCategory, entityCard, filterItems, fmtSource, fmtWindow,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
   indexEntities, interpretLoad, interpretRefresh, locationView, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbSnapshot, type ListItem,
@@ -398,6 +398,7 @@ function Characters({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardAp
         {ch.lines.map((l) => (
           <li key={l.id}>
             <Chip e={l} card={card} label={String(l.data?.origin ?? "line")} />
+            {l.data?.speakerSource === "inferred" && <span className="sb-mono" title="Speaker guessed from the source file, not named in the data">inferred</span>}
             {typeof l.data?.status === "string" && l.data.status && <span className={`sb-status sb-st-${String(l.data.status).toLowerCase().replace(/[^a-z]+/g, "-")}`}>{l.data.status}</span>}
             <p className="sb-quote">{String(l.data?.text ?? l.display)}</p>
           </li>
@@ -535,8 +536,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     if (e.kind === "location") { pick("world")(e.id); setTab("world"); }
     else if (e.kind === "quest_step") { pick("quests")(String(e.data?.trader ?? e.id)); setTab("quests"); setJump(`${e.kind}\u0000${e.id}`); }
     else if (e.kind === "line" || e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") {
-      const sp = e.kind === "line" ? (e.links.find((l) => l.rel === "spoken_by")?.id ?? String(e.data?.speaker ?? "")) : e.id;
-      pick("cast")(sp.toLowerCase()); setTab("cast");
+      pick("cast")(speakerKeyOf(e) ?? "system:system"); setTab("cast");
     } else {
       const el = [...document.querySelectorAll("[data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === `${e.kind}\u0000${e.id}`); // attribute compare, not a selector built from the id
       if (el) card.show(e, el);

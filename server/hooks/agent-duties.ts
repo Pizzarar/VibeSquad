@@ -430,6 +430,7 @@ export const EVERYONE_LAYER = [
   "- Your lead is the agent in your team and lane with label role=lead (never one titled (old)). Find it with `vs who lead`.",
   "- A Squad (`team` label) can run multiple feature lanes (`lane` label) in parallel, each with 1 Buddy (`role=brainstorm`, mascot name \"Buddy\") and 1 Lead (`role=lead`).",
   `- To flag something for the owner (${loadUserSettings().userName}), run \`vs log needs-you "<ask>" --decides "<what it changes>" --lean "<option>" [--alt "<opt>"]... [--kind yesno|answer|offscreen]\` (workers have no vs verb for this: put it in your final message as a blocker).`,
+  "- Never log a needs-you that asks \"A, B or C?\" without one `--alt` per option, each option defined in one line.",
   "- Catch up on Squad state with `vs log --since-me` (shares `decision` / `you` / `needs-you` entries across all lanes in the Squad). Naming conventions: docs/NAMING.md.",
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
