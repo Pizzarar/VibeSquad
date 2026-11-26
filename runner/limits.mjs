@@ -145,14 +145,58 @@ export async function runAgyUsageIsolated({ spawnImpl, makeHome = makeAgyIsolate
   try { return await runAgyUsage({ ...opts, spawnImpl, env: iso.env }); } finally { iso.cleanup(); }
 }
 
-// Polls at most once per minIntervalMs, one in flight (concurrent calls return []). poll.shutdown() kills an in-flight agy.
-export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minIntervalMs = 30 * 60_000, now = Date.now, canRun = () => true } = {}) {
+// R10 fu4 (adaptive agy poll): a 30 min gap let the Claude/GPT 5h row go 73% -> 100% (burn ~1 pt/min) before the 85%
+// failover (server/provider-failover.mjs AGY_CLAUDE_FAILOVER_THRESHOLD) ever read it. The poller still only runs on agy
+// turn_done, but its floor drops from AGY_POLL_SLOW_MS to AGY_POLL_FAST_MS while a pool is "hot":
+//  - level: any 5h row (Gemini or Claude/GPT) at/over AGY_POLL_FAST_AT_PCT. 60 leaves 25 pts (~25 min at 1 pt/min) before 85,
+//    and a 3 min floor means a reading lands every <=3 pts there, so 85 is seen by ~88 at the observed burn. Weekly rows are
+//    left out of the level rule: one sits over 60% for days and would keep polling fast for no reason.
+//  - burn: any row whose last two readings in the same window (same resetsAt) project to >= AGY_POLL_PROJECT_PCT (the
+//    failover threshold) by the next slow poll. Catches a fast climb from below 60 (e.g. 30 -> 58 projects 86).
+// Cost: `agy -p /usage` is ~9s in a scratch home with no model call; at most 20/h and only while hot and agy turns finish.
+// Env overrides (ms / pct): VS_AGY_POLL_SLOW_MS, VS_AGY_POLL_FAST_MS, VS_AGY_POLL_FAST_AT_PCT.
+export const AGY_POLL_SLOW_MS = 30 * 60_000;
+export const AGY_POLL_FAST_MS = 3 * 60_000;
+export const AGY_POLL_FAST_AT_PCT = 60;
+export const AGY_POLL_PROJECT_PCT = 85; // = AGY_CLAUDE_FAILOVER_THRESHOLD (test/r10-fu4 keeps them equal)
+
+export function agyPollConfigFromEnv(env = process.env) {
+  const num = (v, ok) => { const n = Number(v); return v !== undefined && v !== '' && ok(n) ? n : undefined; };
+  const out = {};
+  const slow = num(env.VS_AGY_POLL_SLOW_MS, (n) => Number.isInteger(n) && n >= 0);
+  const fast = num(env.VS_AGY_POLL_FAST_MS, (n) => Number.isInteger(n) && n >= 0);
+  const at = num(env.VS_AGY_POLL_FAST_AT_PCT, (n) => Number.isFinite(n) && n >= 0 && n <= 100);
+  if (slow !== undefined) out.minIntervalMs = slow;
+  if (fast !== undefined) out.fastIntervalMs = fast;
+  if (at !== undefined) out.fastAtPct = at;
+  return out;
+}
+
+// The floor before the next poll, from this poll's rows and the previous reading per provider/window (prev: Map key -> {usedPct, resetsAt, at}).
+export function agyNextPollMs(rows, prev, { at, slowMs = AGY_POLL_SLOW_MS, fastMs = AGY_POLL_FAST_MS, fastAtPct = AGY_POLL_FAST_AT_PCT, projectPct = AGY_POLL_PROJECT_PCT } = {}) {
+  if (fastMs >= slowMs) return slowMs;
+  for (const r of rows ?? []) {
+    const used = Number(r?.usedPct);
+    if (!Number.isFinite(used)) continue;
+    if (r.window === '5h' && used >= fastAtPct) return fastMs;
+    const p = prev?.get(`${r.provider}|${r.window}`);
+    if (!p || p.resetsAt !== r.resetsAt || !(at > p.at) || !(used > p.usedPct)) continue; // new window or no climb: no projection
+    if (used + ((used - p.usedPct) / (at - p.at)) * slowMs >= projectPct) return fastMs;
+  }
+  return slowMs;
+}
+
+// Polls at most once per floor (minIntervalMs, or fastIntervalMs while a pool is hot: agyNextPollMs), one in flight
+// (concurrent calls return []). poll.shutdown() kills an in-flight agy.
+export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minIntervalMs = AGY_POLL_SLOW_MS, fastIntervalMs = AGY_POLL_FAST_MS, fastAtPct = AGY_POLL_FAST_AT_PCT, projectPct = AGY_POLL_PROJECT_PCT, now = Date.now, canRun = () => true } = {}) {
   let busy = false;
   let lastAt = 0;
+  let floorMs = minIntervalMs;
+  const readings = new Map(); // provider|window -> last parsed reading (not store.last: that only holds changed records)
   let current = null;
   let stopped = false;
   const poll = async function poll(agentId) {
-    if (busy || stopped || now() - lastAt < minIntervalMs) return [];
+    if (busy || stopped || now() - lastAt < floorMs) return [];
     // idea-349 (canRun, off by default since idea-701: the default run is isolated): a spawned `agy` on the shared backend announces "subagents and background tasks stopped due to server restart"
     // to live agy sessions. Skip (without spending the interval) while any agy agent is mid-turn or holding background work.
     try { if (!canRun(agentId)) return []; } catch { return []; }
@@ -161,9 +205,14 @@ export function createAgyUsagePoller({ store, run = runAgyUsageIsolated, minInte
     try {
       const text = await run({ onChild: (c) => { current = c; } });
       if (stopped) return [];
-      return parseAgyUsage(text).map((r) => store.record({ ...r, source: 'provider', agentId }, now())).filter(Boolean);
+      const rows = parseAgyUsage(text);
+      const at = now();
+      floorMs = agyNextPollMs(rows, readings, { at, slowMs: minIntervalMs, fastMs: fastIntervalMs, fastAtPct, projectPct });
+      for (const r of rows) readings.set(`${r.provider}|${r.window}`, { usedPct: r.usedPct, resetsAt: r.resetsAt, at });
+      return rows.map((r) => store.record({ ...r, source: 'provider', agentId }, at)).filter(Boolean);
     } catch { return []; } finally { busy = false; current = null; }
   };
+  poll.floorMs = () => floorMs;
   poll.shutdown = () => { stopped = true; if (current) killTree(current); current = null; };
   return poll;
 }

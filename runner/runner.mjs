@@ -5,7 +5,7 @@ import { stat as fspStat } from 'node:fs/promises';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
-import { LimitStore, createAgyUsagePoller, CreditStore, createCreditPoller } from './limits.mjs';
+import { LimitStore, createAgyUsagePoller, agyPollConfigFromEnv, CreditStore, createCreditPoller } from './limits.mjs';
 import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { sha256 } from './reap.mjs';
@@ -471,7 +471,7 @@ export class Runner {
     this.limits = new LimitStore(limitsFile);
     this.credits = new CreditStore(creditsFile);
     // idea-701: the default poller runs `agy -p /usage` in an isolated HOME, so it needs no busy guard; an injected run (tests) keeps the idea-349 guard.
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...agyPollConfigFromEnv(), ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
     this._pollCredits = pollCredits ? createCreditPoller({ store: this.credits, ...(creditFetch ? { fetchImpl: creditFetch } : {}), ...(creditResolveKey ? { resolveKey: creditResolveKey } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
