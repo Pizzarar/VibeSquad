@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 /** B17: which lane/role a dormant pill's empty card is for (pane-local; the host never reuses its selectedLaneId for it). */
 export type CardTarget = { key: string; pill: string };
 export type PickerPill = { key: string; label: string; live: boolean; onOpen: () => void };
-export type PickerLane = { key: string; name: string; code: string; dot: string; needs: boolean; working: boolean; sub: string; pills: PickerPill[] };
+export type PickerLane = { key: string; name: string; code: string; dot: string; needs: boolean; needsCount?: number; working: boolean; sub: string; pills: PickerPill[] };
 export type PickerAgent = { key: string; title: string; sub: string; dot: string; needs: boolean; onOpen: () => void };
 export type PickerData = { active: PickerAgent[]; lanes: PickerLane[] };
 /** B18c: another awake project's lanes, shown under a collapsed "Other projects (N)" disclosure. */
@@ -39,12 +39,12 @@ export function buildPickerData(m: ModelLike, h: PickerHandlers, strip: StripIte
   const lanes: PickerLane[] = [];
   const core = (key: "overlord" | "riffbot", laneId: "_overlord" | "_riffbot", name: string) => {
     const r = m.core[key];
-    lanes.push({ key: laneId, name, code: "Desk", dot: `boring-dot ${r.status} ${h.glyphCls(r.status, r.err ? "error" : r.needsYou > 0 ? "needs-you" : null)}`, needs: r.needsYou > 0 || r.err, working: r.status === "running", sub: word(r.status, r.needsYou > 0, r.err), pills: [{ key: "open", label: "Open", live: Boolean(r.agentId), onOpen: () => h.openCore(laneId, r.agentId) }] });
+    lanes.push({ key: laneId, name, code: "Desk", dot: `boring-dot ${r.status} ${h.glyphCls(r.status, r.err ? "error" : r.needsYou > 0 ? "needs-you" : null)}`, needs: r.needsYou > 0 || r.err, needsCount: r.needsYou, working: r.status === "running", sub: word(r.status, r.needsYou > 0, r.err), pills: [{ key: "open", label: "Open", live: Boolean(r.agentId), onOpen: () => h.openCore(laneId, r.agentId) }] });
   };
   core("overlord", "_overlord", "★ Overlord");
   core("riffbot", "_riffbot", "RiffBot");
   const b = m.core.bugs;
-  lanes.push({ key: "_bugs", name: "Bugs", code: "@bug", dot: `boring-dot ${b.agentId ? "running" : "none"} ${h.glyphCls(b.agentId ? "idle" : "none", b.err ? "error" : b.needsYou > 0 ? "needs-you" : null)}`, needs: b.needsYou > 0 || b.err, working: false, sub: b.needsYou > 0 ? "Needs you" : b.agentId ? "Buddy live" : "No agent", pills: [{ key: "open", label: "Open", live: Boolean(b.agentId), onOpen: () => h.openBugs() }] });
+  lanes.push({ key: "_bugs", name: "Bugs", code: "@bug", dot: `boring-dot ${b.agentId ? "running" : "none"} ${h.glyphCls(b.agentId ? "idle" : "none", b.err ? "error" : b.needsYou > 0 ? "needs-you" : null)}`, needs: b.needsYou > 0 || b.err, needsCount: b.needsYou, working: false, sub: b.needsYou > 0 ? "Needs you" : b.agentId ? "Buddy live" : "No agent", pills: [{ key: "open", label: "Open", live: Boolean(b.agentId), onOpen: () => h.openBugs() }] });
   for (const c of m.conversations) {
     const needs = c.needsYou > 0 || c.err;
     const run = (c.running ?? 0) > 0;
@@ -53,7 +53,7 @@ export function buildPickerData(m: ModelLike, h: PickerHandlers, strip: StripIte
     lanes.push({
       key: c.laneId, name: c.name, code: c.code,
       dot: `boring-dot ${status} ${h.glyphCls(status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`,
-      needs, working: run, sub: c.err ? "Error" : needs ? "Needs you" : roles || "No agent",
+      needs, needsCount: c.needsYou, working: run, sub: c.err ? "Error" : needs ? "Needs you" : roles || "No agent",
       pills: [
         { key: "brainstorm", label: "Buddy", live: Boolean(c.brainstormId), onOpen: () => h.openRole(c.laneId, "brainstorm") },
         { key: "lead", label: "Lead", live: Boolean(c.leadId), onOpen: () => h.openRole(c.laneId, "lead") },
@@ -92,15 +92,21 @@ export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTar
   const codeHits = needle ? data.lanes.filter((l) => l.code && hit(l.code)).map((l) => l.name.toLowerCase()) : [];
   const activeShown = needle ? data.active.filter((a) => hit(a.title, a.sub) || codeHits.some((n) => a.title.toLowerCase().includes(n) || a.sub.toLowerCase().includes(n))) : active;
   // B18c: other awake projects. A non-empty filter keeps only matching lanes (project name matches keep all its lanes) and auto-opens the disclosure.
-  const others = (otherProjects ?? []).map((p) => ({ ...p, lanes: !needle || hit(p.name) ? p.lanes : p.lanes.filter((l) => hit(l.name, l.code)) })).filter((p) => p.lanes.length > 0);
+  const others = (otherProjects ?? []).map((p) => {
+    const lanes = !needle || hit(p.name) ? p.lanes : p.lanes.filter((l) => hit(l.name, l.code));
+    const needsYou = !needle || hit(p.name) ? p.needsYou : lanes.reduce((n, l) => n + (l.needsCount ?? (l.needs ? 1 : 0)), 0);
+    return { ...p, lanes, needsYou };
+  }).filter((p) => p.lanes.length > 0);
   const othersNeeds = others.reduce((n, p) => n + p.needsYou, 0);
   const nothing = activeShown.length === 0 && lanes.length === 0 && others.length === 0;
   // A dormant pill only shows its card here: it must not select the lane in the host (that rewrote the left pane's card).
   const openLane = (laneKey: string, pill: string, onOpen: () => void, live: boolean) => { if (live || !renderEmpty) onOpen(); else setEmptyFor({ key: laneKey, pill }); };
   const first = () => {
-    const l = lanes[0];
     if (activeShown[0]) return activeShown[0].onOpen();
-    if (l) { const p = l.pills.find((x) => x.live) ?? l.pills[0]; openLane(l.key, p.key, p.onOpen, p.live); }
+    const l = lanes[0];
+    if (l) { const p = l.pills.find((x) => x.live) ?? l.pills[0]; return openLane(l.key, p.key, p.onOpen, p.live); }
+    const ol = others[0]?.lanes[0];
+    if (ol) { const p = ol.pills.find((x) => x.live) ?? ol.pills[0]; p.onOpen(); }
   };
   const onKeyDown = (e: { key: string; preventDefault: () => void; stopPropagation: () => void }) => {
     if (e.key === "Escape") {

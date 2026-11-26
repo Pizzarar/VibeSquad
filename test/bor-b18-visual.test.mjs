@@ -78,11 +78,15 @@ test("B18c: omitted/empty otherProjects renders no disclosure", () => {
   assert.doesNotMatch(render({ otherProjects: [] }), /boring-pp-others/);
 });
 
-test("B18c: filter q auto-opening is wired to the same needle and filters other lanes", () => {
+test("B18c: filter q auto-opening is wired to the same needle, filters other lanes + badge, Enter handles others, otherProjects memo is gated", () => {
   const src = read("src", "BoringPanePicker.tsx");
   assert.match(src, /open=\{needle \? true : undefined\}/);
   assert.match(src, /!needle \|\| hit\(p\.name\) \? p\.lanes : p\.lanes\.filter\(\(l\) => hit\(l\.name, l\.code\)\)/);
+  assert.match(src, /const ol = others\[0\]\?\.lanes\[0\];/);
   assert.doesNotMatch(src, /Hypnospace/i);
+  const ade = read("src", "BoringAde.tsx");
+  assert.match(ade, /const pickerOpen = mode === "chat" && panes\.split && !\(panes\.rightActiveId && agents\.has\(panes\.rightActiveId\)\) && !dormantSlot;/);
+  assert.match(ade, /if \(!pickerOpen\) return \[\];/);
 });
 
 // ---- B18c browser half: the real app (?demo=1, several projects). Skips cleanly without Playwright/Chromium. ----
@@ -102,7 +106,7 @@ async function openPicker(b, E, baseUrl, w, h, dpr, theme) {
   await E.installRoutes(ctx);
   // ui-overlap's registry has ONE project; add the demo cast's other teams (efi, plugins, site) so the disclosure has something to list.
   const mk = (id, name, lanes) => ({ ...E.TEAMS_REGISTRY.teams[0], id, name, lanes: lanes.map((l) => ({ id: l, name: l })), paths: [name] });
-  const registry = { ...E.TEAMS_REGISTRY, teams: [...E.TEAMS_REGISTRY.teams, mk("efi", "Main Game", ["main-game", "ui-lab"]), mk("plugins", "Plugins", ["plugins"]), mk("site", "Site", ["site-polish"])] };
+  const registry = { ...E.TEAMS_REGISTRY, teams: [...E.TEAMS_REGISTRY.teams, mk("efi", "Main Game", ["main-game", "ui-lab"]), mk("plugins", "Plugins", ["plugins", "empty-p"]), mk("site", "Site", ["site-polish", "docs"])] };
   await ctx.route("**/api/teams", (route) => (route.request().method() === "GET" ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(registry) }) : route.fallback()));
   const page = await ctx.newPage();
   await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded" });
@@ -116,7 +120,7 @@ async function openPicker(b, E, baseUrl, w, h, dpr, theme) {
   return { ctx, page };
 }
 
-test("browser: Other projects disclosure is live in the real app (collapsed, filter auto-opens, other-project live agent keeps the split)", { skip, timeout: 300000 }, async () => {
+test("browser: Other projects disclosure is live in the real app (collapsed, filter auto-opens, filtered badge, Enter-on-others, dormant Buddy/Lead + live pills keep split)", { skip, timeout: 300000 }, async () => {
   const E = await import(pathToFileURL(join(root, "scripts", "ui-overlap", "env.mjs")).href);
   await E.ensureDist();
   const { server, baseUrl } = await E.serveDist();
@@ -127,14 +131,62 @@ test("browser: Other projects disclosure is live in the real app (collapsed, fil
     assert.equal(await others.count(), 1, "disclosure renders with more than one demo project");
     assert.equal(await others.evaluate((e) => e.open), false, "collapsed by default");
     assert.match(await page.locator('[data-testid="boring-pp-others-sum"]').innerText(), /^Other projects \(3\)/i);
-    // filter match inside another project auto-opens it
-    const lane = await page.evaluate(() => { const e = document.querySelector('[data-testid^="boring-pp-other-lane-"] .boring-pp-name'); return e?.textContent ?? null; });
-    assert.ok(lane, "another project has at least one lane");
-    await page.locator('[data-testid="boring-pp-filter"]').fill(lane);
+    assert.match(await page.locator('[data-testid="boring-pp-others-badge"]').innerText(), /1 needs you/i);
+
+    // Filtered badge: matching a calm lane in Main Game (ui-lab) hides the needs-you badge; matching main-game keeps it
+    const filter = page.locator('[data-testid="boring-pp-filter"]');
+    await filter.fill("ui-lab");
     assert.equal(await others.evaluate((e) => e.open), true, "auto-opens on a filter match");
-    await page.locator('[data-testid="boring-pp-filter"]').fill("");
+    assert.equal(await page.locator('[data-testid="boring-pp-others-badge"]').count(), 0, "calm filtered lane shows no needs-you badge");
+    await filter.fill("main-game");
+    assert.match(await page.locator('[data-testid="boring-pp-others-badge"]').innerText(), /1 needs you/i, "needs-you filtered lane keeps badge");
+    await filter.fill("");
+
+    // UX R41 L2: dormant Trinity rows are hidden in Other projects, while live Plugins Overlord stays
     await others.evaluate((e) => { e.open = true; });
-    // a LIVE other-project pill opens the agent in the right pane and the split stays
+    assert.equal(await page.locator('[data-testid="boring-pp-other-lane-efi-_overlord"]').count(), 0, "dormant Main Game Overlord hidden");
+    assert.equal(await page.locator('[data-testid="boring-pp-other-lane-efi-_bugs"]').count(), 0, "dormant Main Game Bugs hidden");
+    assert.equal(await page.locator('[data-testid="boring-pp-other-lane-plugins-_overlord"]').count(), 1, "live Plugins Overlord kept");
+
+    // Dormant other-project Buddy click (Main Game · ui-lab · Buddy): keeps split, switches project, shows Buddy empty card on right, left unchanged
+    await page.locator('[data-testid="boring-pp-other-open-efi-ui-lab-brainstorm"]').click();
+    await page.locator('[data-testid="boring-empty-card"]').waitFor();
+    assert.equal(await page.locator('[data-testid="boring-pane-left"]').count(), 1, "split left pane stays after dormant Buddy click");
+    assert.equal(await page.locator('[data-testid="boring-pane-right"]').count(), 1, "split right pane stays after dormant Buddy click");
+    assert.match(await page.locator('[data-testid="boring-pane-left"]').innerText(), /Audit - token scout/, "left pane unchanged after dormant Buddy click");
+    assert.match(await page.locator('[data-testid="boring-empty-lane"]').innerText(), /^ui-lab$/i, "right card names ui-lab");
+    assert.match(await page.locator('[data-testid="boring-empty-cta"]').innerText(), /Start Brainstorm/, "right card is for Brainstorm role");
+    assert.match(await page.locator('[data-testid="boring-breadcrumb"]').innerText(), /Main Game/, "breadcrumb reflects switched project Main Game");
+    assert.match(page.url(), /agent=demo-aud/, "URL keeps left pane agent");
+
+    // Back to picker -> now on Main Game, so Site is under Other projects
+    await page.locator('[data-testid="boring-pp-back"]').click();
+    await others.waitFor();
+    await others.evaluate((e) => { e.open = true; });
+
+    // Dormant other-project Lead click on a fully dormant feature lane (Site · docs · Lead): keeps split, switches to Site, shows Lead empty card on right
+    await page.locator('[data-testid="boring-pp-other-open-site-docs-lead"]').click();
+    await page.locator('[data-testid="boring-empty-card"]').waitFor();
+    assert.equal(await page.locator('[data-testid="boring-pane-left"]').count(), 1, "split stays after dormant Lead click");
+    assert.match(await page.locator('[data-testid="boring-pane-left"]').innerText(), /Audit - token scout/, "left pane unchanged after dormant Lead click");
+    assert.match(await page.locator('[data-testid="boring-empty-lane"]').innerText(), /^docs$/i, "right card names docs");
+    assert.match(await page.locator('[data-testid="boring-empty-cta"]').innerText(), /Switch to Brainstorm/, "right card is for Lead role");
+    assert.match(await page.locator('[data-testid="boring-breadcrumb"]').innerText(), /Site/, "breadcrumb reflects switched project Site");
+
+    // Back to picker -> Enter on a query that only matches Other projects (empty-p in Plugins)
+    await page.locator('[data-testid="boring-pp-back"]').click();
+    await filter.waitFor();
+    await filter.fill("empty-p");
+    await filter.press("Enter");
+    await page.locator('[data-testid="boring-empty-card"]').waitFor();
+    assert.match(await page.locator('[data-testid="boring-empty-lane"]').innerText(), /^empty-p$/i, "Enter-on-others opens matching other-project lane");
+    assert.match(await page.locator('[data-testid="boring-breadcrumb"]').innerText(), /Plugins/, "Enter-on-others switched to Plugins");
+    assert.equal(await page.locator('[data-testid="boring-pane-right"]').count(), 1, "split stays after Enter-on-others");
+
+    // Back to picker -> LIVE other-project pill opens the agent in the right pane and the split stays
+    await page.locator('[data-testid="boring-pp-back"]').click();
+    await others.waitFor();
+    await others.evaluate((e) => { e.open = true; });
     const pill = page.locator('[data-testid^="boring-pp-other-open-"].live').first();
     if (await pill.count()) {
       await pill.click();
