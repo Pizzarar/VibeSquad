@@ -1413,6 +1413,11 @@ export class Runner {
   // this.reaper (runner/reap.mjs: env-token proof, never held work, never another agent's, fail closed). Protected: every live
   // agent's last-probed shells (held or not) and this entry's own last hold, the runner and its parent. Nothing is killed once
   // the agent is live again or the runner is shutting down. One reap per process (entry.reapArmed).
+  // idea-1140: when the worker is really done (why 'exit' or 'stop' = archive), the job also asks for its leftovers: every
+  // non-listener process still carrying its id + token outside every live CLI tree (headless Chromium's crashpad and helpers,
+  // reparented to the subreaper), created before the end (runner/detached.mjs createLeftoverReaper). Not on 'park': a parked
+  // worker resumes with the same token, and work it detached on purpose (`nohup suite &`, checked next turn) is still its
+  // work; only its leaked listeners are reaped there, as before. If such work outlives a later exit or archive, that end reaps it.
   _reapAfterEnd(id, entry, why) {
     if (!this.reaper || entry.reapArmed || entry.role !== 'worker' || this._shutDown) return;
     const token = this.tokensById.get(id);
@@ -1423,11 +1428,18 @@ export class Runner {
     const shellPids = (e) => [e.heldNow, e.heldWork, e.work].flatMap((w) => (Array.isArray(w) ? w : [])).map((w) => w?.pid);
     const own = shellPids(entry);
     const stillOk = () => !this._shutDown && !this.live.has(id);
-    const report = (res) => { if (res.reaped?.length || res.skipped?.length || res.error) { try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}) }); } catch { /* reporting is best effort */ } } };
+    const leftovers = why === 'exit' || why === 'stop';
+    const report = (res) => {
+      const lo = res.leftovers;
+      const loAny = !!lo && (lo.reaped?.length || lo.skipped?.length || lo.error);
+      if (!(res.reaped?.length || res.skipped?.length || res.error || loAny)) return;
+      try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}), ...(loAny ? { leftovers: { reaped: lo.reaped ?? [], skipped: lo.skipped ?? [], ...(lo.error ? { error: lo.error } : {}) } } : {}) }); } catch { /* reporting is best effort */ }
+    };
     const t = setTimeout(() => {
       if (!stillOk()) return; // resumed (its new process owns the tree now) or shutting down: nothing to reap
       const protectedPids = [...own, ...[...this.live.values()].flatMap(shellPids), process.pid, process.ppid].filter((p) => Number.isInteger(p) && p > 0);
-      Promise.resolve().then(() => this.reaper({ agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk })).then(report, (err) => report({ error: String(err?.message ?? err) }));
+      const job = { agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk, ...(leftovers ? { leftovers: true, liveCliPids: this._liveCliPids(), selfPid: process.pid } : {}) };
+      Promise.resolve().then(() => this.reaper(job)).then(report, (err) => report({ error: String(err?.message ?? err) }));
     }, this.reapDelayMs);
     t.unref?.();
   }

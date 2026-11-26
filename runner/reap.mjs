@@ -387,12 +387,12 @@ export async function redatePids(pids, { platform = process.platform, spawnImpl 
 const START_MATCH_MS = (platform) => (platform === 'win32' ? 1000 : 2500); // ps dates to the second
 
 /**
- * The runner's reaper: (job) -> Promise<{ reaped: [{ pid, port, root, pids, cmd }], skipped: [...], error? }>.
- *   job: { agentId, token, since (token mint time), endedAt, protectedPids, cliPid, stillOk: () => bool }
+ * The runner's reaper: (job) -> Promise<{ reaped: [{ pid, port, root, pids, cmd }], skipped: [...], error?, leftovers? }>.
+ *   job: { agentId, token, since (token mint time), endedAt, protectedPids, cliPid, stillOk: () => bool, leftovers?, liveCliPids?, selfPid? }
  * stillOk is asked right before any kill (the agent resumed, the runner is shutting down: nothing is killed).
  * Every pid is re-dated just before the kill and dropped if its start time moved (pid reuse) or it is gone.
  */
-export function createDevServerReaper({ platform = process.platform, snapshot = () => snapshotListeners({ platform }), markers = (pids) => readEnvMarkers(pids, { platform }), inspect = (pids) => redatePids(pids, { platform }), kill = (pids) => killPids(pids, { platform }) } = {}) {
+export function createDevServerReaper({ platform = process.platform, snapshot = () => snapshotListeners({ platform }), markers = (pids) => readEnvMarkers(pids, { platform }), inspect = (pids) => redatePids(pids, { platform }), kill = (pids) => killPids(pids, { platform }), leftovers = null } = {}) {
   // Reaps that land together (a burst of parks) share one snapshot, if it started after their process ended.
   let shared = null; // { startedAt, promise }
   const table = (endedAt) => {
@@ -404,7 +404,9 @@ export function createDevServerReaper({ platform = process.platform, snapshot = 
     promise.then(() => setTimeout(() => { if (shared === mine) shared = null; }, 1000).unref?.(), () => { if (shared === mine) shared = null; });
     return promise;
   };
-  return async ({ agentId, token, since = 0, endedAt, protectedPids = [], cliPid = null, stillOk = () => true }) => {
+  // idea-1140: job.leftovers (the agent is done: exit, archive stop) also runs leftovers(job) after the listener reap: every
+  // NON-listener process still carrying this agent's id + token (detached.mjs createLeftoverReaper; its result under .leftovers).
+  const listenerReap = async ({ agentId, token, since = 0, endedAt, protectedPids = [], cliPid = null, stillOk = () => true }) => {
     if (!agentId || !token) return { reaped: [], skipped: [], error: 'no agent token' };
     let snap;
     try { snap = await table(endedAt); } catch (err) { return { reaped: [], skipped: [], error: `snapshot: ${err?.message ?? err}` }; }
@@ -430,5 +432,12 @@ export function createDevServerReaper({ platform = process.platform, snapshot = 
       for (const l of listenersOk) reaped.push({ pid: l.pid, port: l.port, root: r.root, pids, cmd: r.cmd });
     }
     return { reaped, skipped };
+  };
+  return async (job) => {
+    const res = await listenerReap(job);
+    if (!job?.leftovers || !leftovers) return res;
+    let lo;
+    try { lo = await leftovers(job); } catch (err) { lo = { reaped: [], skipped: [], error: String(err?.message ?? err) }; }
+    return { ...res, leftovers: lo };
   };
 }
