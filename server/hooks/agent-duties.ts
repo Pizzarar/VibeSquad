@@ -200,9 +200,12 @@ export function upstreamRespawnPlan(
   if (entries.length >= UPSTREAM_RESPAWN_TIMELINE_LIMIT) return { skip: "not-first-turn" };
   const prompts = entries.filter((e) => e.item?.type === "user_message");
   // idea-1077: an agy quota death ends its turn (end_turn) instead of exiting: that one closing turnEnd, on the last entry, is the
-  // death itself. Any earlier turnEnd is a real finished turn.
+  // death itself. Any earlier turnEnd is a real finished turn (idea-1080 L1: 1 prompt + a real turnEnd + the quota turnEnd skips).
   const finished = quota ? entries.slice(0, -1) : entries;
   if (prompts.length !== 1 || finished.some((e) => e.turnEnd)) return { skip: "not-first-turn" };
+  // idea-1080 L2: "no real work" means no side-effecting call, not zero tool calls. A read-only first turn (read/search/think/fetch)
+  // that died, on a quota or upstream, is still respawned: replaying the prompt repeats only those reads, and quota usually runs
+  // out mid-turn after some, so counting them would leave most quota deaths dead (the silent NO VERDICT 1077 fixed).
   const edit = entries.find((e) => e.item?.type === "tool_call" && !RESPAWN_SAFE_TOOL_KINDS.has(String(e.item?.detail?.kind ?? "").toLowerCase()));
   if (edit) return { skip: `tool-edits(${String(edit.item?.name ?? "tool").slice(0, 40)})` };
   const prompt = String(prompts[0].item?.text ?? "");
