@@ -76,6 +76,10 @@ const {
   RESUME_MODE_LABEL,
   resolveWorkerWorktree,
   extractLastWorkerReport,
+  gatherWorktreeResumeState,
+  formatMidRunResumeBrief,
+  clampLines,
+  MIDRUN_BRIEF_MAX_CHARS,
 } = await import("../server/hooks/agent-duties.ts");
 const { FAILOVER_FROM_LABEL } = await import("../server/lead-handoff.mjs");
 const { readLiveCapDoc, spawnFamily } = await import("../server/provider-failover.mjs");
@@ -637,4 +641,42 @@ test("1101-10: Invariant 4 — main checkout with no linked worktree is refused;
   assert.equal((await resolveWorkerWorktree(MAIN_REPO, "no worktree here", [], { vsHome: VS_HOME })).kind, "main-checkout");
   assert.equal((await resolveWorkerWorktree(LINKED_WT, "", [], { vsHome: VS_HOME })).kind, "worktree");
   assert.equal(extractLastWorkerReport(MIDRUN_TIMELINE(AGY_NOTICE), AGY_NOTICE), LAST_REPORT);
+});
+
+test("1101-11: M2 — resume brief is bounded with thousands of untracked/changed files (status, diff stat, diff all capped)", async () => {
+  // A linked worktree with 3000 untracked files and 400 modified tracked files.
+  const wt = path.join(WORKTREE_ROOT, "unit-1101-big");
+  git(["worktree", "add", "-b", "unit-1101-big", wt, "master"], MAIN_REPO);
+  mkdirSync(path.join(wt, "gen"), { recursive: true });
+  mkdirSync(path.join(wt, "tracked"), { recursive: true });
+  for (let i = 0; i < 400; i++) writeFileSync(path.join(wt, "tracked", `t${i}.txt`), "a\n");
+  git(["add", "tracked"], wt);
+  git(["commit", "-m", "track 400 files"], wt);
+  for (let i = 0; i < 400; i++) writeFileSync(path.join(wt, "tracked", `t${i}.txt`), "b\n".repeat(50));
+  for (let i = 0; i < 3000; i++) writeFileSync(path.join(wt, "gen", `untracked-file-with-a-long-name-${i}.txt`), "x");
+
+  const state = await gatherWorktreeResumeState(wt, null);
+  assert.ok(state.status.length <= 3000, `status capped (${state.status.length})`);
+  assert.match(state.status, /more status lines truncated\)$/);
+  assert.ok(state.diffStat.length <= 3000, `diff stat capped (${state.diffStat.length})`);
+  assert.match(state.diffStat, /more diff-stat lines truncated\)$/);
+  assert.ok(state.diff.length <= 6100, `diff capped (${state.diff.length})`);
+
+  const brief = formatMidRunResumeBrief({
+    deadId: "rn-big", fromFam: "claude", toFam: "antigravity-cli", why: "quota", worktreeCwd: wt, ...state,
+    lastReport: "r".repeat(50_000), originalPrompt: "p".repeat(50_000),
+  });
+  assert.ok(brief.length <= MIDRUN_BRIEF_MAX_CHARS, `brief bounded (${brief.length})`);
+  assert.ok(brief.length < 30_000, "section caps alone keep it under the backstop");
+
+  // Formatter bounds raw (uncapped) sections too, and clampLines is idempotent.
+  const raw = Array.from({ length: 20_000 }, (_, i) => `?? gen/f${i}`).join("\n");
+  const rawBrief = formatMidRunResumeBrief({
+    deadId: "rn-big", fromFam: "claude", toFam: "gemini", why: "quota", worktreeCwd: wt, branch: "b".repeat(5000),
+    commits: raw, status: raw, diffStat: raw, diff: raw, lastReport: "", originalPrompt: "go",
+  });
+  assert.ok(rawBrief.length <= MIDRUN_BRIEF_MAX_CHARS, `raw brief bounded (${rawBrief.length})`);
+  const once = clampLines(raw, 3000, "status lines");
+  assert.equal(clampLines(once, 3000, "status lines"), once);
+  assert.equal(clampLines("short", 3000), "short");
 });

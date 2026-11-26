@@ -227,6 +227,24 @@ export function respawnLabels(labels: Labels, profile: string, deadId: string): 
 const MIDRUN_DIFF_MAX_CHARS = 6000;
 const MIDRUN_PROMPT_MAX_CHARS = 12000;
 const MIDRUN_REPORT_MAX_CHARS = 2500;
+/** idea-1101 M2: `git status --short`, `diff --stat` and the commit list are line-capped too (thousands of untracked files). */
+const MIDRUN_STATUS_MAX_CHARS = 3000;
+const MIDRUN_DIFFSTAT_MAX_CHARS = 3000;
+const MIDRUN_COMMITS_MAX_CHARS = 1500;
+/** Hard ceiling on the whole resume brief (sum of the section caps plus headers); a backstop, never reached by capped sections. */
+export const MIDRUN_BRIEF_MAX_CHARS = 32000;
+
+/** Cut `text` at a line boundary to at most `max` chars (the note included, so a second clamp is a no-op), noting how many
+ *  lines were dropped. Pure. */
+export function clampLines(text: string, max: number, what = "lines"): string {
+  const t = String(text ?? "");
+  if (t.length <= max) return t;
+  const head = t.slice(0, Math.max(0, max - 64));
+  const cut = head.lastIndexOf("\n");
+  const kept = cut > 0 ? head.slice(0, cut) : head;
+  const dropped = t.split("\n").length - kept.split("\n").length;
+  return `${kept}\n...(${dropped} more ${what} truncated)`;
+}
 const WORKTREE_CREATE_RE = /\bvs\s+worktree\s+create\s+([A-Za-z0-9][A-Za-z0-9._/-]*)/g;
 
 /** True when upstreamRespawnPlan skipped ONLY because the worker already did real work (eligible for mid-run quota resume). */
@@ -318,11 +336,11 @@ export async function gatherWorktreeResumeState(worktreeCwd: string, dirs?: GitD
   ]);
   const rawDiff = (diffRes.ok ? diffRes.out : (await run(["diff"])).out).trim();
   const diff = rawDiff.length > MIDRUN_DIFF_MAX_CHARS ? `${rawDiff.slice(0, MIDRUN_DIFF_MAX_CHARS)}\n...(diff truncated)` : rawDiff;
-  const diffStat = (statRes.ok ? statRes.out : (await run(["diff", "--stat"])).out).trim();
+  const diffStat = clampLines((statRes.ok ? statRes.out : (await run(["diff", "--stat"])).out).trim(), MIDRUN_DIFFSTAT_MAX_CHARS, "diff-stat lines");
   return {
-    branch: (branchRes.ok ? branchRes.out : head?.sha ?? "unknown").trim() || "unknown",
-    commits: (logRes.ok ? logRes.out : "").trim(),
-    status: (statusRes.ok ? statusRes.out : "").trim(),
+    branch: (branchRes.ok ? branchRes.out : head?.sha ?? "unknown").trim().slice(0, 200) || "unknown",
+    commits: clampLines((logRes.ok ? logRes.out : "").trim(), MIDRUN_COMMITS_MAX_CHARS, "commits"),
+    status: clampLines((statusRes.ok ? statusRes.out : "").trim(), MIDRUN_STATUS_MAX_CHARS, "status lines"),
     diffStat,
     diff,
   };
@@ -346,6 +364,15 @@ export function formatMidRunResumeBrief(spec: {
   const orig = spec.originalPrompt.length > MIDRUN_PROMPT_MAX_CHARS
     ? `${spec.originalPrompt.slice(0, MIDRUN_PROMPT_MAX_CHARS)}\n...(original prompt truncated)`
     : spec.originalPrompt;
+  // idea-1101 M2: every section is bounded here too (the formatter is exported; callers may pass raw git output).
+  spec = {
+    ...spec,
+    commits: clampLines(spec.commits, MIDRUN_COMMITS_MAX_CHARS, "commits"),
+    status: clampLines(spec.status, MIDRUN_STATUS_MAX_CHARS, "status lines"),
+    diffStat: clampLines(spec.diffStat, MIDRUN_DIFFSTAT_MAX_CHARS, "diff-stat lines"),
+    diff: spec.diff.length > MIDRUN_DIFF_MAX_CHARS ? `${spec.diff.slice(0, MIDRUN_DIFF_MAX_CHARS)}\n...(diff truncated)` : spec.diff,
+    lastReport: spec.lastReport.length > MIDRUN_REPORT_MAX_CHARS ? `${spec.lastReport.slice(0, MIDRUN_REPORT_MAX_CHARS)}\n...(truncated)` : spec.lastReport,
+  };
   const sections: string[] = [
     `[MID-RUN QUOTA RESUME from ${spec.deadId} (${spec.fromFam} -> ${spec.toFam})]`,
     `The previous worker (${spec.deadId}) hit a provider quota wall (${spec.why}) mid-run and was stopped.`,
@@ -362,7 +389,8 @@ export function formatMidRunResumeBrief(spec: {
   if (!spec.commits && !spec.status && !spec.diff) sections.push("(no commits or uncommitted diff yet)");
   if (spec.lastReport) sections.push("", "## Previous worker's last message", spec.lastReport);
   sections.push("", "## Original task prompt", orig);
-  return sections.join("\n");
+  const brief = sections.join("\n");
+  return brief.length > MIDRUN_BRIEF_MAX_CHARS ? `${brief.slice(0, MIDRUN_BRIEF_MAX_CHARS)}\n...(resume brief truncated)` : brief;
 }
 
 /** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
