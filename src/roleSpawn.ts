@@ -50,6 +50,30 @@ export const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
 const AGY_CLAUDE_FAMILY = "agy-claude";
 const AGY_CLAUDE_EXCLUDED_ROLES = new Set(["lead", "brainstorm"]);
 
+/** Mirror of server/provider-failover.mjs INTERRUPTIBLE_KINDS + isInterruptibleWork (@per PLAN_PER_QUOTA_FIT_1126 C). */
+export const INTERRUPTIBLE_KINDS: ReadonlySet<string> = new Set(["docs", "audit", "spike", "pre-check"]);
+
+export function isInterruptibleRole({ stakes, kind, role }: { stakes?: string; kind?: string; role?: string } = {}): boolean {
+  if (String(stakes ?? "").trim().toLowerCase() === "mechanical") return true;
+  const normKey = (v?: string) => String(v ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  const k = normKey(kind);
+  if (k && INTERRUPTIBLE_KINDS.has(k)) return true;
+  const r = normKey(role);
+  if (r && INTERRUPTIBLE_KINDS.has(r)) return true;
+  if (
+    r &&
+    (r.startsWith("pre-check-") ||
+      r.startsWith("audit-") ||
+      r.startsWith("mechanical-") ||
+      r.startsWith("docs-") ||
+      r.startsWith("spike-") ||
+      r === "check-haiku")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export const STAKES_CHOICES = ["normal", "tierA-security", "tierA-invariant", "mechanical"] as const;
 export type Stakes = (typeof STAKES_CHOICES)[number];
 
@@ -108,11 +132,25 @@ export function ladderPick(role: RoleLike, ladder: LadderLike | undefined, stake
  *  All providers capped = it stays on the override provider (or the first of the walk order, falling back from agy-claude
  *  to direct claude when claude is in the walk, mirroring server/role-route.mjs) and `allCapped` is set: the hook starts
  *  it there and waits/fails over, Spawn is never blocked. `via` is the badge text. */
+function normalizeSoftCapped(softCapped?: readonly string[] | Record<string, string | boolean>): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!softCapped) return out;
+  if (Array.isArray(softCapped)) {
+    for (const p of softCapped) if (p) out.set(p, "");
+    return out;
+  }
+  for (const [k, v] of Object.entries(softCapped)) {
+    if (!v) continue;
+    out.set(k, typeof v === "string" ? v : "");
+  }
+  return out;
+}
+
 export function landingPick(
   role: RoleLike,
   ladder: LadderLike | undefined,
   stakes: string,
-  opts: { capped?: readonly string[]; override?: Override | null; roleKey?: string } = {},
+  opts: { capped?: readonly string[]; softCapped?: readonly string[] | Record<string, string | boolean>; kind?: string; override?: Override | null; roleKey?: string } = {},
 ): { provider: string; model: string; via: string; allCapped: boolean } {
   const ov = opts.override ?? null;
   const capped = opts.capped ?? [];
@@ -122,6 +160,10 @@ export function landingPick(
     return { provider: ov.provider, model: ov.model ?? modelOf(ov.provider), via: ov.model ? "override" : "override (provider, ladder model)", allCapped: false };
   }
   const providers = effectiveWalkOrder(role, ladder, stakes, opts.roleKey);
+  const interruptible = isInterruptibleRole({ stakes, kind: opts.kind, role: opts.roleKey ?? role.key ?? role.name });
+  const softMap = interruptible ? new Map<string, string>() : normalizeSoftCapped(opts.softCapped);
+
+  // Pass 1: prefer a family under both hard and soft lines (soft line skipped for interruptible work).
   const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
   for (const provider of providers) {
     if (ov && provider === ov.provider) continue;
@@ -129,9 +171,28 @@ export function landingPick(
       skipped.push(`${providerName(provider)} capped`);
       continue;
     }
+    if (softMap.has(provider)) {
+      const msg = softMap.get(provider);
+      skipped.push(msg ? `${providerName(provider)} (${msg})` : `${providerName(provider)} soft`);
+      continue;
+    }
     // The hook keeps the caller's model only when it belongs to the hop target's family; this badge has no family table, so it shows the ladder model.
     return { provider, model: modelOf(provider), via: skipped.length ? `failover (${skipped.join(", ")} → ${providerName(provider)})` : "ladder", allCapped: false };
   }
+
+  // Pass 2: every family is past soft (or hard). Fall back to the first family under the hard line.
+  if (softMap.size > 0) {
+    const hardSkipped = ov ? [`${providerName(ov.provider)} capped`] : [];
+    for (const provider of providers) {
+      if (ov && provider === ov.provider) continue;
+      if (capped.includes(provider)) {
+        hardSkipped.push(`${providerName(provider)} capped`);
+        continue;
+      }
+      return { provider, model: modelOf(provider), via: hardSkipped.length ? `failover (${hardSkipped.join(", ")} → ${providerName(provider)})` : "ladder", allCapped: false };
+    }
+  }
+
   // R10 fu2/fu3: mirror server/role-route.mjs all-capped fallback — when every family is capped and agy-claude is first,
   // fall back to direct claude when it is in the walk instead of agy-claude.
   const allCappedFallback = providers[0] === AGY_CLAUDE_FAMILY && providers.includes("claude") ? "claude" : (providers[0] ?? "claude");

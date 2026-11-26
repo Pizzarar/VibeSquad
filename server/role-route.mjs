@@ -7,7 +7,7 @@
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
 import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
 import { AGY_CLAUDE_FAMILY, GEMINI_TOP_MODEL } from "./model-ids.mjs";
-import { ROLE_PROVIDER_CHAINS, TIER_PROVIDER_CHAINS } from "./provider-failover.mjs";
+import { ROLE_PROVIDER_CHAINS, TIER_PROVIDER_CHAINS, isInterruptibleWork } from "./provider-failover.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -256,6 +256,34 @@ function cappedSet(caps) {
   return out;
 }
 
+function softCapMap(softCaps) {
+  const out = new Map();
+  if (!softCaps) return out;
+  if (softCaps instanceof Set || Array.isArray(softCaps)) {
+    for (const c of softCaps) {
+      const fam = routeProviderFamily(c);
+      if (fam && !out.has(fam)) out.set(fam, "");
+    }
+    return out;
+  }
+  if (softCaps instanceof Map) {
+    for (const [k, v] of softCaps.entries()) {
+      if (!v) continue;
+      const fam = routeProviderFamily(k);
+      if (fam && !out.has(fam)) out.set(fam, typeof v === "string" ? v : "");
+    }
+    return out;
+  }
+  if (typeof softCaps === "object") {
+    for (const [k, v] of Object.entries(softCaps)) {
+      if (!v) continue;
+      const fam = routeProviderFamily(k);
+      if (fam && !out.has(fam)) out.set(fam, typeof v === "string" ? v : "");
+    }
+  }
+  return out;
+}
+
 function nonEmpty(v) {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
@@ -283,7 +311,7 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  *   or "explicit-capped" (an explicit provider, or a model naming its own family, on a capped provider: the resolver
  *   only reports it; P5c lets the cap win for profile spawns, as agent-duties.ts does today).
  */
-export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
+export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, ladder, stakesLadder, directClaude = false } = {}, opts = {}) {
   const ex = explicit && typeof explicit === "object" ? explicit : {};
   const exProvider = nonEmpty(ex.provider);
   const exModel = nonEmpty(ex.model);
@@ -324,25 +352,47 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     order.splice(ci, 0, AGY_CLAUDE_FAMILY);
   }
 
-  // Provider: explicit > (model's own family, when only a model is given) > walk skipping capped (all capped = first).
+  // Provider: explicit > (model's own family, when only a model is given) > walk skipping hard+soft capped
+  // (soft line only applies to non-interruptible work; if every family is past soft, fall back to first under hard).
   const capped = cappedSet(caps);
+  const interruptible = isInterruptibleWork({ stakes: s, kind, role: found?.key ?? role });
+  const softMap = interruptible ? new Map() : softCapMap(softCaps);
   const modelFam = !exProvider && exModel ? routeProviderFamily(exModel) : "";
   let provider;
   /** R10: the walk chose `provider` (an uncapped family), so the capped ones before it were really walked past. */
   let walked = false;
+  let softFailover = false;
+  let softReason = null;
   if (exProvider || (modelFam && (rungs[modelFam] || order.includes(modelFam)))) {
     provider = exProvider ? routeProviderFamily(exProvider) || exProvider : modelFam;
     if (capped.has(provider)) reasons.push("explicit-capped");
   } else {
-    provider = order.find((p) => !capped.has(p));
-    if (!provider) {
-      // R10 fu2: agy-claude trips at 85% (and is first in the walk), so when every family is capped it is the likeliest to be
-      // dead; direct claude (95% / its own cap) is the likelier survivor, so keep that instead of agy-claude.
-      provider = order[0] === AGY_CLAUDE_FAMILY && order.includes("claude") ? "claude" : order[0];
-      if (order.length) reasons.push("all-capped");
-    } else {
+    const underSoft = order.find((p) => !capped.has(p) && !softMap.has(p));
+    if (underSoft) {
+      provider = underSoft;
       walked = true;
-      if (provider !== order[0]) reasons.push("failover");
+      if (provider !== order[0]) {
+        reasons.push("failover");
+        const head = order.slice(0, order.indexOf(provider));
+        const softHit = head.find((p) => !capped.has(p) && softMap.has(p));
+        if (softHit) {
+          softFailover = true;
+          const baseMsg = softMap.get(softHit) || "soft quota: interruptible only";
+          softReason = `${baseMsg} -> ${provider}`;
+        }
+      }
+    } else {
+      // Every family is past soft (or hard): keep today's behavior — use the first one under the hard line.
+      provider = order.find((p) => !capped.has(p));
+      if (!provider) {
+        // R10 fu2: agy-claude trips at 85% (and is first in the walk), so when every family is capped it is the likeliest to be
+        // dead; direct claude (95% / its own cap) is the likelier survivor, so keep that instead of agy-claude.
+        provider = order[0] === AGY_CLAUDE_FAMILY && order.includes("claude") ? "claude" : order[0];
+        if (order.length) reasons.push("all-capped");
+      } else {
+        walked = true;
+        if (provider !== order[0]) reasons.push("failover");
+      }
     }
   }
   if (legacy) reasons.push("legacy-name");
@@ -382,14 +432,17 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     reason: listed[0] ?? "default",
     reasons: listed.length ? listed : ["default"],
     capped: Boolean(provider) && capped.has(provider),
+    softFailover,
+    softReason,
+    interruptible,
     stakes: s,
     role: found?.key ?? null,
     legacy: legacy?.name ?? null,
     alias: legacy?.alias ?? null,
     hop: hop?.name ?? null,
-    // R10: the walk order and the capped families walked past before `provider` (label family=/why=failover). An
+    // R10: the walk order and the capped/soft-capped families walked past before `provider` (label family=/why=failover). An
     // explicit provider/model or an all-capped route walked nothing: [].
     walk: [...order],
-    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p)) : [],
+    skipped: walked ? order.slice(0, order.indexOf(provider)).filter((p) => capped.has(p) || (softFailover && softMap.has(p))) : [],
   };
 }

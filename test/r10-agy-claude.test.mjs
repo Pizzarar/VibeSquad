@@ -115,11 +115,14 @@ const landed = (out) => ({
   modeId: out.config.modeId,
 });
 
-// Case 1: fresh claude-gpt pool row <85% -> agy-claude (normal -> sonnet-medium, tierA -> opus-high), vs.route has family=agy-claude.
+// Case 1: fresh claude-gpt pool row under soft (<70%) -> agy-claude (normal -> sonnet-medium, tierA -> opus-high), vs.route has family=agy-claude.
+// At 84% (<85% hard, >=70% soft), hard overQuota is still false (85% hard line unchanged), while non-interruptible spawns prefer claude under soft.
 test(
-  "R10-1: fresh claude-gpt pool row <85% routes Implement normal to agy-claude sonnet-medium and tierA to opus-high with family=agy-claude",
+  "R10-1: fresh claude-gpt pool row <70% routes Implement normal to agy-claude sonnet-medium and tierA to opus-high with family=agy-claude; 84% is under hard (85%)",
   withEnv(async () => {
-    const u = usageFromLimits([limitRow("antigravity-cli/claude-gpt", 84)], { now: NOW });
+    const u84 = usageFromLimits([limitRow("antigravity-cli/claude-gpt", 84)], { now: NOW });
+    assert.equal(isProviderOverQuota(AGY_CLAUDE_FAMILY, u84).overQuota, false, "hard line stays at 85%");
+    const u = usageFromLimits([limitRow("antigravity-cli/claude-gpt", 69)], { now: NOW });
     assert.equal(isProviderOverQuota(AGY_CLAUDE_FAMILY, u).overQuota, false);
     const h = harness({ usageProviders: u });
     try {

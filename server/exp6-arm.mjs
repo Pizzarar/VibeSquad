@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isInterruptibleWork } from "./provider-failover.mjs";
 
 // EXP6 (Sonnet vs DSP, 11-19..11-23) is closed; these stay for the history readers (verdict probe, EXP6.md re-reads).
 export const EXP6_SINCE = "2026-11-19T00:00:00Z";
@@ -69,7 +70,7 @@ export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP
  * picked: the pick goes to the other arm with reason capped:<family>, and vs.arm / wf name the provider that actually runs.
  * A `vs cap` entry for the family wins (kept as is). The quota read never throws (unreadable = no quota caps).
  */
-export async function readArmCaps({ env = process.env } = {}) {
+export async function readArmCaps({ env = process.env, stakes, kind, role, softThreshold, softThresholds } = {}) {
   const { isProviderOverQuota, normalizeProviderFamily, readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
   const { liveQuotaUsage } = await import("./limits-read.mjs");
   const cappedProvidersPath = env?.VIBESQUAD_CAPPED_PROVIDERS_PATH || (env?.VIBESQUAD_HOME ? join(env.VIBESQUAD_HOME, "capped-providers.json") : undefined);
@@ -84,8 +85,9 @@ export async function readArmCaps({ env = process.env } = {}) {
   for (const entry of quota) {
     const fam = normalizeProviderFamily(entry?.id);
     if (!fam || caps[fam]) continue;
-    const q = isProviderOverQuota(fam, quota, undefined, { ignoreDiskCaps: true });
+    const q = isProviderOverQuota(fam, quota, undefined, { ignoreDiskCaps: true, env, stakes, kind, role, softThreshold, softThresholds });
     if (q.overQuota) caps[fam] = { reason: q.reason, quota: true };
+    else if (q.softOverQuota) caps[fam] = { reason: q.softReason, quota: true, soft: true };
   }
   return caps;
 }
@@ -208,6 +210,41 @@ export function pickArm(requested, counts, { arms = IMPLEMENTER_ARMS, capped = n
   return best ? ARMS[best.wf] : null;
 }
 
+function splitHardCaps(caps) {
+  if (!caps || Array.isArray(caps)) return caps ?? {};
+  const hard = {};
+  for (const [k, v] of Object.entries(caps)) {
+    if (v && typeof v === "object" && v.soft === true) continue;
+    hard[k] = v;
+  }
+  return hard;
+}
+
+function softReasonForArm(wf, caps, { role = false } = {}) {
+  if (!caps || Array.isArray(caps)) return "";
+  const fams = ARM_CAP_FAMILIES[wf] ?? [];
+  const check = (k) => {
+    const v = caps[k];
+    return v && typeof v === "object" && v.soft === true && typeof v.reason === "string" ? v.reason : "";
+  };
+  if (role && wf === "sonnet") {
+    for (const k of Object.keys(caps)) {
+      if (String(k ?? "").trim().toLowerCase().split("/")[0] === "agy-claude") {
+        const r = check(k);
+        if (r) return r;
+      }
+    }
+  }
+  for (const k of Object.keys(caps)) {
+    const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
+    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
+      const r = check(k);
+      if (r) return r;
+    }
+  }
+  return "";
+}
+
 /**
  * Decide the arm for a spawn. Returns null when this is not a stakes=normal implementer arm request (lead, no lane,
  * tierA-* / mechanical, any other profile, alternation off). Else { mode: "arm", arm, requestedArm, swapped, reason,
@@ -221,6 +258,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   const requested = armOfProfile(profile);
   if (!requested) return null;
   const roleSpawn = requested.role === true;
+  const interruptible = isInterruptibleWork({ stakes, kind: labels?.kind, role: profile });
   const keep = (reason, extra = {}) => ({ mode: "arm", arm: requested.wf, requestedArm: requested.wf, swapped: false, reason, counts: null, profile: String(profile), ...(roleSpawn ? { role: true } : {}), ...extra });
   const abVal = norm(labels.ab);
   const wfVal = norm(labels.wf);
@@ -229,14 +267,22 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   if (optInKey) {
     const optInArm = ARMS[optInKey];
     if (!roleSpawn && !optInArm.profile) return keep("fail-open");
-    let capKey = "";
+    let hardKey = "";
+    let allKey = "";
+    let rawCaps = {};
     try {
-      const caps = capProbe ? await capProbe() : {};
-      capKey = armCapKey(optInKey, caps, { role: roleSpawn });
+      rawCaps = capProbe ? await capProbe() : {};
+      const hardCaps = splitHardCaps(rawCaps);
+      hardKey = armCapKey(optInKey, hardCaps, { role: roleSpawn });
+      allKey = interruptible ? hardKey : armCapKey(optInKey, rawCaps, { role: roleSpawn });
     } catch {
       return keep("fail-open"); // unreadable caps: never swap onto a possibly dead provider (idea-703)
     }
-    if (capKey) return keep(`capped:${capKey}`, { capped: true });
+    if (hardKey) return keep(`capped:${hardKey}`, { capped: true });
+    if (allKey && !armCapKey(requested.wf, rawCaps, { role: roleSpawn })) {
+      const sr = softReasonForArm(optInKey, rawCaps, { role: roleSpawn }) || "soft quota: interruptible only";
+      return keep(`${sr} -> ${requested.provider}`, { capped: true, softFailover: true });
+    }
     const swapped = optInArm.wf !== requested.wf;
     const profileOut = swapped && !roleSpawn ? optInArm.profile : String(profile);
     return {
@@ -248,10 +294,16 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   if (set.length < 2 || !set.includes(requested.wf)) return null;
   if (abVal === "pin") return keep("pin");
   if (wfVal) return keep("wf");
-  let capped;
+  let rawCaps;
+  let hardCapped;
+  let allCapped;
   try {
-    const caps = capProbe ? await capProbe() : {};
-    capped = new Map(set.map((wf) => [wf, armCapKey(wf, caps, { role: roleSpawn })]).filter(([, k]) => k));
+    rawCaps = capProbe ? await capProbe() : {};
+    const hardCaps = splitHardCaps(rawCaps);
+    hardCapped = new Map(set.map((wf) => [wf, armCapKey(wf, hardCaps, { role: roleSpawn })]).filter(([, k]) => k));
+    allCapped = interruptible
+      ? hardCapped
+      : new Map(set.map((wf) => [wf, armCapKey(wf, rawCaps, { role: roleSpawn })]).filter(([, k]) => k));
   } catch {
     return keep("fail-open"); // unreadable caps: never swap onto a possibly dead provider (idea-703)
   }
@@ -261,11 +313,28 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   } catch {
     return keep("fail-open");
   }
-  const arm = pickArm(requested, counts, { arms: set, capped: new Set(capped.keys()), weights });
-  if (!arm) return keep(`capped:${[...capped.values()].join("+")}`, { counts, capped: true }); // every arm capped
-  // The reason names a cap only when it changed the outcome (the uncapped pick was a capped arm).
   const free = pickArm(requested, counts, { arms: set, weights });
-  const reason = free.wf !== arm.wf ? `capped:${capped.get(free.wf)}` : "alternation";
+  // Pass 1: prefer an arm under both hard and soft lines.
+  let arm = pickArm(requested, counts, { arms: set, capped: new Set(allCapped.keys()), weights });
+  let usedHardFallback = false;
+  if (!arm) {
+    // Pass 2: every arm is past soft (or hard). Fall back to hard caps only so we don't strand the spawn.
+    arm = pickArm(requested, counts, { arms: set, capped: new Set(hardCapped.keys()), weights });
+    usedHardFallback = true;
+    if (!arm) return keep(`capped:${[...hardCapped.values()].join("+")}`, { counts, capped: true }); // every arm hard-capped
+  }
+  // The reason names a cap/soft line only when it changed the outcome (the uncapped pick was skipped).
+  let reason = "alternation";
+  let softFailover = false;
+  if (free.wf !== arm.wf) {
+    if (usedHardFallback || hardCapped.has(free.wf)) {
+      reason = `capped:${hardCapped.get(free.wf)}`;
+    } else {
+      const sr = softReasonForArm(free.wf, rawCaps, { role: roleSpawn }) || "soft quota: interruptible only";
+      reason = `${sr} -> ${arm.provider}`;
+      softFailover = true;
+    }
+  }
   const swapped = arm.wf !== requested.wf;
   // A role spawn keeps its role name: the arm only picks the provider (`provider`), the ladder picks the model.
   const profileOut = swapped && !roleSpawn ? arm.profile : String(profile);
@@ -273,5 +342,6 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     mode: "arm", arm: arm.wf, requestedArm: requested.wf, swapped, reason, counts, profile: profileOut,
     ...(roleSpawn ? { role: true, provider: arm.provider } : {}),
     ...(reason !== "alternation" ? { capped: true } : {}),
+    ...(softFailover ? { softFailover: true } : {}),
   };
 }

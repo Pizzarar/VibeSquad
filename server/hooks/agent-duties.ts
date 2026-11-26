@@ -69,6 +69,7 @@ import {
   routeMetricText,
   routeRoleKeyOf,
   routeTierOf,
+  softCappedFamilies,
 } from "../spawn-route.mjs";
 import { armRouteFor } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
@@ -2260,7 +2261,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
         const quota = quotaList();
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
-        const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
+        const route = roleSpawnProfile(fromProfile, {
+          stakes: stakes || undefined,
+          caps: cappedFamilies(usage, failedFam ? [failedFam] : []),
+          softCaps: softCappedFamilies(usage, failedFam ? [failedFam] : [], { stakes: stakes || undefined, role: fromProfile }),
+          roles,
+        });
         const p = (route?.profile ?? null) as StoredProfile | null;
         // R10: spawn family (agy-claude runs on the antigravity-cli runner, a separate quota from Gemini).
         const fam = spawnFamily(p?.provider, p?.model);
@@ -2353,6 +2359,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.mark("match-profile");
         const usageList = currentUsageList();
         const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
+        const kindRaw = reqLabels.kind || env?.VS_KIND;
+        let softFailoverReason = "";
         // spawn_worker pre-fills model/thinking from the profile and names them in `vs.profile-derived`; those are not caller-explicit.
         const derivedFields = String(reqLabels["vs.profile-derived"] ?? "").split(",").map((f) => f.trim());
         const rawCallerModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
@@ -2393,7 +2401,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (roleNameHit(requestedProfileName, roles)) {
             const args = {
               stakes: stakesRaw,
+              kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
+              softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               roles,
               explicitModel: rawCallerModel,
               override: routeOverride,
@@ -2417,7 +2427,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (reroute) {
             const args = {
               stakes: reroute.stakes,
+              kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
+              softCaps: softCappedFamilies(usageList, [provider], { stakes: reroute.stakes, kind: kindRaw, role: reroute.role }),
               roles: liveRoles(loadStoredProfiles()),
               explicitModel: rawCallerModel,
             };
@@ -2468,8 +2480,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const matchedPm = splitProviderModel(matchedProfile.provider, matchedProfile.model);
           const fuzzyOnCallerProvider = !callerPm.provider || callerPm.provider === matchedPm.provider;
           if (wasExplicit || fuzzyOnCallerProvider) {
-            const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList);
+            const fo = resolveProfileWithFailover(matchedProfile, loadStoredProfiles(), usageList, {
+              stakes: stakesRaw,
+              kind: kindRaw,
+              role: matchedProfile.name,
+            });
             if (fo.failedOver && fo.profile) {
+              if (fo.softFailover && fo.reason) softFailoverReason = fo.reason;
               matchedProfile = fo.profile;
               // Preserve explicitness: a fuzzy match stays fuzzy so the caller's provider/model
               // are never clobbered by the explicit-profile override below.
@@ -2773,7 +2790,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           } else if (legacyName) {
             const meta = legacyRouteMeta(requestedProfileName, {
               stakes: stakesRaw,
+              kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
+              softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               explicitModel: rawModel,
             });
             if (meta) {
@@ -2818,6 +2837,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 : roleRoute?.route?.skipped?.includes("agy-claude") && normalizeProviderFamily(String(next.provider ?? provider)) === "claude"
                   ? "claude"
                   : "",
+            softReason: roleRoute?.route?.softReason || softFailoverReason || "",
           });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
           // R2 (PLAN_PER_ROLES_LADDER_1125): the reason the spawn SHOWS (`Role · model · reason`: drawer header, spawn_worker
