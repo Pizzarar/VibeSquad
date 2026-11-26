@@ -21,6 +21,8 @@ export interface WatchItem {
   run?: { pid: number | null; startedAt: number | string };
   /** idea-1101: earlier agent refs before respawn/mid-run quota resume retargeted this item. */
   retargeted?: Array<{ from: string; to: string; at: string; reason?: string }>;
+  /** idea-1126: resolved verdict expectation for an agent item ("review" | "impl"); absent when role is unknown (fail safe). */
+  agentRole?: "review" | "impl";
 }
 
 export interface WatchPing {
@@ -159,3 +161,5 @@ export function itemVerdict(item: WatchItem): string | null;
 export function verdictBlock(set: WatchSet): string;
 /** idea-883: masks verdict words in an LLM merge digest. */
 export function maskVerdictWords(text: string): string;
+/** idea-1126: classifies an agent's verdict expectation ("review" | "impl" | null when unknown). */
+export function agentVerdictRole(agent: any): "review" | "impl" | null;

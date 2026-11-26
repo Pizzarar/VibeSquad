@@ -21,7 +21,8 @@ import { checkTestLockDir, testLockDir } from "../cli/fifo-queue.mjs";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
-import { VERDICT_PREFIX_SRC, extractVerdictLine, parseVerdictLine, stripUnverifiedPrefix } from "./verdict.mjs";
+import { legacyProfileRole } from "./legacy-profile-roles.mjs";
+import { VERDICT_PREFIX_SRC, extractVerdictLine, isReviewerAgent, parseVerdictLine, stripUnverifiedPrefix } from "./verdict.mjs";
 
 export const WATCH_KINDS = Object.freeze(["agent", "suite", "restart"]);
 export const DEFAULT_STALL_MIN = 15;
@@ -300,6 +301,7 @@ function retargetSets({ from, to, reason } = {}, now) {
         delete item.nudgeSentAt;
         delete item.finalText;
         delete item.finalChecked;
+        delete item.agentRole;
         item.retargeted = [...(Array.isArray(item.retargeted) ? item.retargeted : []), { from: src, to: dst, at: iso(now), ...(reason ? { reason: oneLine(reason, 80) } : {}) }];
         changed = true;
       }
@@ -492,15 +494,54 @@ export function itemVerdict(item) {
   return `${v.verdict} ${v.severity ?? `${v.high}/${v.medium}/${v.low}`} ${v.hash}`;
 }
 
-/** The verdict tag a finished agent item shows: its verdict line, or NO VERDICT (never a PASS read from prose). */
+/** The verdict tag a finished agent item shows: its verdict line, `done (impl)` for known non-reviewers, or NO VERDICT (fail safe). */
 const NO_VERDICT = "NO VERDICT";
-const verdictTag = (item) => itemVerdict(item) ?? NO_VERDICT;
+const IMPL_DONE = "done (impl)";
+const REVIEW_ROLE_KEYS = new Set(["review", "reviewer", "pre-check", "precheck", "digest"]);
+const IMPL_ROLE_KEYS = new Set(["implement", "implementer", "planner", "work-order", "art-director", "art-painter", "lead", "brainstorm", "buddy", "overlord"]);
+const REVIEW_PROFILE_RE = /^(?:review|reviewer|ux-review|ux-reviewer|pre-check|precheck|check|audit|scout)(?:-|$)/;
+const IMPL_PROFILE_RE = /^(?:implement|implementer|planner|spec|work-order|mechanical|senior-reasoning|art-director|art-painter|art|lead|brainstorm|buddy|worker|coder)(?:-|$)/;
+
+/**
+ * idea-1126: classify an agent's verdict expectation from its labels/profile/title.
+ * - "review": Reviewer or Pre-check (expects a verdict line; missing verdict stays NO VERDICT).
+ * - "impl": known non-reviewer role (implement, planner, work-order, art, etc.; shows `done (impl)` instead of NO VERDICT).
+ * - null: role unknown (fail safe: stays NO VERDICT).
+ */
+export function agentVerdictRole(agent) {
+  if (!agent || typeof agent !== "object") return null;
+  const labels = agent.labels && typeof agent.labels === "object" ? agent.labels : {};
+  const role = String(labels.role ?? agent.role ?? "").trim().toLowerCase();
+  if (REVIEW_ROLE_KEYS.has(role)) return "review";
+  if (IMPL_ROLE_KEYS.has(role)) return "impl";
+
+  const profile = String(labels.profile ?? agent.profile ?? "").trim();
+  if (profile) {
+    const legacy = legacyProfileRole(profile);
+    if (legacy) return REVIEW_ROLE_KEYS.has(legacy.role) ? "review" : IMPL_ROLE_KEYS.has(legacy.role) ? "impl" : null;
+    const norm = profile.toLowerCase().replace(/[\s_]+/g, "-");
+    if (REVIEW_PROFILE_RE.test(norm)) return "review";
+    if (IMPL_PROFILE_RE.test(norm)) return "impl";
+  }
+
+  const title = String(agent.title ?? "").trim();
+  if (title && (isReviewerAgent({ labels, profile, title }) || /^pre-check\b/i.test(title))) return "review";
+  return null;
+}
+
+const isImplItem = (item) => item?.kind === "agent" && (item.agentRole ? item.agentRole === "impl" : agentVerdictRole(item) === "impl");
+const verdictTag = (item) => itemVerdict(item) ?? (isImplItem(item) ? IMPL_DONE : NO_VERDICT);
 const finishedAgent = (i) => i.kind === "agent" && (i.state === "done" || i.state === "fail");
 
-/** idea-883: "2 FAIL, 1 PASS, 3 NO VERDICT" over the finished agent items (FAIL first), "" when there are none. */
+/** idea-883 / idea-1126: "2 FAIL, 1 PASS, 3 NO VERDICT" over finished verdict-bearing agent items (FAIL first), "" when none. */
 function verdictTally(set) {
   const n = { FAIL: 0, PASS: 0, [NO_VERDICT]: 0 };
-  for (const i of set.items) if (finishedAgent(i)) n[itemVerdict(i)?.split(" ")[0] ?? NO_VERDICT]++;
+  for (const i of set.items) {
+    if (!finishedAgent(i)) continue;
+    const v = itemVerdict(i);
+    if (v) n[v.split(" ")[0]]++;
+    else if (!isImplItem(i)) n[NO_VERDICT]++;
+  }
   return Object.entries(n).filter(([, c]) => c).map(([k, c]) => `${c} ${k}`).join(", ");
 }
 
@@ -530,13 +571,15 @@ export function maskVerdictWords(text) {
 }
 
 function itemLine(item) {
-  // idea-883: a finished agent item leads with its code-read verdict (or NO VERDICT), so the 400-char cap can never cut a
-  // trailing FAIL off; a report that already starts with exactly that tag is left as is (no doubled tag, text unchanged).
+  // idea-883 / idea-1126: a finished agent item leads with its code-read verdict (or NO VERDICT for reviewers/unknowns), so the
+  // 400-char cap can never cut a trailing FAIL off; known non-reviewer roles without a verdict show `done (impl)` instead of NO VERDICT.
   const body = item.report ? oneLine(item.report) : "";
-  const tag = finishedAgent(item) ? verdictTag(item) : "";
+  const v = finishedAgent(item) ? itemVerdict(item) : null;
+  const impl = finishedAgent(item) && !v && isImplItem(item);
+  const tag = finishedAgent(item) ? (v ?? (impl ? "" : NO_VERDICT)) : "";
   const lead = tag && !body.startsWith(tag) ? `${tag}${body ? " — " : ""}` : "";
   const rep = lead || body ? ` — ${lead}${body}` : "";
-  if (item.state === "done") return `- ${itemLabel(item)}: done${rep}`;
+  if (item.state === "done") return `- ${itemLabel(item)}: ${impl ? IMPL_DONE : "done"}${rep}`;
   if (item.state === "fail") return `- ${itemLabel(item)}: FAIL${rep}`;
   if (item.state === "stalled") return `- ${itemLabel(item)}: STALLED (${item.reason})${rep}`;
   return `- ${itemLabel(item)}: ${item.phase || "waiting"}`;
@@ -612,6 +655,10 @@ export function stepSet(set, ctx) {
   if (!isOpen(set)) return null;
   const at = iso(ctx.now);
   for (const item of set.items) {
+    if (item.kind === "agent") {
+      const role = agentVerdictRole(ctx.agents.get(item.ref));
+      if (role && role !== item.agentRole) item.agentRole = role;
+    }
     if (item.state === "done") continue; // sticky
     // Restart resume: until the runner snapshot of a stalled-idle worker loads, classifyItem would read it as never-seen
     // ("no-events", phase pending) and lose the idle episode. Hold its state for one stall window after startup.
@@ -828,6 +875,8 @@ export function createWatchEngine({
     // finished/unread flag and must not count on its own.
     o.attention = (a.pendingPermissions?.length ?? 0) > 0;
     if (a.labels) o.labels = a.labels;
+    if (a.profile) o.profile = String(a.profile);
+    if (a.title) o.title = String(a.title);
     if (activity || o.lastEventAt === undefined) o.lastEventAt = t;
   }
 
