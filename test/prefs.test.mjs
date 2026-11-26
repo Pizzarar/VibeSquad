@@ -94,7 +94,7 @@ test('boring.css is imported after styles.css and every rule is scoped to html[d
     .replace(/@keyframes boring-[\w-]+\s*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
   const selectors = css
     .split('}')
-    .map((b) => b.replace(/@media[^{]*\{/g, '').split('{')[0]) // @media wrappers are fine; the rules inside must still be scoped
+    .map((b) => b.replace(/@(?:media|container)[^{]*\{/g, '').split('{')[0]) // @media wrappers are fine; the rules inside must still be scoped
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);

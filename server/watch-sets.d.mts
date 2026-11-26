@@ -19,6 +19,8 @@ export interface WatchItem {
   nudgeSentAt?: string;
   /** suite: the full run whose record set the verdict */
   run?: { pid: number | null; startedAt: number | string };
+  /** idea-1101: earlier agent refs before respawn/mid-run quota resume retargeted this item. */
+  retargeted?: Array<{ from: string; to: string; at: string; reason?: string }>;
 }
 
 export interface WatchPing {
@@ -97,6 +99,8 @@ export function listWatches(filter?: { owner?: string; team?: string; all?: bool
 export function cancelWatch(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): { ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean };
 export function reownWatches(spec: { from: string; to: string; ids?: string[]; reason?: string }, opts?: { home?: string; now?: number }): { reowned: string[] };
 export function reownWatchesAsync(spec: { from: string; to: string; ids?: string[]; reason?: string }, opts?: { home?: string; now?: number }): Promise<{ reowned: string[] }>;
+export function retargetWatches(spec: { from: string; to: string; reason?: string }, opts?: { home?: string; now?: number }): { retargeted: string[] };
+export function retargetWatchesAsync(spec: { from: string; to: string; reason?: string }, opts?: { home?: string; now?: number }): Promise<{ retargeted: string[] }>;
 export function cancelWatchAsync(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): Promise<{ ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean }>;
 
 export function classifyItem(item: WatchItem, set: WatchSet, ctx: any): { phase: string; phaseSince?: string; state: WatchItemState; reason?: string; report?: string };
@@ -141,6 +145,8 @@ export interface WatchEngine {
   markFailed(keys: string[], error: string): Promise<void>;
   /** idea-418: adopt set `setId` from retired owner `from` for `to` (no-op unless `from` still owns it); never rejects. */
   reown(setId: string, from: string, to: string, reason?: string): Promise<{ reowned: string[] }>;
+  /** idea-1101: retarget open watch sets from cut worker `from` to its successor `to`; never rejects. */
+  retarget(from: string, to: string, reason?: string): Promise<{ retargeted: string[] }>;
   get(id: string): WatchSet | null;
   list(): WatchSet[];
 }

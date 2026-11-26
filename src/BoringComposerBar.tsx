@@ -48,10 +48,14 @@ export function BoringComposerBar(p: BoringComposerBarProps) {
       <div className="boring-composer-cfg" data-testid="boring-composer-cfg" role="group" aria-label="Model and mode">
         {p.providerSelect}
         {p.modelControl}
-        {p.thinkingSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Think</span>{p.thinkingSelect}</span>}
-        {p.modeSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Mode</span>{p.modeSelect}</span>}
-        {p.providerSwitchBtn}
+        {(p.thinkingSelect || p.modeSelect) && (
+          <span className="boring-composer-pair">
+            {p.thinkingSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Think</span>{p.thinkingSelect}</span>}
+            {p.modeSelect && <span className="boring-composer-field"><span className="boring-composer-field-label" aria-hidden="true">Mode</span>{p.modeSelect}</span>}
+          </span>
+        )}
       </div>
+      {p.providerSwitchBtn}
       {p.stagedHint && <div className="boring-composer-staged" data-testid="boring-composer-staged" role="status">{p.stagedHint}</div>}
       <div className="boring-composer-send">
         {p.running && (

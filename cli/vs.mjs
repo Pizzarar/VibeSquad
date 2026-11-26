@@ -2492,13 +2492,23 @@ export async function commandVerdict(flags, makeContext = createContext, { out =
   if (branch.startsWith("-")) throw new Error(`--branch must name a branch or commit, got "${branch}"`);
   const identity = resolveIdentity(flags);
   const ctx = makeContext({ identity: { agentId: identity.agentId, token: identity.token, team: identity.team.id, lane: identity.lane, role: identity.role } });
-  const { agent, lastMessage } = await ctx.withBackend({ id }, async (b) => {
-    const rec = await (b.fetchAgent ?? b.getAgent).call(b, id);
-    const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, id, { direction: "tail", projection: "projected" }); // no limit (as the digest path): a long tool tail must not hide the verdict message
-    return { agent: rec?.agent ?? rec, lastMessage: lastAssistantText(tl, Infinity) };
+  const { agent, lastMessage, readId } = await ctx.withBackend({ id }, async (b) => {
+    // idea-1101 L2: a reviewer cut by a quota wall mid-run was resumed as another agent (labels.respawnedAs): its verdict is the
+    // successor's. Follow the chain (bounded); the successor passes the same reviewer + hash checks as any other.
+    let cur = id;
+    let rec = await (b.fetchAgent ?? b.getAgent).call(b, cur);
+    for (let hop = 0; hop < 3; hop++) {
+      const next = String((rec?.agent ?? rec)?.labels?.respawnedAs ?? "").trim();
+      if (!next || next === cur) break;
+      err(`vs verdict: ${cur} was resumed as ${next} (respawnedAs); reading ${next}\n`);
+      cur = next;
+      rec = await (b.fetchAgent ?? b.getAgent).call(b, cur);
+    }
+    const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, cur, { direction: "tail", projection: "projected" }); // no limit (as the digest path): a long tool tail must not hide the verdict message
+    return { agent: rec?.agent ?? rec, lastMessage: lastAssistantText(tl, Infinity), readId: cur };
   });
   const tip = revParse(branch, flags.cwd ? path.resolve(String(flags.cwd)) : process.cwd());
-  const res = evaluateVerdictGate({ agent: { id, ...(agent ?? {}) }, lastMessage, tip, branch });
+  const res = evaluateVerdictGate({ agent: { id: readId, ...(agent ?? {}) }, lastMessage, tip, branch });
   out(`${res.line || "(no final message)"}\n`);
   if (res.ok) out(`vs verdict: ${res.reason}\n`);
   else err(`vs verdict: REFUSED: ${res.reason}\n`);

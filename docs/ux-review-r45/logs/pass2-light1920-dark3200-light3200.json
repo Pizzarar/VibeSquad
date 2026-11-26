@@ -1,0 +1,2000 @@
+{
+ "light-1920": [
+  {
+   "label": "default",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "BODY",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off, fw+sbb on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "boring-decision-pill-sbb",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after reload",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "All",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "true",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "7 open · 5 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "11 lanes",
+   "decHead": "Oldest first · 5",
+   "active": "boring-decision-preset-all",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "Active",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "none on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "false",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "0 open in selected projects",
+   "squads": [],
+   "strip": [],
+   "offscreen": [],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "Pick an option or type an answer to queue a batch. | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "0 lanes",
+   "decHead": "Oldest first · 0",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false,\"efi\":false,\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "staged vs",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-lean-ny-f1-01",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "2 open · 2 here · 0 off-screen",
+   "squads": [
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "efi",
+    "site"
+   ],
+   "offscreen": [],
+   "send": "Send 0 answers (+1 hidden)",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs unhidden",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after presets",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "typed site, site hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer (+1 hidden)",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "reload with staged",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site back after reload",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-site",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "tab order",
+   "kb": [
+    [
+     "boring-decision-preset-all",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-vibesquad",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-efi",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-site",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-forework",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-sbb",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "BUTTON:Desk · Lead 2",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-lean-ny-f1-01",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ]
+   ]
+  },
+  {
+   "label": "space on efi",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "false",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-efi",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"efi\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "enter on efi",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-efi",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "errs",
+   "errs": [
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ]
+  }
+ ],
+ "dark-3200": [
+  {
+   "label": "default",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "BODY",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off, fw+sbb on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "boring-decision-pill-sbb",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after reload",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "All",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "true",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "7 open · 5 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "11 lanes",
+   "decHead": "Oldest first · 5",
+   "active": "boring-decision-preset-all",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "Active",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "none on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "false",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "0 open in selected projects",
+   "squads": [],
+   "strip": [],
+   "offscreen": [],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "Pick an option or type an answer to queue a batch. | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "0 lanes",
+   "decHead": "Oldest first · 0",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false,\"efi\":false,\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "staged vs",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-lean-ny-f1-01",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "2 open · 2 here · 0 off-screen",
+   "squads": [
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "efi",
+    "site"
+   ],
+   "offscreen": [],
+   "send": "Send 0 answers (+1 hidden)",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs unhidden",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after presets",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "typed site, site hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer (+1 hidden)",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "reload with staged",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site back after reload",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-site",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "tab order",
+   "kb": [
+    [
+     "boring-decision-preset-all",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-vibesquad",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-efi",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-site",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-forework",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-sbb",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "BUTTON:Desk · Lead 2",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ],
+    [
+     "boring-decision-lean-ny-f1-01",
+     "solid 2px rgb(155, 114, 232)",
+     "none"
+    ]
+   ]
+  },
+  {
+   "label": "space on efi",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "false",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-efi",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"efi\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "enter on efi",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-efi",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "errs",
+   "errs": [
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ]
+  }
+ ],
+ "light-3200": [
+  {
+   "label": "default",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "BODY",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site off, fw+sbb on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "boring-decision-pill-sbb",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after reload",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "6 open · 4 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "8 lanes",
+   "decHead": "Oldest first · 4",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false,\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "All",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "true",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "true",
+    "pill-sbb": "true"
+   },
+   "summary": "7 open · 5 here · 2 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site",
+    "forework",
+    "sbb"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02",
+    "ny-f1-06"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "4 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (4) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "11 lanes",
+   "decHead": "Oldest first · 5",
+   "active": "boring-decision-preset-all",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"forework\":true,\"sbb\":true}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "Active",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "none on",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "false",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "0 open in selected projects",
+   "squads": [],
+   "strip": [],
+   "offscreen": [],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "Pick an option or type an answer to queue a batch. | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "0 lanes",
+   "decHead": "Oldest first · 0",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false,\"efi\":false,\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "staged vs",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-lean-ny-f1-01",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "false",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "2 open · 2 here · 0 off-screen",
+   "squads": [
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "efi",
+    "site"
+   ],
+   "offscreen": [],
+   "send": "Send 0 answers (+1 hidden)",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"vibesquad\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "vs unhidden",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-vibesquad",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "after presets",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-preset-active",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "typed site, site hidden",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 1 answer (+1 hidden)",
+   "sendDisabled": false,
+   "footer": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer (+1 hidden)",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-site",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "reload with staged",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "false",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "4 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "BODY",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"site\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "site back after reload",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-site",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "tab order",
+   "kb": [
+    [
+     "boring-decision-preset-all",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-vibesquad",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-efi",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-site",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-forework",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-pill-sbb",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "BUTTON:Desk · Lead 2",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ],
+    [
+     "boring-decision-lean-ny-f1-01",
+     "solid 2px rgb(154, 127, 224)",
+     "none"
+    ]
+   ]
+  },
+  {
+   "label": "space on efi",
+   "pressed": {
+    "preset-active": "false",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "false",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "3 open · 2 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "5 lanes",
+   "decHead": "Oldest first · 2",
+   "active": "boring-decision-pill-efi",
+   "ls": {
+    "vs.decisionFilterOverrides": "{\"efi\":false}"
+   },
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "enter on efi",
+   "pressed": {
+    "preset-active": "true",
+    "preset-all": "false",
+    "pill-vibesquad": "true",
+    "pill-efi": "true",
+    "pill-site": "true",
+    "pill-forework": "false",
+    "pill-sbb": "false"
+   },
+   "summary": "4 open · 3 here · 1 off-screen",
+   "squads": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "strip": [
+    "vibesquad",
+    "efi",
+    "site"
+   ],
+   "offscreen": [
+    "link",
+    "ny-f1-02"
+   ],
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "footer": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "sideBadge": "Decisions · 7",
+   "railHead": "7 lanes",
+   "decHead": "Oldest first · 3",
+   "active": "boring-decision-pill-efi",
+   "ls": {},
+   "url": "?demo=&view=decisions"
+  },
+  {
+   "label": "errs",
+   "errs": [
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ]
+  }
+ ]
+}

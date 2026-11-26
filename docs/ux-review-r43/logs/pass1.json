@@ -1,0 +1,1551 @@
+{
+ "dark-1920": {
+  "steps": [
+   {
+    "label": "overview vibesquad",
+    "url": "?demo=&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     " @ VibeSquad›Desk›Worker",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "click Runner Pilot Brainstorm cell",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 5,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere: Main Game overview",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=efi"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "Forward",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back again",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "reload",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "overview vibesquad again",
+    "url": "?demo=&team=vibesquad",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Runner Pilot Lead cell",
+    "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+    "hist": 7,
+    "selected": [
+     "boring-lead-runner-pilot | Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Lead",
+    "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Runner Pilot›Lead"
+    ]
+   },
+   {
+    "label": "Back from Lead chat",
+    "url": "?demo=&team=vibesquad",
+    "hist": 7,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "riff: overview vibesquad",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 3,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad"
+    ],
+    "frames": [
+     " @ Decision Desk",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "bug-chaser cells",
+    "cells": [
+     {
+      "text": "Bug Chaser @bug-chaser Needs you · 1",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "idle",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "2m ago",
+      "btn": false,
+      "title": null
+     }
+    ]
+   },
+   {
+    "label": "Bug Chaser Lead cell (no Lead)",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Bug Chaser Brainstorm cell",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview 2",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "deep link ?lane=bug-chaser&role=lead",
+    "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Lead",
+    "head": "Bug Chaser · Brainstorm ready · no Lead",
+    "empty": true,
+    "title": "(6) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+    ]
+   },
+   {
+    "label": "lead card buttons",
+    "ctas": [
+     "Switch to Brainstorm",
+     "Brainstorm Idle",
+     "UI Bois Lead idle",
+     "riffbot Lead working · Buddy working",
+     "Workers",
+     "Changes",
+     "Plan",
+     "Feed",
+     "Files",
+     "Terminal",
+     "▶"
+    ]
+   },
+   {
+    "label": "sidebar: Bug Chaser lane title",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 5,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere then Back",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 6,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=efi",
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ Main Game Project›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   }
+  ],
+  "errsA": [],
+  "errsB": []
+ },
+ "light-1920": {
+  "steps": [
+   {
+    "label": "overview vibesquad",
+    "url": "?demo=&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     " @ VibeSquad›Desk›Worker",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "click Runner Pilot Brainstorm cell",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 5,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere: Main Game overview",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=efi"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "Forward",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back again",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "reload",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "overview vibesquad again",
+    "url": "?demo=&team=vibesquad",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Runner Pilot Lead cell",
+    "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+    "hist": 7,
+    "selected": [
+     "boring-lead-runner-pilot | Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Lead",
+    "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Runner Pilot›Lead"
+    ]
+   },
+   {
+    "label": "Back from Lead chat",
+    "url": "?demo=&team=vibesquad",
+    "hist": 7,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "riff: overview vibesquad",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 3,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad"
+    ],
+    "frames": [
+     " @ Decision Desk",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "bug-chaser cells",
+    "cells": [
+     {
+      "text": "Bug Chaser @bug-chaser Needs you · 1",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "idle",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "2m ago",
+      "btn": false,
+      "title": null
+     }
+    ]
+   },
+   {
+    "label": "Bug Chaser Lead cell (no Lead)",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Bug Chaser Brainstorm cell",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview 2",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "deep link ?lane=bug-chaser&role=lead",
+    "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Lead",
+    "head": "Bug Chaser · Brainstorm ready · no Lead",
+    "empty": true,
+    "title": "(6) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+    ]
+   },
+   {
+    "label": "lead card buttons",
+    "ctas": [
+     "Switch to Brainstorm",
+     "Brainstorm Idle",
+     "UI Bois Lead idle",
+     "riffbot Lead working · Buddy working",
+     "Workers",
+     "Changes",
+     "Plan",
+     "Feed",
+     "Files",
+     "Terminal",
+     "▶"
+    ]
+   },
+   {
+    "label": "sidebar: Bug Chaser lane title",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 5,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere then Back",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 6,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=efi",
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ Main Game Project›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   }
+  ],
+  "errsA": [],
+  "errsB": []
+ },
+ "dark-1600": {
+  "steps": [
+   {
+    "label": "overview vibesquad",
+    "url": "?demo=&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     " @ VibeSquad›Desk›Worker",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "click Runner Pilot Brainstorm cell",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 5,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere: Main Game overview",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=efi"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "Forward",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back again",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "reload",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "overview vibesquad again",
+    "url": "?demo=&team=vibesquad",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Runner Pilot Lead cell",
+    "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+    "hist": 7,
+    "selected": [
+     "boring-lead-runner-pilot | Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Lead",
+    "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Runner Pilot›Lead"
+    ]
+   },
+   {
+    "label": "Back from Lead chat",
+    "url": "?demo=&team=vibesquad",
+    "hist": 7,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "riff: overview vibesquad",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 3,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad"
+    ],
+    "frames": [
+     " @ Decision Desk",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "bug-chaser cells",
+    "cells": [
+     {
+      "text": "Bug Chaser @bug-chaser Needs you · 1",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "idle",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "2m ago",
+      "btn": false,
+      "title": null
+     }
+    ]
+   },
+   {
+    "label": "Bug Chaser Lead cell (no Lead)",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Bug Chaser Brainstorm cell",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview 2",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "deep link ?lane=bug-chaser&role=lead",
+    "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Lead",
+    "head": "Bug Chaser · Brainstorm ready · no Lead",
+    "empty": true,
+    "title": "(6) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+    ]
+   },
+   {
+    "label": "lead card buttons",
+    "ctas": [
+     "Switch to Brainstorm",
+     "Brainstorm Idle",
+     "UI Bois Lead idle",
+     "riffbot Lead working · Buddy working",
+     "Workers",
+     "Changes",
+     "Plan",
+     "Feed",
+     "Files",
+     "Terminal",
+     "▶"
+    ]
+   },
+   {
+    "label": "sidebar: Bug Chaser lane title",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 5,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere then Back",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 6,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=efi",
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ Main Game Project›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   }
+  ],
+  "errsA": [],
+  "errsB": []
+ },
+ "light-1600": {
+  "steps": [
+   {
+    "label": "overview vibesquad",
+    "url": "?demo=&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     " @ VibeSquad›Desk›Worker",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "click Runner Pilot Brainstorm cell",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 5,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere: Main Game overview",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=efi"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "Forward",
+    "url": "?demo=&team=efi",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-efi | Main Game Project"
+    ],
+    "crumb": "Main Game Project › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ Main Game Project›Overview"
+    ]
+   },
+   {
+    "label": "Back again",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ Main Game Project›Overview",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "reload",
+    "url": "?demo=&team=vibesquad&lane=runner-pilot",
+    "hist": 6,
+    "selected": [
+     "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+    "head": "Runner Pilot · Lead idle · no Brainstorm",
+    "empty": true,
+    "title": "(5) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    ]
+   },
+   {
+    "label": "overview vibesquad again",
+    "url": "?demo=&team=vibesquad",
+    "hist": 6,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad"
+    ],
+    "frames": [
+     "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Runner Pilot Lead cell",
+    "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+    "hist": 7,
+    "selected": [
+     "boring-lead-runner-pilot | Lead / 12m ago"
+    ],
+    "crumb": "VibeSquad › Runner Pilot › Lead",
+    "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Runner Pilot›Lead"
+    ]
+   },
+   {
+    "label": "Back from Lead chat",
+    "url": "?demo=&team=vibesquad",
+    "hist": 7,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(5) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "riff: overview vibesquad",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 3,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad"
+    ],
+    "frames": [
+     " @ Decision Desk",
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "bug-chaser cells",
+    "cells": [
+     {
+      "text": "Bug Chaser @bug-chaser Needs you · 1",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "idle",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "—",
+      "btn": true,
+      "title": null
+     },
+     {
+      "text": "2m ago",
+      "btn": false,
+      "title": null
+     }
+    ]
+   },
+   {
+    "label": "Bug Chaser Lead cell (no Lead)",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "Bug Chaser Brainstorm cell",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "Back to overview 2",
+    "url": "?demo=&riff=1&team=vibesquad",
+    "hist": 4,
+    "selected": [
+     "boring-project-header-vibesquad | VibeSquad"
+    ],
+    "crumb": "VibeSquad › Overview",
+    "head": null,
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Overview"
+    ]
+   },
+   {
+    "label": "deep link ?lane=bug-chaser&role=lead",
+    "url": "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead",
+    "hist": 4,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Lead",
+    "head": "Bug Chaser · Brainstorm ready · no Lead",
+    "empty": true,
+    "title": "(6) VibeSquad",
+    "h": [],
+    "frames": [
+     " @ -",
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead"
+    ]
+   },
+   {
+    "label": "lead card buttons",
+    "ctas": [
+     "Switch to Brainstorm",
+     "Brainstorm Idle",
+     "UI Bois Lead idle",
+     "riffbot Lead working · Buddy working",
+     "Workers",
+     "Changes",
+     "Plan",
+     "Feed",
+     "Files",
+     "Terminal",
+     "▶"
+    ]
+   },
+   {
+    "label": "sidebar: Bug Chaser lane title",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 5,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=vibesquad&agent=demo-bugs"
+    ],
+    "frames": [
+     "CARD Bug Chaser · Brainstorm ready · no Lead @ VibeSquad›Bug Chaser›Lead",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   },
+   {
+    "label": "elsewhere then Back",
+    "url": "?demo=&riff=1&team=vibesquad&agent=demo-bugs",
+    "hist": 6,
+    "selected": [
+     "boring-conv-bug-chaser | Bug Chaser / 2m ago / ⋯"
+    ],
+    "crumb": "VibeSquad › Bug Chaser › Brainstorm",
+    "head": "! / Bug Runner · triage / Brainstorm · @bug-chaser / gemini-4-neon / ⋯",
+    "empty": false,
+    "title": "(6) VibeSquad",
+    "h": [
+     "pushState /?demo=&riff=1&team=efi",
+     "POP"
+    ],
+    "frames": [
+     " @ VibeSquad›Bug Chaser›Brainstorm",
+     " @ Main Game Project›Overview",
+     " @ VibeSquad›Bug Chaser›Brainstorm"
+    ]
+   }
+  ],
+  "errsA": [],
+  "errsB": []
+ }
+}

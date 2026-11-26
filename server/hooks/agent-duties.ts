@@ -169,6 +169,8 @@ export function digestSpawnConfig(p: StoredProfile | null, profile: string): Dig
 export const RESPAWN_OF_LABEL = "respawnOf";
 /** Label stamped on the dead worker once it was respawned: the replacement's id (a replayed exit sees it and stops). */
 export const RESPAWNED_AS_LABEL = "respawnedAs";
+/** idea-1101: label on a mid-run quota-resumed successor ("midrun"), distinguishing it from a 0-turn respawn. */
+export const RESUME_MODE_LABEL = "vs.resume";
 /** An upstream exit older than this is a restart catch-up replay, not a fresh death: never respawned (same window as the cap). */
 export const UPSTREAM_RESPAWN_MAX_AGE_MS = 10 * 60_000;
 /** Timeline rows read to judge the dead worker's first turn; a timeline this long is no first-turn death. */
@@ -178,7 +180,7 @@ const RESPAWN_SAFE_TOOL_KINDS = new Set(["read", "search", "think", "fetch"]);
 /** Labels the replacement must not inherit: the spawn hook re-derives them for the new provider/profile. */
 const RESPAWN_DROPPED_LABELS = new Set([
   "profile", "provider", "model", "vs.model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
-  RESPAWNED_AS_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
+  RESPAWNED_AS_LABEL, RESUME_MODE_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
   // The respawn moves to the alternate provider on purpose: an inherited caller override would pin it back on the dead one.
   ROUTE_OVERRIDE_LABEL,
 ]);
@@ -219,6 +221,187 @@ export function respawnLabels(labels: Labels, profile: string, deadId: string): 
   const out: Labels = {};
   for (const [k, v] of Object.entries(labels ?? {})) if (!RESPAWN_DROPPED_LABELS.has(k) && v !== undefined) out[k] = v;
   return { ...out, profile, [RESPAWN_OF_LABEL]: deadId };
+}
+
+// ---- idea-1101: mid-run quota-wall resume helpers ----
+
+const MIDRUN_DIFF_MAX_CHARS = 6000;
+const MIDRUN_PROMPT_MAX_CHARS = 12000;
+const MIDRUN_REPORT_MAX_CHARS = 2500;
+/** idea-1101 M2: `git status --short`, `diff --stat` and the commit list are line-capped too (thousands of untracked files). */
+const MIDRUN_STATUS_MAX_CHARS = 3000;
+const MIDRUN_DIFFSTAT_MAX_CHARS = 3000;
+const MIDRUN_COMMITS_MAX_CHARS = 1500;
+/** Hard ceiling on the whole resume brief (sum of the section caps plus headers); a backstop, never reached by capped sections. */
+export const MIDRUN_BRIEF_MAX_CHARS = 32000;
+
+/** Cut `text` at a line boundary to at most `max` chars (the note included, so a second clamp is a no-op), noting how many
+ *  lines were dropped. Pure. */
+export function clampLines(text: string, max: number, what = "lines"): string {
+  const t = String(text ?? "");
+  if (t.length <= max) return t;
+  const head = t.slice(0, Math.max(0, max - 64));
+  const cut = head.lastIndexOf("\n");
+  const kept = cut > 0 ? head.slice(0, cut) : head;
+  const dropped = t.split("\n").length - kept.split("\n").length;
+  return `${kept}\n...(${dropped} more ${what} truncated)`;
+}
+const WORKTREE_CREATE_RE = /\bvs\s+worktree\s+create\s+([A-Za-z0-9][A-Za-z0-9._/-]*)/g;
+
+/** True when upstreamRespawnPlan skipped ONLY because the worker already did real work (eligible for mid-run quota resume). */
+export function isMidRunQuotaSkip(skipReason: string): boolean {
+  return skipReason === "not-first-turn" || skipReason.startsWith("tool-edits(");
+}
+
+/** First non-empty user_message in `entries`, or "". Pure. */
+export function extractOriginalPrompt(entries: Array<{ item?: any }>): string {
+  for (const e of entries ?? []) {
+    if (e?.item?.type === "user_message") {
+      const text = String(e.item.text ?? "").trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+/** Last substantive assistant message before the quota wall (ignoring the quota notice itself). Pure. */
+export function extractLastWorkerReport(entries: Array<{ item?: any }>, quotaError = ""): string {
+  const errNorm = String(quotaError ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  for (let i = (entries?.length ?? 0) - 1; i >= 0; i--) {
+    const item = entries[i]?.item;
+    if (item?.type !== "assistant_message") continue;
+    const text = String(item.text ?? "").trim();
+    if (!text) continue;
+    const norm = text.replace(/\s+/g, " ").trim().toLowerCase();
+    if (errNorm && (norm === errNorm || norm.includes(errNorm))) continue;
+    return text.length > MIDRUN_REPORT_MAX_CHARS ? `${text.slice(0, MIDRUN_REPORT_MAX_CHARS)}\n...(truncated)` : text;
+  }
+  return "";
+}
+
+/**
+ * idea-1101 (Invariant #4): verify the linked git worktree a mid-run quota successor will run in.
+ * - If `cwd` itself is a linked worktree (`gitDir !== commonDir`), returns it directly.
+ * - If `cwd` is a main checkout (`gitDir === commonDir`), checks whether the worker created a sanctuary worktree
+ *   (`<vsHome>/worktrees/<repo>/<unit>`) belonging to the same repo (`commonDir` match). If none exists, returns
+ *   `{ kind: "main-checkout" }` so the successor NEVER runs git writes in the main checkout.
+ * - If `cwd` is not a git repo at all, returns `{ kind: "non-git" }`.
+ */
+export async function resolveWorkerWorktree(
+  cwd: string,
+  prompt: string,
+  entries: Array<{ item?: any }>,
+  { vsHome = process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad") }: { vsHome?: string } = {},
+): Promise<{ kind: "worktree"; path: string; dirs: GitDirs } | { kind: "main-checkout" } | { kind: "non-git" }> {
+  if (!cwd) return { kind: "non-git" };
+  const dirs = await gitDirsFs(cwd);
+  if (!dirs) return { kind: "non-git" };
+  if (dirs.gitDir.toLowerCase() !== dirs.commonDir.toLowerCase()) {
+    return { kind: "worktree", path: path.resolve(cwd), dirs };
+  }
+  // Main checkout: look for a verified sanctuary worktree referenced by `vs worktree create <unit>` in prompt/timeline.
+  const repoName = path.basename(path.dirname(dirs.commonDir));
+  const sanctuaryRoot = path.resolve(vsHome, "worktrees", repoName);
+  const units = new Set<string>();
+  const scan = (s: string) => {
+    for (const m of s.matchAll(WORKTREE_CREATE_RE)) if (m[1]) units.add(m[1]);
+  };
+  if (prompt) scan(prompt);
+  for (const e of entries ?? []) {
+    if (e?.item?.type === "assistant_message" && typeof e.item.text === "string") scan(e.item.text);
+    if (e?.item?.type === "tool_call") {
+      // idea-1101 L3: `name` is the tool (Bash); the shell command lives in detail.input (runner timeline: { command } for
+      // Claude, the ACP rawInput for agy/opencode). Scan both, bounded.
+      if (typeof e.item.name === "string") scan(e.item.name);
+      const input = e.item.detail?.input;
+      if (input != null) {
+        let text = "";
+        try { text = typeof input === "string" ? input : JSON.stringify(input); } catch { text = ""; }
+        if (text) scan(text.slice(0, 4000));
+      }
+    }
+  }
+  for (const unit of units) {
+    const cand = path.resolve(sanctuaryRoot, unit);
+    const rel = path.relative(sanctuaryRoot, cand);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    if (!fs.existsSync(cand)) continue;
+    const cDirs = await gitDirsFs(cand);
+    if (cDirs && cDirs.gitDir.toLowerCase() !== cDirs.commonDir.toLowerCase() && cDirs.commonDir.toLowerCase() === dirs.commonDir.toLowerCase()) {
+      return { kind: "worktree", path: cand, dirs: cDirs };
+    }
+  }
+  return { kind: "main-checkout" };
+}
+
+/** Gather branch, recent commits, status, diff stat and bounded diff in `worktreeCwd` off the event loop. Never throws. */
+export async function gatherWorktreeResumeState(worktreeCwd: string, dirs?: GitDirs | null): Promise<{ branch: string; commits: string; status: string; diffStat: string; diff: string }> {
+  const head = dirs ? await readHeadFs(dirs).catch(() => null) : null;
+  const run = (args: string[]) => gitExecOffLoop(worktreeCwd, args, 4000).catch(() => ({ ok: false, out: "", code: null }));
+  const [branchRes, logRes, statusRes, statRes, diffRes] = await Promise.all([
+    head?.branch ? Promise.resolve({ ok: true, out: head.branch, code: 0 }) : run(["rev-parse", "--abbrev-ref", "HEAD"]),
+    run(["log", "--oneline", "-n", "10"]),
+    run(["status", "--short"]),
+    run(["diff", "--stat", "HEAD"]),
+    run(["diff", "HEAD"]),
+  ]);
+  const rawDiff = (diffRes.ok ? diffRes.out : (await run(["diff"])).out).trim();
+  const diff = rawDiff.length > MIDRUN_DIFF_MAX_CHARS ? `${rawDiff.slice(0, MIDRUN_DIFF_MAX_CHARS)}\n...(diff truncated)` : rawDiff;
+  const diffStat = clampLines((statRes.ok ? statRes.out : (await run(["diff", "--stat"])).out).trim(), MIDRUN_DIFFSTAT_MAX_CHARS, "diff-stat lines");
+  return {
+    branch: (branchRes.ok ? branchRes.out : head?.sha ?? "unknown").trim().slice(0, 200) || "unknown",
+    commits: clampLines((logRes.ok ? logRes.out : "").trim(), MIDRUN_COMMITS_MAX_CHARS, "commits"),
+    status: clampLines((statusRes.ok ? statusRes.out : "").trim(), MIDRUN_STATUS_MAX_CHARS, "status lines"),
+    diffStat,
+    diff,
+  };
+}
+
+/** Pure formatter for the mid-run quota resume brief passed to the successor worker. */
+export function formatMidRunResumeBrief(spec: {
+  deadId: string;
+  fromFam: string;
+  toFam: string;
+  why: string;
+  worktreeCwd: string;
+  branch: string;
+  commits: string;
+  status: string;
+  diffStat: string;
+  diff: string;
+  lastReport: string;
+  originalPrompt: string;
+}): string {
+  const orig = spec.originalPrompt.length > MIDRUN_PROMPT_MAX_CHARS
+    ? `${spec.originalPrompt.slice(0, MIDRUN_PROMPT_MAX_CHARS)}\n...(original prompt truncated)`
+    : spec.originalPrompt;
+  // idea-1101 M2: every section is bounded here too (the formatter is exported; callers may pass raw git output).
+  spec = {
+    ...spec,
+    commits: clampLines(spec.commits, MIDRUN_COMMITS_MAX_CHARS, "commits"),
+    status: clampLines(spec.status, MIDRUN_STATUS_MAX_CHARS, "status lines"),
+    diffStat: clampLines(spec.diffStat, MIDRUN_DIFFSTAT_MAX_CHARS, "diff-stat lines"),
+    diff: spec.diff.length > MIDRUN_DIFF_MAX_CHARS ? `${spec.diff.slice(0, MIDRUN_DIFF_MAX_CHARS)}\n...(diff truncated)` : spec.diff,
+    lastReport: spec.lastReport.length > MIDRUN_REPORT_MAX_CHARS ? `${spec.lastReport.slice(0, MIDRUN_REPORT_MAX_CHARS)}\n...(truncated)` : spec.lastReport,
+  };
+  const sections: string[] = [
+    `[MID-RUN QUOTA RESUME from ${spec.deadId} (${spec.fromFam} -> ${spec.toFam})]`,
+    `The previous worker (${spec.deadId}) hit a provider quota wall (${spec.why}) mid-run and was stopped.`,
+    `Continue its work in this SAME linked worktree (\`${spec.worktreeCwd}\`, branch \`${spec.branch}\`).`,
+    `Do NOT redo already-committed or already-applied changes; inspect the worktree state below, finish the remaining work, run the required tests, and report your final result.`,
+    `Never run git writes in the main checkout (R17).`,
+    "",
+    `## Worktree state (${spec.worktreeCwd}, branch ${spec.branch})`,
+  ];
+  if (spec.commits) sections.push("### Recent commits", "```", spec.commits, "```");
+  if (spec.status) sections.push("### Working tree status", "```", spec.status, "```");
+  if (spec.diffStat) sections.push("### Diff stat", "```", spec.diffStat, "```");
+  if (spec.diff) sections.push("### Diff so far", "```diff", spec.diff, "```");
+  if (!spec.commits && !spec.status && !spec.diff) sections.push("(no commits or uncommitted diff yet)");
+  if (spec.lastReport) sections.push("", "## Previous worker's last message", spec.lastReport);
+  sections.push("", "## Original task prompt", orig);
+  const brief = sections.join("\n");
+  return brief.length > MIDRUN_BRIEF_MAX_CHARS ? `${brief.slice(0, MIDRUN_BRIEF_MAX_CHARS)}\n...(resume brief truncated)` : brief;
 }
 
 /** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
@@ -3239,7 +3422,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
                 void flushWake(paseo, agent.id);
               }
-              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
+              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""), { quota: outcome.error?.quota === true });
             }
             if (outcome.kind !== "completed") {
               // Cancelled / other non-completed outcomes produce no digest, but a lead's
@@ -3323,7 +3506,31 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return skip("timeline-unreadable");
       }
       const plan = upstreamRespawnPlan(entries, labels, { ageMs, role: effectiveAgentRole({ labels }), quota: quota === true });
-      if ("skip" in plan) return skip(plan.skip);
+      let mode: "respawn" | "resume" = "respawn";
+      let spawnCwd = cwd;
+      let wtDirs: GitDirs | null = null;
+      let originalPrompt = "";
+      if ("skip" in plan) {
+        // idea-1101: keep 0-turn/read-only behavior intact; for MID-RUN quota walls, resume in the SAME linked worktree.
+        if (!quota || !isMidRunQuotaSkip(plan.skip)) return skip(plan.skip);
+        if (entries.length >= UPSTREAM_RESPAWN_TIMELINE_LIMIT && !extractOriginalPrompt(entries)) {
+          try {
+            entries = (await paseo.agents.ref(deadId).timeline.refetch({ limit: 0 })).entries ?? entries;
+          } catch {
+            /* keep the tail entries we already read */
+          }
+        }
+        originalPrompt = extractOriginalPrompt(entries) || initialPromptsById.get(deadId) || "";
+        if (!originalPrompt.trim()) return skip("no-prompt");
+        const wt = await resolveWorkerWorktree(cwd, originalPrompt, entries);
+        if (wt.kind === "non-git") return skip(plan.skip);
+        if (wt.kind === "main-checkout") return skip("main-checkout");
+        mode = "resume";
+        spawnCwd = wt.path;
+        wtDirs = wt.dirs;
+      } else {
+        originalPrompt = plan.prompt;
+      }
       // At most once per task, across restarts: a replacement already carrying respawnOf=<dead> ends it.
       try {
         // R2 M1: archived agents too: a replacement that already finished and was archived still counts.
@@ -3340,16 +3547,31 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // R2 H1: the claim, synchronously before the create (no await since the A4 check).
       if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");
       upstreamRespawnClaimed.add(deadId);
-      const title = String(me?.title ?? agent?.title ?? "").trim() || `respawn of ${deadId}`;
+      const title = String(me?.title ?? agent?.title ?? "").trim() || `${mode === "resume" ? "resume" : "respawn"} of ${deadId}`;
       const toFam = spawnFamily(alt.provider, alt.model) || alt.provider;
       const why = String(error || "upstream failure").replace(/\s+/g, " ").slice(0, 160);
       const died = quota ? `hit the ${fromFam} quota` : `died on an upstream ${fromFam} failure`;
-      // idea-1077: the replacement says it failed over (`vs.failover`: why=failover on its route; `vs.failover-from`: the profile
+      let spawnPrompt = originalPrompt;
+      if (mode === "resume") {
+        const gitState = await gatherWorktreeResumeState(spawnCwd, wtDirs);
+        spawnPrompt = formatMidRunResumeBrief({
+          deadId,
+          fromFam,
+          toFam,
+          why,
+          worktreeCwd: spawnCwd,
+          ...gitState,
+          lastReport: extractLastWorkerReport(entries, error),
+          originalPrompt,
+        });
+      }
+      // idea-1077 + idea-1101: the replacement says it failed over (`vs.failover`: why=failover on its route; `vs.failover-from`: the profile
       // it was meant to run), like a failed-over lead successor (lead-handoff.mjs).
       const newLabels: Labels = {
         ...respawnLabels(labels, alt.name, deadId),
         "vs.failover": `${fromProfile} -> ${alt.name} (${quota ? "quota" : "upstream"} ${fromFam})`.slice(0, 200),
         [FAILOVER_FROM_LABEL]: fromProfile,
+        ...(mode === "resume" ? { [RESUME_MODE_LABEL]: "midrun" } : {}),
       };
       let newId = "";
       try {
@@ -3360,9 +3582,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             ...(alt.thinkingOptionId ? { thinkingOptionId: alt.thinkingOptionId } : {}),
             ...(alt.featureValues ? { featureValues: { ...alt.featureValues } } : {}),
           },
-          cwd: cwd || undefined,
+          cwd: spawnCwd || undefined,
           title,
-          prompt: plan.prompt,
+          prompt: spawnPrompt,
           labels: newLabels,
           env: { VS_PROFILE: alt.name },
         });
@@ -3372,15 +3594,33 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (!newId) return skip("spawn-no-id");
       await deps.setLabels(deadId, { [RESPAWNED_AS_LABEL]: newId }).catch((e: unknown) => log(`respawnedAs label failed for ${deadId}: ${e}`));
+      if (mode === "resume") {
+        // idea-1101 L2: the superseded worker is archived, so a later `vs send` to it can never revive it on the capped provider
+        // (its timeline and respawnedAs label stay readable; replays of its wall stop at reason=archived / already-respawned).
+        await Promise.resolve()
+          .then(() => paseo.agents.ref(deadId).archive())
+          .catch(() => deps.archiveAgent(deadId))
+          .catch((e: unknown) => log(`archive of superseded ${deadId} failed: ${e}`));
+      }
+      if (watch) {
+        const { retargeted } = await watch.retarget(deadId, newId, mode === "resume" ? "mid-run quota resume" : "upstream respawn");
+        if (retargeted.length) log(`watch retarget ${deadId} -> ${newId}: ${retargeted.join(", ")}`);
+      }
       // The lead's notice (decision wakes it): both ids, so it re-points its watch from the dead worker to the replacement.
       appendLog(where.team, {
         agent: "plugin",
         lane: where.lane,
         type: "decision",
-        text: `RESPAWNED ${deadId} -> ${newId}: worker "${title}" ${died} in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
+        text: mode === "resume"
+          ? `RESUMED ${deadId} -> ${newId}: worker "${title}" ${died} mid-run (${why}); resumed in same worktree (${spawnCwd}) on ${alt.name} (${toFam}). Watch ${newId}; ${deadId} is superseded (archived; vs verdict ${deadId} follows respawnedAs).`
+          : `RESPAWNED ${deadId} -> ${newId}: worker "${title}" ${died} in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
         refs: [deadId, newId],
       });
-      metric(`result=respawned agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s${quota ? " cause=quota" : ""}`);
+      metric(
+        mode === "resume"
+          ? `result=resumed agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s cause=quota mode=midrun`
+          : `result=respawned agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s${quota ? " cause=quota" : ""}`,
+      );
     }
 
     try {
@@ -3450,6 +3690,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      */
     async function a4RetryScheduled(digestId: string, before: number, res: any): Promise<boolean> {
       const msg = String(res?.error?.message ?? res?.error ?? "");
+      if (res?.error?.quota === true) return false; // idea-1101 M1: handleFailure never resends a quota wall
       if (msg && !TRANSIENT_ERROR.test(msg)) return false;
       const end = Date.now() + (msg ? DIGEST_RETRY_GRACE_MS : 50); // no message (daemon handle): the old short settle
       for (;;) {
@@ -3688,8 +3929,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // not only at turn_ended). confirmTakeover above stays here.
 
     // A4: transient network error retry with exponential backoff.
-    async function handleFailure(paseo: Paseo, agent: any, message: string) {
+    async function handleFailure(paseo: Paseo, agent: any, message: string, { quota = false }: { quota?: boolean } = {}) {
       if (!TRANSIENT_ERROR.test(message)) return;
+      // idea-1101 M1: a provider quota wall is never transient, even when it names its googleapis service: the upstream-respawn
+      // hook (upstream_exit quota) routes it past the now-capped provider; a resend would only hit the cap again.
+      if (quota) {
+        log(`quota wall on ${agent.id}: no A4 retry, the upstream-respawn hook routes it (idea-1101)`);
+        return;
+      }
       if (upstreamRespawnClaimed.has(agent.id)) {
         log(`transient error on ${agent.id}: no A4 retry, it was re-spawned after an upstream failure (idea-504)`);
         return;

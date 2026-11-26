@@ -864,3 +864,162 @@ test("U1 r2: urlSyncDecision treats a reordered query as the same URL (Storybook
   assert.deepEqual(D("?team=a&x=1&x=2", "?team=a&x=2&x=1"), { write: false, replace: false }, "repeated keys compare as a multiset");
   assert.deepEqual(D("", ""), { write: false, replace: false });
 });
+
+// ── P3 (docs/PLAN_DESK_DD_POLISH.md P3; idea-1000): a feature lane's empty card has its own URL ─────────────────────────────────────
+// ?lane=<laneId> names the lane's empty card (Brainstorm role); &role=lead its Lead card ("Brainstorm ready · no Lead"), also for
+// ?slot=bugs. The split's right-pane card (rightCard, B17) is transient pane state and never writes a key (Bor3).
+test("P3: serializeUrlState/parseUrlState/sameQuery/urlSyncScreen carry ?lane= and ?role=lead; one screen = one canonical URL", async () => {
+  const { transformSync } = await import("rolldown/utils");
+  const { readFileSync } = await import("node:fs");
+  const pal = readFileSync(path.join(REPO_ROOT, "src", "CommandPalette.tsx"), "utf8");
+  const fn = (name) => { const i = pal.indexOf(`export function ${name}`); return pal.slice(i, pal.indexOf("\n}\n", i) + 3); };
+  const code = transformSync("p3.ts", readFileSync(path.join(REPO_ROOT, "src", "urlSync.ts"), "utf8") + "\n" + fn("parseUrlState") + fn("serializeUrlState"), { lang: "ts" }).code;
+  const { parseUrlState: parse, serializeUrlState: ser, urlSyncScreen, sameQuery, urlSyncDecision } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+  const cases = [
+    [{ team: "vibesquad", agent: null, slot: null, lane: "runner-pilot", tab: null }, "?demo=", "?demo=&team=vibesquad&lane=runner-pilot"],
+    [{ team: "vibesquad", agent: null, slot: null, lane: "bug-chaser", role: "lead", tab: null }, "?demo=&riff=1", "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead"],
+    [{ team: "vibesquad", agent: null, slot: "bugs", role: "lead", tab: null }, "", "?team=vibesquad&slot=bugs&role=lead"],
+  ];
+  for (const [st, base, want] of cases) {
+    const url = ser(st, base);
+    assert.equal(url, want, JSON.stringify(st));
+    assert.deepEqual(parse(url), st, `parse(${url})`);
+    assert.equal(ser(parse(url), url), url, `stable: ${url}`);
+  }
+  // Precedence agent > slot > lane > tab; role only qualifies ?slot=bugs / ?lane=; stale keys are replaced, never duplicated.
+  assert.equal(ser({ team: "t", agent: "a", lane: "x", role: "lead" }), "?team=t&agent=a");
+  assert.equal(ser({ team: "t", agent: null, slot: "overlord", lane: "x", role: "lead" }), "?team=t&slot=overlord");
+  assert.equal(ser({ team: "t", agent: null, lane: "x", tab: "inbox" }), "?team=t&lane=x");
+  assert.equal(ser({ team: "t", agent: null, tab: "inbox", role: "lead" }), "?team=t&tab=inbox", "no stray role on a tab");
+  assert.equal(ser({ team: "t", agent: null }, "?team=t&lane=x&role=lead"), "?team=t", "callers that pass no keys strip them");
+  assert.equal(ser({ team: "t", agent: null, lane: "y" }, "?lane=x&role=lead&team=t"), "?team=t&lane=y");
+  assert.deepEqual(parse("?team=t&agent=a&lane=x&role=lead"), { team: "t", agent: "a", slot: null, tab: null });
+  assert.deepEqual(parse("?team=t&slot=overlord&lane=x&role=lead"), { team: "t", agent: null, slot: "overlord", tab: null });
+  assert.deepEqual(parse("?team=t&lane=x&tab=inbox&role=nope"), { team: "t", agent: null, slot: null, lane: "x", tab: null });
+  assert.deepEqual(parse("?team=t&role=lead"), { team: "t", agent: null, slot: null, tab: null }, "role alone is nothing");
+  assert.deepEqual(parse("?team=t&lane=&role=lead"), { team: "t", agent: null, slot: null, tab: null });
+  // sameQuery: order-insensitive, so the sync never pushes a reorder of the same lane card; a role or lane change is a new screen.
+  assert.equal(sameQuery("?demo=&team=vibesquad&riff=1&lane=bug-chaser&role=lead", "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead"), true);
+  assert.equal(sameQuery("?team=t&lane=x&role=lead", "?role=lead&lane=x&team=t"), true);
+  assert.equal(sameQuery("?team=t&lane=x", "?team=t&lane=x&role=lead"), false);
+  assert.equal(sameQuery("?team=t&lane=x", "?team=t&lane=y"), false);
+  assert.deepEqual(urlSyncDecision({ next: "?team=t&lane=x&role=lead", current: "?role=lead&team=t&lane=x", popActive: false, storybookReplace: () => false }), { write: false, replace: false });
+  assert.deepEqual(urlSyncDecision({ next: "?team=t&lane=x", current: "?team=t", popActive: true, storybookReplace: () => false }), { write: true, replace: true }, "while a pop is active: replace, never push");
+  // urlSyncScreen: same team gate as U1; BoringApp unmounted keeps the URL's lane/role; Psycho writes none.
+  const K = (team, lane = null, role = null) => ({ team, slot: null, lane, role, tab: null });
+  const S = (o) => urlSyncScreen({ boring: true, live: undefined, rendered: undefined, team: "efi", kept: {}, ...o });
+  assert.deepEqual(S({ live: K("efi", "ui-lab", "lead") }), { slot: null, lane: "ui-lab", role: "lead", tab: null });
+  assert.deepEqual(S({ live: K("efi", "ui-lab") }), { slot: null, lane: "ui-lab", tab: null });
+  assert.deepEqual(S({ live: K("vibesquad", "wiki"), rendered: K("vibesquad", "wiki") }), { slot: null, tab: null }, "another project's lane is never written for this team");
+  assert.deepEqual(S({ live: undefined, kept: parse("?team=efi&lane=ui-lab&role=lead") }), { slot: null, lane: "ui-lab", role: "lead", tab: null }, "Storybook: keep the URL's keys");
+  assert.deepEqual(S({ boring: false, live: K("efi", "ui-lab", "lead") }), { slot: null, tab: null });
+});
+
+const laneHead = (page) => page.evaluate(() => (document.querySelector('[data-testid="boring-lane-no-agent-head"]')?.textContent ?? "").trim() || null);
+const LANE_CARD = { url: "?demo=&team=vibesquad&lane=runner-pilot", card: "Start Brainstorm", tab: null, chat: false };
+
+test("P3 e2e (idea-1000): a lane's empty card has its own URL (?lane=): one push; go elsewhere, Back shows the card, Forward returns, reload keeps it", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  // A chat first, so the persisted pane has an active agent: reload must still land on the card, not that chat.
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  await page.locator('[data-testid="boring-project-header-vibesquad"]').click();
+  await page.waitForTimeout(900);
+  assert.deepEqual(await screenOf(page), OV("vibesquad"));
+  await take();
+  // Runner Pilot has an idle Lead and no Brainstorm: its Brainstorm cell opens the lane's empty card.
+  const nav = await u1Step(page, take, "open lane card", () => page.locator('[data-testid="boring-lane-row-runner-pilot"] td:nth-child(2) button').click(), LANE_CARD);
+  assert.equal(pushes(nav.s), 1, `one pushState (${JSON.stringify(nav.s.h)})`);
+  assert.equal(nav.s.hlen - nav.before.hlen, 1, "history.length +1");
+  assert.equal(await laneHead(page), "Runner Pilot · Lead idle · no Brainstorm");
+  // Elsewhere (another project), then Back / Forward / Back / reload.
+  const away = await u1Step(page, take, "go elsewhere", () => page.locator('[data-testid="boring-project-header-efi"]').click(), OV("efi"));
+  assert.equal(pushes(away.s), 1);
+  assert.equal(away.s.hlen - away.before.hlen, 1, "history.length +1");
+  const back = await u1Step(page, take, "Back", () => page.goBack(), LANE_CARD);
+  assert.equal(pushes(back.s), 0, `Back: no pushState (${JSON.stringify(back.s.h)})`);
+  assert.equal(back.s.hlen, away.s.hlen, "Back: history.length unchanged");
+  assert.equal(await laneHead(page), "Runner Pilot · Lead idle · no Brainstorm", "Back shows the lane's card");
+  const fwd = await u1Step(page, take, "Forward", () => page.goForward(), OV("efi"));
+  assert.equal(pushes(fwd.s), 0);
+  assert.equal(fwd.s.hlen, away.s.hlen, "Forward: history.length unchanged");
+  const back2 = await u1Step(page, take, "Back again", () => page.goBack(), LANE_CARD);
+  assert.equal(pushes(back2.s), 0);
+  await u1Reload(page, "lane card", LANE_CARD);
+  assert.equal(await laneHead(page), "Runner Pilot · Lead idle · no Brainstorm", "reload shows the lane's card");
+  assert.deepEqual(errs, [], "no page errors");
+  await context.close();
+});
+
+test("P3 e2e (idea-1000): the 'Brainstorm ready · no Lead' card (?lane=&role=lead): load, go elsewhere, Back, Forward, reload", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
+  await context.addInitScript(HISTORY_WRAP);
+  await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); }catch{}`);
+  const page = await context.newPage();
+  const errs = [];
+  page.on("pageerror", (e) => errs.push(String(e)));
+  // ?riff=1: the demo's Bug Chaser lane has a Brainstorm and no Lead.
+  const url = "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead";
+  await page.goto(`${baseUrl}/${url}`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+  await page.waitForTimeout(1200);
+  const take = () => page.evaluate(() => ({ h: window.__h.splice(0), hlen: history.length, url: location.search }));
+  const s0 = await take();
+  assert.equal(s0.url, url, "the load keeps the card's URL");
+  assert.equal(pushes(s0), 0, "load canonicalization never pushes");
+  const head = "Bug Chaser · Brainstorm ready · no Lead";
+  assert.equal(await laneHead(page), head);
+  await page.locator('[data-testid="boring-project-header-efi"]').click();
+  await page.waitForTimeout(900);
+  const s1 = await take();
+  assert.equal(s1.url, "?demo=&riff=1&team=efi");
+  assert.equal(pushes(s1), 1);
+  assert.equal(s1.hlen - s0.hlen, 1, "history.length +1");
+  await page.goBack();
+  await page.waitForTimeout(900);
+  const s2 = await take();
+  assert.equal(s2.url, url);
+  assert.equal(pushes(s2), 0);
+  assert.equal(await laneHead(page), head, "Back shows the Lead card, not the lane's Brainstorm chat");
+  await page.goForward();
+  await page.waitForTimeout(900);
+  const s3 = await take();
+  assert.equal(s3.url, "?demo=&riff=1&team=efi");
+  assert.equal(await laneHead(page), null);
+  await page.goBack();
+  await page.waitForTimeout(900);
+  await take();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+  await page.waitForTimeout(1200);
+  const s4 = await take();
+  assert.equal(s4.url, url, "reload keeps the URL");
+  assert.equal(pushes(s4), 0, "reload writes no entry");
+  assert.equal(await laneHead(page), head, "reload shows the Lead card");
+  assert.deepEqual(errs, [], "no page errors");
+  await context.close();
+});
+
+test("P3 e2e (Bor3): the split's right-pane lane card (rightCard) writes no URL key and no history entry", async (t) => {
+  if (unavailable) return t.skip(unavailable);
+  const { context, page, take } = await openChat("dark");
+  await page.locator(".boring-sidebar .boring-needs-open", { hasText: "Audit - token scout" }).first().click();
+  await page.waitForTimeout(900);
+  const s0 = await take();
+  assert.equal(s0.url, "?demo=&team=vibesquad&agent=demo-aud");
+  await page.locator('[data-testid="boring-split-toggle"]').click();
+  await page.waitForTimeout(600);
+  await page.locator('[data-testid="boring-pp-open-runner-pilot-brainstorm"]').click(); // dormant pill: the lane's empty card in the right pane
+  await page.waitForTimeout(900);
+  assert.equal(await page.locator('[data-testid="boring-empty-lane"]').first().textContent(), "Runner Pilot", "the right pane shows the lane's card");
+  const s1 = await take();
+  assert.equal(s1.url, s0.url, "URL unchanged: no ?lane= / ?slot= / ?role= for the pane-local card");
+  assert.doesNotMatch(s1.url, /[?&](lane|slot|role)=/);
+  assert.deepEqual(s1.h, [], `no history write (${JSON.stringify(s1.h)})`);
+  assert.equal(s1.hlen, s0.hlen);
+  await context.close();
+});

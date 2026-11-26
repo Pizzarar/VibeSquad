@@ -52,6 +52,6 @@ test("header role subtitle is sentence case", () => {
 test("CSS scoped to Normal mode, no Hypnospace in UI", () => {
   const css = src("boring.css");
   const d3c = css.slice(css.indexOf("D3c: single Normal-mode"));
-  for (const line of d3c.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*"))) assert.match(line.trim(), /^(@media[^{]*\{ )?html\[data-vibe="boring"\]/);
+  for (const line of d3c.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*") && !l.startsWith("@container"))) assert.match(line.trim(), /^(@media[^{]*\{ )?html\[data-vibe="boring"\]/);
   assert.doesNotMatch(panel, /Hypnospace/i);
 });
