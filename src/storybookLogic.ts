@@ -30,6 +30,7 @@ export type SbSnapshot = {
   entities: SbEntity[];
   findings: SbFinding[];
   warnings: string[];
+  audit?: { signal: string; severity: string; msg?: string }[];
 };
 
 export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed";
@@ -434,3 +435,73 @@ export const plainText = (s: string): string => s.replace(/\*\*(.+?)\*\*/g, "$1"
 
 /** Speaker id → readable name when no entity/card names it ("narrator" → "Narrator"). */
 export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, (_m, a, b) => a + b.toUpperCase());
+
+// ── Overview + Findings split (V2) ──────────────────────────────────────────────
+
+/** Findings scopes: Problems = real checker findings; Text to review = the unreviewed text inventory; Story issues = coherence checks (J4-2). */
+export type FindingScope = "problems" | "story" | "text" | "all";
+export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "all"];
+export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", all: "All" };
+export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
+  problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
+  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
+  text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
+  all: "Everything above, together.",
+};
+/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
+export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
+export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
+export const isProblem = (it: ListItem): boolean => !isTextToReview(it);
+export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check);
+
+export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
+  switch (scope) {
+    case "problems": return items.filter(isProblem);
+    case "story": return items.filter(isStoryIssue);
+    case "text": return items.filter(isTextToReview);
+    default: return items;
+  }
+}
+
+export function scopeCounts(items: ListItem[]): Record<FindingScope, number> {
+  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, all: items.length };
+  for (const it of items) { if (isTextToReview(it)) c.text++; else c.problems++; if (isStoryIssue(it)) c.story++; }
+  return c;
+}
+
+/** The tab badge counts Problems only. */
+export const problemCount = (items: ListItem[]): number => scopeCounts(items).problems;
+
+const KIND_PLURAL: Record<string, string> = { quest_step: "Quest steps", voice_card: "Voice cards", lore: "Lore entries", enemy: "Enemies", squad: "Squad members", line: "Text lines" };
+export const kindLabel = (kind: string): string => KIND_PLURAL[kind] ?? `${titleCase(kind.replace(/_/g, " "))}s`;
+
+/** Entity kinds present, largest first. */
+export function kindCounts(entities: SbEntity[]): { kind: string; label: string; n: number }[] {
+  const m = new Map<string, number>();
+  for (const e of entities) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+  return [...m.entries()].map(([kind, n]) => ({ kind, label: kindLabel(kind), n })).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+}
+
+export const AUDIT_SIGNALS = ["coverage", "integrity", "cohesion", "signoff"] as const;
+export const AUDIT_LABEL: Record<string, string> = { coverage: "Coverage", integrity: "Integrity", cohesion: "Cohesion", signoff: "Sign-off" };
+export const AUDIT_HELP: Record<string, string> = {
+  coverage: "Things that should exist but do not: missing slots, no art.",
+  integrity: "References that point at nothing.",
+  cohesion: "Places that disagree with each other.",
+  signoff: "Pieces still placeholder, AI-generated or awaiting review.",
+};
+/** Counts per F2 audit signal from snapshot.audit (null when the snapshot has no audit data). */
+export function auditCounts(audit: SbSnapshot["audit"]): Record<string, number> | null {
+  if (!Array.isArray(audit)) return null;
+  const c: Record<string, number> = Object.fromEntries(AUDIT_SIGNALS.map((s) => [s, 0]));
+  for (const f of audit) if (f && Object.hasOwn(c, f.signal)) c[f.signal]++;
+  return c;
+}
+
+/** Which tab shows a kind, if any (Overview kind chips link there). */
+export function kindTab(kind: string): string | null {
+  if (kind === "quest_step") return "quests";
+  if (kind === "location") return "world";
+  if (kind === "trader" || kind === "squad" || kind === "voice_card" || kind === "line") return "cast";
+  return null;
+}
