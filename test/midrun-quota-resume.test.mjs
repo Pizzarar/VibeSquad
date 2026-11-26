@@ -721,3 +721,18 @@ test("1101-12: L2 — superseded worker is archived after a mid-run resume; vs v
   assert.match(err, new RegExp(`rn-l2-old was resumed as ${newId}`));
   assert.equal(out.split("\n")[0], `PASS 0/0/0 ${tip.slice(0, 8)}`);
 });
+
+test("1101-13: L3 — a sanctuary worktree created by a shell tool call (detail.input.command) is found for a main-checkout worker", async () => {
+  const wt = path.join(WORKTREE_ROOT, "unit-1101-shell");
+  git(["worktree", "add", "-b", "unit-1101-shell", wt, "master"], MAIN_REPO);
+  const shellTl = [
+    { item: { type: "user_message", text: "Unit 1101: edit app.js in your own worktree." } },
+    { item: { type: "tool_call", name: "Bash", detail: { kind: "execute", input: { command: "vs worktree create unit-1101-shell && cd ~/.vibesquad/worktrees/DemoRepo/unit-1101-shell" } } } },
+  ];
+  const r = await resolveWorkerWorktree(MAIN_REPO, "Unit 1101: edit app.js in your own worktree.", shellTl, { vsHome: VS_HOME });
+  assert.equal(r.kind, "worktree");
+  assert.equal(r.path, wt);
+  // ACP rawInput as a string works too; an unrelated command still refuses the main checkout.
+  assert.equal((await resolveWorkerWorktree(MAIN_REPO, "", [{ item: { type: "tool_call", name: "execute", detail: { input: "vs worktree create unit-1101-shell" } } }], { vsHome: VS_HOME })).kind, "worktree");
+  assert.equal((await resolveWorkerWorktree(MAIN_REPO, "", [{ item: { type: "tool_call", name: "Bash", detail: { input: { command: "ls" } } } }], { vsHome: VS_HOME })).kind, "main-checkout");
+});

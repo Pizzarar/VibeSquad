@@ -308,7 +308,17 @@ export async function resolveWorkerWorktree(
   if (prompt) scan(prompt);
   for (const e of entries ?? []) {
     if (e?.item?.type === "assistant_message" && typeof e.item.text === "string") scan(e.item.text);
-    if (e?.item?.type === "tool_call" && typeof e.item.name === "string") scan(e.item.name);
+    if (e?.item?.type === "tool_call") {
+      // idea-1101 L3: `name` is the tool (Bash); the shell command lives in detail.input (runner timeline: { command } for
+      // Claude, the ACP rawInput for agy/opencode). Scan both, bounded.
+      if (typeof e.item.name === "string") scan(e.item.name);
+      const input = e.item.detail?.input;
+      if (input != null) {
+        let text = "";
+        try { text = typeof input === "string" ? input : JSON.stringify(input); } catch { text = ""; }
+        if (text) scan(text.slice(0, 4000));
+      }
+    }
   }
   for (const unit of units) {
     const cand = path.resolve(sanctuaryRoot, unit);
