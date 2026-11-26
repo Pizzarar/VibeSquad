@@ -588,7 +588,30 @@ export const BINARY_MISSING_RE = /\bbinary not found at\b|\bexecutable "[^"]+" n
 // upgrade your subscription to increase your limits. Resets in 3h45m18s." Whole-event match only (one short line), so a reply
 // that quotes it among other text never counts.
 export const AGY_QUOTA_RE = /^\s*(?:\u26a0\ufe0f?\s*)?third-party quota reached\b[^\n]*$/i;
-const AGY_RESETS_IN_RE = /\bresets in\s+((?:\d+\s*[dhms]\s*)+)/i;
+const QUOTA_RESETS_IN_RE = /\b(?:resets? in|reset after)\s+((?:\d+\s*[dhms]\s*)+)/i;
+
+// idea-1101: Claude CLI 5-hour / weekly usage limit notices (e.g. "You've hit your limit · resets 5pm (America/New_York)",
+// "Claude usage limit reached. Your limit will reset...", "You have reached your 5-hour limit").
+const CLAUDE_QUOTA_CORE = /(?:you(?:'ve| have)\s+(?:hit|reached)\s+your\s+(?:(?:5-?hour|weekly|daily|session|usage|claude)\s+)?limit\b|(?:claude\s+)?(?:5-?hour|weekly|usage)\s+limit\s+reached\b)/i;
+export const CLAUDE_QUOTA_RE = new RegExp(`^\\s*(?:\\u26a0\\ufe0f?\\s*)?(?:(?:api\\s+)?error:\\s*)?${CLAUDE_QUOTA_CORE.source}[^\\n]*$`, "i");
+
+// idea-1101: Gemini / agy Gemini quota notices (e.g. "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric ...",
+// "You have exhausted your capacity on this model. Your quota will reset after 2h15m.", "TerminalQuotaError").
+const GEMINI_QUOTA_CORE = /(?:\bRESOURCE_EXHAUSTED\b|\bTerminalQuotaError\b|resource has been exhausted|quota exceeded for quota metric|(?:you(?:'ve| have)\s+)?exhausted your capacity on this model|(?:gemini|model)\s+quota\s+(?:reached|exceeded))/i;
+export const GEMINI_QUOTA_RE = new RegExp(`^\\s*(?:\\u26a0\\ufe0f?\\s*)?(?:(?:api\\s+)?error:\\s*)?${GEMINI_QUOTA_CORE.source}[^\\n]*$`, "i");
+
+/** Default cap TTL for a Claude/Gemini quota notice that carries no parseable reset duration. */
+export const PROVIDER_QUOTA_DEFAULT_TTL_MS = 30 * 60 * 1000;
+
+/** Parse a "resets in XdYhZmWs" / "reset after XhYm" duration, clamped to QUOTA_WINDOW_MS.weekly, or null. Pure. */
+export function parseQuotaResetInMs(text) {
+  const m = QUOTA_RESETS_IN_RE.exec(String(text ?? ""));
+  if (!m) return null;
+  const unit = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1000 };
+  let ms = 0;
+  for (const [, n, u] of m[1].matchAll(/(\d+)\s*([dhms])/gi)) ms += Number(n) * unit[u.toLowerCase()];
+  return ms > 0 ? Math.min(ms, QUOTA_WINDOW_MS.weekly) : null;
+}
 
 /**
  * idea-1077: the agy quota notice in `text`, or null: { msg, resetInMs } where resetInMs is the parsed "Resets in XdYhZmWs"
@@ -598,24 +621,36 @@ const AGY_RESETS_IN_RE = /\bresets in\s+((?:\d+\s*[dhms]\s*)+)/i;
 export function agyQuotaOf(text) {
   const msg = String(text ?? "").trim();
   if (!msg || msg.length > PROVIDER_ERROR_MAX_CHARS || !AGY_QUOTA_RE.test(msg)) return null;
-  const m = AGY_RESETS_IN_RE.exec(msg);
-  let resetInMs = null;
-  if (m) {
-    const unit = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1000 };
-    let ms = 0;
-    for (const [, n, u] of m[1].matchAll(/(\d+)\s*([dhms])/gi)) ms += Number(n) * unit[u.toLowerCase()];
-    if (ms > 0) resetInMs = Math.min(ms, QUOTA_WINDOW_MS.weekly);
-  }
-  return { msg, resetInMs };
+  return { msg, resetInMs: parseQuotaResetInMs(msg) };
+}
+
+/** idea-1101: Claude 5h/weekly usage limit notice in `text`, or null: { msg, resetInMs }. Pure. */
+export function claudeQuotaOf(text, { wholeEvent = false } = {}) {
+  const msg = String(text ?? "").trim();
+  if (!msg || msg.length > PROVIDER_ERROR_MAX_CHARS) return null;
+  if (wholeEvent ? !CLAUDE_QUOTA_RE.test(msg) : !CLAUDE_QUOTA_CORE.test(msg)) return null;
+  return { msg, resetInMs: parseQuotaResetInMs(msg) };
+}
+
+/** idea-1101: Gemini / agy-Gemini quota notice in `text`, or null: { msg, resetInMs }. Pure. */
+export function geminiQuotaOf(text, { wholeEvent = false } = {}) {
+  const msg = String(text ?? "").trim();
+  if (!msg || msg.length > PROVIDER_ERROR_MAX_CHARS) return null;
+  if (wholeEvent ? !GEMINI_QUOTA_RE.test(msg) : !GEMINI_QUOTA_CORE.test(msg)) return null;
+  return { msg, resetInMs: parseQuotaResetInMs(msg) };
 }
 
 /**
- * The provider-side fault a runner event reports, or null (idea-442 + idea-826): `balance` (error or exit), `binary-missing`
- * (error or exit) or `upstream` (exit flagged by the ACP adapter). Task-side failures (bad tool call, gone cwd) are never one.
+ * The provider-side fault a runner event reports, or null (idea-442 + idea-826 + idea-1077 + idea-1101): `quota` (agy,
+ * claude 5h/weekly, gemini), `balance` (error or exit), `binary-missing` (error or exit) or `upstream` (exit flagged by
+ * the ACP adapter). Task-side failures (bad tool call, gone cwd) are never one.
  */
 export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
-  // idea-1077: the agy quota notice arrives as assistant output (or, should agy ever send it so, as an error / exit reason).
-  if (e?.type === "output") return quotaFault(e.text);
+  // idea-1077: agy's own pool notice is the ONLY quota wall read from assistant `output` (agy sends it as plain text, then
+  // end_turn). idea-1101 H1: Claude / Gemini walls are read only from provider error channels (the Claude adapter's failed-result
+  // `error`, the ACP adapter's JSON-RPC `error`, an `exit` reason), never from streamed assistant text: the ACP adapter emits one
+  // `output` per chunk and workers routinely write "usage limit" / "RESOURCE_EXHAUSTED" in reports.
+  if (e?.type === "output") return quotaFault(e.text, { agyOnly: true });
   if (e?.type !== "exit" && e?.type !== "error") return null;
   const msg = String((e.type === "exit" ? e.error : e.message) ?? "");
   if (e.type === "error") {
@@ -633,14 +668,32 @@ export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
   return null;
 }
 
-/** A quota fault holds to the notice's own reset; with none parsed it holds like any agy-claude fault (AGY_CLAUDE_MIN_CAP_TTL_MS). */
-function quotaFault(text) {
-  const q = agyQuotaOf(text);
-  return q ? { kind: "quota", ttlMs: q.resetInMs ?? AGY_CLAUDE_MIN_CAP_TTL_MS, msg: q.msg, resetParsed: q.resetInMs !== null } : null;
+/** A quota fault holds to the notice's own reset; with none parsed it holds for the provider's default window.
+ *  `agyOnly` (assistant output): only agy's whole-event pool notice counts. */
+function quotaFault(text, { agyOnly = false } = {}) {
+  const agy = agyQuotaOf(text);
+  if (agy) return { kind: "quota", ttlMs: agy.resetInMs ?? AGY_CLAUDE_MIN_CAP_TTL_MS, msg: agy.msg, resetParsed: agy.resetInMs !== null, families: AGY_QUOTA_FAMILIES, reasonPrefix: "third-party quota" };
+  if (agyOnly) return null;
+  const claude = claudeQuotaOf(text);
+  if (claude) return { kind: "quota", ttlMs: claude.resetInMs ?? PROVIDER_QUOTA_DEFAULT_TTL_MS, msg: claude.msg, resetParsed: claude.resetInMs !== null, families: CLAUDE_QUOTA_FAMILIES, reasonPrefix: "provider quota" };
+  const gemini = geminiQuotaOf(text);
+  if (gemini) return { kind: "quota", ttlMs: gemini.resetInMs ?? PROVIDER_QUOTA_DEFAULT_TTL_MS, msg: gemini.msg, resetParsed: gemini.resetInMs !== null, families: GEMINI_QUOTA_FAMILIES, reasonPrefix: "provider quota" };
+  return null;
 }
 
 /** idea-1077: the families an agy quota notice may cap: agy-claude (a Claude id on agy) or antigravity-cli (agy Gemini). */
 export const AGY_QUOTA_FAMILIES = Object.freeze([AGY_CLAUDE_FAMILY, "antigravity-cli"]);
+/** idea-1101: the families a Claude 5h/weekly limit notice may cap. */
+export const CLAUDE_QUOTA_FAMILIES = Object.freeze(["claude"]);
+/** idea-1101: the families a Gemini quota notice may cap. */
+export const GEMINI_QUOTA_FAMILIES = Object.freeze(["antigravity-cli", "gemini"]);
+
+/** True when `fault` applies to the given normalized provider `family`. */
+function faultMatchesFamily(fault, family) {
+  if (!fault || !family) return false;
+  if (fault.kind === "quota" && Array.isArray(fault.families)) return fault.families.includes(family);
+  return true;
+}
 
 function safeExists(exists, p) { try { return exists(p); } catch { return false; } }
 
@@ -686,8 +739,8 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes =
   const fault = provider ? providerFaultOf(e, { cwd, exists }) : null;
   if (!fault) return null;
   const family = normalizeProviderFamily(provider);
-  // idea-1077: the agy quota notice is agy's own: it caps only the agy pool the agent ran on (never native claude on a quote).
-  if (fault.kind === "quota" && !AGY_QUOTA_FAMILIES.includes(family)) return null;
+  // idea-1077 / idea-1101: a provider quota notice only caps its own provider families (never native claude on an agy quote).
+  if (!faultMatchesFamily(fault, family)) return null;
   const at = Number.isFinite(e.ts) ? e.ts : now;
   const confirmed = fault.kind === "balance" ? noteBalanceStrike(strikes, family, agentId, at) : true;
   let baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
@@ -697,7 +750,7 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes =
   const faultTtl = baseTtlMs - ageMs;
   if (faultTtl <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
   const ttlMs = family === AGY_CLAUDE_FAMILY ? Math.max(faultTtl, agyClaudePoolHoldMs(now, pool)) : faultTtl;
-  const reason = `${FAULT_REASON[fault.kind]}${confirmed ? "" : " (unconfirmed)"}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
+  const reason = `${fault.reasonPrefix ?? FAULT_REASON[fault.kind]}${confirmed ? "" : " (unconfirmed)"}: ${String(fault.msg || "agent exited").slice(0, 160)}`;
   try {
     // Fast path only (skips a lock round-trip); the authoritative keep-longer check is inside setProviderCapped's lock.
     const have = readCaps?.()?.[family];
@@ -1758,8 +1811,8 @@ export class RunnerBackend {
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
       const fault = e.type === "error" || e.type === "output" ? providerFaultOf(e) : null;
-      if (fault?.kind === "quota") await this.noteQuotaNotice(id, t0, e); // idea-1077: agy's quota notice is assistant text
-      else if (fault) await this.capOnProviderError(id, e); // idea-826: "Insufficient Balance" is an error, not an exit
+      if (fault?.kind === "quota" || fault?.kind === "balance") await this.noteQuotaNotice(id, t0, e, fault); // idea-1077 + idea-1101: quota/credit walls across all providers
+      else if (fault) await this.capOnProviderError(id, e); // idea-826: binary-missing on error
       return;
     }
     if (e.type === "unarchive") {
@@ -1813,11 +1866,24 @@ export class RunnerBackend {
     const shown = { ...agentNoQueue, status: to, ...(t.queued ? { queued: t.queued } : {}), ...(toolFields ?? {}) };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
+    if (lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && !t.cancelled) {
+      // idea-1101 M1: a turn that failed on a provider quota/credit wall (markQuotaTurn, or a mid-turn exit whose own reason is
+      // this provider's wall) carries outcome.error.quota, so A4 never resends it as a transient error (a Gemini 429 names
+      // googleapis). Set here, not in the pure reduceTurn, whose outcome shape stays as idea-1077 pinned it.
+      let quotaWall = !!t.quotaFault;
+      if (!quotaWall && e.type === "exit") {
+        const f = providerFaultOf(e, { cwd: agent.cwd });
+        quotaWall = (f?.kind === "quota" || f?.kind === "balance") && faultMatchesFamily(f, normalizeProviderFamily(capFamilyOf(agent)));
+      }
+      if (quotaWall) lifecycle = { ...lifecycle, outcome: { ...lifecycle.outcome, error: { ...lifecycle.outcome.error, quota: true } } };
+    }
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
-    // idea-1077: a turn that ended on agy's quota notice goes to the upstream-respawn hook (after turn_ended: hooks run serially),
-    // which re-routes a worker with no real turn down its role chain, past the now-capped pool.
+    // idea-1077 + idea-1101: a turn that ended on any provider quota/credit wall goes to the upstream-respawn hook
+    // (after turn_ended: hooks run serially), which re-routes 0-turn workers or resumes mid-run workers down the role chain.
+    let emittedUpstream = false;
     if (lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && t?.quotaFault && !t.cancelled) {
       this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: t.quotaFault, ts: e.ts, quota: true });
+      emittedUpstream = true;
     }
     const spawnOutcome = spawnOutcomeOf(shown, lifecycle, Number.isFinite(e.ts) ? { at: e.ts } : undefined);
     if (spawnOutcome) void noteLaneSpawnOutcome(spawnOutcome, this.spawnStreakFile ? { file: this.spawnStreakFile } : undefined); // idea-820
@@ -1825,27 +1891,35 @@ export class RunnerBackend {
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending
     if (e.type === "exit") {
       // idea-504: after the cap (so spawn failover already routes around the provider), tell the hooks: a worker that died on
-      // an upstream failure, or on a missing CLI binary (idea-821), in its first turn is re-spawned once on the alternate provider
-      // (agent-duties). A cancel never is.
+      // an upstream failure, missing CLI binary (idea-821), or quota/credit wall (idea-1101) is routed past the capped provider.
       // R10: the spawn family (antigravity-cli + a Claude id = agy-claude), so an agy-claude death caps agy-claude only, never Gemini.
-      const fault = capProviderOnUpstreamExit(capFamilyOf(agent), e, { cwd: agent.cwd, agentId: id })?.kind ?? providerFaultOf(e, { cwd: agent.cwd })?.kind;
-      if ((e.upstream === true || fault === "binary-missing") && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
+      const fam = capFamilyOf(agent);
+      const capped = capProviderOnUpstreamExit(fam, e, { cwd: agent.cwd, agentId: id });
+      const rawFault = providerFaultOf(e, { cwd: agent.cwd });
+      const fault = capped?.kind ?? (rawFault && faultMatchesFamily(rawFault, normalizeProviderFamily(fam)) ? rawFault.kind : undefined);
+      // idea-1101 L1: a quota/credit exit only hands off when it cut an open turn (died mid-turn). An exit after a turn that
+      // already ended (completed, or failed and handed off at its own turn_ended) is never a reason to resume (invariant 3).
+      const diedMidTurn = lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed";
+      const isQuotaWall = (fault === "quota" || fault === "balance") && diedMidTurn;
+      if (!emittedUpstream && (e.upstream === true || fault === "binary-missing" || isQuotaWall) && !t?.cancelled) {
+        this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts, ...(isQuotaWall ? { quota: true } : {}) });
+      }
     }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
   }
 
   /**
-   * idea-1077: agy's quota notice ("⚠ Third-party quota reached ... Resets in 3h45m18s", plain assistant text, then end_turn).
-   * Only for an agent on an agy pool (capFamilyOf: agy-claude for a Claude id, antigravity-cli for Gemini): its open turn is
-   * marked failed with the notice (markQuotaTurn), and that pool is capped until the parsed reset (capProviderOnUpstreamExit:
-   * keep-longer, so an owner `vs cap` is never touched). Never throws.
+   * idea-1077 + idea-1101: a provider quota or credit/balance wall (agy third-party quota, Claude 5h/weekly limit,
+   * Gemini quota, OpenCode/DeepSeek credit). When the fault matches the agent's own provider family, its open turn is
+   * marked failed with the notice (markQuotaTurn) so turn_ended emits upstream_exit(quota:true), and that provider family
+   * is capped (capProviderOnUpstreamExit: keep-longer, so an owner `vs cap` is never touched). Never throws.
    */
-  async noteQuotaNotice(id, t, e) {
+  async noteQuotaNotice(id, t, e, fault = providerFaultOf(e)) {
     try {
       const agent = this.live.known.get(id) ?? (await bounded(this.fetchAgent(id))).agent;
       const family = capFamilyOf(agent);
-      if (!AGY_QUOTA_FAMILIES.includes(normalizeProviderFamily(family))) return;
-      if (t) markQuotaTurn(t, agyQuotaOf(e.type === "output" ? e.text : e.message)?.msg);
+      if (!fault || !faultMatchesFamily(fault, normalizeProviderFamily(family))) return;
+      if (t) markQuotaTurn(t, fault.msg);
       capProviderOnUpstreamExit(family, e, { cwd: agent?.cwd, agentId: id });
     } catch { /* best effort: the notice is still in the agent's output */ }
   }
