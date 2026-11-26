@@ -1,0 +1,594 @@
+[
+ {
+  "label": "== LANE"
+ },
+ {
+  "label": "Split",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 2,
+  "selected": [],
+  "crumb": "VibeSquad › Split · pick an agent",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+  "h": [],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   " @ VibeSquad›Split · pick an agent"
+  ],
+  "panes": "split=true L=demo-lead-runner R=null rightTabs= active=right"
+ },
+ {
+  "label": "picker Plugins Lead -> right",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-pl",
+  "hist": 3,
+  "selected": [
+   "boring-lead-plugins | Lead / 3m ago"
+  ],
+  "crumb": "VibeSquad › Plugins › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-pl"
+  ],
+  "frames": [
+   " @ VibeSquad›Split · pick an agent",
+   " @ VibeSquad›Plugins›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=right"
+ },
+ {
+  "label": "activate left",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 4,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+  ],
+  "frames": [
+   " @ VibeSquad›Plugins›Lead",
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "LANE enter",
+  "url": "?demo=&team=vibesquad&lane=runner-pilot",
+  "hist": 5,
+  "selected": [
+   "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+  "head": "Runner Pilot · Lead idle · no Brainstorm",
+  "empty": true,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [
+   "pushState /?demo=&team=vibesquad&lane=runner-pilot"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "LANE reload",
+  "url": "?demo=&team=vibesquad&lane=runner-pilot",
+  "hist": 5,
+  "selected": [
+   "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+  "head": "Runner Pilot · Lead idle · no Brainstorm",
+  "empty": true,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [],
+  "frames": [
+   " @ -",
+   "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "LANE Back (Runner Pilot Lead; right pane?)",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 5,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+  "h": [
+   "POP"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=null rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "errs LANE",
+  "errs": []
+ },
+ {
+  "label": "== SLOT"
+ },
+ {
+  "label": "Split",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 2,
+  "selected": [],
+  "crumb": "VibeSquad › Split · pick an agent",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+  "h": [],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   " @ VibeSquad›Split · pick an agent"
+  ],
+  "panes": "split=true L=demo-lead-runner R=null rightTabs= active=right"
+ },
+ {
+  "label": "picker Plugins Lead -> right",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-pl",
+  "hist": 3,
+  "selected": [
+   "boring-lead-plugins | Lead / 3m ago"
+  ],
+  "crumb": "VibeSquad › Plugins › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-pl"
+  ],
+  "frames": [
+   " @ VibeSquad›Split · pick an agent",
+   " @ VibeSquad›Plugins›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=right"
+ },
+ {
+  "label": "activate left",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 4,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+  ],
+  "frames": [
+   " @ VibeSquad›Plugins›Lead",
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "SLOT enter",
+  "url": "?demo=&team=efi&slot=overlord",
+  "hist": 5,
+  "selected": [
+   "boring-core-overlord | ★ Overlord / no agent"
+  ],
+  "crumb": "Main Game Project › Desk › Overlord",
+  "head": "Desk · no Overlord or RiffBot running",
+  "empty": true,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [
+   "pushState /?demo=&team=efi&slot=overlord"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "SLOT reload",
+  "url": "?demo=&team=efi&slot=overlord",
+  "hist": 5,
+  "selected": [
+   "boring-core-overlord | ★ Overlord / no agent"
+  ],
+  "crumb": "Main Game Project › Desk › Overlord",
+  "head": "Desk · no Overlord or RiffBot running",
+  "empty": true,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [],
+  "frames": [
+   " @ -",
+   "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "SLOT Back (Runner Pilot Lead; right pane?)",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 5,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+  "h": [
+   "POP"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=null rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "errs SLOT",
+  "errs": []
+ },
+ {
+  "label": "== AGENT"
+ },
+ {
+  "label": "Split",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 2,
+  "selected": [],
+  "crumb": "VibeSquad › Split · pick an agent",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "Pick an agent or lane / Close split / NEEDS YOU · ACTIVE NOW / Audit - token scout / Desk ",
+  "h": [],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   " @ VibeSquad›Split · pick an agent"
+  ],
+  "panes": "split=true L=demo-lead-runner R=null rightTabs= active=right"
+ },
+ {
+  "label": "picker Plugins Lead -> right",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-pl",
+  "hist": 3,
+  "selected": [
+   "boring-lead-plugins | Lead / 3m ago"
+  ],
+  "crumb": "VibeSquad › Plugins › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-pl"
+  ],
+  "frames": [
+   " @ VibeSquad›Split · pick an agent",
+   " @ VibeSquad›Plugins›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=right"
+ },
+ {
+  "label": "activate left",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 4,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-runner"
+  ],
+  "frames": [
+   " @ VibeSquad›Plugins›Lead",
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "AGENT enter",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-wiki",
+  "hist": 5,
+  "selected": [
+   "boring-lead-wiki | Lead / 15m ago"
+  ],
+  "crumb": "VibeSquad › wiki › Lead",
+  "head": "○ / wiki · Lead 1 / Lead · @wiki / claude-opus-5-5 / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "pushState /?demo=&team=vibesquad&agent=demo-lead-wiki"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead",
+   " @ VibeSquad›wiki›Lead"
+  ],
+  "panes": "split=true L=demo-lead-wiki R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "AGENT reload",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-wiki",
+  "hist": 5,
+  "selected": [
+   "boring-lead-wiki | Lead / 15m ago"
+  ],
+  "crumb": "VibeSquad › wiki › Lead",
+  "head": "○ / wiki · Lead 1 / Lead · @wiki / claude-opus-5-5 / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [],
+  "frames": [
+   " @ -",
+   " @ VibeSquad›Overview",
+   " @ VibeSquad›wiki›Lead"
+  ],
+  "panes": "split=true L=demo-lead-wiki R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "AGENT Back (Runner Pilot Lead; right pane?)",
+  "url": "?demo=&team=vibesquad&agent=demo-lead-runner",
+  "hist": 5,
+  "selected": [
+   "boring-lead-runner-pilot | Lead / 12m ago"
+  ],
+  "crumb": "VibeSquad › Runner Pilot › Lead",
+  "head": "○ / Runner Pilot · Lead 2 / Lead · @runner-pilot / gpt-codex / ⋯",
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": true,
+  "right": "✓ / ★ LEAD · Plugins / Lead / gpt-codex / ⋯ / WORKING NOW / Plugins is running sub-agents ",
+  "h": [
+   "POP"
+  ],
+  "frames": [
+   " @ VibeSquad›Runner Pilot›Lead"
+  ],
+  "panes": "split=true L=demo-lead-runner R=demo-lead-pl rightTabs=demo-lead-pl active=left"
+ },
+ {
+  "label": "errs AGENT",
+  "errs": []
+ },
+ {
+  "label": "cold ?demo=&team=efi&slot=bugs&role=lead",
+  "url": "?demo=&team=efi&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "Main Game Project › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null
+ },
+ {
+  "label": "reload",
+  "url": "?demo=&team=efi&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "Main Game Project › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [],
+  "frames": [
+   " @ -",
+   " @ Main Game Project›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "inject role=lead entry then Back onto it",
+  "url": "?demo=&team=efi&slot=bugs",
+  "hist": 4,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "Main Game Project › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [
+   "pushState ?demo=&team=efi&slot=bugs&role=lead",
+   "pushState ?demo=&team=efi&slot=overlord",
+   "POP",
+   "POP",
+   "replaceState /?demo=&team=efi&slot=bugs"
+  ],
+  "frames": [
+   "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord",
+   " @ Main Game Project›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "errs",
+  "errs": []
+ },
+ {
+  "label": "cold ?demo=&team=vibesquad&slot=bugs&role=lead",
+  "url": "?demo=&team=vibesquad&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null
+ },
+ {
+  "label": "reload",
+  "url": "?demo=&team=vibesquad&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [],
+  "frames": [
+   " @ -",
+   " @ VibeSquad›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "inject role=lead entry then Back onto it",
+  "url": "?demo=&team=vibesquad&slot=bugs",
+  "hist": 4,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(5) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [
+   "pushState ?demo=&team=vibesquad&slot=bugs&role=lead",
+   "pushState ?demo=&team=vibesquad&slot=overlord",
+   "POP",
+   "replaceState /?demo=&team=vibesquad&agent=demo-lead-vs",
+   "POP",
+   "replaceState /?demo=&team=vibesquad&slot=bugs"
+  ],
+  "frames": [
+   " @ VibeSquad›Desk›Overlord",
+   " @ VibeSquad›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "errs",
+  "errs": []
+ },
+ {
+  "label": "cold ?demo=&riff=1&team=vibesquad&slot=bugs&role=lead",
+  "url": "?demo=&riff=1&team=vibesquad&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(6) VibeSquad",
+  "split": false,
+  "right": null
+ },
+ {
+  "label": "reload",
+  "url": "?demo=&riff=1&team=vibesquad&slot=bugs",
+  "hist": 2,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(6) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [],
+  "frames": [
+   " @ -",
+   " @ VibeSquad›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "inject role=lead entry then Back onto it",
+  "url": "?demo=&riff=1&team=vibesquad&slot=bugs",
+  "hist": 4,
+  "selected": [
+   "boring-core-bugs | Bugs / no agent"
+  ],
+  "crumb": "VibeSquad › Bugs › Brainstorm",
+  "head": null,
+  "empty": false,
+  "title": "(6) VibeSquad",
+  "split": false,
+  "right": null,
+  "h": [
+   "pushState ?demo=&riff=1&team=vibesquad&slot=bugs&role=lead",
+   "pushState ?demo=&riff=1&team=vibesquad&slot=overlord",
+   "POP",
+   "replaceState /?demo=&riff=1&team=vibesquad&agent=demo-lead-vs",
+   "POP",
+   "replaceState /?demo=&riff=1&team=vibesquad&slot=bugs"
+  ],
+  "frames": [
+   " @ VibeSquad›Bugs›Brainstorm",
+   " @ VibeSquad›Desk›Overlord",
+   " @ VibeSquad›Bugs›Brainstorm"
+  ],
+  "panes": "split=undefined L=undefined R=undefined rightTabs= active=undefined"
+ },
+ {
+  "label": "errs",
+  "errs": []
+ }
+]

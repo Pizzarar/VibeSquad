@@ -41,27 +41,36 @@ export type UrlSlot = "overlord" | "riffbot" | "bugs";
 export type UrlTab = "inbox" | "standup";
 /** D4 (PLAN_DESK_DECISION_DESK): cross-Squad Decision Desk URL key (`?view=decisions`). */
 export type UrlView = "decisions";
-export type UrlState = { team: string | null; agent: string | null; slot?: UrlSlot | null; tab?: UrlTab | null; view?: UrlView | null };
+/** P3 (idea-1000): which role's empty card a lane (or the Bugs slot) shows; only `lead` is written (Brainstorm is the default, omitted). */
+export type UrlRole = "lead";
+/** `lane` (P3): a feature lane's empty card (`?lane=<laneId>`, + `&role=lead` for its Lead card). Lane ids are free-form, so they get
+ * their own key instead of sharing the closed `slot` enum (a lane named "bugs" would collide). */
+export type UrlState = { team: string | null; agent: string | null; slot?: UrlSlot | null; lane?: string | null; role?: UrlRole | null; tab?: UrlTab | null; view?: UrlView | null };
 
-/** One screen, one URL: an agent wins over a slot, a slot over a tab, and ?view=decisions names the Decision Desk. Unknown values fall back to null. */
+/** One screen, one URL: an agent wins over a slot, a slot over a lane card, a lane card over a tab, and ?view=decisions names the
+ * Decision Desk. ?role=lead only qualifies ?slot=bugs or ?lane=. Unknown values fall back to null; lane/role appear only when set. */
 export function parseUrlState(search: string): UrlState {
   const p = new URLSearchParams(search);
   const agent = p.get("agent") || null;
   const rawSlot = p.get("slot");
   const slot = !agent && (rawSlot === "overlord" || rawSlot === "riffbot" || rawSlot === "bugs") ? rawSlot : null;
+  const lane = !agent && !slot ? p.get("lane") || null : null;
+  const role: UrlRole | null = (slot === "bugs" || lane) && p.get("role") === "lead" ? "lead" : null;
   const rawTab = p.get("tab");
-  const tab = !agent && !slot && (rawTab === "inbox" || rawTab === "standup") ? rawTab : null;
-  const view: UrlView | null = !agent && !slot && !tab && p.get("view") === "decisions" ? "decisions" : null;
-  return { team: p.get("team") || null, agent, slot, tab, ...(view ? { view } : {}) };
+  const tab = !agent && !slot && !lane && (rawTab === "inbox" || rawTab === "standup") ? rawTab : null;
+  const view: UrlView | null = !agent && !slot && !lane && !tab && p.get("view") === "decisions" ? "decisions" : null;
+  return { team: p.get("team") || null, agent, slot, ...(lane ? { lane } : {}), ...(role ? { role } : {}), tab, ...(view ? { view } : {}) };
 }
 
-/** Merges team/agent (+ U1 slot/tab, D4 view=decisions) into an existing query string, keeping unrelated params (demo, dock, sb, ...). */
+/** Merges team/agent (+ U1 slot/tab, P3 lane/role, D4 view=decisions) into an existing query string, keeping unrelated params (demo, dock, sb, ...). */
 export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, search = ""): string {
   const p = new URLSearchParams(search);
   p.delete("team");
   p.delete("agent");
   p.delete("view");
   p.delete("slot");
+  p.delete("lane");
+  p.delete("role");
   p.delete("tab");
   if (state.view === "decisions") {
     p.set("view", "decisions");
@@ -70,7 +79,9 @@ export function serializeUrlState(state: UrlState & { squadsHome?: boolean }, se
     if (state.team) p.set("team", state.team);
     if (state.agent) p.set("agent", state.agent);
     else if (state.slot) p.set("slot", state.slot);
+    else if (state.lane) p.set("lane", state.lane);
     else if (state.tab) p.set("tab", state.tab);
+    if (!state.agent && (state.slot === "bugs" || (!state.slot && state.lane)) && state.role === "lead") p.set("role", "lead");
   }
   const s = p.toString();
   return s ? `?${s}` : "";

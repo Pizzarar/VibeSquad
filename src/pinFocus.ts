@@ -319,11 +319,12 @@ export const getBoringShownAgent = () => boringShown;
 
 // U1 (idea-997/895): the non-agent screen keys BoringApp has on screen (an empty Desk slot card, an Overview sub-tab), tagged with the
 // project they belong to; undefined while BoringApp is not mounted. App's URL sync writes them as ?slot= / ?tab= (urlSyncScreen).
-export type BoringScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; tab: "inbox" | "standup" | null };
+// P3 (idea-1000): `lane` names a feature lane's empty card (?lane=), `role` the Lead card of that lane or of the Bugs slot (?role=lead).
+export type BoringScreenKeys = { team: string | null; slot: "overlord" | "riffbot" | "bugs" | null; lane: string | null; role: "lead" | null; tab: "inbox" | "standup" | null };
 let boringScreen: BoringScreenKeys | undefined;
 const boringScreenSubs = new Set<() => void>();
 export function setBoringScreenKeys(k: BoringScreenKeys | undefined) {
-  if (k === boringScreen || (k && boringScreen && k.team === boringScreen.team && k.slot === boringScreen.slot && k.tab === boringScreen.tab)) return;
+  if (k === boringScreen || (k && boringScreen && k.team === boringScreen.team && k.slot === boringScreen.slot && k.lane === boringScreen.lane && k.role === boringScreen.role && k.tab === boringScreen.tab)) return;
   boringScreen = k;
   for (const f of boringScreenSubs) f();
 }
