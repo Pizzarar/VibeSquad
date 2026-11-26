@@ -3364,7 +3364,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               if (!isDigestAgent(labels) && effectiveAgentRole({ labels }) === "lead") {
                 void flushWake(paseo, agent.id);
               }
-              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""));
+              return await handleFailure(paseo, agent, String(outcome.error?.message ?? ""), { quota: outcome.error?.quota === true });
             }
             if (outcome.kind !== "completed") {
               // Cancelled / other non-completed outcomes produce no digest, but a lead's
@@ -3624,6 +3624,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      */
     async function a4RetryScheduled(digestId: string, before: number, res: any): Promise<boolean> {
       const msg = String(res?.error?.message ?? res?.error ?? "");
+      if (res?.error?.quota === true) return false; // idea-1101 M1: handleFailure never resends a quota wall
       if (msg && !TRANSIENT_ERROR.test(msg)) return false;
       const end = Date.now() + (msg ? DIGEST_RETRY_GRACE_MS : 50); // no message (daemon handle): the old short settle
       for (;;) {
@@ -3862,8 +3863,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // not only at turn_ended). confirmTakeover above stays here.
 
     // A4: transient network error retry with exponential backoff.
-    async function handleFailure(paseo: Paseo, agent: any, message: string) {
+    async function handleFailure(paseo: Paseo, agent: any, message: string, { quota = false }: { quota?: boolean } = {}) {
       if (!TRANSIENT_ERROR.test(message)) return;
+      // idea-1101 M1: a provider quota wall is never transient, even when it names its googleapis service: the upstream-respawn
+      // hook (upstream_exit quota) routes it past the now-capped provider; a resend would only hit the cap again.
+      if (quota) {
+        log(`quota wall on ${agent.id}: no A4 retry, the upstream-respawn hook routes it (idea-1101)`);
+        return;
+      }
       if (upstreamRespawnClaimed.has(agent.id)) {
         log(`transient error on ${agent.id}: no A4 retry, it was re-spawned after an upstream failure (idea-504)`);
         return;

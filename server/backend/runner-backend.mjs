@@ -549,7 +549,8 @@ export function reduceTurn(t, e) {
     }
     if (inTurn && t.status === "idle") {
       t.awaiting = false;
-      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed") } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
+      // idea-1101 M1: `quota` marks a provider quota/credit wall (markQuotaTurn), so A4 never resends it as a transient error.
+      const outcome = t.errored ? { kind: "failed", error: { message: String(t.error ?? "turn failed"), ...(t.quotaFault ? { quota: true } : {}) } } : t.cancelled ? { kind: "cancelled" } : { kind: "completed" };
       return { kind: "turn_ended", turnId: String(e.seq), outcome };
     }
     return null;
@@ -558,7 +559,7 @@ export function reduceTurn(t, e) {
     t.status = "closed";
     t.awaiting = false;
     if (inTurn && (e.error || (e.code ?? 0) !== 0)) t.errored = true; // died mid-turn
-    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`) } } } : null;
+    return inTurn ? { kind: "turn_ended", turnId: String(e.seq), outcome: { kind: "failed", error: { message: String(e.error ?? `agent exited (code ${e.code ?? "?"})`), ...(t.quotaFault ? { quota: true } : {}) } } } : null;
   }
   return null;
 }
@@ -1866,6 +1867,11 @@ export class RunnerBackend {
     const shown = { ...agentNoQueue, status: to, ...(t.queued ? { queued: t.queued } : {}), ...(toolFields ?? {}) };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
+    if (e.type === "exit" && lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && !lifecycle.outcome.error?.quota) {
+      // idea-1101 M1: a mid-turn exit whose own reason is this provider's quota/credit wall is flagged like markQuotaTurn's.
+      const f = providerFaultOf(e, { cwd: agent.cwd });
+      if ((f?.kind === "quota" || f?.kind === "balance") && faultMatchesFamily(f, normalizeProviderFamily(capFamilyOf(agent)))) lifecycle.outcome.error.quota = true;
+    }
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     // idea-1077 + idea-1101: a turn that ended on any provider quota/credit wall goes to the upstream-respawn hook
     // (after turn_ended: hooks run serially), which re-routes 0-turn workers or resumes mid-run workers down the role chain.

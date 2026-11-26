@@ -184,7 +184,7 @@ function fakeRunner({ id, provider, model, cwd = LINKED_WT, labels = {}, timelin
   return { backend, agents, timelines, created };
 }
 
-async function emitQuotaWall(f, id, errorText, { cappedProviders = [], watchSets = false, ts = Date.now() } = {}) {
+async function emitQuotaWall(f, id, errorText, { cappedProviders = [], watchSets = false, ts = Date.now(), outcomeQuota = true } = {}) {
   writeCaps({});
   const host = await createRunnerHookHost(f.backend, {
     startWatcher: false,
@@ -193,7 +193,7 @@ async function emitQuotaWall(f, id, errorText, { cappedProviders = [], watchSets
   });
   try {
     const agent = await f.backend.getAgent(id);
-    await host.emit("agent.turn_ended", { agent, turnId: "7", outcome: { kind: "failed", error: { message: errorText } } });
+    await host.emit("agent.turn_ended", { agent, turnId: "7", outcome: { kind: "failed", error: { message: errorText, ...(outcomeQuota ? { quota: true } : {}) } } });
     await host.emit("agent.upstream_exit", { agent, error: errorText, ts, quota: true });
   } finally {
     host.dispose();
@@ -312,6 +312,45 @@ test("1101-3: Gemini quota -> classified with reset TTL, caps antigravity-cli, e
   assert.equal(f.created.length, 1);
   assert.equal(spawnFamily(f.created[0].provider, f.created[0].model), "claude");
   assert.equal(f.created[0].cwd, LINKED_WT);
+});
+
+test("1101-3b: M1 — a Gemini quota error naming its googleapis service is flagged quota, skips A4, and still resumes", async () => {
+  const GAPI = "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Generate Content API requests per minute' of service 'generativelanguage.googleapis.com'";
+  writeCaps({});
+  const ts = Date.now();
+  const ev = await backendEvents([
+    { seq: 0, ts, type: "created", provider: "antigravity-cli", model: "gemini-4-neon-medium" },
+    { seq: 1, ts, type: "input", text: ORIG_PROMPT },
+    { seq: 2, ts, type: "status", status: "running" },
+    { seq: 3, ts, type: "error", message: GAPI },
+    { seq: 4, ts, type: "status", status: "idle" },
+  ], { id: "rn-gapi-1", provider: "antigravity-cli", model: "gemini-4-neon-medium", status: "idle", cwd: LINKED_WT, labels: { role: "worker" } });
+  const ended = ev.filter((e) => e.kind === "turn_ended");
+  assert.equal(ended[0].outcome.kind, "failed");
+  assert.equal(ended[0].outcome.error.quota, true, "turn outcome carries the quota flag");
+  assert.equal(ev.filter((e) => e.kind === "upstream_exit" && e.quota).length, 1);
+
+  // Mid-turn exit whose own reason is the wall (no prior error event) is flagged too.
+  writeCaps({});
+  const ex = await backendEvents([
+    { seq: 0, ts, type: "created", provider: "antigravity-cli", model: "gemini-4-neon-medium" },
+    { seq: 1, ts, type: "input", text: ORIG_PROMPT },
+    { seq: 2, ts, type: "status", status: "running" },
+    { seq: 3, ts, type: "exit", code: 1, error: `agy exited (code 1) after: ${GAPI}`, upstream: false },
+  ], { id: "rn-gapi-2", provider: "antigravity-cli", model: "gemini-4-neon-medium", status: "idle", cwd: LINKED_WT, labels: { role: "worker" } });
+  assert.equal(ex.find((e) => e.kind === "turn_ended").outcome.error.quota, true);
+  assert.equal(ex.filter((e) => e.kind === "upstream_exit" && e.quota).length, 1);
+
+  // Hook: the quota-flagged failed turn schedules no A4 resend, so the resume is not pre-empted (a4-retry-scheduled).
+  const f = fakeRunner({ id: "rn-mid-gapi", provider: "antigravity-cli", model: "gemini-4-neon-medium", labels: { profile: "Review" }, timeline: MIDRUN_TIMELINE(GAPI) });
+  const sends = [];
+  f.backend.sendAgentPrompt = async (aid, p) => { sends.push([aid, p]); return { queued: false }; };
+  await emitQuotaWall(f, "rn-mid-gapi", GAPI, { cappedProviders: ["antigravity-cli", AGY_CLAUDE_FAMILY] });
+  await new Promise((r) => setTimeout(r, 150)); // past retryBaseMs: a scheduled A4 resend would have fired
+  assert.equal(f.created.length, 1, "resumed, not skipped as a4-retry-scheduled");
+  assert.equal(spawnFamily(f.created[0].provider, f.created[0].model), "claude");
+  assert.equal(sends.filter(([aid]) => aid === "rn-mid-gapi").length, 0, "no A4 resend to the capped provider");
+  assert.doesNotMatch(metricsFor("rn-mid-gapi").at(-1).text, /a4-retry-scheduled/);
 });
 
 test("1101-4: OpenCode / DeepSeek credit error -> caps opencode, emits single upstream_exit(quota:true), resumes mid-run on claude", async () => {
