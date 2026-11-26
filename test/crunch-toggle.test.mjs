@@ -142,3 +142,27 @@ test("a dropped steer (delivered:false) falls back to a normal prompt", async ()
   await toggle.onTeamsSave([{ id: "vs" }], [{ id: "vs", vibeMode: true }]);
   assert.deepEqual(calls, [true, false]);
 });
+
+test("hub Buddy is skipped on ON and OFF; team Buddy, team Lead and hub Lead still wake (O1)", async () => {
+  const agents = [
+    ag("HB", "brainstorm", "vs", "vibesquad"),
+    ag("HL", "lead", "vs", "vibesquad"),
+    ag("TB", "brainstorm", "vs", "bug"),
+    ag("TL", "lead", "vs", "bug"),
+  ];
+  const mk = (vibeMode) => [{ id: "vs", vibeMode, lanes: [{ id: "vibesquad", hub: true }, { id: "bug" }] }];
+  for (const [prev, next, tag] of [[false, true, "on"], [true, false, "off"]]) {
+    const s = setup({ agents });
+    await s.toggle.onTeamsSave(mk(prev), mk(next));
+    assert.deepEqual(s.sent.map((x) => x.id).sort(), ["HL", "TB", "TL"]);
+    assert.ok(s.logs.includes(`crunch-${tag} team=vs lane=vibesquad agent=HB role=brainstorm skipped=hub-buddy`), s.logs.join("\n"));
+    assert.equal(s.logs.length, 4);
+  }
+});
+
+test("hub Buddy skipped by the fallback rule (no hub flag, lane id equals team id)", async () => {
+  const s = setup({ agents: [ag("HB", "brainstorm", "vs", "vs"), ag("HL", "lead", "vs", "vs"), ag("TB", "brainstorm", "vs", "bug")] });
+  await s.toggle.onTeamsSave([{ id: "vs", vibeMode: false, lanes: [{ id: "vs" }, { id: "bug" }] }], [{ id: "vs", vibeMode: true, lanes: [{ id: "vs" }, { id: "bug" }] }]);
+  assert.deepEqual(s.sent.map((x) => x.id).sort(), ["HL", "TB"]);
+  assert.ok(s.logs.some((l) => l.endsWith("agent=HB role=brainstorm skipped=hub-buddy")));
+});
