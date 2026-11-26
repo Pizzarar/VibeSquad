@@ -495,6 +495,21 @@ async function injectedPrefix(role, cwd) {
 }
 
 /**
+ * idea-1077: agy's quota notice ended this turn: mark it failed with the notice, exactly like an error event would (so the turn
+ * ends `failed`, never `completed`: no NO-VERDICT digest), and remember it (t.quotaFault) for the upstream-respawn hand-off.
+ * Outside a turn it changes nothing. Pure.
+ */
+export function markQuotaTurn(t, msg) {
+  const inTurn = t.status === "running" || t.status === "initializing" || !!t.awaiting;
+  if (!inTurn || !msg) return false;
+  t.errored = true;
+  t.error = msg;
+  t.errSinceInput = true;
+  t.quotaFault = msg;
+  return true;
+}
+
+/**
  * Advance one agent's turn state by one runner log event (pure, no I/O); returns the lifecycle event it caused, if any.
  * A prompt (`input`) marks a turn live even before the adapter's first `running` (an ACP adapter failing in initialize /
  * session-new errors in that window while its log status is still unknown), and an error/exit there is a failed turn.
@@ -511,7 +526,7 @@ export function reduceTurn(t, e) {
     // turn_started/turn_ended. A turn the restart cut is abandoned here, not reported completed (no digest, no takeover).
     t.status = STATUS[e.status] ?? e.status;
     t.queued = undefined;
-    if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; }
+    if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; t.quotaFault = undefined; }
     return null;
   }
   if (e.type === "status" && e.status === "parked" && (e.queued === true || (t.queued && !t.errSinceInput))) {
@@ -529,6 +544,7 @@ export function reduceTurn(t, e) {
       t.errored = false; // next turn began
       t.error = undefined;
       t.cancelled = false;
+      t.quotaFault = undefined;
       return wasRunning ? null : { kind: "turn_started" };
     }
     if (inTurn && t.status === "idle") {
@@ -567,12 +583,39 @@ export const BINARY_CAP_TTL_MS = 10 * 60 * 1000;
 export const BALANCE_ERROR_RE = /insufficient[ _](account[ _])?balance|insufficient_quota|credit balance is too low|exceeded your current quota|\b402\W{0,3}payment required/i;
 // runner/spawn.mjs: "<cmd> binary not found at <path>" (spawn ENOENT, cwd present) / resolveExecutable's 'executable "<cmd>" not found'.
 export const BINARY_MISSING_RE = /\bbinary not found at\b|\bexecutable "[^"]+" not found\b/i;
+// idea-1077: antigravity-cli's own pool notice when a third-party (Claude/GPT) pool runs dry. agy sends it as ordinary assistant
+// text and ends the turn end_turn (no error, no exit), e.g. "⚠ Third-party quota reached. Please switch to Gemini models or
+// upgrade your subscription to increase your limits. Resets in 3h45m18s." Whole-event match only (one short line), so a reply
+// that quotes it among other text never counts.
+export const AGY_QUOTA_RE = /^\s*(?:\u26a0\ufe0f?\s*)?third-party quota reached\b[^\n]*$/i;
+const AGY_RESETS_IN_RE = /\bresets in\s+((?:\d+\s*[dhms]\s*)+)/i;
+
+/**
+ * idea-1077: the agy quota notice in `text`, or null: { msg, resetInMs } where resetInMs is the parsed "Resets in XdYhZmWs"
+ * clamped to the longest quota window (QUOTA_WINDOW_MS.weekly: the notice names no window, same rule as agyClaudePoolHoldMs for
+ * unknown windows), or null when the text carries no parseable reset. Pure.
+ */
+export function agyQuotaOf(text) {
+  const msg = String(text ?? "").trim();
+  if (!msg || msg.length > PROVIDER_ERROR_MAX_CHARS || !AGY_QUOTA_RE.test(msg)) return null;
+  const m = AGY_RESETS_IN_RE.exec(msg);
+  let resetInMs = null;
+  if (m) {
+    const unit = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1000 };
+    let ms = 0;
+    for (const [, n, u] of m[1].matchAll(/(\d+)\s*([dhms])/gi)) ms += Number(n) * unit[u.toLowerCase()];
+    if (ms > 0) resetInMs = Math.min(ms, QUOTA_WINDOW_MS.weekly);
+  }
+  return { msg, resetInMs };
+}
 
 /**
  * The provider-side fault a runner event reports, or null (idea-442 + idea-826): `balance` (error or exit), `binary-missing`
  * (error or exit) or `upstream` (exit flagged by the ACP adapter). Task-side failures (bad tool call, gone cwd) are never one.
  */
 export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
+  // idea-1077: the agy quota notice arrives as assistant output (or, should agy ever send it so, as an error / exit reason).
+  if (e?.type === "output") return quotaFault(e.text);
   if (e?.type !== "exit" && e?.type !== "error") return null;
   const msg = String((e.type === "exit" ? e.error : e.message) ?? "");
   if (e.type === "error") {
@@ -581,6 +624,8 @@ export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
     if (/^error_/i.test(String(e.subtype ?? ""))) return null;
     if (msg.length > PROVIDER_ERROR_MAX_CHARS) return null;
   }
+  const quota = quotaFault(msg);
+  if (quota) return quota;
   if (msg && BALANCE_ERROR_RE.test(msg)) return { kind: "balance", ttlMs: BALANCE_CAP_TTL_MS, msg };
   // A runner from before the spawnErrorMessage cwd check still names the binary when the agent's cwd is gone: not a binary fault.
   if (msg && BINARY_MISSING_RE.test(msg)) return cwd && !safeExists(exists, cwd) ? null : { kind: "binary-missing", ttlMs: BINARY_CAP_TTL_MS, msg };
@@ -588,9 +633,18 @@ export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
   return null;
 }
 
+/** A quota fault holds to the notice's own reset; with none parsed it holds like any agy-claude fault (AGY_CLAUDE_MIN_CAP_TTL_MS). */
+function quotaFault(text) {
+  const q = agyQuotaOf(text);
+  return q ? { kind: "quota", ttlMs: q.resetInMs ?? AGY_CLAUDE_MIN_CAP_TTL_MS, msg: q.msg, resetParsed: q.resetInMs !== null } : null;
+}
+
+/** idea-1077: the families an agy quota notice may cap: agy-claude (a Claude id on agy) or antigravity-cli (agy Gemini). */
+export const AGY_QUOTA_FAMILIES = Object.freeze([AGY_CLAUDE_FAMILY, "antigravity-cli"]);
+
 function safeExists(exists, p) { try { return exists(p); } catch { return false; } }
 
-const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient balance", "binary-missing": "binary missing" };
+const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient balance", "binary-missing": "binary missing", quota: "third-party quota" };
 
 /**
  * The provider circuit breaker (reuses the `vs cap` store, server/provider-failover.mjs setProviderCapped). idea-442: opencode/deepseek
@@ -630,10 +684,13 @@ export function capProviderOnUpstreamExit(provider, e, { cwd, agentId, strikes =
   const fault = provider ? providerFaultOf(e, { cwd, exists }) : null;
   if (!fault) return null;
   const family = normalizeProviderFamily(provider);
+  // idea-1077: the agy quota notice is agy's own: it caps only the agy pool the agent ran on (never native claude on a quote).
+  if (fault.kind === "quota" && !AGY_QUOTA_FAMILIES.includes(family)) return null;
   const at = Number.isFinite(e.ts) ? e.ts : now;
   const confirmed = fault.kind === "balance" ? noteBalanceStrike(strikes, family, agentId, at) : true;
   let baseTtlMs = confirmed ? fault.ttlMs : BALANCE_FIRST_TTL_MS;
-  if (family === AGY_CLAUDE_FAMILY) baseTtlMs = Math.max(baseTtlMs, AGY_CLAUDE_MIN_CAP_TTL_MS);
+  // A quota notice's parsed reset is the provider's own word: the cap lifts then, not one poll interval later.
+  if (family === AGY_CLAUDE_FAMILY && !fault.resetParsed) baseTtlMs = Math.max(baseTtlMs, AGY_CLAUDE_MIN_CAP_TTL_MS);
   const ageMs = Math.max(0, now - at);
   const faultTtl = baseTtlMs - ageMs;
   if (faultTtl <= 0) return null; // a restart catch-up replaying an old event must not re-cap a provider that has since recovered
@@ -1336,6 +1393,7 @@ export class RunnerBackend {
    *   { kind: 'created' | 'turn_started', agentId, agent }
    *   { kind: 'turn_ended', agentId, agent, turnId, outcome }   outcome: { kind: 'completed' | 'cancelled' } | { kind: 'failed', error: { message } }
    *   { kind: 'upstream_exit', agentId, agent, error, ts }   the agent exited on an upstream model-API failure (idea-442/504)
+   *     (+ quota: true: its turn ended on agy's quota notice instead, the agent is parked, not exited; idea-1077)
    * Returns the unsubscribe.
    */
   subscribeEvents(listener) {
@@ -1697,7 +1755,9 @@ export class RunnerBackend {
     await this.trackTools(id, e, gen);
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
-      if (e.type === "error" && providerFaultOf(e)) await this.capOnProviderError(id, e); // idea-826: "Insufficient Balance" is an error, not an exit
+      const fault = e.type === "error" || e.type === "output" ? providerFaultOf(e) : null;
+      if (fault?.kind === "quota") await this.noteQuotaNotice(id, t0, e); // idea-1077: agy's quota notice is assistant text
+      else if (fault) await this.capOnProviderError(id, e); // idea-826: "Insufficient Balance" is an error, not an exit
       return;
     }
     if (e.type === "unarchive") {
@@ -1752,6 +1812,11 @@ export class RunnerBackend {
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
+    // idea-1077: a turn that ended on agy's quota notice goes to the upstream-respawn hook (after turn_ended: hooks run serially),
+    // which re-routes a worker with no real turn down its role chain, past the now-capped pool.
+    if (lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed" && t?.quotaFault && !t.cancelled) {
+      this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: t.quotaFault, ts: e.ts, quota: true });
+    }
     const spawnOutcome = spawnOutcomeOf(shown, lifecycle, Number.isFinite(e.ts) ? { at: e.ts } : undefined);
     if (spawnOutcome) void noteLaneSpawnOutcome(spawnOutcome, this.spawnStreakFile ? { file: this.spawnStreakFile } : undefined); // idea-820
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
@@ -1765,6 +1830,22 @@ export class RunnerBackend {
       if ((e.upstream === true || fault === "binary-missing") && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
     }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /**
+   * idea-1077: agy's quota notice ("⚠ Third-party quota reached ... Resets in 3h45m18s", plain assistant text, then end_turn).
+   * Only for an agent on an agy pool (capFamilyOf: agy-claude for a Claude id, antigravity-cli for Gemini): its open turn is
+   * marked failed with the notice (markQuotaTurn), and that pool is capped until the parsed reset (capProviderOnUpstreamExit:
+   * keep-longer, so an owner `vs cap` is never touched). Never throws.
+   */
+  async noteQuotaNotice(id, t, e) {
+    try {
+      const agent = this.live.known.get(id) ?? (await bounded(this.fetchAgent(id))).agent;
+      const family = capFamilyOf(agent);
+      if (!AGY_QUOTA_FAMILIES.includes(normalizeProviderFamily(family))) return;
+      if (t) markQuotaTurn(t, agyQuotaOf(e.type === "output" ? e.text : e.message)?.msg);
+      capProviderOnUpstreamExit(family, e, { cwd: agent?.cwd, agentId: id });
+    } catch { /* best effort: the notice is still in the agent's output */ }
   }
 
   /** idea-826: a provider fault reported as an `error` event (the agent stays parked) trips the provider cap. Never throws. */
