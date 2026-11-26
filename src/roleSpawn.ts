@@ -15,9 +15,9 @@ const routeOverrideLabel = ({ provider, model }: { provider?: string; model?: st
  *  vs.model (a switch since spawn); "" while a switch is staged (the chip already shows the staged model). */
 export function drawerSpawnWhy(labels: Record<string, string>, liveModel: string | null | undefined, staged: boolean): string {
   if (staged) return "";
-  if (armSoftReason(labels)) return SPAWN_REASON.SOFT;
   const spawned = labels["vs.model"];
   if (spawned && liveModel && liveModel !== spawned) return "override";
+  if (armSoftReason(labels)) return SPAWN_REASON.SOFT;
   return routeWhy(labels["vs.route"]);
 }
 
@@ -46,7 +46,7 @@ export const SPAWN_REASON_GLOSS: Record<string, string> = {
   [SPAWN_REASON.ARM]: "Arm: an alternating Sonnet/Gemini trial picked this model.",
   [SPAWN_REASON.OVERRIDE]: "Override: you or the caller picked the provider or model.",
   [SPAWN_REASON.FAILOVER]: "Failover: the preferred provider was capped, so a fallback ran instead.",
-  [SPAWN_REASON.SOFT]: "Soft line: the preferred provider passed its soft line, so a fallback ran.",
+  [SPAWN_REASON.SOFT]: "Soft line: the preferred provider passed the quota line, so a fallback ran.",
   [SPAWN_REASON.LEGACY_NAME]: "Legacy name: an old profile name ran its stored profile.",
   [SPAWN_REASON.ALL_CAPPED]: "All capped: every provider was capped, so it started on the first and waits or fails over.",
 };
@@ -56,12 +56,18 @@ export function spawnChipTitle(opts: { role?: string; model?: string; reason: st
   const head = [opts.role, opts.model].filter(Boolean).join(" · ");
   if (opts.staged) return `${head} (staged switch: applies on your next message)`;
   const reason = spawnReasonLabel(opts.reason);
-  const gloss = reason ? (SPAWN_REASON_GLOSS[reason] ?? "") : "";
-  const on = (reason === SPAWN_REASON.FAILOVER || reason === SPAWN_REASON.SOFT) && opts.provider ? ` Runs on ${opts.provider}.` : "";
-  // C fu2 m1: the soft line in plain words ("Claude pool at 78%, soft line 70%"), never the raw `>=` / `->` route text.
+  // C fu2 m1/m2: cause before result, "soft line" at most once per tooltip, never the raw `>=` / `->` route text.
   const softText = reason === SPAWN_REASON.SOFT && opts.softReason ? formatSoftReason(opts.softReason) : "";
-  const soft = softText ? ` ${softText}.` : "";
-  return [head, gloss + on + soft].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
+  const softInline = softText
+    .replace(/, soft line (\d+(?:\.\d+)?%)/i, " (line $1)")
+    .replace(/\bpast its soft line\b/i, "past the line");
+  const gloss = softInline
+    ? `Soft line: ${softInline}, so a fallback ran.`
+    : reason
+      ? (SPAWN_REASON_GLOSS[reason] ?? "")
+      : "";
+  const on = (reason === SPAWN_REASON.FAILOVER || reason === SPAWN_REASON.SOFT) && opts.provider ? ` Runs on ${opts.provider}.` : "";
+  return [head, gloss + on].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
 }
 
 /** Provider id -> the name the role editor shows. */
