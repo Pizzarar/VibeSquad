@@ -14,6 +14,7 @@ import {
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import { StorybookArc } from "./StorybookArc";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
@@ -333,6 +334,21 @@ function QuestWeb({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardApi;
   );
 }
 
+type QuestMode = "web" | "arcs" | "order";
+const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
+function QuestsTab({ snap, idx, card, sel, setSel, openLine }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; openLine: (e: SbEntity) => void }) {
+  const [mode, setMode] = useState<QuestMode>("arcs");
+  const chip = (e: SbEntity, label?: string) => <Chip e={e} card={card} label={label} />;
+  return (
+    <div>
+      <div className="sb-seg" role="tablist" aria-label="Quest views">
+        {QUEST_MODES.map(([m, l]) => <button key={m} type="button" role="tab" aria-selected={mode === m} className="sb-seg-btn" onClick={() => setMode(m)}>{l}</button>)}
+      </div>
+      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
+    </div>
+  );
+}
+
 function Locations({ idx, card, sel, setSel }: { idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void }) {
   const locs = useMemo(() => idx.byKind("location"), [idx]);
   const loc = locs.find((l) => l.id === sel) ?? locs[0];
@@ -561,7 +577,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   // Finding → quest step: scroll to the step's chip, focus it (which opens its card) and flash it (UX R18 m9).
   useEffect(() => {
     if (!jump || tab !== "quests") return;
-    const el = [...document.querySelectorAll<HTMLElement>(".sb-step [data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === jump);
+    const el = [...document.querySelectorAll<HTMLElement>(".sb-step [data-sb-chip], .sb-arc-step [data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === jump);
     setJump(null);
     if (!el) return;
     el.scrollIntoView({ block: "center" });
@@ -604,7 +620,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} />}
             {tab === "review" && <Findings items={items} idx={idx} card={card} active={activeReview} setActive={setActiveReview} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
-            {tab === "quests" && <QuestWeb idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} openLine={goTo} />}
             {tab === "world" && <Locations idx={idx} card={card} sel={sel.world} setSel={pick("world")} />}
             {tab === "cast" && <Characters idx={idx} card={card} sel={sel.cast} setSel={pick("cast")} />}
             {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope === "story" ? "story" : "problems"} setScope={setScope} scopes={["problems", "story"]} goTo={goTo} />}
