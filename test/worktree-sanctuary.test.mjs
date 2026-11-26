@@ -418,8 +418,9 @@ test("a .venv link that will not detach fails closed: removeTeamWorktrees keeps 
   try {
     const repo = initVenvRepo(root);
     const wt = createManagedWorktree(repo, "unit-venv-stuck", { env });
-    // The link "detaches" but is still there: must throw, never fall through to a removal.
-    assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => true }), { code: "ELINK" });
+    // The unlink silently does nothing: must throw, never fall through to a removal; an unlink that throws propagates.
+    assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => {} }), { code: "ELINK" });
+    assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => { throw Object.assign(new Error("busy"), { code: "EBUSY" }); } }), { code: "EBUSY" });
     // removeTeamWorktrees on a worktree whose .venv link cannot be removed (read-only parent) keeps it.
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       const { chmodSync } = await import("node:fs");

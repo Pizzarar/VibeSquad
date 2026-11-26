@@ -252,18 +252,28 @@ function unlinkWorktreeDirLink(wtPath, name) {
 
 /**
  * Detach every dependency link (DEPENDENCY_LINK_DIRS: node_modules, .venv) at the worktree root, link only, never the
- * target. Fails closed: throws (code ELINK) when a link is still there afterwards, so the caller must not remove the
- * worktree. Returns the names detached.
+ * target; a real folder of that name is left alone. Fails closed: an unlink that throws, or a link still there afterwards
+ * (code ELINK), throws, so the caller must not remove the worktree. `unlinkLink(absPath)` is a test seam. Returns the
+ * names detached.
  */
-export function detachDependencyLinks(wtPath, { unlinkLink = unlinkWorktreeDirLink } = {}) {
+export function detachDependencyLinks(wtPath, { unlinkLink = unlinkLinkOnly } = {}) {
   const detached = [];
   for (const name of DEPENDENCY_LINK_DIRS) {
-    if (unlinkLink(wtPath, name)) detached.push(name);
-    let still = false;
+    const p = resolve(wtPath, name);
+    let isLink = false;
     try {
-      still = lstatSync(resolve(wtPath, name)).isSymbolicLink();
+      isLink = lstatSync(p).isSymbolicLink();
     } catch {}
+    if (!isLink) continue;
+    unlinkLink(p);
+    let still = true;
+    try {
+      lstatSync(p);
+    } catch (e) {
+      if (e?.code === "ENOENT") still = false;
+    }
     if (still) throw Object.assign(new Error(`${name} link still attached`), { code: "ELINK" });
+    detached.push(name);
   }
   return detached;
 }
@@ -926,7 +936,7 @@ export function removeSweptWorktree(
   try {
     const wtRoot = normPath(wtPath);
     // idea-1090: the root node_modules/.venv junctions first, by name (detachUntrackedLinks below would also find them).
-    detachDependencyLinks(resolve(wtPath));
+    detachDependencyLinks(resolve(wtPath), { unlinkLink });
     for (const rel of buildOutput) {
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
       // before `git worktree remove` could walk it.
