@@ -205,7 +205,7 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
     if (prev) edges.push(`  ${prev} --> ${sn}`);
     prev = sn;
     for (const l of s.links) {
-      if (l.rel === "trader") continue;
+      if (l.rel === "trader" || l.rel === "spoken_by" || l.rel === "said_at") continue; // V1 identity links duplicate trader / at_location here
       const t = idx.get(l.kind, l.id);
       if (!t) continue;
       edges.push(`  ${sn} -.->|${mermaidLabel(l.rel.replace(/_/g, " "), 24)}| ${nodeFor(t)}`);
@@ -255,28 +255,56 @@ export function fmtWindow(minS: number | null, maxS: number | null): string {
   return `${f(minS ?? 0)}–${f(maxS)}`;
 }
 
-export type CharacterView = { id: string; speaker: string; card: SbEntity | null; entity: SbEntity | null; lines: SbEntity[] };
+export type CharacterView = { id: string; speaker: string; card: SbEntity | null; entity: SbEntity | null; lines: SbEntity[]; kind: string; inferred: number };
 
-/** Lowercased speaker key of a text line: csv rows carry a display name ("Popper"), others an id ("popper", "narrator"). */
+/** Lowercased speaker id of a text line (legacy shape, id only; use lineSpeakerKey for identity): csv rows carry a display name, others an id. */
 export function lineSpeaker(e: SbEntity): string {
   const link = e.links.find((l) => l.rel === "spoken_by");
   return String(link?.id ?? e.data?.speaker ?? "").toLowerCase();
 }
 
-/** One entry per speaker that has lines or a voice card, sorted by line count desc then name. */
+/** Speaker identity of a line as `kind:id` (V1): adapter speakerKind/speakerId, else the spoken_by link, else the legacy speaker string, else System. Never empty. */
+export function lineSpeakerKey(e: SbEntity): string {
+  const d = e.data ?? {};
+  if (typeof d.speakerKind === "string" && d.speakerKind && typeof d.speakerId === "string" && d.speakerId) return `${d.speakerKind}:${d.speakerId.toLowerCase()}`;
+  const link = e.links.find((l) => l.rel === "spoken_by");
+  if (link) return `${link.kind}:${link.id.toLowerCase()}`;
+  const legacy = typeof d.speaker === "string" ? d.speaker.trim().toLowerCase() : "";
+  return legacy ? `legacy:${legacy}` : "system:system";
+}
+
+/** Characters-tab key for any entity that can be opened there (line / trader / squad / voice card); null for others. */
+export function speakerKeyOf(e: SbEntity): string | null {
+  if (e.kind === "line") return lineSpeakerKey(e);
+  if (e.kind === "trader" || e.kind === "squad") return `${e.kind}:${e.id.toLowerCase()}`;
+  if (e.kind === "voice_card") return `${String(e.data?.speakerKind ?? "trader")}:${String(e.data?.speakerId ?? e.id).toLowerCase()}`;
+  return null;
+}
+
+const FIXED_SPEAKER_NAMES: Record<string, string> = { "system:system": "System", "party:squad": "Squad", "narrator:narrator": "Narrator" };
+
+/** One entry per (kind,id) speaker that has lines or a voice card (squad-x cards fold into squad member x), sorted by line count desc then name. */
 export function characterViews(idx: EntityIndex): CharacterView[] {
   const speakers = new Map<string, SbEntity[]>();
   for (const l of idx.byKind("line")) {
-    const s = lineSpeaker(l);
-    if (!s) continue;
-    (speakers.get(s) ?? speakers.set(s, []).get(s)!).push(l);
+    const k = lineSpeakerKey(l);
+    (speakers.get(k) ?? speakers.set(k, []).get(k)!).push(l);
   }
-  for (const c of idx.byKind("voice_card")) if (!speakers.has(c.id.toLowerCase())) speakers.set(c.id.toLowerCase(), []);
+  const cards = new Map<string, SbEntity>();
+  for (const c of idx.byKind("voice_card")) {
+    const k = speakerKeyOf(c)!;
+    cards.set(k, c);
+    if (!speakers.has(k)) speakers.set(k, []);
+  }
   return [...speakers.entries()]
-    .map(([id, lines]) => {
-      const card = idx.get("voice_card", id) ?? idx.byKind("voice_card").find((c) => c.id.toLowerCase() === id) ?? null;
-      const entity = idx.get("trader", id) ?? idx.get("squad", id) ?? idx.get("enemy", id);
-      return { id, speaker: entity?.display ?? card?.display ?? titleCase(id), card, entity, lines };
+    .map(([key, lines]) => {
+      const i = key.indexOf(":");
+      const kind = key.slice(0, i);
+      const sid = key.slice(i + 1);
+      const card = cards.get(key) ?? null;
+      const entity = kind === "trader" || kind === "squad" || kind === "enemy" ? idx.byKind(kind).find((x) => x.id.toLowerCase() === sid) ?? null : null;
+      const inferred = lines.filter((l) => l.data?.speakerSource === "inferred").length;
+      return { id: key, kind, speaker: entity?.display ?? card?.display ?? FIXED_SPEAKER_NAMES[key] ?? titleCase(sid), card, entity, lines, inferred };
     })
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
 }
@@ -301,8 +329,10 @@ export function entityCard(e: SbEntity, idx: EntityIndex): EntityCard {
   const d = e.data ?? {};
   const areaLink = e.links.find((l) => l.kind === "location");
   const area = areaLink ? idx.get("location", areaLink.id)?.display ?? areaLink.id : typeof d.where_seen === "string" && d.where_seen ? d.where_seen : typeof d.group === "string" && d.group ? d.group : null;
-  const speakerRaw = e.kind === "line" ? lineSpeaker(e) : e.kind === "quest_step" ? String(d.trader ?? "") : "";
-  const speaker = speakerRaw ? (idx.get("trader", speakerRaw) ?? idx.get("squad", speakerRaw))?.display ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : speakerRaw) : null;
+  const speakerRaw = e.kind === "line" ? lineSpeakerKey(e) : e.kind === "quest_step" ? `trader:${String(d.trader ?? "")}` : "";
+  const [spKind, ...spRest] = speakerRaw.split(":");
+  const spId = spRest.join(":");
+  const speaker = spId ? (spKind === "trader" || spKind === "squad" ? idx.get(spKind, spId)?.display : null) ?? FIXED_SPEAKER_NAMES[speakerRaw] ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : spId) : null;
   const text =
     e.kind === "quest_step" ? [cleanTodo(String(d.story ?? "")), taskText(d.task)].filter(Boolean).join("\n") :
     e.kind === "line" || e.kind === "lore" ? String(d.text ?? e.display) :

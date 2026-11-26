@@ -309,6 +309,10 @@
         "text": "A supply drop came down nearby. The squad reached it.",
         "origin": "long_haul",
         "speaker": "narrator",
+        "speakerKind": "narrator",
+        "speakerId": "narrator",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "at_s": 1800,
         "kind": null
       }
@@ -526,6 +530,11 @@
       },
       "links": [
         {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
           "rel": "trader",
           "kind": "trader",
           "id": "popper"
@@ -564,6 +573,11 @@
         "line": 17
       },
       "links": [
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
         {
           "rel": "trader",
           "kind": "trader",
@@ -644,6 +658,11 @@
           "id": "popper"
         },
         {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
           "rel": "wants_item",
           "kind": "item",
           "id": "scrap_metal"
@@ -677,6 +696,16 @@
           "rel": "trader",
           "kind": "trader",
           "id": "popper"
+        },
+        {
+          "rel": "spoken_by",
+          "kind": "trader",
+          "id": "popper"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
         },
         {
           "rel": "targets_enemy",
@@ -716,6 +745,11 @@
       "links": [
         {
           "rel": "trader",
+          "kind": "trader",
+          "id": "doc"
+        },
+        {
+          "rel": "spoken_by",
           "kind": "trader",
           "id": "doc"
         },
@@ -760,6 +794,10 @@
         "text": "Popper doesn't look up from his press.",
         "origin": "trader_relations",
         "speaker": "popper",
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "band": "wary"
       }
     },
@@ -784,6 +822,10 @@
         "text": "Word gets around: Popper heard about that.",
         "origin": "trader_relations",
         "speaker": "popper",
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "band": "word"
       }
     },
@@ -820,6 +862,10 @@
         "story": "'I'm out. {qty}.'",
         "origin": "encouragement",
         "speaker": "popper",
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "speakerSource": "explicit",
+        "rowClass": "flavor",
         "item_id": "scrap_metal",
         "qty": 100,
         "requires": [
@@ -851,6 +897,10 @@
         "text": "Doc frowns.",
         "origin": "trader_relations",
         "speaker": "doc",
+        "speakerKind": "trader",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "band": "wary"
       }
     },
@@ -875,6 +925,10 @@
         "text": "Word gets around: Doc heard about that.",
         "origin": "trader_relations",
         "speaker": "doc",
+        "speakerKind": "trader",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "band": "word"
       }
     },
@@ -899,6 +953,10 @@
         "text": "STORY-TODO: Reyes",
         "origin": "squad",
         "speaker": "doc",
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "field": "name"
       }
     },
@@ -923,6 +981,10 @@
         "text": "STORY-TODO: A former paramedic.",
         "origin": "squad",
         "speaker": "doc",
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "field": "bio"
       }
     },
@@ -947,6 +1009,10 @@
         "text": "Medic: meds heal 10% more",
         "origin": "squad",
         "speaker": "doc",
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "field": "trait_text"
       }
     },
@@ -971,6 +1037,10 @@
         "text": "Hauls a trauma kit",
         "origin": "squad",
         "speaker": "doc",
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "field": "flaw"
       }
     },
@@ -995,6 +1065,10 @@
         "text": "Below ground, meds heal more",
         "origin": "squad",
         "speaker": "doc",
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "rowClass": "story",
         "field": "synergy"
       }
     },
@@ -1012,7 +1086,11 @@
       "data": {
         "text": "%s slip into %s.",
         "origin": "raid_story",
-        "speaker": "squad"
+        "speaker": "squad",
+        "speakerKind": "party",
+        "speakerId": "squad",
+        "speakerSource": "inferred",
+        "rowClass": "story"
       }
     },
     {
@@ -1029,7 +1107,11 @@
       "data": {
         "text": "%s checks the %s. Nothing worth taking.",
         "origin": "raid_story",
-        "speaker": "actor"
+        "speaker": "actor",
+        "speakerKind": "party",
+        "speakerId": "squad",
+        "speakerSource": "inferred",
+        "rowClass": "story"
       }
     },
     {
@@ -1046,7 +1128,11 @@
       "data": {
         "text": "Tripwire! -%d.",
         "origin": "raid_story",
-        "speaker": "narrator"
+        "speaker": "narrator",
+        "speakerKind": "party",
+        "speakerId": "squad",
+        "speakerSource": "inferred",
+        "rowClass": "story"
       }
     },
     {
@@ -1063,7 +1149,11 @@
       "data": {
         "text": "...and the raid went on.",
         "origin": "raid_story",
-        "speaker": "narrator"
+        "speaker": "narrator",
+        "speakerKind": "party",
+        "speakerId": "squad",
+        "speakerSource": "inferred",
+        "rowClass": "story"
       }
     },
     {
@@ -1097,7 +1187,12 @@
         "reviewed_hash": "",
         "text": "Build the Armory (Hideout)",
         "origin": "csv",
-        "csv_line": 2
+        "csv_line": 2,
+        "speakerKind": "system",
+        "speakerId": "system",
+        "speakerSource": "inferred",
+        "screen": "Screen: Armory",
+        "rowClass": "ui"
       }
     },
     {
@@ -1137,7 +1232,12 @@
         "reviewed_hash": "",
         "text": "Bring thirty casings,\nand \"he'll\" know you.",
         "origin": "csv",
-        "csv_line": 3
+        "csv_line": 3,
+        "speakerKind": "trader",
+        "speakerId": "popper",
+        "speakerSource": "explicit",
+        "screen": "Trader questlines",
+        "rowClass": "story"
       }
     },
     {
@@ -1177,7 +1277,12 @@
         "reviewed_hash": "abc123",
         "text": "Doc frowns.",
         "origin": "csv",
-        "csv_line": 5
+        "csv_line": 5,
+        "speakerKind": "squad",
+        "speakerId": "doc",
+        "speakerSource": "explicit",
+        "screen": "Trader relations",
+        "rowClass": "story"
       }
     },
     {
