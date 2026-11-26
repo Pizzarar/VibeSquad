@@ -12,8 +12,11 @@ import test from "node:test";
 import {
   cleanupProjectsFolder,
   createManagedWorktree,
+  detachDependencyLinks,
   linkNodeModules,
+  linkVenv,
   listRepoWorktrees,
+  removeTeamWorktrees,
   unlinkNodeModulesLink,
   resolveManagedWorktreePath,
   resolveManagedWorktreeRoot,
@@ -280,6 +283,157 @@ test("linkNodeModules skips when the main checkout has no node_modules, and neve
     assert.equal(linkNodeModules(repo, dest), "exists");
     assert.equal(unlinkNodeModulesLink(dest), false);
     assert.ok(existsSync(join(dest, "node_modules")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── idea-1090: .venv junction (same primitive as node_modules; the delete path is Tier A) ─────────────────────
+
+/** A repo whose main checkout has a real .venv with a sentinel, ignored the way Python projects do (`.venv/`). */
+function initVenvRepo(root) {
+  const repo = join(root, "repo");
+  initRepo(repo);
+  mkdirSync(join(repo, ".venv", "lib", "site-packages"), { recursive: true });
+  writeFileSync(join(repo, ".venv", "pyvenv.cfg"), "home = /usr/bin\n");
+  writeFileSync(join(repo, ".venv", "lib", "site-packages", "SENTINEL"), "keep-me");
+  writeFileSync(join(repo, ".gitignore"), ".venv/\n");
+  runGit(["add", ".gitignore"], repo);
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore"], repo);
+  return repo;
+}
+
+const assertMainVenvIntact = async (repo) => {
+  const { lstatSync, readFileSync, readdirSync } = await import("node:fs");
+  assert.ok(lstatSync(join(repo, ".venv")).isDirectory());
+  assert.equal(lstatSync(join(repo, ".venv")).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(repo, ".venv", "lib", "site-packages", "SENTINEL"), "utf8"), "keep-me");
+  assert.equal(readFileSync(join(repo, ".venv", "pyvenv.cfg"), "utf8"), "home = /usr/bin\n");
+  assert.deepEqual(readdirSync(join(repo, ".venv")).sort(), ["lib", "pyvenv.cfg"]);
+};
+
+test("createManagedWorktree links .venv, keeps it untracked, adds /.venv to info/exclude once, and reports venv", async () => {
+  const { lstatSync, readFileSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "vs-venv-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const repo = initVenvRepo(root);
+    const wt = createManagedWorktree(repo, "unit-venv", { env });
+    assert.equal(wt.venv, "linked");
+    assert.equal(wt.nodeModules, "no-source"); // node_modules result unchanged for a repo without one
+    assert.ok(lstatSync(join(wt.path, ".venv")).isSymbolicLink());
+    assert.equal(readFileSync(join(wt.path, ".venv", "lib", "site-packages", "SENTINEL"), "utf8"), "keep-me");
+    // `.venv/` matches only a directory and git sees the link as a symlink: info/exclude keeps it untracked.
+    assert.equal(runGit(["status", "--porcelain"], wt.path), "");
+    assert.equal(linkVenv(repo, wt.path), "exists"); // idempotent
+    const wt2 = createManagedWorktree(repo, "unit-venv-2", { env });
+    assert.equal(wt2.venv, "linked");
+    const excludeText = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
+    assert.equal(excludeText.split(/\r?\n/).filter((l) => l === "/.venv").length, 1);
+    assert.equal(excludeText.split(/\r?\n/).filter((l) => l === "/node_modules").length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linkVenv skips when main has no .venv or only a .venv link, and never replaces a .venv (real or link) in the worktree", async () => {
+  const { lstatSync, readFileSync, readlinkSync, symlinkSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "vs-venv2-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const bare = join(root, "bare");
+    initRepo(bare);
+    const wt = createManagedWorktree(bare, "unit-novenv", { env });
+    assert.equal(wt.venv, "no-source");
+    assert.equal(existsSync(join(wt.path, ".venv")), false);
+    // Main's .venv is itself a link (not a real dir): not linked.
+    mkdirSync(join(root, "elsewhere"));
+    symlinkSync(join(root, "elsewhere"), join(bare, ".venv"), "junction");
+    assert.equal(linkVenv(bare, wt.path), "no-source");
+    assert.equal(existsSync(join(wt.path, ".venv")), false);
+
+    const repo = initVenvRepo(root);
+    const dest = join(root, "dest");
+    mkdirSync(join(dest, ".venv"), { recursive: true });
+    writeFileSync(join(dest, ".venv", "own"), "worktree-venv");
+    assert.equal(linkVenv(repo, dest), "exists");
+    assert.equal(lstatSync(join(dest, ".venv")).isSymbolicLink(), false);
+    assert.equal(readFileSync(join(dest, ".venv", "own"), "utf8"), "worktree-venv");
+    // An existing .venv link elsewhere is left pointing where it was.
+    const dest2 = join(root, "dest2");
+    mkdirSync(dest2);
+    symlinkSync(join(root, "elsewhere"), join(dest2, ".venv"), "junction");
+    assert.equal(linkVenv(repo, dest2), "exists");
+    assert.equal(resolve(readlinkSync(join(dest2, ".venv"))), resolve(root, "elsewhere"));
+    // A real .venv is never detached (and never emptied) by the removal helper.
+    assert.deepEqual(detachDependencyLinks(dest), []);
+    assert.equal(readFileSync(join(dest, ".venv", "own"), "utf8"), "worktree-venv");
+    await assertMainVenvIntact(repo);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sweep removes a worktree with a .venv link and leaves main's .venv and its sentinel intact", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-venv3-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const repo = initVenvRepo(root);
+    mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(repo, "node_modules", "pkg", "index.js"), "x");
+    const wt = createManagedWorktree(repo, "unit-venv-sweep", { env });
+    assert.equal(wt.venv, "linked");
+    assert.equal(wt.nodeModules, "linked");
+    const res = sweepMergedWorktrees(repo, { apply: true, liveCwds: [], freshGraceMs: 0 });
+    assert.equal(res.results.length, 1);
+    assert.equal(res.results[0].action, "removed");
+    assert.equal(existsSync(wt.path), false);
+    await assertMainVenvIntact(repo);
+    const { readFileSync } = await import("node:fs");
+    assert.equal(readFileSync(join(repo, "node_modules", "pkg", "index.js"), "utf8"), "x");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("removeTeamWorktrees detaches the .venv link before git removes the worktree; main's .venv survives", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-venv4-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const repo = initVenvRepo(root);
+    const wt = createManagedWorktree(repo, "unit-venv-rm", { env });
+    assert.equal(wt.venv, "linked");
+    const [r] = removeTeamWorktrees([{ path: wt.path, branch: "unit-venv-rm" }]);
+    assert.equal(r.worktree, "removed", r.reason);
+    assert.equal(existsSync(wt.path), false);
+    await assertMainVenvIntact(repo);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a .venv link that will not detach fails closed: removeTeamWorktrees keeps the worktree, detachDependencyLinks throws", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-venv5-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const repo = initVenvRepo(root);
+    const wt = createManagedWorktree(repo, "unit-venv-stuck", { env });
+    // The link "detaches" but is still there: must throw, never fall through to a removal.
+    assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => true }), { code: "ELINK" });
+    // removeTeamWorktrees on a worktree whose .venv link cannot be removed (read-only parent) keeps it.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      const { chmodSync } = await import("node:fs");
+      chmodSync(wt.path, 0o555);
+      try {
+        const [r] = removeTeamWorktrees([{ path: wt.path, branch: "unit-venv-stuck" }]);
+        assert.equal(r.worktree, "kept");
+        assert.match(r.reason, /dependency link not detached/);
+        assert.ok(existsSync(join(wt.path, ".venv")));
+      } finally {
+        chmodSync(wt.path, 0o755);
+      }
+    }
+    await assertMainVenvIntact(repo);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
