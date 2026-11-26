@@ -2,7 +2,8 @@
 //  - pinned: the row's `length_budget` (EFI text_review.csv) when it states a number ("1-3 sentences", "40 chars");
 //    prose such as "none pinned (labels wrap)" is NOT a budget and falls through;
 //  - default: per-group caps from ../length-config.mjs (toast, button, card title, bio, ...), chosen from the row's
-//    group / where_seen / file / data_path. No matching group = no cap = never flagged.
+//    data_path field key, a `Data:` group / data/<name>.json stem, then (fallback) the where_seen prose. No matching group =
+//    no cap = never flagged.
 // Findings carry `category: "too-long"` so a UI can filter "Too long". Pinned breach = warn, default-cap breach = info.
 import { clean, norm } from "./text.mjs";
 import { lengthGroupsFor } from "../length-config.mjs";
@@ -29,13 +30,19 @@ function fieldKey(dp) {
   return String(dp).split(".").at(-1).replace(/\[\d+\]$/, "");
 }
 
-/** Pick the cap group (the group column names a screen, not a field type, so it is not used): field key first, free-text where_seen/file only as a fallback (see length-config.mjs). */
+/**
+ * Pick the cap group. Pass 1: field key, origin/field, plus the owning data file (a `Data:` group or data/<name>.json stem;
+ * `Screen:` groups and scenes/ paths name a screen, not a field type, so they are ignored). Pass 2 (only if pass 1 found
+ * nothing): where_seen prose with its leading "<screen> page >" breadcrumb stripped (see length-config.mjs).
+ */
 export function pickGroup(e, groups) {
   const d = e.data;
-  const primary = tokens(fieldKey(d.data_path), d.origin, d.field, d.kind);
+  const dataScope = /^\s*data\s*:/i.test(d.group ?? "") ? d.group : "";
+  const stem = /^data\/([^/]+)\.json$/.exec(d.file ?? "")?.[1] ?? "";
+  const primary = tokens(fieldKey(d.data_path), d.origin, d.field, d.kind, dataScope, stem);
   const hit = groups.find((g) => g.match.test(primary));
   if (hit) return hit;
-  const fb = tokens(d.where_seen); // not d.file: file names like title_screen.gd say nothing about the field type
+  const fb = tokens(String(d.where_seen ?? "").replace(/^[^>]*\bpage\s*>\s*/i, "").split(">").map((x) => x.trim()).filter((x) => !/^(?:[a-z0-9]*_[a-z0-9_]*(?:\(\))?|[a-z0-9_]+\(\))$/i.test(x)).join(" ")); // also drops bare code identifiers (title_screen, _build()) // not d.file: file names like title_screen.gd say nothing about the field type
   return groups.filter((g) => g.fallback != null).sort((a, b) => a.fallback - b.fallback).find((g) => g.match.test(fb)) ?? null;
 }
 

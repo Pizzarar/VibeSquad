@@ -2,11 +2,10 @@
 // Per-project config lives here (the adapter module is owned by another lane); an adapter may also expose `lengthCaps`
 // to override. Each group = {key, label, match: RegExp, max: characters, fallback?: number}. First match wins in pass 1.
 // `match` is tested on a token string (non-alphanumerics collapsed to spaces, lowercased). Pass 1 (primary): the data_path
-// field key + origin/field (the group column names a screen, so it is not used). Pass 2 (fallback, only when pass 1 matched
+// field key + origin/field + a `Data:` group / data/<name>.json stem (a `Screen:` group names a screen, so it is ignored). Pass 2 (fallback, only when pass 1 matched
 // nothing): free-text where_seen only, tried in `fallback` order (lower first; groups without it are skipped). Description and
 // story come first so prose like "tooltip below Deploy button" cannot cap long copy at a button cap.
 // A row matching no group has no cap (unknown group: never flagged).
-// "tooltip below Deploy button" cannot cap long copy at a button cap.
 export const DEFAULT_LENGTH_GROUPS = Object.freeze([
   { key: "toast", label: "toast", match: /\btoasts?\b/, max: 90, fallback: 3 },                       // one line over the game view, auto-dismisses
   { key: "button", label: "button", match: /\b(?:buttons?|btns?)\b/, max: 28, fallback: 4 },           // buttons do not wrap

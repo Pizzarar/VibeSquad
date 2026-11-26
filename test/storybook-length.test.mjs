@@ -76,3 +76,23 @@ test("sentence counter ignores decimals and ellipses", async () => {
   const fs = await run([line("a", "Costs 1.5 coins... wait. Done.", { length_budget: "1-2 sentences" })]);
   assert.equal(fs.length, 0);
 });
+
+test("Data: group / data/<name>.json stem scopes the field (trader_relations rows keep their story cap)", async () => {
+  const dp = '["traders","popper","lines","wary"]';
+  const row = { group: "Data: trader_relations", file: "data/trader_relations.json", data_path: dp, where_seen: "(not mapped: verify)" };
+  assert.equal((await run([line("a", "t".repeat(301), row)])).length, 1);
+  assert.equal((await run([line("a", "t".repeat(300), row)])).length, 0);
+  assert.equal((await run([line("a", "t".repeat(301), { ...row, group: "" })])).length, 1);           // file stem alone
+});
+test("Screen: group and scenes/ path never pick a cap", async () => {
+  const row = { group: "Screen: title", file: "scenes/title/title_screen.gd", where_seen: "(not mapped: verify)" };
+  assert.equal((await run([line("a", "u".repeat(200), row)])).length, 0);
+});
+test("where_seen leading '<screen> page >' breadcrumb is stripped before the fallback", async () => {
+  const long = "v".repeat(100);
+  assert.equal((await run([line("a", long, { where_seen: "title page > armory_view > (file scope)" })])).length, 0);
+  assert.equal((await run([line("a", long, { where_seen: "title page > Questline panel (step title)" })])).length, 1); // genuine title still caps
+});
+test("bare code identifiers in where_seen (title_screen) do not match", async () => {
+  assert.equal((await run([line("a", "x".repeat(100), { where_seen: "title page > title_screen > (file scope)" })])).length, 0);
+});
