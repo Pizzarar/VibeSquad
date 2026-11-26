@@ -42,6 +42,37 @@ test("pinned budget beats default cap; native duplicate of a csv row is skipped;
   assert.match(fs[0].msg, /pinned budget 100/);
   const dup = await run([line("a", "w".repeat(95), { where_seen: "toast" }), line("n", "w".repeat(95), { origin: "squad", field: "bio" })]);
   assert.equal(dup.length, 1);
-  const ov = await run([line("a", "hi there", { where_seen: "button" })], { lengthCaps: [{ key: "button", label: "button", match: /button/, max: 3 }] });
+  const ov = await run([line("a", "hi there", { where_seen: "button" })], { lengthCaps: [{ key: "button", label: "button", match: /button/, max: 3, fallback: 1 }] });
   assert.equal(ov.length, 1);
+});
+
+test("owner_rewrite checked even when current_text is empty", async () => {
+  const fs = await run([line("a", "", { owner_rewrite: "r".repeat(100), data_path: '["x", "toast"]' })]);
+  assert.equal(fs.length, 1);
+  assert.match(fs[0].msg, /owner_rewrite/);
+});
+test("multiline / whitespace-varying csv text still dedupes the native duplicate", async () => {
+  const d = { data_path: '["a","toast"]' };
+  const fs = await run([line("c", "w".repeat(50) + "\n\n  " + "w".repeat(50), d), line("n", "w".repeat(50) + " " + "w".repeat(50), { origin: "squad", field: "toast" })]);
+  assert.equal(fs.length, 1);
+  assert.equal(fs[0].entityRef.id, "c");
+});
+test("group match: field key / group column first, JSON-array and dotted data_path both work", async () => {
+  const long = "s".repeat(200);
+  assert.equal((await run([line("a", long, { data_path: '["questlines","x","steps",0,"title"]' })])).length, 1);          // title cap 48
+  assert.equal((await run([line("a", long, { data_path: "questlines.popper.steps[0].title" })])).length, 1);
+  assert.equal((await run([line("a", long, { data_path: "questlines.popper.steps[0].story" })])).length, 0);             // story 300
+  assert.equal((await run([line("a", long, { data_path: '["a","description"]' })])).length, 1);                           // 160
+});
+test("regex false positives: free-text prose cannot cap long copy", async () => {
+  const long = "p".repeat(100);
+  assert.equal((await run([line("a", long, { where_seen: "tooltip below Deploy button", data_path: '["x","description"]' })])).length, 0);
+  assert.equal((await run([line("a", long, { where_seen: "dialogue label", data_path: '["x","story"]' })])).length, 0);
+  assert.equal((await run([line("a", long, { where_seen: "toaster oven", file: "scenes/title_screen.gd" })])).length, 0);
+  assert.equal((await run([line("a", long, { where_seen: "descending list" })])).length, 0);
+  assert.equal((await run([line("a", long, { where_seen: "kit_model verdicts() (toast)" })])).length, 1);   // genuine fallback still caps
+});
+test("sentence counter ignores decimals and ellipses", async () => {
+  const fs = await run([line("a", "Costs 1.5 coins... wait. Done.", { length_budget: "1-2 sentences" })]);
+  assert.equal(fs.length, 0);
 });

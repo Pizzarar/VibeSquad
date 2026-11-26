@@ -4,11 +4,11 @@
 //  - default: per-group caps from ../length-config.mjs (toast, button, card title, bio, ...), chosen from the row's
 //    group / where_seen / file / data_path. No matching group = no cap = never flagged.
 // Findings carry `category: "too-long"` so a UI can filter "Too long". Pinned breach = warn, default-cap breach = info.
-import { clean } from "./text.mjs";
+import { clean, norm } from "./text.mjs";
 import { lengthGroupsFor } from "../length-config.mjs";
 
 const ref = (e) => ({ kind: e.kind, id: e.id });
-const sentences = (s) => (String(s).match(/[^.!?]+(?:[.!?]+|$)/g) ?? []).filter((x) => /\w/.test(x)).length;
+const sentences = (s) => (String(s).replace(/(\d)\.(\d)/g, "$1$2").replace(/\.{2,}/g, "…").match(/[^.!?]+(?:[.!?]+|$)/g) ?? []).filter((x) => /\w/.test(x)).length;
 
 /** "1-3 sentences" -> {unit:'sentences',max:3}; "<= 40 chars" -> {unit:'chars',max:40}; else null. */
 export function parseBudget(s) {
@@ -20,25 +20,37 @@ export function parseBudget(s) {
   return null;
 }
 
-function haystack(e) {
+const tokens = (...parts) => parts.filter(Boolean).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+
+/** Last field key of data_path: a JSON-array string (real EFI) or a dotted path (`a.b[0].story`). */
+function fieldKey(dp) {
+  if (!dp) return "";
+  try { const p = JSON.parse(dp); if (Array.isArray(p)) return String(p.at(-1)); } catch { /* dotted */ }
+  return String(dp).split(".").at(-1).replace(/\[\d+\]$/, "");
+}
+
+/** Pick the cap group (the group column names a screen, not a field type, so it is not used): field key first, free-text where_seen/file only as a fallback (see length-config.mjs). */
+export function pickGroup(e, groups) {
   const d = e.data;
-  let key = "";
-  try { const p = JSON.parse(d.data_path); if (Array.isArray(p)) key = String(p.at(-1)); } catch { /* not json */ }
-  return [d.group, d.where_seen, d.file, key, d.origin, d.field, d.kind].filter(Boolean).join(" | ").toLowerCase();
+  const primary = tokens(fieldKey(d.data_path), d.origin, d.field, d.kind);
+  const hit = groups.find((g) => g.match.test(primary));
+  if (hit) return hit;
+  const fb = tokens(d.where_seen); // not d.file: file names like title_screen.gd say nothing about the field type
+  return groups.filter((g) => g.fallback != null).sort((a, b) => a.fallback - b.fallback).find((g) => g.match.test(fb)) ?? null;
 }
 
 function run(ctx) {
   const lines = ctx.registry.byKind("line");
   const groups = lengthGroupsFor(ctx.snapshot.project, ctx.adapter);
-  const csvTexts = new Set(lines.filter((e) => e.data.origin === "csv").map((e) => clean(e.data.text)));
+  const flat = (v) => clean(v).replace(/\s+/g, " ");
+  const csvTexts = new Set(lines.filter((e) => e.data.origin === "csv").map((e) => norm(e.data.text)));
   const out = [];
   for (const e of lines) {
-    const text = clean(e.data.text).replace(/\s+/g, " ");
-    if (!text) continue;
-    if (e.data.origin !== "csv" && csvTexts.has(text)) continue; // the csv row owns it
-    const rewrite = e.data.origin === "csv" ? clean(e.data.owner_rewrite).replace(/\s+/g, " ") : "";
+    const text = flat(e.data.text);
+    if (e.data.origin !== "csv" && csvTexts.has(norm(e.data.text))) continue; // the csv row owns it
+    const rewrite = e.data.origin === "csv" ? flat(e.data.owner_rewrite) : "";
     const budget = parseBudget(e.data.length_budget);
-    const hit = groups.find((g) => g.match.test(haystack(e)));
+    const hit = budget ? null : pickGroup(e, groups);
     for (const [label, t] of [["text", text], ["owner_rewrite", rewrite]]) {
       if (!t) continue;
       let over = null;

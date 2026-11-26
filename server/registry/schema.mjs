@@ -3,7 +3,7 @@
 // Entity   = { id, kind, display, aliases[], source:{path,line}, links:[{rel,kind,id,project?}], production, data:{},
 //              productionSlots?:{[slot]: state|null} }
 // Snapshot = { schemaVersion:1, project, ref, sha, generatedAt, entities[], findings[], warnings[] }
-// Finding  = { check:'#1'..'#12', severity:'error'|'warn'|'info', entityRef:{kind,id}|null, msg, source:{path,line}|null }
+// Finding  = { check:'#1'..'#12'|'#18', severity:'error'|'warn'|'info', entityRef:{kind,id}|null, msg, source:{path,line}|null }
 //
 // Identity is (kind,id) inside a project, NOT id alone: EFI's `doc` is both a trader and a squad member. Across projects
 // it is the studio ID <project>:<kind>:<id> (ids.mjs).
