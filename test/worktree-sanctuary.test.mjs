@@ -413,6 +413,7 @@ test("removeTeamWorktrees detaches the .venv link before git removes the worktre
 });
 
 test("a .venv link that will not detach fails closed: removeTeamWorktrees keeps the worktree, detachDependencyLinks throws", async () => {
+  const { lstatSync } = await import("node:fs");
   const root = mkdtempSync(join(tmpdir(), "vs-venv5-"));
   const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
   try {
@@ -421,6 +422,21 @@ test("a .venv link that will not detach fails closed: removeTeamWorktrees keeps 
     // The unlink silently does nothing: must throw, never fall through to a removal; an unlink that throws propagates.
     assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => {} }), { code: "ELINK" });
     assert.throws(() => detachDependencyLinks(wt.path, { unlinkLink: () => { throw Object.assign(new Error("busy"), { code: "EBUSY" }); } }), { code: "EBUSY" });
+    // idea-1090 review M: an lstat error other than ENOENT (EPERM here) aborts instead of reading as "no link".
+    const eperm = (p) => {
+      if (/[\\/]\.venv$/.test(p)) throw Object.assign(new Error("denied"), { code: "EPERM" });
+      return lstatSync(p);
+    };
+    assert.throws(() => detachDependencyLinks(wt.path, { lstat: eperm }), { code: "EPERM" });
+    const [rp] = removeTeamWorktrees([{ path: wt.path, branch: "unit-venv-stuck" }], { lstat: eperm });
+    assert.equal(rp.worktree, "kept");
+    assert.match(rp.reason, /dependency link not detached \(EPERM\)/);
+    assert.ok(existsSync(wt.path));
+    assert.ok(lstatSync(join(wt.path, ".venv")).isSymbolicLink(), "link left attached, worktree not removed");
+    assert.equal(runGit(["worktree", "list", "--porcelain"], repo).includes(wt.path), true);
+    await assertMainVenvIntact(repo);
+    // ENOENT (no link at all) still reads as nothing to detach.
+    assert.deepEqual(detachDependencyLinks(join(root, "repo")), []);
     // removeTeamWorktrees on a worktree whose .venv link cannot be removed (read-only parent) keeps it.
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       const { chmodSync } = await import("node:fs");

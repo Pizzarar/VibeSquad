@@ -43,7 +43,7 @@ const gitError = (e) => {
  * Remove each worktree and its branch. `items` are { path, branch? } from the confirm dialog.
  * Returns one result per item: { path, branch, worktree: "removed" | "kept" | "missing", branchResult, reason? }.
  */
-export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSync } = {}) {
+export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSync, lstat } = {}) {
   const out = [];
   for (const raw of Array.isArray(items) ? items : []) {
     const path = String(raw?.path ?? "").trim();
@@ -82,7 +82,7 @@ export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSy
     // A node_modules or .venv junction (see linkNodeModules, linkVenv) must be detached, never recursed into: git/rm
     // walking it would delete the main checkout's real node_modules or .venv. A link that will not detach keeps the worktree.
     try {
-      detachDependencyLinks(path);
+      detachDependencyLinks(path, lstat ? { lstat } : {}); // `lstat`: test seam only
     } catch (e) {
       r.reason = `dependency link not detached (${e?.code ?? "error"})`;
       continue;
@@ -252,23 +252,26 @@ function unlinkWorktreeDirLink(wtPath, name) {
 
 /**
  * Detach every dependency link (DEPENDENCY_LINK_DIRS: node_modules, .venv) at the worktree root, link only, never the
- * target; a real folder of that name is left alone. Fails closed: an unlink that throws, or a link still there afterwards
- * (code ELINK), throws, so the caller must not remove the worktree. `unlinkLink(absPath)` is a test seam. Returns the
- * names detached.
+ * target; a real folder of that name is left alone. Fails closed: an lstat error other than ENOENT (EPERM, EACCES,
+ * EBUSY, ENAMETOOLONG, and ENOTDIR too: the root was already read as a worktree dir), an unlink that throws, or a link
+ * still there afterwards (code ELINK) throws, so the caller must not remove the worktree. Paths go through toLongPath
+ * (Windows >260 chars). `unlinkLink(absPath)` and `lstat(absPath)` are test seams. Returns the names detached.
  */
-export function detachDependencyLinks(wtPath, { unlinkLink = unlinkLinkOnly } = {}) {
+export function detachDependencyLinks(wtPath, { unlinkLink = unlinkLinkOnly, lstat = lstatSync } = {}) {
   const detached = [];
   for (const name of DEPENDENCY_LINK_DIRS) {
-    const p = resolve(wtPath, name);
+    const p = toLongPath(resolve(wtPath, name));
     let isLink = false;
     try {
-      isLink = lstatSync(p).isSymbolicLink();
-    } catch {}
+      isLink = lstat(p).isSymbolicLink();
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e; // unreadable: not known to be link-free, so nothing may be removed
+    }
     if (!isLink) continue;
     unlinkLink(p);
     let still = true;
     try {
-      lstatSync(p);
+      lstat(p);
     } catch (e) {
       if (e?.code === "ENOENT") still = false;
     }
