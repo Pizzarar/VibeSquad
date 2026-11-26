@@ -644,6 +644,30 @@ export function BoringDecisionDesk({
 
   const jumpToOffscreen = () => document.querySelector('[data-testid="boring-decision-offscreen"]')?.scrollIntoView?.({ block: "start", behavior: "smooth" });
   const offscreenCount = offscreenItems.length;
+  const stripRef = useRef<HTMLElement | null>(null);
+  const [stripScrollMore, setStripScrollMore] = useState(false);
+  const updateStripScroll = () => {
+    const el = stripRef.current;
+    if (!el || wide) {
+      setStripScrollMore(false);
+      return;
+    }
+    setStripScrollMore(el.scrollHeight - el.scrollTop - el.clientHeight > 2);
+  };
+  useEffect(() => {
+    updateStripScroll();
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(updateStripScroll) : 0;
+    const onResize = () => updateStripScroll();
+    if (typeof window !== "undefined") window.addEventListener("resize", onResize);
+    const el = stripRef.current;
+    const ro = typeof ResizeObserver === "function" && el ? new ResizeObserver(updateStripScroll) : null;
+    if (ro && el) ro.observe(el);
+    return () => {
+      if (raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(raf);
+      if (typeof window !== "undefined") window.removeEventListener("resize", onResize);
+      ro?.disconnect();
+    };
+  }, [wide, stripGroups.length, quietOpen]);
   const leadStateLabel = (l: StatusLaneLine) => {
     const s = l.leadState;
     if (l.openDecisions > 0 && (s === "idle" || s === "none" || s === "running")) return `waiting · ${l.openDecisions}`;
@@ -814,8 +838,73 @@ export function BoringDecisionDesk({
         ))}
       </section>
 
-      {/* 2. Live Status Strip: one line per lane, grouped by Squad (below feed & scroll-capped < 1900px; right rail in .is-wide) */}
-      <section className="boring-decision-strip" data-testid="boring-decision-strip" aria-label="Squad status">
+      {/* 2. Off-screen strip: hands-on test, money/keys, release (follows feed in both stacked & tab order) */}
+      {offscreenItems.length > 0 && (
+        <section className="boring-decision-offscreen" data-testid="boring-decision-offscreen" aria-label="Off-screen items">
+          <div className="boring-decision-section-head">
+            <h2 className="boring-decision-section-title">Off-screen · Test, money &amp; release</h2>
+            <span className="boring-decision-section-meta">{offscreenItems.length}</span>
+          </div>
+          <div className="boring-decision-offscreen-list">
+            {offscreenItems.map((item) => {
+              const sel = staged[item.id];
+              const age = formatAge(item.ts, now);
+              return (
+                <div
+                  key={item.id}
+                  className={`boring-decision-offscreen-row${sel ? " staged" : ""}`}
+                  data-testid={`boring-decision-offscreen-${item.id}`}
+                >
+                  <div className="boring-decision-offscreen-main">
+                    <div className="boring-decision-card-meta">
+                      <span className="boring-decision-offscreen-squad">{item.squadName || item.squad}</span>
+                      <span className="boring-decision-lane-pill">{item.lane ? `@${item.lane.replace(/^@/, "")}` : "Desk"}</span>
+                      {item.inferred && <span className="boring-decision-inferred">inferred</span>}
+                      {age && <span className="boring-decision-age">{age}</span>}
+                    </div>
+                    <div className="boring-decision-ask">{item.ask}</div>
+                    {item.decides && (
+                      <div className="boring-decision-decides">
+                        <span className="boring-decision-decides-label">Decides:</span> {item.decides}
+                      </div>
+                    )}
+                  </div>
+                  <div className="boring-decision-offscreen-actions">
+                    <button
+                      type="button"
+                      className={`boring-decision-choice${sel?.choice === "reply" ? " selected staged" : ""}`}
+                      data-testid={`boring-decision-done-${item.id}`}
+                      disabled={Boolean(pending) || sending}
+                      onClick={() => toggleChoice(item.id, { choice: "reply", text: "Done off-screen" })}
+                    >
+                      {sel?.choice === "reply" ? "✓ Done" : "Mark done"}
+                    </button>
+                    <button
+                      type="button"
+                      className={`boring-decision-dismiss${sel?.choice === "dismiss" ? " staged" : ""}`}
+                      data-testid={`boring-decision-dismiss-${item.id}`}
+                      disabled={Boolean(pending) || sending}
+                      onClick={() => toggleChoice(item.id, { choice: "dismiss" })}
+                    >
+                      {sel?.choice === "dismiss" ? "✓ Dismiss" : "Dismiss"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 3. Live Status Strip: one line per lane, grouped by Squad (after off-screen & scroll-capped < 1900px; right rail in .is-wide) */}
+      <section
+        ref={stripRef}
+        className={`boring-decision-strip${!wide && stripScrollMore ? " has-scroll-more" : ""}`}
+        data-testid="boring-decision-strip"
+        data-scroll-more={!wide && stripScrollMore ? "true" : undefined}
+        onScroll={updateStripScroll}
+        aria-label="Squad status"
+      >
         <div className="boring-decision-section-head">
           <h2 className="boring-decision-section-title">Live Status</h2>
           <span className="boring-decision-section-meta">{statusGroups.reduce((n, g) => n + g.lanes.length, 0)} lanes</span>
@@ -881,65 +970,8 @@ export function BoringDecisionDesk({
             </div>
           ))}
         </div>
+        <div className="boring-decision-strip-fade" data-testid="boring-decision-strip-fade" aria-hidden="true" />
       </section>
-
-      {/* 3. Off-screen strip: hands-on test, money/keys, release */}
-      {offscreenItems.length > 0 && (
-        <section className="boring-decision-offscreen" data-testid="boring-decision-offscreen" aria-label="Off-screen items">
-          <div className="boring-decision-section-head">
-            <h2 className="boring-decision-section-title">Off-screen · Test, money &amp; release</h2>
-            <span className="boring-decision-section-meta">{offscreenItems.length}</span>
-          </div>
-          <div className="boring-decision-offscreen-list">
-            {offscreenItems.map((item) => {
-              const sel = staged[item.id];
-              const age = formatAge(item.ts, now);
-              return (
-                <div
-                  key={item.id}
-                  className={`boring-decision-offscreen-row${sel ? " staged" : ""}`}
-                  data-testid={`boring-decision-offscreen-${item.id}`}
-                >
-                  <div className="boring-decision-offscreen-main">
-                    <div className="boring-decision-card-meta">
-                      <span className="boring-decision-offscreen-squad">{item.squadName || item.squad}</span>
-                      <span className="boring-decision-lane-pill">{item.lane ? `@${item.lane.replace(/^@/, "")}` : "Desk"}</span>
-                      {item.inferred && <span className="boring-decision-inferred">inferred</span>}
-                      {age && <span className="boring-decision-age">{age}</span>}
-                    </div>
-                    <div className="boring-decision-ask">{item.ask}</div>
-                    {item.decides && (
-                      <div className="boring-decision-decides">
-                        <span className="boring-decision-decides-label">Decides:</span> {item.decides}
-                      </div>
-                    )}
-                  </div>
-                  <div className="boring-decision-offscreen-actions">
-                    <button
-                      type="button"
-                      className={`boring-decision-choice${sel?.choice === "reply" ? " selected staged" : ""}`}
-                      data-testid={`boring-decision-done-${item.id}`}
-                      disabled={Boolean(pending) || sending}
-                      onClick={() => toggleChoice(item.id, { choice: "reply", text: "Done off-screen" })}
-                    >
-                      {sel?.choice === "reply" ? "✓ Done" : "Mark done"}
-                    </button>
-                    <button
-                      type="button"
-                      className={`boring-decision-dismiss${sel?.choice === "dismiss" ? " staged" : ""}`}
-                      data-testid={`boring-decision-dismiss-${item.id}`}
-                      disabled={Boolean(pending) || sending}
-                      onClick={() => toggleChoice(item.id, { choice: "dismiss" })}
-                    >
-                      {sel?.choice === "dismiss" ? "✓ Dismiss" : "Dismiss"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
 
       {/* 4. Sticky batch Send bar with 5s Undo */}
       <footer className="boring-decision-bar" data-testid="boring-decision-bar">

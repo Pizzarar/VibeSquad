@@ -393,8 +393,8 @@ test("D4 r3 (R38 m3): the status strip lists Squads in the same order as the fee
 for (const cfg of [
   { name: "p2-dark-1600-lanes24", theme: "dark", width: 1600, height: 900, dpr: 1, wide: false },
   { name: "p2-light-1600-lanes24", theme: "light", width: 1600, height: 900, dpr: 1, wide: false },
-  { name: "p2-dark-1920-lanes24", theme: "dark", width: 1920, height: 1080, dpr: 1, wide: true },
-  { name: "p2-light-1920-lanes24", theme: "light", width: 1920, height: 1080, dpr: 1, wide: true },
+  { name: "p2-dark-1920-lanes24", theme: "dark", width: 1920, height: 1080, dpr: 1, wide: true, check1920Events: true },
+  { name: "p2-light-1920-lanes24", theme: "light", width: 1920, height: 1080, dpr: 1, wide: true, check1920Events: true },
   { name: "p2-dark-3200-lanes24", theme: "dark", width: 3200, height: 1800, dpr: 1.2, wide: true, checkWideRail: true },
   { name: "p2-light-3200-lanes24", theme: "light", width: 3200, height: 1800, dpr: 1.2, wide: true, checkWideRail: true },
 ]) {
@@ -413,9 +413,15 @@ for (const cfg of [
 
       const g = await page.evaluate(() => {
         const desk = document.querySelector('[data-testid="boring-decision-desk"]');
-        const feed = document.querySelector('[data-testid="boring-decision-feed"]').getBoundingClientRect();
+        const feedEl = document.querySelector('[data-testid="boring-decision-feed"]');
+        const offEl = document.querySelector('[data-testid="boring-decision-offscreen"]');
         const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+        const fadeEl = document.querySelector('[data-testid="boring-decision-strip-fade"]');
+        const squadBtn = stripEl.querySelector(".boring-decision-strip-squad-btn");
+        const feed = feedEl.getBoundingClientRect();
+        const off = offEl.getBoundingClientRect();
         const strip = stripEl.getBoundingClientRect();
+        const fade = fadeEl.getBoundingClientRect();
         const bar = document.querySelector('[data-testid="boring-decision-bar"]').getBoundingClientRect();
         const cards = [...document.querySelectorAll(".boring-decision-card")].map((c) => c.getBoundingClientRect());
         const eventSpans = [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].map((el) => ({
@@ -423,10 +429,36 @@ for (const cfg of [
           scrollW: el.scrollWidth,
           clientW: el.clientWidth,
         }));
+        const focusables = [...desk.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])')];
+        const sectionOrder = focusables.map((el) =>
+          feedEl.contains(el) ? "feed" : offEl.contains(el) ? "offscreen" : stripEl.contains(el) ? "strip" : null,
+        ).filter(Boolean);
         return {
           isWide: desk.classList.contains("is-wide"),
+          domOrderOk: Boolean(feedEl.compareDocumentPosition(offEl) & Node.DOCUMENT_POSITION_FOLLOWING) && Boolean(offEl.compareDocumentPosition(stripEl) & Node.DOCUMENT_POSITION_FOLLOWING),
+          tabOrder: {
+            lastFeed: sectionOrder.lastIndexOf("feed"),
+            firstOff: sectionOrder.indexOf("offscreen"),
+            lastOff: sectionOrder.lastIndexOf("offscreen"),
+            firstStrip: sectionOrder.indexOf("strip"),
+          },
           feed: { top: feed.top, bottom: feed.bottom, left: feed.left, right: feed.right, width: feed.width },
-          strip: { top: strip.top, bottom: strip.bottom, left: strip.left, right: strip.right, width: strip.width, height: strip.height, scrollHeight: stripEl.scrollHeight, clientHeight: stripEl.clientHeight, overflowY: getComputedStyle(stripEl).overflowY },
+          off: { top: off.top, bottom: off.bottom, left: off.left, right: off.right, width: off.width },
+          strip: {
+            top: strip.top,
+            bottom: strip.bottom,
+            left: strip.left,
+            right: strip.right,
+            width: strip.width,
+            height: strip.height,
+            scrollHeight: stripEl.scrollHeight,
+            clientHeight: stripEl.clientHeight,
+            overflowY: getComputedStyle(stripEl).overflowY,
+            hasScrollMore: stripEl.classList.contains("has-scroll-more"),
+            scrollMoreAttr: stripEl.getAttribute("data-scroll-more"),
+          },
+          fade: { display: getComputedStyle(fadeEl).display, height: fade.height },
+          squadHeadPosition: getComputedStyle(squadBtn).position,
           barTop: bar.top,
           innerHeight,
           cardsAbove: cards.filter((r) => r.top >= 0 && r.bottom <= bar.top).length,
@@ -435,11 +467,29 @@ for (const cfg of [
       });
 
       assert.equal(g.isWide, cfg.wide, `is-wide class matches viewport (${cfg.width})`);
+      assert.equal(g.domOrderOk, true, "P2b m1: DOM order is feed -> off-screen -> strip");
+      assert.ok(
+        g.tabOrder.lastFeed >= 0 && g.tabOrder.lastFeed < g.tabOrder.firstOff && g.tabOrder.lastOff < g.tabOrder.firstStrip,
+        `P2b m1: Tab focus order is feed -> off-screen -> strip (${JSON.stringify(g.tabOrder)})`,
+      );
       assert.ok(g.cardsAbove >= 1, `at least 1 decision card sits above the send bar (got ${g.cardsAbove})`);
 
       if (cfg.wide) {
         assert.ok(g.strip.left >= g.feed.right, `wide rail sits right of feed (${JSON.stringify(g)})`);
         assert.ok(Math.abs(g.strip.top - g.feed.top) < 40, "wide rail aligns with top of feed");
+        if (cfg.check1920Events) {
+          const r39Named = [
+            "Decision Desk approved",
+            "Merged U1+U2",
+            "Shipped D2 owner-only",
+            "Standardized PNG compression",
+          ];
+          for (const needle of r39Named) {
+            const ev = g.eventSpans.find((e) => e.text.includes(needle));
+            assert.ok(ev, `P2b m3: expected R39 event line containing "${needle}"`);
+            assert.ok(ev.scrollW <= ev.clientW + 1, `P2b m3: event text "${ev.text}" should not truncate at 1920 (scrollW=${ev.scrollW}, clientW=${ev.clientW})`);
+          }
+        }
         if (cfg.checkWideRail) {
           assert.ok(g.strip.width > 580, `m2: rail width at 3200@1.2 must exceed 580px (got ${g.strip.width})`);
           assert.ok(g.feed.width >= 600 && g.feed.width <= 1200, `m2: feed keeps a readable measure (got ${g.feed.width})`);
@@ -451,21 +501,49 @@ for (const cfg of [
         }
       } else {
         const cap = Math.min(320, Math.round(g.innerHeight * 0.35)) + 2;
-        assert.ok(g.feed.bottom <= g.strip.top + 1, `m4: feed precedes strip in stacked layout (feed.bottom=${g.feed.bottom}, strip.top=${g.strip.top})`);
+        assert.ok(g.feed.bottom <= g.off.top + 1, `P2b m1: feed precedes off-screen in stacked layout (feed.bottom=${g.feed.bottom}, off.top=${g.off.top})`);
+        assert.ok(g.off.bottom <= g.strip.top + 1, `P2b m1: off-screen precedes strip in stacked layout (off.bottom=${g.off.bottom}, strip.top=${g.strip.top})`);
         assert.ok(g.strip.height <= cap, `m4: stacked strip height ${g.strip.height} <= cap ${cap}`);
         assert.equal(g.strip.overflowY, "auto", "m4: stacked strip scrolls vertically");
-        // Expanding the +N quiet fold keeps the strip within its cap and scrollable.
+        assert.equal(g.squadHeadPosition, "sticky", "P2b m2: stacked strip Squad heads are sticky");
+        if (g.strip.scrollHeight > g.strip.clientHeight + 2) {
+          assert.equal(g.strip.hasScrollMore, true, "P2b m2: overflowing stacked strip marks has-scroll-more");
+          assert.equal(g.strip.scrollMoreAttr, "true", "P2b m2: overflowing stacked strip sets data-scroll-more");
+          assert.notEqual(g.fade.display, "none", "P2b m2: bottom fade cue is visible when strip overflows");
+          assert.ok(g.fade.height >= 20, `P2b m2: bottom fade cue has visible height (got ${g.fade.height})`);
+        }
+        // Expanding the +N quiet fold keeps the strip within its cap and scrollable with the scroll cue active.
         const quietBtn = page.locator('[data-testid^="boring-decision-strip-quiet-"]').first();
         assert.ok(await quietBtn.count(), "quiet fold button present with ?lanes=24");
         await quietBtn.click();
         await page.waitForTimeout(150);
         const expanded = await page.evaluate(() => {
           const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+          const fadeEl = document.querySelector('[data-testid="boring-decision-strip-fade"]');
           const r = stripEl.getBoundingClientRect();
-          return { height: r.height, scrollHeight: stripEl.scrollHeight, clientHeight: stripEl.clientHeight };
+          return {
+            height: r.height,
+            scrollHeight: stripEl.scrollHeight,
+            clientHeight: stripEl.clientHeight,
+            hasScrollMore: stripEl.classList.contains("has-scroll-more"),
+            fadeDisplay: getComputedStyle(fadeEl).display,
+          };
         });
         assert.ok(expanded.height <= cap, `m4: expanded stacked strip height ${expanded.height} stays <= cap ${cap}`);
         assert.ok(expanded.scrollHeight > expanded.clientHeight, `m4: expanded stacked strip overflows inside its scroll box (${expanded.scrollHeight} > ${expanded.clientHeight})`);
+        assert.equal(expanded.hasScrollMore, true, "P2b m2: expanded overflowing strip shows scroll cue");
+        assert.notEqual(expanded.fadeDisplay, "none", "P2b m2: fade cue visible when expanded strip overflows");
+        // Scrolling to the bottom clears the scroll cue so the final line is unobstructed.
+        const atBottom = await page.evaluate(async () => {
+          const stripEl = document.querySelector('[data-testid="boring-decision-strip"]');
+          stripEl.scrollTop = stripEl.scrollHeight;
+          stripEl.dispatchEvent(new Event("scroll"));
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const fadeEl = document.querySelector('[data-testid="boring-decision-strip-fade"]');
+          return { hasScrollMore: stripEl.classList.contains("has-scroll-more"), fadeDisplay: getComputedStyle(fadeEl).display };
+        });
+        assert.equal(atBottom.hasScrollMore, false, "P2b m2: scroll cue clears at bottom of strip");
+        assert.equal(atBottom.fadeDisplay, "none", "P2b m2: fade hides at bottom of strip");
       }
 
       await page.screenshot({ path: path.join(SHOTS_DIR, `${cfg.name}.png`), fullPage: false });
