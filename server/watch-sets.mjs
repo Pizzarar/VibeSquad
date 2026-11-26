@@ -791,6 +791,7 @@ export function createWatchEngine({
       if (ev.kind === "remove") {
         const o = obsFor(String(ev.agentId));
         o.archived = true;
+        o.finalChecked = 0; // an earlier idle tick's SNAP_REFRESH_MS throttle must not hide the final report now
         o.lastEventAt = t;
         return;
       }

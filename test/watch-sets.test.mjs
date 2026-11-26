@@ -3358,3 +3358,9 @@ test("idea-1083: archived worker with a stale running status and NO completed re
     assert.equal(r.item.reason, "archived");
   }
 });
+
+test("idea-1091: archived mid-second-turn with a stale running status does not reuse the prior turn's report", async () => {
+  const r = await archivedRun([U, A("old report", true), U, A("mid")], "running");
+  assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
+  assert.equal(r.item.reason, "archived");
+});

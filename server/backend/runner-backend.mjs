@@ -655,7 +655,7 @@ const FAULT_REASON = { upstream: "upstream failure", balance: "insufficient bala
  */
 /**
  * R10 fu2: the agy Claude/GPT pool is polled at most every 30 min while cool (runner/limits.mjs createAgyUsagePoller, AGY_POLL_SLOW_MS;
- * it also waits while an agy agent is mid-turn). Since unit-per-r10-fu4 (agyNextPollMs) the floor drops to 3 min (AGY_POLL_FAST_MS)
+ * the default isolated poller never waits on a mid-turn agent: canRun is () => true since idea-701, runner/limits.mjs, and only an injected agyUsage gets a canRun gate). Since unit-per-r10-fu4 (agyNextPollMs) the floor drops to 3 min (AGY_POLL_FAST_MS)
  * while any 5h pool row reads >= 60% (AGY_POLL_FAST_AT_PCT) or any row's last two readings in the same window project to >= 85%
  * (AGY_POLL_PROJECT_PCT) within the slow interval. A 10 min fault cap on agy-claude could lapse before the next (slow) pool reading
  * and routing walked back onto an exhausted pool (the next spawn died again). agy-claude faults hold at least one slow poll interval
