@@ -14,7 +14,7 @@ const src = { path: "data/x.json", line: 3 };
 
 test("SIGNALS + CHECK_SIGNALS: every check id maps, integrity/cohesion/signoff split is exact", () => {
   assert.deepEqual(audit.SIGNALS, ["coverage", "integrity", "cohesion", "signoff"]);
-  assert.deepEqual(Object.keys(audit.CHECK_SIGNALS).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))), Array.from({ length: 12 }, (_, i) => `#${i + 1}`));
+  assert.deepEqual(Object.keys(audit.CHECK_SIGNALS).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))), [...Array.from({ length: 12 }, (_, i) => `#${i + 1}`), "#18"]);
   for (const id of ["#1", "#2", "#5", "#7"]) assert.equal(audit.CHECK_SIGNALS[id], "integrity", id);
   for (const id of ["#3", "#4", "#6", "#9", "#10", "#11", "#12"]) assert.equal(audit.CHECK_SIGNALS[id], "cohesion", id);
   assert.equal(audit.CHECK_SIGNALS["#8"], "signoff");
