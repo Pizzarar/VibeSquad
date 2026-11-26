@@ -414,11 +414,11 @@ export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "all
 export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", all: "All" };
 export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
-  story: "Coherence checks only: impossible quests, duplicate lines, ordering and lore contradictions.",
+  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
   text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
   all: "Everything above, together.",
 };
-/** Story-coherence checks (J4-2): #4 and #7 and #11 and #12 (lore contradictions). */
+/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
 export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
 export const isProblem = (it: ListItem): boolean => !isTextToReview(it);

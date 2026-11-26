@@ -476,7 +476,9 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [sel, setSelAll] = useState<Record<Tab, string | null>>(NO_SEL);
-  const [active, setActive] = useState<Set<SbCategory>>(new Set());
+  // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
+  const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
+  const [activeReview, setActiveReview] = useState<Set<SbCategory>>(new Set());
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
@@ -600,12 +602,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); } setActive(new Set()); }} />}
-            {tab === "review" && <Findings items={items} idx={idx} card={card} active={active} setActive={setActive} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} />}
+            {tab === "review" && <Findings items={items} idx={idx} card={card} active={activeReview} setActive={setActiveReview} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
             {tab === "quests" && <QuestWeb idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} />}
             {tab === "world" && <Locations idx={idx} card={card} sel={sel.world} setSel={pick("world")} />}
             {tab === "cast" && <Characters idx={idx} card={card} sel={sel.cast} setSel={pick("cast")} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={active} setActive={setActive} scope={scope === "story" ? "story" : "problems"} setScope={setScope} scopes={["problems", "story"]} goTo={goTo} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope === "story" ? "story" : "problems"} setScope={setScope} scopes={["problems", "story"]} goTo={goTo} />}
           </main>
         </>
       )}

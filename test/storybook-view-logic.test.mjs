@@ -495,5 +495,12 @@ describe("V2 Home + findings split", () => {
     const ids = [...v.matchAll(/\{ id: "(\w+)", label: "[^"]+", built: (true|false) \}/g)].map((m) => `${m[1]}:${m[2]}`);
     assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:false", "problems:true", "glossary:false"]);
     assert.match(v, /useState<Tab>\("home"\)/);
+    // regression: Problems and Review keep separate category filters (a shared Set made Review show "No findings match")
+    assert.match(v, /active=\{activeReview\} setActive=\{setActiveReview\} scope="text"/);
+    assert.match(v, /active=\{activeProblems\} setActive=\{setActiveProblems\}/);
+    assert.ok(!/active=\{active\}/.test(v), "no shared active Set");
+  });
+  test("story copy matches STORY_CHECKS", () => {
+    assert.ok(!/impossible|duplicate lines/.test(L.FINDING_SCOPE_HELP.story));
   });
 });
