@@ -2078,6 +2078,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const p = (route?.profile ?? null) as StoredProfile | null;
         // R10: spawn family (agy-claude runs on the antigravity-cli runner, a separate quota from Gemini).
         const fam = spawnFamily(p?.provider, p?.model);
+        // idea-1077: every rung capped = resolveRoute keeps a capped first hop (route.capped, "all-capped"). A spawn may wait
+        // there; a respawn would just die again on (or ignore the owner's cap of) that family: no alternate, the lead decides.
+        if (route?.route?.capped) return null;
         return p?.provider && fam && fam !== failedFam ? p : null;
       }
       const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());

@@ -6,6 +6,8 @@ export const SOFT_FLAG_REASON: string;
 export const SOFT_FLAG_NUDGE: string;
 export const WRITE_HANDOFF_PROMPT: string;
 export const TAKEOVER_CONFIRM_INSTRUCTION: string;
+/** idea-1077: the profile a failed-over agent was meant to run (lead successor or quota respawn). */
+export const FAILOVER_FROM_LABEL: string;
 
 export function loadTeamsConfig(rootDir?: string): any;
 export function loadLeadThresholds(

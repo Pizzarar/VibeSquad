@@ -260,6 +260,9 @@ function fakeRunner(id, timeline) {
 const DEAD_TL = [{ item: { type: "user_message", text: "Unit usa-68: do the thing." } }, { item: { type: "assistant_message", text: NOTICE.trim() }, turnEnd: true }];
 
 async function respawn(id, cappedProviders, timeline = DEAD_TL) {
+  // Hermetic: the hook's failover (isProviderOverQuota) also reads VIBESQUAD_CAPPED_PROVIDERS_PATH for a family missing from
+  // the usage list, so a live cap an earlier test left on disk (1077-7's agy Gemini cap) would leak into this route.
+  writeCaps({});
   const f = fakeRunner(id, timeline);
   const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { cappedProviders, retryBaseMs: 30 }, pollMs: 20 });
   try {
@@ -300,4 +303,15 @@ test("1077-11: with native claude capped too it takes the next uncapped rung of 
   ];
   assert.equal((await respawn("rn-qd3", [AGY_CLAUDE_FAMILY], busy)).length, 0, "had a real turn: the lead decides");
   assert.ok(teamLog().some((e) => e.type === "metric" && /result=skipped reason=not-first-turn agent=rn-qd3 /.test(e.text)));
+});
+
+test("1077-12: under the owner's No-DeepSeek cap (opencode capped) the respawn never lands on opencode: agy Gemini, else no respawn", async () => {
+  const noDs = { opencode: { reason: "cli cap", updatedAt: new Date(NOW).toISOString() } };
+  const toGemini = await respawn("rn-qd4", { [AGY_CLAUDE_FAMILY]: { reason: "q" }, claude: { reason: "q" }, ...noDs });
+  assert.equal(toGemini.length, 1);
+  assert.equal(spawnFamily(toGemini[0].provider, toGemini[0].model), "antigravity-cli", toGemini[0].provider);
+  // Every rung of the chain out (agy Gemini too): no replacement at all, never opencode; the lead decides.
+  const none = await respawn("rn-qd5", { [AGY_CLAUDE_FAMILY]: { reason: "q" }, claude: { reason: "q" }, "antigravity-cli": { reason: "q" }, ...noDs });
+  assert.deepEqual(none.map((a) => a.provider), []);
+  assert.ok(teamLog().some((e) => e.type === "metric" && /result=skipped reason=no-alternate agent=rn-qd5 /.test(e.text)));
 });
