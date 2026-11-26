@@ -433,6 +433,9 @@ function foldRecord(id, st) {
   return { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.lastSeq, createdAt: st.created.ts, updatedAt: st.lastTs, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
 }
 
+// idea-1144: watch-open errors that are transient (inotify instance/watch budget exhausted): retried with a capped backoff.
+const ROSTER_WATCH_TRANSIENT = new Set(['EMFILE', 'ENOSPC']);
+const ROSTER_WATCH_BACKOFF_MAX_MS = 60_000;
 // How often the roster-watch guard stats the agents dir (idea-594). One async stat per tick, unref'd; see _ensureRosterWatchGuard.
 const DEFAULT_ROSTER_WATCH_GUARD_MS = 5000;
 
@@ -466,6 +469,8 @@ export class Runner {
     this._rosterWatchGuardMs = rosterWatchGuardMs;
     this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
     this._rosterWatchIdentity = null; // `${ino}:${birthtimeNs}` (bigint; ns because ms collides on ino reuse) of the watched dir, captured when the watch opens
+    this._rosterWatchBackoff = 0; // consecutive transient (EMFILE/ENOSPC) failures: scales the guard retry delay (idea-1144)
+    this._rosterWatchRetryAt = 0; // epoch ms before which _ensureRosterWatch will not retry the open
     this._rosterWatchReopen = false; // a reopen is pending: the guard closed the watch (missing/replaced dir) and reopens once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
@@ -2270,6 +2275,7 @@ export class Runner {
   // permanent failure: _ensureRosterWatch just returns and the guard retries once the dir is recreated.
   _ensureRosterWatch() {
     if (this._rosterWatch || this._rosterWatchFailed || this._shutDown) return;
+    if (this._rosterWatchRetryAt && Date.now() < this._rosterWatchRetryAt) return; // transient-failure backoff (idea-1144)
     let identity = null;
     try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
     let w;
@@ -2282,14 +2288,49 @@ export class Runner {
     } catch (err) {
       // The dir vanished between the stat above and the watch open (ENOENT): a missing dir, not a permanent failure (L2).
       if (err?.code === 'ENOENT') return;
+      // EMFILE/ENOSPC: inotify budget exhausted, usually briefly. Not permanent: retry on the guard with a bounded backoff (idea-1144).
+      if (ROSTER_WATCH_TRANSIENT.has(err?.code)) { this._rosterWatchTransientFailure(); return; }
       this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return;
     }
     if (!w) { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
-    w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
+    w.on?.('error', (err) => {
+      if (ROSTER_WATCH_TRANSIENT.has(err?.code)) {
+        if (this._rosterWatch !== w || this._shutDown) return; // a stale handle's late error
+        this._closeRosterWatchHandle();
+        this._rosterWatchIdentity = null;
+        this._rosterWatchTransientFailure();
+        return;
+      }
+      this.closeRosterWatch(); this._rosterWatchFailed = true;
+    });
     this._rosterWatch = w;
+    this._rosterWatchBackoff = 0; this._rosterWatchRetryAt = 0; // a successful open resets the backoff
     this._rosterWatchIdentity = identity; // captured now, not on the first guard tick (M3)
     this._rosterWatchReopen = false;
     this._ensureRosterWatchGuard();
+  }
+
+  // A transient open/runtime failure (EMFILE/ENOSPC): keep the reopen pending, back off exponentially from the guard interval
+  // (capped), and (re)arm the guard so it retries. Never sets _rosterWatchFailed, so the roster is not abandoned for good.
+  _rosterWatchTransientFailure() {
+    if (this._shutDown) return;
+    this._rosterWatchBackoff = Math.min((this._rosterWatchBackoff || 0) + 1, 10);
+    this._rosterWatchReopen = true;
+    this._rosterWatchRetryAt = Date.now() + this._rosterWatchBackoffMs();
+    this._stopRosterWatchGuard(); // re-arm below with the backoff delay
+    this._ensureRosterWatchGuard();
+  }
+
+  _rosterWatchGuardIntervalMs() {
+    const ms = Number(this._rosterWatchGuardMs);
+    return Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
+  }
+
+  // interval * 2^(n-1), capped at ROSTER_WATCH_BACKOFF_MAX_MS; 0 when no transient failure is pending.
+  _rosterWatchBackoffMs() {
+    const n = this._rosterWatchBackoff || 0;
+    const base = this._rosterWatchGuardIntervalMs();
+    return n > 0 ? Math.min(base * 2 ** (n - 1), Math.max(base, ROSTER_WATCH_BACKOFF_MAX_MS)) : base;
   }
 
   // Closes only the fs.watch handle and forgets every clean mark. Used by the guard when it detects a missing/replaced
@@ -2309,6 +2350,7 @@ export class Runner {
     this._rosterWatchFailed = false;
     this._rosterWatchIdentity = null;
     this._rosterWatchReopen = false;
+    this._rosterWatchBackoff = 0; this._rosterWatchRetryAt = 0;
     this._stopRosterWatchGuard();
   }
 
@@ -2317,8 +2359,7 @@ export class Runner {
   // clearing it), and closeRosterWatch/shutdown clear it. No sync fs on the hot scan path.
   _ensureRosterWatchGuard() {
     if (this._rosterWatchGuard || this._shutDown || this._rosterWatchFailed || !(this._rosterWatch || this._rosterWatchReopen)) return;
-    const ms = Number(this._rosterWatchGuardMs);
-    const interval = Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
+    const interval = this._rosterWatchBackoffMs();
     this._rosterWatchGuard = setTimeout(() => { this._rosterWatchGuardTick(); }, interval);
     this._rosterWatchGuard.unref?.();
   }
