@@ -351,6 +351,52 @@ test('Runner: a worker\'s exit and archive stop ask for leftovers (live CLI pids
   assert.equal(h.jobs[2].leftovers, undefined, 'park: listeners only (its detached work may be the next turn\'s)');
 });
 
+test('review M2: archiving a worker that already auto-parked arms a leftover reap (why stop); a parked lead\'s archive does not', async (t) => {
+  const h = harness();
+  t.after(() => h.runner.shutdown());
+  const w = h.create({ role: 'worker', lane: 'bug-chaser' });
+  h.endTurn(w);
+  h.runner.park(w); // the idle park (as the park grace would): listeners only
+  await until(() => h.jobs.length === 1);
+  assert.equal(h.jobs[0].leftovers, undefined);
+  assert.equal(h.runner.live.has(w), false);
+  h.runner.archive(w);
+  await until(() => h.jobs.length === 2);
+  const j = h.jobs[1];
+  assert.equal(j.agentId, w);
+  assert.equal(j.leftovers, true);
+  assert.equal(j.token, h.runner.tokenFor(w));
+  assert.equal(j.cliPid, null);
+  assert.ok(j.endedAt >= h.jobs[0].endedAt);
+  await until(() => h.reports.some((r) => r.id === w && r.why === 'stop'));
+  assert.equal(h.reports.find((r) => r.id === w && r.why === 'stop').lane, 'bug-chaser');
+  // A lead is never reaped (the worker gate holds for the archive path too).
+  const lead = h.create({ role: 'lead' });
+  h.endTurn(lead);
+  h.runner.park(lead);
+  h.runner.archive(lead);
+  await tick(80);
+  assert.ok(!h.jobs.some((x) => x.agentId === lead));
+});
+
+test('review L2: an end\'s reap never fires once the agent was started again, even if it is not live by then', async (t) => {
+  const h = harness({ reapDelayMs: 150 });
+  t.after(() => h.runner.shutdown());
+  const w = h.create({ role: 'worker' });
+  h.endTurn(w);
+  h.runner.archive(w); // live, idle: stop -> a leftover reap armed for 150 ms from now
+  assert.equal(h.runner.live.has(w), false);
+  h.runner.unarchive(w);
+  h.runner.send(w, 'again'); // resumed: a new process
+  await until(() => h.runner.live.has(w));
+  h.endTurn(w);
+  h.runner.park(w); // not live again before the stop's timer fires
+  assert.equal(h.runner.live.has(w), false);
+  await tick(300);
+  assert.ok(!h.jobs.some((j) => j.agentId === w && j.leftovers), `the stale stop reap fired: ${JSON.stringify(h.jobs.map((j) => [j.agentId, !!j.leftovers]))}`);
+  assert.equal(h.jobs.filter((j) => j.agentId === w).length, 1, 'only the later park\'s own (listener) reap');
+});
+
 test('reapReporter: leftovers get the runner.log line and one team-log metric per reaped tree', () => {
   const logged = [];
   const team = [];
