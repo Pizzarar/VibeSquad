@@ -55,3 +55,14 @@ Joined to runner `created` meta to separate digests (`digestFor`) from code revi
 
 - **Verdict**: **Yes, `cap=6` throttles Gemini.** Even in steady-state (`>=03:15Z`), over half of non-digest Gemini spawns wait in queue (p90 16.0m, max 20.8m, `ahead` up to 18) while antigravity quota sits at 6% (5h) / 18% (wk).
 - **Proposed value (For3 `runner.conf`)**: raise `VS_RUNNER_TURN_CAP_ANTIGRAVITY` from `6` to **`12`** (matches `DEFAULT_TURN_CAPS.claude=12`; `12+12=24` fits inside `VS_RUNNER_MAX_LIVE=24` with DeepSeek off, no disk/RAM bump needed).
+
+## Re-read 11-26 (cap=12)
+
+| Antigravity Window | All queued | Non-digest queued | Non-digest `ahead` (p50/p90/max) | Non-digest wait (p50/p90/max) |
+|---|--:|--:|--:|--:|
+| Post all (`cap=12`, `>=18:56Z`) | 157/1199 (13.1%) | 67/383 (17.5%) | 1 / 4 / 16 | 0.9m / 3.7m / 5.0m |
+| Post steady (`cap=12`, `>=19:10Z`) | 135/1159 (11.6%) | 62/377 (16.4%) | 1 / 4 / 5 | 0.8m / 2.6m / 4.9m |
+
+- **Concurrency & headroom**: Hit >=12 concurrent antigravity turns during bursts (steady max 17 concurrent turns, restart burst 22; >=12 in 6.55% of 10s intervals), actively utilizing the cap during review/audit spikes.
+- **Quota burn (`limits.jsonl`)**: `antigravity-cli` 5h usedPct averaged 14.1% (min 0%, max 31%, 0 rows >=85%) and weekly averaged 22.1% (min 0%, max 34%, 0 rows >=85%); `antigravity-cli/claude-gpt` 5h averaged 21.5% (2 rows hit 100% at 00:12Z, since drained to 2%) and weekly 32.6% (max 70%, 0 rows >=85%). Gemini is far from exhausted and pool is not burning fast.
+- **One-line lean**: **keep 12** (non-digest queued dropped 55.8% -> 16.4%, p90 wait fell 16.0m -> 2.6m, max concurrency reached 17 without burning Gemini pool at max 31% 5h / 34% weekly).
