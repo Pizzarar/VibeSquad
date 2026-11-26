@@ -1561,17 +1561,20 @@ html[data-vibe="boring"] .boring-empty-jumps { display: flex; flex-direction: co
 html[data-vibe="boring"] .boring-empty-jumps > section { display: flex; flex-direction: column; gap: 8px; }
 /* B18b composer (@bor) */
 html[data-vibe="boring"] .composer-row.boring-composer-row { container-type: inline-size; container-name: boring-composer; }
-html[data-vibe="boring"] .boring-composer-bar { gap: 6px 8px; }
-html[data-vibe="boring"] .boring-composer-cfg { flex: 0 1 auto; gap: 4px 6px; }
+html[data-vibe="boring"] .boring-composer-bar { gap: 6px clamp(6px, (100cqw - 680px) * 999, 8px); }
+html[data-vibe="boring"] .boring-composer-cfg { flex: 0 1 auto; order: 1; min-width: clamp(0px, (681px - 100cqw) * 999, 100%); gap: 4px 6px; }
 html[data-vibe="boring"] .boring-composer-pair { display: inline-flex; align-items: center; gap: 4px 6px; flex-wrap: nowrap; min-width: 0; }
 html[data-vibe="boring"] .boring-composer-field { white-space: nowrap; flex: 0 1 auto; min-width: 0; }
 html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { max-width: 172px; }
-html[data-vibe="boring"] .boring-composer-cfg select[aria-label="Provider"] { max-width: 112px; }
-html[data-vibe="boring"] .boring-composer-field select { max-width: 108px; }
-html[data-vibe="boring"] .boring-composer-bar > .btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
-html[data-vibe="boring"] .boring-composer-send { white-space: nowrap; }
-html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn { padding: 0 14px; }
-html[data-vibe="boring"] .boring-composer-bar { @container boring-composer (max-width: 680px) { gap: 6px; .boring-composer-cfg { flex: 1 0 100%; order: 1; } .boring-composer-cfg select[aria-label="Provider"] { max-width: 96px; } .boring-composer-cfg select[aria-label="Model"], .boring-composer-cfg input[aria-label="Model"] { flex: 1 1 80px; min-width: 0; } .boring-composer-field select { max-width: 96px; } .boring-composer-actions { order: 2; } & > .btn.small { order: 3; padding: 0 8px; font-size: 11px; } .boring-composer-send { order: 4; gap: 4px; } .boring-composer-send .composer-interrupt-btn { padding: 0 8px; font-size: 12px; } .boring-composer-send .boring-composer-send-btn { padding: 0 12px; } .boring-composer-staged { order: 5; } } }
+html[data-vibe="boring"] .boring-composer-cfg select[aria-label="Provider"] { max-width: clamp(96px, (100cqw - 680px) * 999, 112px); }
+html[data-vibe="boring"] .boring-composer-cfg select[aria-label="Model"], html[data-vibe="boring"] .boring-composer-cfg input[aria-label="Model"] { flex: 1 1 80px; min-width: 0; }
+html[data-vibe="boring"] .boring-composer-field select { max-width: clamp(96px, (100cqw - 680px) * 999, 108px); }
+html[data-vibe="boring"] .boring-composer-actions { order: 2; }
+html[data-vibe="boring"] .boring-composer-bar > .btn.small { order: 3; min-height: 32px; padding: 0 clamp(8px, (100cqw - 680px) * 999, 10px); font-size: 11px; white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-send { order: 4; gap: clamp(4px, (100cqw - 680px) * 999, 6px); white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-send .composer-interrupt-btn { padding: 0 clamp(8px, (100cqw - 680px) * 999, 12px); font-size: 12px; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn { padding: 0 clamp(12px, (100cqw - 680px) * 999, 14px); }
+html[data-vibe="boring"] .boring-composer-staged { order: 5; }
 /* B18a/c visual (@bor) */
 html[data-vibe="boring"] .boring-project-tree { padding-bottom: 24px; -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 24px), transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 24px), transparent 100%); }
 html[data-vibe="boring"] .boring-sidebar-footer { border-top: 1px solid var(--border); background: var(--surface-0); }

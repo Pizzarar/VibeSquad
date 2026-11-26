@@ -687,7 +687,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     clearRightPane();
     setActivePane("right");
     setRightCard({ key, pill: "open" });
-    setSelectedLaneId((cur) => (cur && LANE_SLOT[cur] ? null : cur));
+    setSelectedLaneId((cur) => (cur && (LANE_SLOT[cur] || !agent) ? null : cur));
     setMode("chat");
   };
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null, teamId?: string) => {
@@ -720,7 +720,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     emptyKind = selectedRole;
     agentId = selectedWorkerId && agents.get(selectedWorkerId) ? selectedWorkerId : resolvePinChatAgentId(currentPin, selectedRole, activeAgentId, agents);
   } else {
-    agentId = (activeAgentId && agents.get(activeAgentId) ? activeAgentId : null) ?? zones.riffbot.member?.agent.id ?? zones.overlord.member?.agent.id ?? null;
+    agentId = (activeAgentId && agents.get(activeAgentId) ? activeAgentId : null) ?? (panes.split && panes.leftActiveId && agents.has(panes.leftActiveId) ? panes.leftActiveId : null) ?? zones.riffbot.member?.agent.id ?? zones.overlord.member?.agent.id ?? null;
   }
   const agent = agentId ? agents.get(agentId) : undefined;
   // R5-4: App's URL sync names the agent on screen: every way back to Overview or usage (project row, breadcrumb, drawer
@@ -729,7 +729,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     rosterLoaded: !!rosterLoaded,
     landingPending: activeLandable && landedFor !== activeAgentId,
     activeAgentId,
-    shownAgentId: mode === "chat" ? (agent?.id ?? (panes.split && panes.leftActiveId && agents.has(panes.leftActiveId) ? panes.leftActiveId : null)) : null,
+    shownAgentId: mode === "chat" && agent ? agent.id : null,
   });
   useEffect(() => setBoringShownAgent(urlAgent), [urlAgent]);
   useEffect(() => () => setBoringShownAgent(undefined), []);
@@ -872,6 +872,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // dormant -> switch project + show that lane/role's empty card in the right pane (split stays, left pane untouched).
   const openOtherDormant = (tid: string, card: CardTarget) => {
     pendingRightCard.current = { teamId: tid, card };
+    setSelectedLaneId(null);
+    setSelectedWorkerId(null);
     setActivePane("right");
     onSelectSquad(tid);
   };
