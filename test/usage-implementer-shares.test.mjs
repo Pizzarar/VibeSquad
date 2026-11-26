@@ -123,3 +123,77 @@ test('usa-68: a single implementer is unchanged (no shares)', () => {
   close(m.costUsd, 2);
   close(sumUnits(u), 1);
 });
+
+// ---- usa-68 fix round: buildFloor, per-model/workflow/provider weighting, ledger round-trip
+import { buildQualityByModel } from '../src/usageHelpers.ts';
+
+const twoProfileHome = (unit) => home({
+  'rn-a': worker({ ts: T0, cwd: WT(unit), profile: 'Implement - Sonnet', cost: 3 }),
+  'rn-b': worker({ ts: T0 + 5 * MIN, cwd: WT(unit), profile: 'Implement - Gemini', cost: 1, provider: 'gemini', model: 'gemini-4-pro' }),
+});
+
+test('usa-68: buildFloor does not double count non-earliest share runs (rework unit: clean/rework/abandoned match one $4 implementer)', () => {
+  const merge = (unit) => [{ m: 'a', b: 'b', unit, ms: T0 + 60 * MIN, bsubject: 'feat review r2 (@usa)' }];
+  const split = usage(twoProfileHome('unit-efi-f1'), merge('unit-efi-f1'));
+  const single = usage(home({ 'rn-s': worker({ ts: T0, cwd: WT('unit-efi-f2'), cost: 4 }) }), merge('unit-efi-f2'));
+  assert.ok(unitsOf(split)['unit-efi-f1'].reviewRounds >= 2, 'fixture is a rework unit');
+  close(split.floor.loopAndAbandonedCostUsd, 0);
+  close(split.floor.reworkCostUsd, 4);
+  close(split.floor.reworkCostUsd, single.floor.reworkCostUsd);
+  close(split.floor.loopAndAbandonedCostUsd, single.floor.loopAndAbandonedCostUsd);
+  close(split.floor.cleanCostUsd, single.floor.cleanCostUsd);
+});
+
+test('usa-68: per-model / workflow / provider-family units match byProfile fractional totals; each model bills its own spend', () => {
+  const u = usage(twoProfileHome('unit-efi-w1'), [{ m: 'a', b: 'b', unit: 'unit-efi-w1', ms: T0 + 60 * MIN }]);
+  const q = Object.fromEntries(buildQualityByModel(u.merged.units).map((r) => [r.model, r]));
+  close(q['claude-sonnet-5-5'].units, 0.75);
+  close(q['gemini-4-pro'].units, 0.25);
+  close(q['claude-sonnet-5-5'].costUsd, 3);
+  close(q['gemini-4-pro'].costUsd, 1);
+  const byProf = Object.fromEntries(impls(u).map((p) => [p.model, p.mergedUnits]));
+  for (const [model, units] of Object.entries(byProf)) close(q[model].units, units);
+  close(u.byWorkflow.reduce((n, w) => n + w.units, 0), 1);
+  close(u.byWorkflow.reduce((n, w) => n + w.costUsd, 0), 4);
+  const modes = u.byWorkflow.filter((w) => w.units > 0);
+  assert.equal(modes.length, 2, 'each share lands in its own workflow arm');
+  const prov = Object.fromEntries(u.byProvider.map((p) => [p.provider, p.byFamily.reduce((n, f) => n + f.units, 0)]));
+  close(prov.claude, 0.75);
+  close(prov.gemini, 0.25);
+  // L1: no float noise in fractional rollups
+  for (const p of impls(u)) for (const f of p.byFamily) assert.equal(f.units, Math.round(f.units * 1e6) / 1e6);
+});
+
+test('usa-68: buildQualityByModel bills a cross-model unit per share (Opus $1.69 + Sonnet $50.53), whole units unchanged', () => {
+  const rows = buildQualityByModel([
+    { implementerModel: 'claude-opus-5-5', costUsd: 52.215, reviewSource: 'x', firstReviewVerdict: 'PASS', reviewRounds: 1,
+      implementerShares: [{ model: 'claude-opus-5-5', costUsd: 1.687, share: 1.687 / 52.215 }, { model: 'claude-sonnet-5-5', costUsd: 50.528, share: 50.528 / 52.215 }] },
+    { implementerModel: 'claude-opus-5-5', costUsd: 2, reviewRounds: 1 },
+  ]);
+  const q = Object.fromEntries(rows.map((r) => [r.model, r]));
+  close(q['claude-opus-5-5'].costUsd, 3.687);
+  close(q['claude-sonnet-5-5'].costUsd, 50.528);
+  close(q['claude-opus-5-5'].units + q['claude-sonnet-5-5'].units, 2);
+});
+
+test('usa-68: ledger snapshot carries implementerShares and folds back; old rows fold without it', () => {
+  const h = twoProfileHome('unit-efi-l1');
+  usage(h, [{ m: 'a', b: 'b', unit: 'unit-efi-l1', ms: T0 + 60 * MIN }]);
+  const file = path.join(h, 'runner', 'usage-ledger.jsonl');
+  const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const rec = rows.find((r) => r.kind === 'unit' && r.unit === 'unit-efi-l1');
+  assert.equal(rec.implementerShares.length, 2);
+  assert.equal(rec.implementerShares[1].model, 'gemini-4-pro');
+  // old row (no shares) + the shares row, folded because the raw git log no longer lists them
+  const oldRow = { kind: 'unit', sha: 'oldsha', unit: 'unit-old', ts: new Date(T0 - 9e6).toISOString(), lane: 'usage', reviewRounds: 1, costUsd: 2, implementerProfile: 'Implement - Sonnet', implementerProvider: 'claude', implementerModel: 'claude-sonnet-5-5' };
+  fs.appendFileSync(file, JSON.stringify(oldRow) + '\n');
+  const h2 = home({ 'rn-z': worker({ ts: T0, cwd: WT('unit-efi-l2'), cost: 1 }) });
+  fs.mkdirSync(path.join(h2, 'runner'), { recursive: true });
+  fs.copyFileSync(file, path.join(h2, 'runner', 'usage-ledger.jsonl'));
+  const u = usage(h2, [{ m: 'c', b: 'd', unit: 'unit-efi-l2', ms: T0 + 60 * MIN }]);
+  const folded = Object.fromEntries(u.merged.units.filter((m) => m.fromLedger).map((m) => [m.unit, m]));
+  assert.equal(folded['unit-efi-l1'].implementerShares.length, 2);
+  assert.equal(folded['unit-old'].implementerShares, undefined);
+  const q = Object.fromEntries(buildQualityByModel(u.merged.units).map((r) => [r.model, r]));
+  close(q['gemini-4-pro'].costUsd, 1);
+});

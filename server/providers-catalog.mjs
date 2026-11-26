@@ -1745,17 +1745,6 @@ function multiProfileHit(cands) {
   return { implementer: sorted[0], miss: null, shareCands: sorted };
 }
 
-/** usa-55: several implementer profiles worked one unit's worktree (Implement + Work Order + Mechanical fixes...). Credit the
- * primary one: the costliest run that did work (ties: earliest created). The coverage gap was mostly this ambiguity. */
-function pickPrimaryImplementer(cands) {
-  const worked = cands.filter((a) => a.turns > 0);
-  const pool = worked.length ? worked : cands;
-  const created = (x) => (x.createdAt ?? Infinity);
-  return pool.slice().sort((x, y) => ((y.costUsd ?? 0) - (x.costUsd ?? 0))
-    || (created(x) === created(y) ? 0 : created(x) < created(y) ? -1 : 1)
-    || String(x.agentId ?? "").localeCompare(String(y.agentId ?? "")))[0] ?? null;
-}
-
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
   return resolveImplementer(unit, agents, index).implementer;
@@ -1776,7 +1765,7 @@ function resolveImplementer(unit, agents, index) {
       const impls = cwdMatches.filter(isImplementerWorker);
       if (impls.length > 0) { // usa-44: zero-turn runs never spent anything
         const one = pickImplementer(impls);
-        return one ? hit(one) : multiProfileHit(impls) ?? hit(pickPrimaryImplementer(impls)); // usa-68: several profiles -> earliest + shares
+        return one ? hit(one) : multiProfileHit(impls); // usa-68: several profiles -> earliest + shares
       }
     }
     // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
@@ -2612,43 +2601,61 @@ function classifyWorkflowMode(unit, implementer, reviewerFamily = "gemini-review
   return classifyWorkflow(unit, implementer, reviewerFamily).mode;
 }
 
+/** usa-68: how a merged unit splits across implementer profiles. Units with implementerShares weight units/first-try/rounds/fix
+ * by s.share and cost by s.costUsd (each model bills its own spend); others are one whole part. Fields fall back to the unit's. */
+function unitParts(u, implementer) {
+  const sh = Array.isArray(u.implementerShares) && u.implementerShares.length > 1 ? u.implementerShares : null;
+  if (!sh) return [{ w: 1, cost: Number.isFinite(u.costUsd) ? u.costUsd : 0, inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, turns: u.turns ?? null, workflowMode: null, family: u.implementerFamily ?? implementer?.family ?? null, provider: u.implementerProvider ?? null, whole: true }];
+  const wsum = sh.reduce((n, x) => n + (x.share ?? 0), 0);
+  return sh.map((x) => ({ w: wsum > 0 ? (x.share ?? 0) / wsum : 1 / sh.length, cost: x.costUsd ?? 0, inputTokens: x.inputTokens ?? 0, outputTokens: x.outputTokens ?? 0, turns: x.turns ?? 0, workflowMode: x.workflowMode ?? null, family: x.family ?? u.implementerFamily ?? null, provider: x.provider ?? u.implementerProvider ?? null, whole: false }));
+}
+
 /** A/B workflow rollup. Cost/tokens per unit come from the attributed implementer (one worker ≈ one unit). */
 function buildByWorkflow(merged, agentById) {
   const groups = new Map();
+  const r6 = (n) => Math.round(n * 1e6) / 1e6; // usa-68: fractional units carry float noise
   for (const u of merged) {
     const implementer = u.implementerAgentId ? agentById.get(u.implementerAgentId) : null;
-    const workflowMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
-    const g = getOrSet(groups, workflowMode, () => ({
-      workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
-      wfSources: new Set(),
-      families: new Map(),
-      units: 0, firstTryPassCount: 0, firstTryKnown: 0, reviewRoundsSum: 0, costUsd: 0,
-      inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
-      fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
-    }));
-    g.wfSources.add(u.wfSource ?? "derived");
-    g.units += 1;
+    const unitMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
     const ft = unitFirstTry(u);
-    if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryPassCount += 1; }
-    g.reviewRoundsSum += u.reviewRounds ?? 0;
-    const cost = Number.isFinite(u.costUsd) ? u.costUsd : 0;
-    if (!u.implementerShared) g.costUnits += 1; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
-    g.costUsd += cost;
-    g.inputTokens += u.inputTokens ?? 0;
-    g.outputTokens += u.outputTokens ?? 0;
-    g.locAdded += u.locAdded ?? 0;
-    g.locDeleted += u.locDeleted ?? 0;
-    if (cost > 0) g.knownCostUnits += 1;
-    if (u.unitCycleMs !== null && u.unitCycleMs !== undefined) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
-    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
-    // usa-65: quota family sub-breakdown inside each workflow arm (pre-R10 / absent -> "unlabeled")
-    const fam = familyKeyOf(u.implementerFamily ?? implementer?.family ?? null);
-    const fg = getOrSet(g.families, fam, () => ({ family: fam, units: 0, turns: 0, costUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
-    fg.units += 1;
-    fg.turns += u.turns ?? (!u.implementerShared ? implementer?.turns : 0) ?? 0;
-    if (!u.implementerShared) fg.costUnits += 1;
-    fg.costUsd += cost;
-    if (ft !== null) { fg.firstTryKnown += 1; if (ft) fg.firstTryPassCount += 1; }
+    for (const p of unitParts(u, implementer)) {
+      const w = p.w;
+      const workflowMode = p.workflowMode ?? unitMode;
+      const g = getOrSet(groups, workflowMode, () => ({
+        workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
+        wfSources: new Set(),
+        families: new Map(),
+        units: 0, firstTryPassCount: 0, firstTryKnown: 0, reviewRoundsSum: 0, costUsd: 0,
+        inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
+        fixAfterMergeCount: 0, knownCostUnits: 0, costUnits: 0,
+      }));
+      g.wfSources.add(u.wfSource ?? "derived");
+      g.units += w;
+      if (ft !== null) { g.firstTryKnown += w; if (ft) g.firstTryPassCount += w; }
+      g.reviewRoundsSum += (u.reviewRounds ?? 0) * w;
+      const cost = p.cost;
+      if (!u.implementerShared) g.costUnits += w; // usa-58: a shared (identity-only) credit carries no cost: not a $0 unit
+      g.costUsd += cost;
+      g.inputTokens += p.inputTokens;
+      g.outputTokens += p.outputTokens;
+      g.locAdded += (u.locAdded ?? 0) * w;
+      g.locDeleted += (u.locDeleted ?? 0) * w;
+      if (cost > 0) g.knownCostUnits += w;
+      if (u.unitCycleMs !== null && u.unitCycleMs !== undefined) { g.unitCycleSum += u.unitCycleMs * w; g.unitCycleCount += w; }
+      if (u.fixAfterMerge) g.fixAfterMergeCount += w;
+      // usa-65: quota family sub-breakdown inside each workflow arm (pre-R10 / absent -> "unlabeled")
+      const fam = familyKeyOf(p.family);
+      const fg = getOrSet(g.families, fam, () => ({ family: fam, units: 0, turns: 0, costUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+      fg.units += w;
+      fg.turns += p.turns ?? (!u.implementerShared ? implementer?.turns : 0) ?? 0;
+      if (!u.implementerShared) fg.costUnits += w;
+      fg.costUsd += cost;
+      if (ft !== null) { fg.firstTryKnown += w; if (ft) fg.firstTryPassCount += w; }
+    }
+  }
+  for (const g of groups.values()) {
+    for (const k of ["units", "firstTryPassCount", "firstTryKnown", "reviewRoundsSum", "fixAfterMergeCount", "knownCostUnits", "costUnits"]) g[k] = r6(g[k]);
+    for (const f of g.families.values()) for (const k of ["units", "costUnits", "firstTryPassCount", "firstTryKnown"]) f[k] = r6(f[k]);
   }
   return [...groups.values()].map((g) => {
     const totalLoc = g.locAdded + g.locDeleted;
@@ -2851,7 +2858,8 @@ function buildFloor(merged, agents, totals) {
     if ((u.reviewRounds ?? 0) >= 2) rework += c;
     else if (u.fixAfterMerge) fixCost += c;
   }
-  const implementerIds = new Set(merged.map((u) => u.implementerAgentId).filter(Boolean));
+  // usa-68: every share run is part of a merged unit (its spend is in u.costUsd), never abandoned waste
+  const implementerIds = new Set(merged.flatMap((u) => [u.implementerAgentId, ...(u.implementerShares ?? []).map((s) => s.agentId)]).filter(Boolean));
   let loopAbandoned = 0, restart = 0;
   const firstCoord = new Set();
   for (const a of agents) {
@@ -3889,7 +3897,12 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     let implementerShares = null;
     if (shareRuns.length > 1) {
       const total = shareRuns.reduce((n, a) => n + (a.costUsd ?? 0), 0);
-      implementerShares = shareRuns.map((a) => ({ agentId: a.agentId, provider: a.provider, profile: a.profile, family: a.family ?? null, costUsd: a.costUsd ?? 0, share: total > 0 ? (a.costUsd ?? 0) / total : 1 / shareRuns.length }));
+      implementerShares = shareRuns.map((a) => ({
+        agentId: a.agentId, provider: a.provider, profile: a.profile, family: a.family ?? null,
+        model: a.model ? baseModel(a.model) : null, workflowMode: classifyWorkflowMode(u, a, reviewerFamily),
+        costUsd: a.costUsd ?? 0, inputTokens: a.inputTokens ?? 0, outputTokens: a.outputTokens ?? 0, turns: a.turns ?? 0,
+        share: total > 0 ? (a.costUsd ?? 0) / total : 1 / shareRuns.length,
+      }));
     }
     const sumOf = (k) => (implementerShares ? shareRuns.reduce((n, a) => n + (a[k] ?? 0), 0) : implementer?.[k]);
     const { lane: unitLane, laneSource } = backfillLane(u, implementer);
@@ -4037,14 +4050,14 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       unknownReviewUnits: isReviewer ? 0 : r6(g.mergedUnits - g.firstTryKnown),
       fixRounds: g.fixRounds,
       fixPassRate: g.fixRounds ? Math.round((g.fixPassN / g.fixRounds) * 1000) / 1000 : null,
-      reviewRounds: isReviewer ? g.reviewedReviewRounds : g.reviewRounds,
+      reviewRounds: isReviewer ? g.reviewedReviewRounds : r6(g.reviewRounds),
       avgReviewRounds: mergedUnits ? Math.round(((isReviewer ? g.reviewedReviewRounds : g.reviewRounds) / mergedUnits) * 100) / 100 : 0,
       costPerMergedUnit: mergedUnits ? g.costUsd / mergedUnits : null,
-      fixAfterMergeCount: isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount,
+      fixAfterMergeCount: isReviewer ? g.reviewedFixAfterMergeCount : r6(g.fixAfterMergeCount),
       fixAfterMergeRate: mergedUnits ? Math.round(((isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount) / mergedUnits) * 1000) / 1000 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
       byFamily: [...g.families.values()].map((f) => {
-        const fUnits = isReviewer ? f.reviewedUnits : f.units;
+        const fUnits = isReviewer ? f.reviewedUnits : r6(f.units);
         return {
           family: f.family,
           runs: f.runs,
@@ -4052,8 +4065,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
           turns: f.turns,
           costUsd: f.costUsd,
           costPerUnit: fUnits ? f.costUsd / fUnits : null,
-          firstTryPassCount: f.firstTryPassCount,
-          firstTryKnown: f.firstTryKnown,
+          firstTryPassCount: r6(f.firstTryPassCount),
+          firstTryKnown: r6(f.firstTryKnown),
           firstTryPassRate: f.firstTryKnown ? Math.round((f.firstTryPassCount / f.firstTryKnown) * 1000) / 1000 : null,
         };
       }).sort((a, b) => b.units - a.units || b.costUsd - a.costUsd || b.runs - a.runs || a.family.localeCompare(b.family)),
@@ -4159,17 +4172,21 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       const uDay = typeof u.mergedAt === "string" && u.mergedAt.length >= 10 ? u.mergedAt.slice(0, 10) : null;
       if (!uDay || (since && uDay < since) || (until && uDay > until)) continue;
     }
-    const fam = familyKeyOf(u.implementerFamily);
-    const pfKey = `${u.implementerProvider}|${fam}`;
-    const pf = getOrSet(providerFamily, pfKey, () => ({ provider: u.implementerProvider, family: fam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
-    pf.units += 1;
-    if (!u.implementerShared) {
-      pf.costUnits += 1;
-      if (u.fromLedger && Number.isFinite(u.costUsd)) pf.implementerCostUsd += u.costUsd;
-    }
     const ft = unitFirstTry(u);
-    if (ft !== null) { pf.firstTryKnown += 1; if (ft) pf.firstTryPassCount += 1; }
+    for (const p of unitParts(u, null)) { // usa-68: a split unit credits each share's own provider/family and spend
+      const fam = familyKeyOf(p.family);
+      const prov = p.provider ?? u.implementerProvider;
+      const pfKey = `${prov}|${fam}`;
+      const pf = getOrSet(providerFamily, pfKey, () => ({ provider: prov, family: fam, runs: 0, units: 0, turns: 0, costUsd: 0, implementerCostUsd: 0, costUnits: 0, firstTryPassCount: 0, firstTryKnown: 0 }));
+      pf.units += p.w;
+      if (!u.implementerShared) {
+        pf.costUnits += p.w;
+        if (u.fromLedger && Number.isFinite(p.cost)) pf.implementerCostUsd += p.cost;
+      }
+      if (ft !== null) { pf.firstTryKnown += p.w; if (ft) pf.firstTryPassCount += p.w; }
+    }
   }
+  for (const pf of providerFamily.values()) for (const k of ["units", "costUnits", "firstTryPassCount", "firstTryKnown"]) pf[k] = Math.round(pf[k] * 1e6) / 1e6;
   const providerFamiliesByProvider = new Map();
   for (const f of providerFamily.values()) {
     getOrSet(providerFamiliesByProvider, f.provider, () => []).push({
