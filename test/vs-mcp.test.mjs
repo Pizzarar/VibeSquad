@@ -365,6 +365,19 @@ test('report writes as the caller; types are restricted', async () => {
   await assert.rejects(callTool(ctx, 'report', { type: 'metric', text: 'x' }), /type must be/);
 });
 
+test('report needs-you: lettered options without alts warn (idea-1142); alts present or other types do not', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  const r1 = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?' });
+  assert.match(r1.warning, /lettered/);
+  assert.equal(ctx.logs.length, 1, 'still logged');
+  const r2 = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['B: slow', 'C: skip'] });
+  assert.equal(r2.warning, undefined);
+  const rd = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['A: fast'] });
+  assert.match(rd.warning, /lettered/, 'an alt that duplicates do is stripped, so it still warns');
+  const r3 = await callTool(ctx, 'report', { type: 'blocker', text: 'Pick A, B, or C?' });
+  assert.equal(r3.warning, undefined);
+});
+
 test('report needs-you carries validated structured fields (D1); fields on other types are refused', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick a db', decides: 'storage engine', do: 'sqlite', alt: ['postgres', 'sqlite'], kind: 'answer' });

@@ -30,7 +30,9 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { validatePlanPath } from "../server/plan-log.mjs";
-import { isNeedsYouType, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
+import { isNeedsYouType, namesLetteredOptions, NEEDS_YOU_LETTERED_WARNING, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
+
+export { namesLetteredOptions };
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsLive, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { agentCallerOf, callTool, createContext, hasOwnerProof, lastAssistantText, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
@@ -655,7 +657,7 @@ async function commandLog(flags) {
     ? validateNeedsYouFields(type, text, { decides: flags.decides, do: flags.lean, alt: flags.alt.length ? flags.alt : undefined, kind: flags.kind })
     : null;
   if (type === "needs-you" && namesLetteredOptions(text) && flags.alt.length === 0) {
-    process.stderr.write("warning: this needs-you names lettered/numbered options but has no --alt; pass one --alt \"<option, defined in one line>\" per option so the owner sees each choice (logged anyway)\n");
+    process.stderr.write(`warning: ${NEEDS_YOU_LETTERED_WARNING} (logged anyway)\n`);
   }
   const entry = await ctx.writeLog({
     type: who.type,
@@ -668,24 +670,6 @@ async function commandLog(flags) {
   });
   process.stdout.write(JSON.stringify(entry) + "\n");
   return 0;
-}
-
-/**
- * @desk C3 (PLAN_DESK_DD_CHOICES): does an ask name lettered options ("A, B, or C", "A/B/C", "(a) ... or (b)",
- * "option A", "Option 1/2")? Warn-only heuristic, tuned against false positives:
- *  - a standalone uppercase letter A-F needs a second, different marker next to it (", " / "/" / "or" / "vs"), so the
- *    article "A" at a sentence start and a lone "Plan B" never match;
- *  - letters are case-sensitive uppercase, so the article "a" never matches; "(a)"/"(b)" needs two distinct markers
- *    (a single "(a)" is a footnote);
- *  - "option A" (letter uppercase) counts alone; numbers need a pair ("Option 1/2", "option 1 or 2"), so "option 2" alone does not.
- */
-export function namesLetteredOptions(text) {
-  const t = String(text ?? "");
-  const paren = new Set([...t.matchAll(/\(([a-fA-F])\)/g)].map((m) => m[1].toLowerCase()));
-  if (paren.size >= 2) return true;
-  if (/(?<![\w'’-])[A-F]\s*(?:\/|,\s*(?:or\s+)?|\s+or\s+|\s+vs\.?\s+)[A-F](?![\w'’-])/.test(t)) return true;
-  if (/\b[Oo]ptions?\s+(?:[A-F]\b|\d\s*[\/,]\s*\d|\d\s+(?:or|and)\s+\d)/.test(t)) return true;
-  return false;
 }
 
 /** The tools.mjs identity for a resolved CLI identity: the agent id + token (X1b), team/lane/role as the claim to verify. */
