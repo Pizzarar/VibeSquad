@@ -462,7 +462,12 @@ test("1101-7: Invariant 1 — no double resume in-process, across restart (respa
   // First wall: resumes once.
   await emitQuotaWall(f, "rn-once", AGY_NOTICE, { cappedProviders: [AGY_CLAUDE_FAMILY] });
   assert.equal(f.created.length, 1);
-  // Simulated server restart replays the wall: respawnedAs blocks it.
+  // L2: the superseded worker is archived, so a replay stops at reason=archived.
+  await emitQuotaWall(f, "rn-once", AGY_NOTICE, { cappedProviders: [AGY_CLAUDE_FAMILY] });
+  assert.equal(f.created.length, 1);
+  assert.match(metricsFor("rn-once").at(-1).text, /reason=archived/);
+  // Archive lost (or unarchived): simulated server restart replays the wall: respawnedAs blocks it.
+  f.agents.get("rn-once").archivedAt = null;
   await emitQuotaWall(f, "rn-once", AGY_NOTICE, { cappedProviders: [AGY_CLAUDE_FAMILY] });
   assert.equal(f.created.length, 1);
   assert.match(metricsFor("rn-once").at(-1).text, /reason=already-respawned/);
@@ -679,4 +684,40 @@ test("1101-11: M2 — resume brief is bounded with thousands of untracked/change
   const once = clampLines(raw, 3000, "status lines");
   assert.equal(clampLines(once, 3000, "status lines"), once);
   assert.equal(clampLines("short", 3000), "short");
+});
+
+test("1101-12: L2 — superseded worker is archived after a mid-run resume; vs verdict <oldId> follows respawnedAs", async () => {
+  const f = fakeRunner({ id: "rn-l2-old", provider: "antigravity-cli", model: "claude-opus-5-5-high", labels: { profile: "Review" }, timeline: MIDRUN_TIMELINE(AGY_NOTICE) });
+  await emitQuotaWall(f, "rn-l2-old", AGY_NOTICE, { cappedProviders: [AGY_CLAUDE_FAMILY] });
+  assert.equal(f.created.length, 1);
+  const newId = f.created[0].id;
+  const old = f.agents.get("rn-l2-old");
+  assert.ok(old.archivedAt, "superseded worker archived (a vs send cannot revive it on the capped provider)");
+  assert.equal(old.labels.respawnedAs, newId);
+  const dec = teamLog().filter((e) => e.type === "decision" && e.refs?.includes("rn-l2-old")).at(-1);
+  assert.deepEqual(dec.refs, ["rn-l2-old", newId]);
+
+  // 0-turn path is unchanged: the dead worker is not archived there.
+  const z = fakeRunner({ id: "rn-l2-zero", provider: "antigravity-cli", model: "claude-opus-5-5-high", timeline: [
+    { item: { type: "user_message", text: ORIG_PROMPT } },
+    { item: { type: "assistant_message", text: AGY_NOTICE }, turnEnd: true },
+  ] });
+  await emitQuotaWall(z, "rn-l2-zero", AGY_NOTICE, { cappedProviders: [AGY_CLAUDE_FAMILY] });
+  assert.equal(z.created.length, 1);
+  assert.equal(z.agents.get("rn-l2-zero").archivedAt, null);
+
+  // vs verdict on the old reviewer id reads the successor's verdict.
+  const { commandVerdict } = await import("../cli/vs.mjs");
+  const tip = git(["rev-parse", "HEAD"], LINKED_WT);
+  f.timelines.set(newId, [{ item: { type: "user_message", text: "resume" } }, { item: { type: "assistant_message", text: `PASS 0/0/0 ${tip.slice(0, 8)}` } }]);
+  const backend = {
+    fetchAgent: async (aid) => ({ agent: await f.backend.getAgent(aid) }),
+    fetchAgentTimeline: async (aid) => f.backend.fetchAgentTimeline(aid),
+  };
+  let out = "";
+  let err = "";
+  const code = await commandVerdict({ _: ["rn-l2-old"], branch: "HEAD", cwd: LINKED_WT }, () => ({ withBackend: (_o, fn) => fn(backend) }), { out: (x) => (out += x), err: (x) => (err += x) });
+  assert.equal(code, 0, err);
+  assert.match(err, new RegExp(`rn-l2-old was resumed as ${newId}`));
+  assert.equal(out.split("\n")[0], `PASS 0/0/0 ${tip.slice(0, 8)}`);
 });
