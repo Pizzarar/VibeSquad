@@ -1,7 +1,7 @@
 // Review queue logic (PLAN_STORYBOOK_V2 V3, wave 2): pure, no React / DOM, unit-tested in test/storybook-review.test.mjs.
 // Turns the snapshot's text lines, contract templates and lore into ONE ordered list of rows the owner reads top to bottom:
 // story first, then flavor, then toasts/system/UI; grouped by speaker (people) or screen/file (system text). Read-only.
-import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic";
+import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic.ts";
 
 export type RowClass = "story" | "flavor" | "ui";
 export const ROW_CLASSES: RowClass[] = ["story", "flavor", "ui"];
