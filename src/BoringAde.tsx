@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { OPEN_USAGE_EVENT, takeColdUsageFocus } from "./usageHelpers";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
@@ -27,7 +27,7 @@ import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLast
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
-import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type CardTarget, type PickerHandlers, type StripItem } from "./BoringPanePicker";
+import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type CardTarget, type OtherProject, type PickerHandlers, type StripItem } from "./BoringPanePicker";
 import { useTheme } from "./useBotFace";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
@@ -824,6 +824,30 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const running = view.members.filter((m) => m.agent.status === "running" && !seen.has(m.agent.id) && !m.agent.archivedAt).map((m): StripItem => ({ id: m.agent.id, needs: false, sub: "Working", title: memberTitle(m) }));
     return [...rows.map((r): StripItem => ({ id: r.item.id, needs: true, err: r.item.kind === "error", title: r.who, sub: r.who.includes(r.lane) ? needsYouReason(r.item) : `${r.lane} · ${needsYouReason(r.item)}` })), ...running];
   };
+  // B18c: every other awake project's lanes for the picker's "Other projects (N)" disclosure. Live -> right pane (split stays);
+  // dormant -> switch project + show that lane (CardTarget is single-project, so no cross-project right card).
+  const otherOps = useRef<{ pickRoleIn: typeof pickRoleIn; pickCore: typeof pickCore; pickBugs: typeof pickBugs; onSelectSquad: (id: string) => void } | null>(null);
+  otherOps.current = { pickRoleIn, pickCore, pickBugs, onSelectSquad };
+  const otherProjects = useMemo((): OtherProject[] => {
+    const ops = () => otherOps.current!;
+    return filterAwakeViews(allViews, folders).filter((v) => v.team.id !== view?.team.id).map((v) => {
+      const m = boringSidebarModel(v, now);
+      const tid = v.team.id;
+      const h: PickerHandlers = {
+        glyphCls,
+        openAgent: (id) => openAgentInTab(id, "right"),
+        openCore: (laneId, id) => (id ? openAgentInTab(id, "right") : ops().pickCore(laneId, null, tid)),
+        openBugs: () => { if (m.core.bugs.agentId) return openAgentInTab(m.core.bugs.agentId, "right"); ops().onSelectSquad(tid); ops().pickBugs({ pin: m.core.bugs.pin as Pin | null, agentId: null }); },
+        openRole: (laneId, role) => {
+          const c = m.conversations.find((x) => x.laneId === laneId);
+          const mem = c && (role === "lead" ? c.pin.lead : c.pin.brainstorm);
+          if (mem) openAgentInTab(mem.agent.id, "right");
+          else if (c) ops().pickRoleIn(v, c.pin as Pin, laneId, role);
+        },
+      };
+      return { id: tid, name: v.team.name, needsYou: m.totalNeedsYou, lanes: buildPickerData(m, h).lanes };
+    });
+  }, [views, view, folders, now]);
   // Every open action on the right card lands in the right pane (live -> openAgentInTab("right"); dormant -> update rightCard, never fold split or clobber selectedLaneId).
   const rightHandlers: PickerHandlers = {
     glyphCls,
@@ -892,7 +916,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
+            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} otherProjects={otherProjects} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
               <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={closeSplitToButton}>Close split</button>
             </BoringPanePicker>
             <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>

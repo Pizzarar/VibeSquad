@@ -84,3 +84,64 @@ test("B18c: filter q auto-opening is wired to the same needle and filters other 
   assert.match(src, /!needle \|\| hit\(p\.name\) \? p\.lanes : p\.lanes\.filter\(\(l\) => hit\(l\.name, l\.code\)\)/);
   assert.doesNotMatch(src, /Hypnospace/i);
 });
+
+// ---- B18c browser half: the real app (?demo=1, several projects). Skips cleanly without Playwright/Chromium. ----
+const { chromium } = await (async () => {
+  try {
+    const d = process.env.PLAYWRIGHT_DIR;
+    const pw = await import(d ? pathToFileURL(join(d, "playwright-core", "index.mjs")).href : "playwright-core");
+    return { chromium: pw?.chromium ?? pw?.default?.chromium ?? null };
+  } catch { return { chromium: null }; }
+})();
+const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const skip = chromium && exe ? false : "no Playwright/Chromium (set PLAYWRIGHT_DIR + PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)";
+const initScript = (theme) => `try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"boring","app.theme":"${theme}"}))}catch(e){}`;
+async function openPicker(b, E, baseUrl, w, h, dpr, theme) {
+  const ctx = await b.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: dpr, colorScheme: theme });
+  await ctx.addInitScript(initScript(theme));
+  await E.installRoutes(ctx);
+  // ui-overlap's registry has ONE project; add the demo cast's other teams (efi, plugins, site) so the disclosure has something to list.
+  const mk = (id, name, lanes) => ({ ...E.TEAMS_REGISTRY.teams[0], id, name, lanes: lanes.map((l) => ({ id: l, name: l })), paths: [name] });
+  const registry = { ...E.TEAMS_REGISTRY, teams: [...E.TEAMS_REGISTRY.teams, mk("efi", "Main Game", ["main-game", "ui-lab"]), mk("plugins", "Plugins", ["plugins"]), mk("site", "Site", ["site-polish"])] };
+  await ctx.route("**/api/teams", (route) => (route.request().method() === "GET" ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(registry) }) : route.fallback()));
+  const page = await ctx.newPage();
+  await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded" });
+  const aud = page.locator('[data-testid="boring-worker-demo-aud"]');
+  if (!(await aud.count())) await page.locator('[data-testid="boring-project-header-vibesquad"]').click({ timeout: 15000 });
+  await aud.click({ timeout: 15000 });
+  await page.locator('[data-testid="boring-chat-column"]').waitFor();
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="boring-split-toggle"]').click();
+  await page.locator('[data-testid="boring-split-empty"]').waitFor();
+  return { ctx, page };
+}
+
+test("browser: Other projects disclosure is live in the real app (collapsed, filter auto-opens, other-project live agent keeps the split)", { skip, timeout: 300000 }, async () => {
+  const E = await import(pathToFileURL(join(root, "scripts", "ui-overlap", "env.mjs")).href);
+  await E.ensureDist();
+  const { server, baseUrl } = await E.serveDist();
+  const b = await chromium.launch({ executablePath: exe, args: ["--no-sandbox"] });
+  try {
+    const { ctx, page } = await openPicker(b, E, baseUrl, 1600, 900, 1, "dark");
+    const others = page.locator('[data-testid="boring-pp-others"]');
+    assert.equal(await others.count(), 1, "disclosure renders with more than one demo project");
+    assert.equal(await others.evaluate((e) => e.open), false, "collapsed by default");
+    assert.match(await page.locator('[data-testid="boring-pp-others-sum"]').innerText(), /^Other projects \(3\)/i);
+    // filter match inside another project auto-opens it
+    const lane = await page.evaluate(() => { const e = document.querySelector('[data-testid^="boring-pp-other-lane-"] .boring-pp-name'); return e?.textContent ?? null; });
+    assert.ok(lane, "another project has at least one lane");
+    await page.locator('[data-testid="boring-pp-filter"]').fill(lane);
+    assert.equal(await others.evaluate((e) => e.open), true, "auto-opens on a filter match");
+    await page.locator('[data-testid="boring-pp-filter"]').fill("");
+    await others.evaluate((e) => { e.open = true; });
+    // a LIVE other-project pill opens the agent in the right pane and the split stays
+    const pill = page.locator('[data-testid^="boring-pp-other-open-"].live').first();
+    if (await pill.count()) {
+      await pill.click();
+      await page.waitForTimeout(400);
+      assert.equal(await page.locator('[data-testid="boring-pane-right"]').count(), 1, "split stays open");
+      assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 0, "right pane now shows the agent, not the picker");
+    } else assert.fail("no live other-project pill in the demo cast");
+    await ctx.close();
+  } finally { await b.close(); server.close(); }
+});
