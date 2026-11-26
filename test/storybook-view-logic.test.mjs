@@ -109,11 +109,47 @@ describe("storybookLogic", () => {
 
   test("character view groups csv display-name speakers with id speakers; voice card attached", () => {
     const chars = L.characterViews(idx);
-    const popper = chars.find((c) => c.id === "popper");
+    const popper = chars.find((c) => c.id === "trader:popper");
     assert.ok(popper.card);
     assert.equal(popper.speaker, "Popper");
     assert.ok(popper.lines.length >= 3);
-    assert.ok(chars.some((c) => c.id === "narrator"));
+    assert.ok(chars.some((c) => c.id === "narrator:narrator"));
+  });
+
+  test("V1 characterViews: trader:doc vs squad:doc split, voice cards folded, speakerless kept under system:system", () => {
+    const chars = L.characterViews(idx);
+    const doc = chars.find((c) => c.id === "trader:doc");
+    const saint = chars.find((c) => c.id === "squad:doc");
+    assert.equal(doc.speaker, "Doc");
+    assert.equal(saint.speaker, "Saint");
+    assert.equal(doc.card.id, "doc");
+    assert.equal(saint.card.id, "squad-saint");
+    assert.ok(saint.lines.every((l) => l.data.speakerKind === "squad") && doc.lines.every((l) => l.data.speakerKind === "trader"));
+    assert.equal(chars.filter((c) => c.card?.id === "squad-saint").length, 1, "no duplicate squad-saint chip");
+    assert.ok(!chars.some((c) => c.id.includes("squad-")));
+    const sys = chars.find((c) => c.id === "system:system");
+    assert.ok(sys.lines.length >= 1 && sys.inferred >= 1);
+    assert.equal(sys.speaker, "System");
+    const bare = { id: "x", kind: "line", display: "x", aliases: [], source: null, links: [], production: null, data: { text: "t" } };
+    assert.equal(L.lineSpeakerKey(bare), "system:system");
+    assert.equal(L.lineSpeakerKey({ ...bare, data: { speaker: "Popper" } }), "legacy:popper");
+  });
+
+  test("V1 speakerKeyOf across line / trader / squad / voice_card", () => {
+    const line = snap.entities.find((e) => e.kind === "line" && e.data.speakerKind === "squad");
+    assert.equal(L.speakerKeyOf(line), `squad:${line.data.speakerId}`);
+    assert.equal(L.speakerKeyOf(idx.get("trader", "doc")), "trader:doc");
+    assert.equal(L.speakerKeyOf(idx.get("squad", "doc")), "squad:doc");
+    assert.equal(L.speakerKeyOf(idx.get("voice_card", "squad-saint")), "squad:doc");
+    assert.equal(L.speakerKeyOf(idx.get("voice_card", "doc")), "trader:doc");
+    assert.equal(L.speakerKeyOf(idx.get("location", "harbor_district")), null);
+  });
+
+  test("V1 entityCard names Saint / Doc / System by (kind,id)", () => {
+    const ln = (kind, id) => snap.entities.find((e) => e.kind === "line" && e.data.speakerKind === kind && e.data.speakerId === id);
+    assert.equal(L.entityCard(ln("squad", "doc"), idx).speaker, "Saint");
+    assert.equal(L.entityCard(ln("trader", "doc"), idx).speaker, "Doc");
+    assert.equal(L.entityCard(ln("system", "system"), idx).speaker, "System");
   });
 
   test("entity card: text, speaker, area, status, owner_note, source file:line", () => {
@@ -236,7 +272,7 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s;`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s;`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
