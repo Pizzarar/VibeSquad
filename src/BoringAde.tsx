@@ -122,8 +122,8 @@ export function boringLandingFromUrl(
   views: TeamView[],
   search: string,
   known: (id: string) => boolean = () => true,
-): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "slot"; teamId: string; slot: UrlSlot } | { mode: "project"; teamId: string | null; tab: UrlTab | null } | { mode: "decisions"; teamId: null } | null {
-  const { team, agent, slot, tab, view } = parseUrlState(search);
+): { mode: "chat"; teamId: string | null; view: TeamView | null; sel: ReturnType<typeof boringSelectionForAgent>; agentId: string } | { mode: "slot"; teamId: string; slot: UrlSlot; role?: "lead" } | { mode: "lane"; teamId: string; laneId: string; role: Role } | { mode: "project"; teamId: string | null; tab: UrlTab | null } | { mode: "decisions"; teamId: null } | null {
+  const { team, agent, slot, lane, role, tab, view } = parseUrlState(search);
   if (view === "decisions") return { mode: "decisions", teamId: null };
   if (agent) {
     const land = boringAgentLanding(views, agent, known);
@@ -134,9 +134,21 @@ export function boringLandingFromUrl(
   // U2 (UX R33 r2 m3): a team that is not a known view (?team=gone) shows the fallback project's plain Overview: its slot/tab belong to
   // the gone team, never to the fallback (teamId null = stay on the view App falls back to).
   if (team && !views.some((v) => v.team.id === team)) return { mode: "project", teamId: null, tab: null };
-  if (team && slot) return { mode: "slot", teamId: team, slot };
+  if (team && slot) return { mode: "slot", teamId: team, slot, ...(slot === "bugs" && role === "lead" ? { role } : {}) };
+  // P3 (idea-1000): a feature lane's empty card. A lane this project no longer has (removed, hidden, done) is its plain Overview.
+  if (team && lane) {
+    const v = views.find((x) => x.team.id === team);
+    return v && boringLaneKnown(v, lane) ? { mode: "lane", teamId: team, laneId: lane, role: role === "lead" ? "lead" : "brainstorm" } : { mode: "project", teamId: team, tab: null };
+  }
   if (team) return { mode: "project", teamId: team, tab: tab ?? null };
   return null;
+}
+
+/** P3 (idea-1000): is `laneId` one of `view`'s feature-lane sidebar rows (the ones `?lane=` can name)? Same filter as the sidebar's
+ * conversations: pinned, not the hub, not the Desk's own lane (id = team id), not the Bugs lane (that one is `?slot=bugs`). */
+export function boringLaneKnown(view: TeamView, laneId: string): boolean {
+  const bugsLane = quickBugsChipState(view).pin?.lane.id;
+  return pinsForSquad(view).pinned.some((p) => p.lane.id === laneId && !isHubPin(p) && p.lane.id !== view.team.id && p.lane.id !== bugsLane);
 }
 
 export { boringLaneLabel };
@@ -435,7 +447,9 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   // ?team=gone fallback, a Ctrl+K switch out of Storybook while the URL still names the old project) adopts nothing; a view that resolves
   // after mount (registry / roster arrive late) adopts them when it becomes the URL's team (pendingUrl0 below).
   const urlKeys0 = url0 && url0.team && url0.team === (view?.team.id ?? null) ? url0 : null;
-  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : urlKeys0?.slot ? "chat" : "project"));
+  // P3 (idea-1000): ?lane= names a feature lane's empty card (+ ?role=lead: its Lead card); a lane the view doesn't have is its Overview.
+  const [urlLane0] = useState(() => (urlKeys0?.lane && view && boringLaneKnown(view, urlKeys0.lane) ? urlKeys0.lane : null));
+  const [mode, setMode] = useState<Mode>(() => (takeColdUsageFocus() ? "usage" : urlKeys0?.slot || urlLane0 ? "chat" : "project"));
   const coldUsage = useRef(mode === "usage"); // cold ?focus=usage: the first agent-landing must not override it
   const theme = useTheme(); // B13e: light theme shows the -light busts
   useEffect(() => {
@@ -443,8 +457,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     window.addEventListener(OPEN_USAGE_EVENT, open);
     return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
   }, []);
-  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (urlKeys0?.slot ? SLOT_LANE[urlKeys0.slot] : null));
-  const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
+  const [selectedLaneId, setSelectedLaneId] = useState<string | null>(() => (urlKeys0?.slot ? SLOT_LANE[urlKeys0.slot] : urlLane0));
+  const [selectedRole, setSelectedRole] = useState<Role>(() => ((urlKeys0?.slot || urlLane0) && urlKeys0?.role === "lead" ? "lead" : "brainstorm"));
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const decisionCount = useDecisionCount();
@@ -459,7 +473,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [tabFor, setTabFor] = useState<{ team: string | null; tab: OverviewTab }>(() => ({ team: view?.team.id ?? null, tab: (urlKeys0?.tab && TAB_FROM_URL[urlKeys0.tab]) || "overview" }));
   // U1 r2 (Gemini Major 2): the URL's keys while its team's view has not resolved yet. Dropped by the first user input or pop (from
   // then on the screen follows the user / the popped URL, never a stale cold-load key).
-  const pendingUrl0 = useRef(url0?.team && !urlKeys0 && (url0.slot || url0.tab) ? url0 : null);
+  const pendingUrl0 = useRef(url0?.team && !urlKeys0 && (url0.slot || url0.lane || url0.tab) ? url0 : null);
   useEffect(() => {
     if (!pendingUrl0.current || typeof window === "undefined") return;
     const drop = () => { pendingUrl0.current = null; off(); };
@@ -629,10 +643,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
       setMode("chat");
     } else if (land.mode === "decisions") {
       setMode("decisions");
-    } else if (land.mode === "slot") {
-      setSelectedLaneId(SLOT_LANE[land.slot]);
-      setSelectedRole("brainstorm");
+    } else if (land.mode === "slot" || land.mode === "lane") {
+      setSelectedLaneId(land.mode === "slot" ? SLOT_LANE[land.slot] : land.laneId); // P3: a lane's empty card, like a Desk slot
+      setSelectedRole(land.role === "lead" ? "lead" : "brainstorm");
       setSelectedWorkerId(null);
+      if (land.mode === "lane") setProjectOpen((o) => ({ ...o, [land.teamId]: true })); // its lane row is visible (like revealAgent)
       setMode("chat");
     } else {
       setOverviewTab((land.tab && TAB_FROM_URL[land.tab]) || "overview", land.teamId ?? view?.team.id ?? null); // Back to ?team= alone = the Overview tab
@@ -699,6 +714,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   useEffect(() => () => setBoringShownAgent(undefined), []);
   // U1: the agent-less screen keys (App writes ?slot= / ?tab=; serializeUrlState drops them whenever an agent is named).
   const urlSlot = mode === "chat" && !agent && selectedLaneId ? LANE_SLOT[selectedLaneId] ?? null : null;
+  // P3 (idea-1000): a feature lane's empty card (?lane=) and whose card it is (?role=lead, also for the Bugs slot). Derived from the main
+  // selection only: the split's right-pane card (rightCard) is transient pane state and never gets a key (agreed with @bor, Bor3).
+  const urlLane = mode === "chat" && !agent && currentConv ? currentConv.laneId : null;
+  const urlRole = (urlLane || urlSlot === "bugs") && currentPin && selectedRole === "lead" ? "lead" : null;
   const urlTab = mode === "project" ? TAB_TO_URL[overviewTab] : null;
   const screenTeam = view?.team.id ?? null;
   // U1: a project switch resets the sub-tab for good (returning by its row shows the Overview tab); `overviewTab` already reads
@@ -709,9 +728,10 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const p = pendingUrl0.current;
     if (p && p.team === screenTeam) {
       pendingUrl0.current = null;
-      if (p.slot) {
-        setSelectedLaneId(SLOT_LANE[p.slot]);
-        setSelectedRole("brainstorm");
+      const lane = p.slot ? SLOT_LANE[p.slot] : p.lane && view && boringLaneKnown(view, p.lane) ? p.lane : null; // P3: ?lane=
+      if (lane) {
+        setSelectedLaneId(lane);
+        setSelectedRole(p.role === "lead" ? "lead" : "brainstorm");
         setSelectedWorkerId(null);
         setMode("chat");
       }
@@ -720,7 +740,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     }
     setTabFor((cur) => (cur.team === screenTeam ? cur : { team: screenTeam, tab: "overview" }));
   }, [screenTeam]);
-  useEffect(() => setBoringScreenKeys({ team: screenTeam, slot: urlSlot, tab: urlTab }), [screenTeam, urlSlot, urlTab]);
+  useEffect(() => setBoringScreenKeys({ team: screenTeam, slot: urlSlot, lane: urlLane, role: urlRole, tab: urlTab }), [screenTeam, urlSlot, urlLane, urlRole, urlTab]);
   useEffect(() => () => setBoringScreenKeys(undefined), []);
   // U2: declared after the shown-agent / screen-key publishers, so App's URL sync reads that landing's values when this one flips.
   useEffect(() => setBoringLandedGen(landedGen), [landedGen]);

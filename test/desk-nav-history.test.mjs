@@ -58,7 +58,7 @@ writeFileSync(join(dir, "condenseReason.mjs"), transformSync("condenseReason.ts"
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
-stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {}; export const setBoringLandedGen = () => {};`);
+stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = (k) => { globalThis.__screenKeys = k; }; export const setBoringLandedGen = () => {};`);
 stub("pinFocusLogic.mjs", `export const boringDeepLinkPending = (a) => !a.rosterLoaded && !!a.activeAgentId; export const boringUrlAgent = (a) => (!a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId);`);
 stub(
   "pins.mjs",
@@ -88,7 +88,7 @@ const adeCode = transformSync("BoringAde.tsx", src, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/attentionItems"/, `from "./attentionItemsBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringLandingFromUrl, boringAgentLanding, boringSelectionForAgent } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringLandingFromUrl, boringAgentLanding, boringSelectionForAgent, boringLaneKnown } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -402,10 +402,103 @@ test("U1: the sub-tab resets on project change (and stays reset); Open-in-Inbox 
 });
 
 test("U1 wiring: BoringApp publishes the slot/tab keys (team-tagged); App's sync reads them live and lists the render value as a dep", () => {
-  assert.match(src, /setBoringScreenKeys\(\{ team: screenTeam, slot: urlSlot, tab: urlTab \}\)/);
+  assert.match(src, /setBoringScreenKeys\(\{ team: screenTeam, slot: urlSlot, lane: urlLane, role: urlRole, tab: urlTab \}\), \[screenTeam, urlSlot, urlLane, urlRole, urlTab\]\)/, "P3: lane/role are published (and deps) too");
   assert.match(src, /useEffect\(\(\) => \(\) => setBoringScreenKeys\(undefined\), \[\]\)/, "unmount clears the keys (App keeps the URL's own)");
   assert.match(src, /const urlSlot = mode === "chat" && !agent && selectedLaneId \? LANE_SLOT\[selectedLaneId\] \?\? null : null;/);
   const app = readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8");
   assert.match(app, /urlSyncScreen\(\{ boring: vibe === "boring", live: getBoringScreenKeys\(\), rendered: boringScreen, team: activeTeamId \|\| null, kept: parseUrlState\(location\.search\) \}\)/);
   assert.match(app, /\}, \[activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded\]\);/);
+});
+
+// ── P3 (docs/PLAN_DESK_DD_POLISH.md P3; idea-1000): a feature lane's empty card has its own URL (?lane=<id>, + &role=lead) ──────────
+// Fixture: "per" has a Brainstorm and no Lead (its Lead card = "Brainstorm ready · no Lead"); "solo" has nobody ("no Lead or Brainstorm").
+const p3Squad = () => squad({ pins: [...squad().pins, lanePin("solo", { brainstorm: null })] });
+const headOf = (t) => {
+  const h = byId(t, "boring-lane-no-agent-head");
+  const txt = (n) => (n == null || typeof n === "boolean" ? "" : typeof n === "string" || typeof n === "number" ? String(n) : Array.isArray(n) ? n.map(txt).join("") : txt(n.props?.children));
+  return h ? txt(h) : null;
+};
+
+test("P3: boringLandingFromUrl maps ?lane= (+ role=lead) to that lane's empty card; unknown / hub / Desk / Bugs lane ids -> plain Overview", () => {
+  const v = [p3Squad()];
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&lane=solo"), { mode: "lane", teamId: "vs", laneId: "solo", role: "brainstorm" });
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&lane=per&role=lead"), { mode: "lane", teamId: "vs", laneId: "per", role: "lead" });
+  assert.deepEqual(boringLandingFromUrl(v, "?role=lead&lane=per&team=vs"), { mode: "lane", teamId: "vs", laneId: "per", role: "lead" }, "key order is irrelevant");
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&lane=per&role=bogus"), { mode: "lane", teamId: "vs", laneId: "per", role: "brainstorm" }, "only role=lead is a value");
+  for (const q of ["?team=vs&lane=nope", "?team=vs&lane=hub", "?team=vs&lane=vs", "?team=vs&lane=bug", "?team=vs&lane="]) assert.deepEqual(boringLandingFromUrl(v, q), { mode: "project", teamId: "vs", tab: null }, q);
+  assert.deepEqual(boringLandingFromUrl(v, "?team=gone&lane=per"), { mode: "project", teamId: null, tab: null }, "an unknown team never lends its lane to the fallback");
+  assert.equal(boringLandingFromUrl(v, "?team=vs&agent=ade-bs&lane=per").mode, "chat", "an agent wins over a lane");
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=overlord&lane=per"), { mode: "slot", teamId: "vs", slot: "overlord" }, "a slot wins over a lane");
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&lane=per&tab=inbox").mode, "lane", "a lane card wins over a tab");
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=bugs&role=lead"), { mode: "slot", teamId: "vs", slot: "bugs", role: "lead" }, "the Bugs slot's Lead card");
+  assert.deepEqual(boringLandingFromUrl(v, "?team=vs&slot=overlord&role=lead"), { mode: "slot", teamId: "vs", slot: "overlord" }, "role only qualifies bugs / lane");
+  assert.equal(boringLaneKnown(p3Squad(), "solo"), true);
+  assert.equal(boringLaneKnown(p3Squad(), "hub"), false);
+  assert.equal(boringLaneKnown(p3Squad(), "bug"), false);
+});
+
+test("P3: a reload at ?lane= mounts on that lane's empty card (its role) and publishes the same keys; a gone lane mounts on the Overview", () => {
+  for (const [q, head, keys] of [
+    ["?team=vs&lane=solo", "Lane solo · no Lead or Brainstorm running", { lane: "solo", role: null }],
+    ["?team=vs&lane=per&role=lead", "Lane per · Brainstorm ready · no Lead", { lane: "per", role: "lead" }],
+  ]) {
+    reset();
+    globalThis.location = { search: q };
+    render(props(p3Squad()));
+    const t = render(props(p3Squad()));
+    assert.equal(byId(t, "boring-project-view"), null, `${q}: not the Overview`);
+    assert.ok(byId(t, "boring-lane-no-agent"), `${q}: the lane's empty card`);
+    assert.equal(headOf(t), head, `${q}: header`);
+    assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, tab: null, ...keys }, `${q}: published keys name the same card`);
+  }
+  reset();
+  globalThis.location = { search: "?team=vs&lane=gone" };
+  const t = render(props(p3Squad()));
+  assert.ok(byId(t, "boring-project-view"), "a lane the project no longer has: its Overview");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: null, role: null, tab: null });
+});
+
+test("P3: a pop (navGen) re-lands the lane empty card and its role; ?team= alone is the Overview; ?slot=bugs&role=lead the Bugs Lead card", () => {
+  reset();
+  const view = p3Squad();
+  render(props(view));
+  const pop = (search, gen) => { globalThis.location = { search }; render(props(view, { navGen: gen })); return render(props(view, { navGen: gen })); };
+  let t = pop("?team=vs&lane=per&role=lead", 1);
+  assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead", "Back/Forward to the lane's Lead card");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+  t = pop("?team=vs", 2);
+  assert.ok(byId(t, "boring-project-view"), "the plain ?team= entry is the Overview");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: null, role: null, tab: null });
+  t = pop("?team=vs&lane=solo", 3);
+  assert.equal(headOf(t), "Lane solo · no Lead or Brainstorm running");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "solo", role: null, tab: null }, "brainstorm is the default role (omitted)");
+  t = pop("?team=vs&slot=bugs&role=lead", 4);
+  assert.equal(headOf(t), "Bugs · Brainstorm ready · no Lead", "the Bugs slot keeps its role too");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: "bugs", lane: null, role: "lead", tab: null });
+  t = pop("?team=vs&slot=bugs", 5);
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: "bugs", lane: null, role: null, tab: null }, "?slot=bugs alone is its Brainstorm (its live Buddy shows)");
+  assert.equal(globalThis.__calls.filter((c) => c[0] === "onSelectSquad").length, 0, "same project: no squad switch");
+});
+
+test("P3: a cold load whose team resolves after mount adopts its ?lane= card once (pendingUrl0), never on another view", () => {
+  reset();
+  const vs = p3Squad();
+  const efi = efiSquad();
+  globalThis.location = { search: "?team=vs&lane=per&role=lead" };
+  let t = render({ ...props(efi), views: [efi] }); // the URL's team is not loaded yet: the fallback view adopts nothing
+  assert.ok(byId(t, "boring-project-view"), "fallback view: its Overview");
+  assert.deepEqual(globalThis.__screenKeys, { team: "efi", slot: null, lane: null, role: null, tab: null });
+  render({ ...props(vs), views: [efi, vs] }); // its view resolves: the effect adopts the URL's lane card
+  t = render({ ...props(vs), views: [efi, vs] });
+  assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+});
+
+test("P3 wiring: lane/role derive from the main selection only (never the split's pane-local rightCard); App's sync is unchanged", () => {
+  assert.match(src, /const urlLane = mode === "chat" && !agent && currentConv \? currentConv\.laneId : null;/);
+  assert.match(src, /const urlRole = \(urlLane \|\| urlSlot === "bugs"\) && currentPin && selectedRole === "lead" \? "lead" : null;/);
+  const keysAt = src.indexOf("const urlLane =");
+  assert.doesNotMatch(src.slice(keysAt, src.indexOf("\n", src.indexOf("const urlRole ="))), /rightCard/, "rightCard never feeds a URL key (Bor3)");
+  const pf = readFileSync(resolve(import.meta.dirname, "..", "src", "pinFocus.ts"), "utf8");
+  assert.match(pf, /k\.lane === boringScreen\.lane && k\.role === boringScreen\.role/, "a lane/role change notifies App (its sync dep)");
 });
