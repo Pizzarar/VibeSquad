@@ -1559,6 +1559,21 @@ html[data-vibe="boring"] .boring-empty-lane { margin: 0; font-size: var(--t-titl
 html[data-vibe="boring"] .boring-empty-card > p { margin: 0; color: var(--text-1); font-size: var(--t-body); }
 html[data-vibe="boring"] .boring-empty-jumps { display: flex; flex-direction: column; gap: 14px; width: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
 html[data-vibe="boring"] .boring-empty-jumps > section { display: flex; flex-direction: column; gap: 8px; }
+/* B18a/c visual (@bor) */
+html[data-vibe="boring"] .boring-project-tree { padding-bottom: 24px; -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 24px), transparent 100%); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(100% - 24px), transparent 100%); }
+html[data-vibe="boring"] .boring-sidebar-footer { border-top: 1px solid var(--border); background: var(--surface-0); }
+html[data-vibe="boring"] .boring-project-block.open { background: linear-gradient(155deg, color-mix(in srgb, var(--living-warm) 8%, var(--surface-1)) 0%, color-mix(in srgb, var(--accent) 6%, var(--surface-1)) 100%); }
+html[data-vibe="boring"] .boring-main-pin.boring-main-pin { background: linear-gradient(155deg, color-mix(in srgb, var(--living-warm) 12%, var(--surface-2)) 0%, color-mix(in srgb, var(--accent) 10%, var(--surface-2)) 100%); }
+html[data-vibe="boring"] .boring-main-pin .boring-main-line.boring-main-line { background: color-mix(in srgb, var(--living-warm) 12%, var(--surface-2)); }
+html[data-vibe="boring"] .boring-ctx-body { background: radial-gradient(110% 42% at 50% 104%, color-mix(in srgb, var(--living-warm) 10%, transparent) 0%, color-mix(in srgb, var(--accent) 5%, transparent) 48%, transparent 76%); }
+html[data-vibe="boring"] .boring-split-empty { background: radial-gradient(110% 42% at 50% 104%, color-mix(in srgb, var(--living-warm) 10%, transparent) 0%, color-mix(in srgb, var(--accent) 5%, transparent) 48%, transparent 76%), var(--surface-0); }
+html[data-vibe="boring"] .boring-pp-others { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 12px; }
+html[data-vibe="boring"] .boring-pp-others-sum { cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: var(--t-small); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
+html[data-vibe="boring"] .boring-pp-others-sum::before { content: "▸"; font-size: 11px; } html[data-vibe="boring"] .boring-pp-others[open] > .boring-pp-others-sum::before { content: "▾"; }
+html[data-vibe="boring"] .boring-pp-others-sum:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-pp-others-badge { text-transform: none; letter-spacing: 0; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--st-attn); color: var(--st-attn); font-weight: 500; }
+html[data-vibe="boring"] .boring-pp-other { margin-top: 12px; }
+
 /* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
 /* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }

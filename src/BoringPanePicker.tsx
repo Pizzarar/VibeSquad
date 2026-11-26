@@ -9,6 +9,8 @@ export type PickerPill = { key: string; label: string; live: boolean; onOpen: ()
 export type PickerLane = { key: string; name: string; code: string; dot: string; needs: boolean; working: boolean; sub: string; pills: PickerPill[] };
 export type PickerAgent = { key: string; title: string; sub: string; dot: string; needs: boolean; onOpen: () => void };
 export type PickerData = { active: PickerAgent[]; lanes: PickerLane[] };
+/** B18c: another awake project's lanes, shown under a collapsed "Other projects (N)" disclosure. */
+export type OtherProject = { id: string; name: string; needsYou: number; lanes: PickerLane[] };
 /** One row of the Needs-you / Active-now strip. Built by the host from the SAME rows the sidebar Needs-you section uses (needsYouRows) plus every running member. */
 export type StripItem = { id: string; title: string; sub: string; needs: boolean; err?: boolean };
 
@@ -68,7 +70,7 @@ export function buildPickerData(m: ModelLike, h: PickerHandlers, strip: StripIte
  * `getData` runs only while the picker is mounted (the host's split tree is built every render). A dormant pill selects the lane in the host, then
  * `renderEmpty` shows that lane's empty card here with a Back link. Keyboard: filter autofocuses, Enter opens the first match, Esc backs out / clears / closes.
  */
-export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTarget, onClose, focusOnMount = true, children }: { focusOnMount?: boolean; getData: () => PickerData; renderEmpty?: (t: CardTarget) => ReactNode; emptyTarget?: CardTarget | null; onEmptyTarget?: (t: CardTarget | null) => void; onClose?: () => void; children?: ReactNode }) {
+export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTarget, onClose, focusOnMount = true, otherProjects, children }: { focusOnMount?: boolean; otherProjects?: OtherProject[]; getData: () => PickerData; renderEmpty?: (t: CardTarget) => ReactNode; emptyTarget?: CardTarget | null; onEmptyTarget?: (t: CardTarget | null) => void; onClose?: () => void; children?: ReactNode }) {
   const [q, setQ] = useState("");
   const [localEmpty, setLocalEmpty] = useState<CardTarget | null>(null);
   // Controlled when the host passes emptyTarget (so its breadcrumb can name the lane); local otherwise.
@@ -89,7 +91,10 @@ export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTar
   // The strip also matches a lane's @code (typing "@ui-bois" narrows both lists to that lane's agents).
   const codeHits = needle ? data.lanes.filter((l) => l.code && hit(l.code)).map((l) => l.name.toLowerCase()) : [];
   const activeShown = needle ? data.active.filter((a) => hit(a.title, a.sub) || codeHits.some((n) => a.title.toLowerCase().includes(n) || a.sub.toLowerCase().includes(n))) : active;
-  const nothing = activeShown.length === 0 && lanes.length === 0;
+  // B18c: other awake projects. A non-empty filter keeps only matching lanes (project name matches keep all its lanes) and auto-opens the disclosure.
+  const others = (otherProjects ?? []).map((p) => ({ ...p, lanes: !needle || hit(p.name) ? p.lanes : p.lanes.filter((l) => hit(l.name, l.code)) })).filter((p) => p.lanes.length > 0);
+  const othersNeeds = others.reduce((n, p) => n + p.needsYou, 0);
+  const nothing = activeShown.length === 0 && lanes.length === 0 && others.length === 0;
   // A dormant pill only shows its card here: it must not select the lane in the host (that rewrote the left pane's card).
   const openLane = (laneKey: string, pill: string, onOpen: () => void, live: boolean) => { if (live || !renderEmpty) onOpen(); else setEmptyFor({ key: laneKey, pill }); };
   const first = () => {
@@ -152,6 +157,29 @@ export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTar
                 ))}
               </div>
             </section>
+          )}
+          {others.length > 0 && (
+            <details className="boring-pp-others" data-testid="boring-pp-others" open={needle ? true : undefined}>
+              <summary className="boring-pp-others-sum" data-testid="boring-pp-others-sum">Other projects ({others.length}){othersNeeds > 0 && <span className="boring-pp-others-badge" data-testid="boring-pp-others-badge">{othersNeeds} needs you</span>}</summary>
+              {others.map((p) => (
+                <section key={p.id} className="boring-pp-sec boring-pp-other" data-testid={`boring-pp-other-${p.id}`} aria-label={`${p.name} lanes`}>
+                  <h3 className="boring-pp-h">{p.name}</h3>
+                  <div className="boring-pp-grid">
+                    {p.lanes.map((l) => (
+                      <div key={l.key} className={`boring-pp-lane${l.needs ? " attn" : ""}`} data-testid={`boring-pp-other-lane-${p.id}-${l.key}`}>
+                        <span className={l.dot} aria-hidden="true" />
+                        <span className="boring-pp-name" title={l.name}>{l.name}</span>
+                        {l.code && <code className="boring-pp-code">{l.code}</code>}
+                        <span className="boring-pp-sub">{l.sub}</span>
+                        <span className="boring-pp-pills">
+                          {l.pills.map((pl) => (<button key={pl.key} type="button" className={`boring-pp-pill${pl.live ? " live" : ""}`} data-testid={`boring-pp-other-open-${p.id}-${l.key}-${pl.key}`} aria-label={`Open ${p.name} ${l.name} ${pl.label}${pl.live ? "" : " (not running)"}`} onClick={pl.onOpen}>{pl.label}</button>))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </details>
           )}
           {nothing && <p className="boring-pp-none" data-testid="boring-pp-none">No lane or agent matches “{q.trim()}”.</p>}
         </div>
