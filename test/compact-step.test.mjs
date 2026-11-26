@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
-import { createCompactor, compactLanding, compactSpendFromLog, createAgentLogTailReader, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { createCompactor, compactLanding, compactSpendFromLog, createAgentLogTailReader, readAgentLogTail, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
 import { compactNotAttempted } from "../server/compact-crossing.mjs";
 import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../server/lead-handoff.mjs";
 
@@ -970,6 +970,64 @@ test("M2b createAgentLogTailReader: skips unchanged, reads delta on append, fall
     assert.equal(afterRotate[1].type, "exit");
   } finally {
     JSON.parse = origParse;
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+  }
+});
+
+test("M2b createAgentLogTailReader: same-inode truncate + regrow past old size falls back to full tail read", () => {
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "vs-compact-regrow-")); tmpDirs.push(dir);
+  const agentsDir = join(dir, "runner", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  process.env.VIBESQUAD_HOME = dir;
+
+  const id = "rn-regrow";
+  const logFile = join(agentsDir, `${id}.jsonl`);
+  try {
+    writeFileSync(logFile, [
+      ev("status", { ts: 1, status: "idle" }),
+      ev("input", { ts: 2, text: "/compact old" }),
+    ].map((x) => JSON.stringify(x)).join("\n") + "\n");
+
+    const read = createAgentLogTailReader(id);
+    assert.deepEqual(read(), readAgentLogTail(id));
+
+    // Overwrite in place (same inode, truncated then regrown strictly past old size with misaligned line boundaries)
+    writeFileSync(logFile, [
+      ev("status", { ts: 10, status: "running", pad: "xxxxxxx" }),
+      ev("input", { ts: 11, text: "wake\n\n/compact new-longer-payload" }),
+      ev("parked", { ts: 12, reason: "slot-reclaim" }),
+    ].map((x) => JSON.stringify(x)).join("\n") + "\n");
+
+    assert.deepEqual(read(), readAgentLogTail(id));
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+  }
+});
+
+test("M2b createAgentLogTailReader: caps committedEvents to the maxBytes tail window across incremental appends", () => {
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "vs-compact-cap-")); tmpDirs.push(dir);
+  const agentsDir = join(dir, "runner", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  process.env.VIBESQUAD_HOME = dir;
+
+  const id = "rn-cap";
+  const logFile = join(agentsDir, `${id}.jsonl`);
+  const maxBytes = 200;
+  try {
+    writeFileSync(logFile, JSON.stringify(ev("status", { i: 0, pad: "01234567890123456789" })) + "\n");
+    const read = createAgentLogTailReader(id, maxBytes);
+    assert.deepEqual(read(), readAgentLogTail(id, maxBytes));
+
+    for (let i = 1; i <= 25; i++) {
+      appendFileSync(logFile, JSON.stringify(ev("status", { i, pad: "01234567890123456789" })) + "\n");
+      const got = read();
+      const fresh = readAgentLogTail(id, maxBytes);
+      assert.deepEqual(got, fresh, `step ${i}`);
+      assert.ok(got.length <= 5, `capped to ~maxBytes window at step ${i}, got ${got.length}`);
+    }
+  } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
   }
 });

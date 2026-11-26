@@ -98,9 +98,35 @@ export function readAgentLogTail(id, maxBytes = 512 * 1024) {
   } catch { return []; }
 }
 
+const TAIL_FINGERPRINT_BYTES = 64;
+
+function parseJsonlEventsWithOffsets(buf, baseOffset, dropFirst = false) {
+  const events = [];
+  const starts = [];
+  let pos = 0;
+  let first = true;
+  while (pos < buf.length) {
+    let nl = buf.indexOf(0x0a, pos);
+    if (nl < 0) nl = buf.length;
+    if (!first || !dropFirst) {
+      const line = buf.subarray(pos, nl).toString("utf8").trim();
+      if (line) {
+        try {
+          events.push(JSON.parse(line));
+          starts.push(baseOffset + pos);
+        } catch {}
+      }
+    }
+    first = false;
+    pos = nl + 1;
+  }
+  return { events, starts };
+}
+
 /**
  * Incremental tail reader for `<VIBESQUAD_HOME>/runner/agents/<id>.jsonl`: skips reading when size/mtime/inode are unchanged,
- * reads and parses only appended bytes when the file grows, and falls back to a full tail read on truncation, rotation, or rewrite.
+ * reads and parses only appended bytes when the file grows (verifying a tail fingerprint before committedOffset), caps committed
+ * events to the maxBytes tail window, and falls back to a full tail read on truncation, rotation, or in-place rewrite.
  */
 export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
   let initialized = false;
@@ -108,8 +134,17 @@ export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
   let lastMtimeMs = -1;
   let lastIno = null;
   let committedOffset = 0;
+  let committedTail = Buffer.alloc(0);
+  let committedStarts = [];
   let committedEvents = [];
   let cachedEvents = [];
+
+  const readRange = (fd, start, length) => {
+    if (length <= 0) return Buffer.alloc(0);
+    const buf = Buffer.alloc(length);
+    const n = readSync(fd, buf, 0, length, start);
+    return n < length ? buf.subarray(0, n) : buf;
+  };
 
   return function read() {
     try {
@@ -118,48 +153,82 @@ export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
       if (initialized && st.size === lastSize && st.mtimeMs === lastMtimeMs && st.ino === lastIno) {
         return cachedEvents;
       }
-      const rotated = initialized && (
-        st.ino !== lastIno
+      let fullRead = !initialized
+        || st.ino !== lastIno
         || st.size < lastSize
         || (st.size === lastSize && st.mtimeMs !== lastMtimeMs)
         || st.size - committedOffset > maxBytes
-      );
-      let from;
+        || (committedOffset > 0 && committedTail.length === 0);
+
+      let from = 0;
       let dropFirst = false;
-      if (!initialized || rotated) {
-        committedEvents = [];
-        from = Math.max(0, st.size - maxBytes);
-        dropFirst = from > 0;
-      } else {
-        from = committedOffset;
-      }
-      const len = Math.max(0, st.size - from);
-      let buf = Buffer.alloc(0);
-      if (len > 0) {
-        const fd = openSync(file, "r");
-        try {
-          buf = Buffer.alloc(len);
-          const n = readSync(fd, buf, 0, len, from);
-          if (n < len) buf = buf.subarray(0, n);
-        } finally {
-          closeSync(fd);
+      let deltaBuf = Buffer.alloc(0);
+      let fpPrefix = Buffer.alloc(0);
+
+      const fd = openSync(file, "r");
+      try {
+        if (!fullRead) {
+          const fpLen = committedTail.length;
+          const readStart = committedOffset - fpLen;
+          const raw = readRange(fd, readStart, fpLen + Math.max(0, st.size - committedOffset));
+          if (fpLen > 0 && (raw.length < fpLen || !raw.subarray(0, fpLen).equals(committedTail))) {
+            fullRead = true;
+          } else {
+            from = committedOffset;
+            fpPrefix = raw.subarray(0, fpLen);
+            deltaBuf = raw.subarray(fpLen);
+          }
         }
+        if (fullRead) {
+          committedStarts = [];
+          committedEvents = [];
+          committedTail = Buffer.alloc(0);
+          from = Math.max(0, st.size - maxBytes);
+          dropFirst = from > 0;
+          fpPrefix = Buffer.alloc(0);
+          deltaBuf = readRange(fd, from, Math.max(0, st.size - from));
+        }
+      } finally {
+        closeSync(fd);
       }
-      const lastNl = buf.lastIndexOf(0x0a);
+
+      const lastNl = deltaBuf.lastIndexOf(0x0a);
       let trailing = [];
       if (lastNl >= 0) {
-        const parsed = parseJsonlLines(buf.subarray(0, lastNl + 1).toString("utf8"), dropFirst);
-        if (parsed.length) committedEvents.push(...parsed);
+        const committedSlice = deltaBuf.subarray(0, lastNl + 1);
+        const { events, starts } = parseJsonlEventsWithOffsets(committedSlice, from, dropFirst);
+        if (events.length) {
+          committedEvents.push(...events);
+          committedStarts.push(...starts);
+        }
         committedOffset = from + lastNl + 1;
-        if (lastNl + 1 < buf.length) {
-          trailing = parseJsonlLines(buf.subarray(lastNl + 1).toString("utf8"), false);
+        if (committedSlice.length >= TAIL_FINGERPRINT_BYTES) {
+          committedTail = Buffer.from(committedSlice.subarray(committedSlice.length - TAIL_FINGERPRINT_BYTES));
+        } else {
+          const combined = fpPrefix.length ? Buffer.concat([fpPrefix, committedSlice]) : committedSlice;
+          committedTail = Buffer.from(combined.subarray(Math.max(0, combined.length - TAIL_FINGERPRINT_BYTES)));
+        }
+        if (lastNl + 1 < deltaBuf.length) {
+          trailing = parseJsonlEventsWithOffsets(deltaBuf.subarray(lastNl + 1), committedOffset, false).events;
         }
       } else {
-        committedOffset = from;
-        if (buf.length > 0) trailing = parseJsonlLines(buf.toString("utf8"), dropFirst);
+        if (fullRead) committedOffset = from;
+        if (deltaBuf.length > 0) {
+          trailing = parseJsonlEventsWithOffsets(deltaBuf, from, dropFirst).events;
+        }
       }
+
+      const endOffset = from + deltaBuf.length;
+      const windowStart = Math.max(0, endOffset - maxBytes);
+      if (windowStart > 0 && committedStarts.length > 0 && committedStarts[0] <= windowStart) {
+        let drop = 0;
+        while (drop < committedStarts.length && committedStarts[drop] <= windowStart) drop++;
+        committedStarts = committedStarts.slice(drop);
+        committedEvents = committedEvents.slice(drop);
+      }
+
       initialized = true;
-      lastSize = from + buf.length;
+      lastSize = endOffset;
       lastMtimeMs = st.mtimeMs;
       lastIno = st.ino;
       cachedEvents = trailing.length ? [...committedEvents, ...trailing] : committedEvents;
@@ -170,6 +239,8 @@ export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
       lastMtimeMs = -1;
       lastIno = null;
       committedOffset = 0;
+      committedTail = Buffer.alloc(0);
+      committedStarts = [];
       committedEvents = [];
       cachedEvents = [];
       return [];
