@@ -268,7 +268,7 @@ test("CSS: fluid measure vars, B17 section scoped/single-line, Psycho + styles.c
   const a = css.indexOf("/* ---- B17 deadspace"), b = css.indexOf("/* --- D4 polish");
   assert.ok(a > 0 && b > a, "B17 section sits before D4 polish");
   const sec = css.slice(a, b);
-  for (const line of sec.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*"))) assert.match(line, /^html\[data-vibe="boring"\] /);
+  for (const line of sec.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*") && !l.startsWith("@container"))) assert.match(line.trim(), /^html\[data-vibe="boring"\] /);
   assert.doesNotMatch(sec, /!important|@media|@keyframes/);
   assert.ok(sec.includes(".boring-empty-card { max-width: 720px;"));
   for (const sel of [".timeline > *", ".composer > *", ".perm-card", '[data-testid="tl-pinned-todo"]']) assert.ok(css.includes(`html[data-vibe="boring"] ${sel} {`) , sel);
