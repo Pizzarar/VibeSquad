@@ -3564,6 +3564,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       if (!newId) return skip("spawn-no-id");
       await deps.setLabels(deadId, { [RESPAWNED_AS_LABEL]: newId }).catch((e: unknown) => log(`respawnedAs label failed for ${deadId}: ${e}`));
+      if (mode === "resume") {
+        // idea-1101 L2: the superseded worker is archived, so a later `vs send` to it can never revive it on the capped provider
+        // (its timeline and respawnedAs label stay readable; replays of its wall stop at reason=archived / already-respawned).
+        await Promise.resolve()
+          .then(() => paseo.agents.ref(deadId).archive())
+          .catch(() => deps.archiveAgent(deadId))
+          .catch((e: unknown) => log(`archive of superseded ${deadId} failed: ${e}`));
+      }
       if (watch) {
         const { retargeted } = await watch.retarget(deadId, newId, mode === "resume" ? "mid-run quota resume" : "upstream respawn");
         if (retargeted.length) log(`watch retarget ${deadId} -> ${newId}: ${retargeted.join(", ")}`);
@@ -3574,7 +3582,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         lane: where.lane,
         type: "decision",
         text: mode === "resume"
-          ? `RESUMED ${deadId} -> ${newId}: worker "${title}" ${died} mid-run (${why}); resumed in same worktree (${spawnCwd}) on ${alt.name} (${toFam}). Watch ${newId}; ${deadId} is superseded.`
+          ? `RESUMED ${deadId} -> ${newId}: worker "${title}" ${died} mid-run (${why}); resumed in same worktree (${spawnCwd}) on ${alt.name} (${toFam}). Watch ${newId}; ${deadId} is superseded (archived; vs verdict ${deadId} follows respawnedAs).`
           : `RESPAWNED ${deadId} -> ${newId}: worker "${title}" ${died} in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
         refs: [deadId, newId],
       });
