@@ -23,7 +23,6 @@ export const COMPACT_SETTLE_MS = 1_500;
 
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
-const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
 // An input that carries a /compact line anywhere: also one coalesced behind a queued wake (C3: "<wake>\n\n/compact ...").
 const COMPACT_LINE_RE = /(^|\n)\s*\/compact\b/i;
 /** Per-turn cost from session-cumulative `turn_done.costUsd`: delta vs the previous turn_done (a drop means the session restarted: take it whole). */
@@ -42,7 +41,7 @@ export function compactSpendFromLog(events) {
   for (let i = events.length - 1; i >= 0; i--) if (events[i]?.type === "compacted") { c = i; break; }
   if (c < 0) return null;
   let j = -1;
-  for (let i = c - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_INPUT_RE.test(String(events[i].text ?? ""))) { j = i; break; }
+  for (let i = c - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_LINE_RE.test(String(events[i].text ?? ""))) { j = i; break; }
   if (j < 0) return null;
   let base = 0;
   for (let i = j - 1; i >= 0; i--) if (events[i]?.type === "turn_done" && Number.isFinite(Number(events[i].costUsd))) { base = Number(events[i].costUsd); break; }
@@ -80,6 +79,12 @@ export function compactLanding(events, { since } = {}) {
   return "direct";
 }
 
+function parseJsonlLines(text, dropFirst = false) {
+  const lines = text.split("\n");
+  if (dropFirst) lines.shift(); // torn first line
+  return lines.flatMap((l) => { try { return l.trim() ? [JSON.parse(l)] : []; } catch { return []; } });
+}
+
 /** Default log reader: the tail (last maxBytes, default 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events, oldest first; [] when unreadable. Also brainstorm.mjs's G1 carry scan. */
 export function readAgentLogTail(id, maxBytes = 512 * 1024) {
   try {
@@ -89,10 +94,158 @@ export function readAgentLogTail(id, maxBytes = 512 * 1024) {
     const fd = openSync(file, "r");
     let text;
     try { const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); text = buf.toString("utf8"); } finally { closeSync(fd); }
-    const lines = text.split("\n");
-    if (from > 0) lines.shift(); // torn first line
-    return lines.flatMap((l) => { try { return l.trim() ? [JSON.parse(l)] : []; } catch { return []; } });
+    return parseJsonlLines(text, from > 0);
   } catch { return []; }
+}
+
+const TAIL_FINGERPRINT_BYTES = 64;
+
+function parseJsonlEventsWithOffsets(buf, baseOffset, dropFirst = false) {
+  const events = [];
+  const starts = [];
+  let pos = 0;
+  let first = true;
+  while (pos < buf.length) {
+    let nl = buf.indexOf(0x0a, pos);
+    if (nl < 0) nl = buf.length;
+    if (!first || !dropFirst) {
+      const line = buf.subarray(pos, nl).toString("utf8").trim();
+      if (line) {
+        try {
+          events.push(JSON.parse(line));
+          starts.push(baseOffset + pos);
+        } catch {}
+      }
+    }
+    first = false;
+    pos = nl + 1;
+  }
+  return { events, starts };
+}
+
+/**
+ * Incremental tail reader for `<VIBESQUAD_HOME>/runner/agents/<id>.jsonl`: skips reading when size/mtime/inode are unchanged,
+ * reads and parses only appended bytes when the file grows (verifying a tail fingerprint before committedOffset), caps committed
+ * events to the maxBytes tail window, and falls back to a full tail read on truncation, rotation, or in-place rewrite.
+ */
+export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
+  let initialized = false;
+  let lastSize = 0;
+  let lastMtimeMs = -1;
+  let lastIno = null;
+  let committedOffset = 0;
+  let committedTail = Buffer.alloc(0);
+  let committedStarts = [];
+  let committedEvents = [];
+  let cachedEvents = [];
+
+  const readRange = (fd, start, length) => {
+    if (length <= 0) return Buffer.alloc(0);
+    const buf = Buffer.alloc(length);
+    const n = readSync(fd, buf, 0, length, start);
+    return n < length ? buf.subarray(0, n) : buf;
+  };
+
+  return function read() {
+    try {
+      const file = join(vibesquadHome(), "runner", "agents", `${id}.jsonl`);
+      const st = statSync(file);
+      if (initialized && st.size === lastSize && st.mtimeMs === lastMtimeMs && st.ino === lastIno) {
+        return cachedEvents;
+      }
+      let fullRead = !initialized
+        || st.ino !== lastIno
+        || st.size < lastSize
+        || (st.size === lastSize && st.mtimeMs !== lastMtimeMs)
+        || st.size - committedOffset > maxBytes
+        || (committedOffset > 0 && committedTail.length === 0);
+
+      let from = 0;
+      let dropFirst = false;
+      let deltaBuf = Buffer.alloc(0);
+      let fpPrefix = Buffer.alloc(0);
+
+      const fd = openSync(file, "r");
+      try {
+        if (!fullRead) {
+          const fpLen = committedTail.length;
+          const readStart = committedOffset - fpLen;
+          const raw = readRange(fd, readStart, fpLen + Math.max(0, st.size - committedOffset));
+          if (fpLen > 0 && (raw.length < fpLen || !raw.subarray(0, fpLen).equals(committedTail))) {
+            fullRead = true;
+          } else {
+            from = committedOffset;
+            fpPrefix = raw.subarray(0, fpLen);
+            deltaBuf = raw.subarray(fpLen);
+          }
+        }
+        if (fullRead) {
+          committedStarts = [];
+          committedEvents = [];
+          committedTail = Buffer.alloc(0);
+          from = Math.max(0, st.size - maxBytes);
+          dropFirst = from > 0;
+          fpPrefix = Buffer.alloc(0);
+          deltaBuf = readRange(fd, from, Math.max(0, st.size - from));
+        }
+      } finally {
+        closeSync(fd);
+      }
+
+      const lastNl = deltaBuf.lastIndexOf(0x0a);
+      let trailing = [];
+      if (lastNl >= 0) {
+        const committedSlice = deltaBuf.subarray(0, lastNl + 1);
+        const { events, starts } = parseJsonlEventsWithOffsets(committedSlice, from, dropFirst);
+        if (events.length) {
+          committedEvents.push(...events);
+          committedStarts.push(...starts);
+        }
+        committedOffset = from + lastNl + 1;
+        if (committedSlice.length >= TAIL_FINGERPRINT_BYTES) {
+          committedTail = Buffer.from(committedSlice.subarray(committedSlice.length - TAIL_FINGERPRINT_BYTES));
+        } else {
+          const combined = fpPrefix.length ? Buffer.concat([fpPrefix, committedSlice]) : committedSlice;
+          committedTail = Buffer.from(combined.subarray(Math.max(0, combined.length - TAIL_FINGERPRINT_BYTES)));
+        }
+        if (lastNl + 1 < deltaBuf.length) {
+          trailing = parseJsonlEventsWithOffsets(deltaBuf.subarray(lastNl + 1), committedOffset, false).events;
+        }
+      } else {
+        if (fullRead) committedOffset = from;
+        if (deltaBuf.length > 0) {
+          trailing = parseJsonlEventsWithOffsets(deltaBuf, from, dropFirst).events;
+        }
+      }
+
+      const endOffset = from + deltaBuf.length;
+      const windowStart = Math.max(0, endOffset - maxBytes);
+      if (windowStart > 0 && committedStarts.length > 0 && committedStarts[0] <= windowStart) {
+        let drop = 0;
+        while (drop < committedStarts.length && committedStarts[drop] <= windowStart) drop++;
+        committedStarts = committedStarts.slice(drop);
+        committedEvents = committedEvents.slice(drop);
+      }
+
+      initialized = true;
+      lastSize = endOffset;
+      lastMtimeMs = st.mtimeMs;
+      lastIno = st.ino;
+      cachedEvents = trailing.length ? [...committedEvents, ...trailing] : committedEvents;
+      return cachedEvents;
+    } catch {
+      initialized = false;
+      lastSize = 0;
+      lastMtimeMs = -1;
+      lastIno = null;
+      committedOffset = 0;
+      committedTail = Buffer.alloc(0);
+      committedStarts = [];
+      committedEvents = [];
+      cachedEvents = [];
+      return [];
+    }
+  };
 }
 
 export function isClaudeAgent(agent) {
@@ -233,8 +386,8 @@ export function createCompactor({
     }
   }
 
-  const landing = async (id, since) => {
-    try { return compactLanding(await readEvents(id), { since }); } catch { return "direct"; } // unreadable log: re-send as before
+  const landing = async (id, since, read = readEvents) => {
+    try { return compactLanding(await read(id), { since }); } catch { return "direct"; } // unreadable log: re-send as before
   };
 
   /**
@@ -242,7 +395,7 @@ export function createCompactor({
    * while the runner shows idle. Re-sending at once would compact twice (and skew the adapter's turn count), so wait for that
    * boundary first: "compacted", or "none" at the deadline / once the process is parked or exits (the held /compact died).
    */
-  async function awaitLate(w, id, since, hardCap) {
+  async function awaitLate(w, id, since, hardCap, read) {
     const deadline = Date.now() + lateBoundaryMs;
     for (;;) {
       const left = deadline - Date.now();
@@ -251,7 +404,7 @@ export function createCompactor({
       if (s === "compacted") return "compacted";
       if (s === "cancelled") return "none";
       if (s !== "tick") continue;
-      if ((await landing(id, since)) === "gone") return "none";
+      if ((await landing(id, since, read)) === "gone") return "none";
       if (Number.isFinite(hardCap)) {
         const now = await freshAgent(id);
         if (overCap(now, hardCap)) return capStop(now);
@@ -369,8 +522,9 @@ export function createCompactor({
         if (got !== "no-boundary") break;
         // C1/C3/C4: the /compact rode along with another message. A steered one first gets its late boundary window (C1), also
         // on the last attempt: the CLI can still run the held /compact, and the caller's handoff must not overlap it.
-        if ((await landing(id, sentAt)) === "steered") {
-          const late = await awaitLate(w, id, sentAt, hardCap);
+        const readForLate = readEvents === readAgentLogTail ? createAgentLogTailReader(id) : readEvents;
+        if ((await landing(id, sentAt, readForLate)) === "steered") {
+          const late = await awaitLate(w, id, sentAt, hardCap, readForLate);
           if (late === "compacted") { got = "compacted"; break; }
           if (capped(late)) break;
         }
