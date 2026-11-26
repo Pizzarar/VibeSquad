@@ -482,10 +482,31 @@ export function headerField(s, max = 80) {
     .trim();
 }
 
+/** C2b: option index a bare-letter lean ("B", "(b)", "Option B") names among lettered alts ("A: …", "B) …"), else -1. */
+export function resolveLeanAltIndex(item) {
+  const m = /^\s*(?:option\s+)?\(?([A-Za-z])\)?[.:]?\s*$/i.exec(item.lean ?? "");
+  if (!m) return -1;
+  const letter = m[1].toUpperCase();
+  return (item.alts ?? []).findIndex((a) => {
+    const am = /^\s*(?:option\s+)?\(?([A-Za-z])(?:[\s.:)\-–—]|$)/i.exec(a);
+    return Boolean(am) && am[1].toUpperCase() === letter;
+  });
+}
+
+/** C2b: distinct options on an item (a lean naming a lettered option is that option, not another). */
+function optionCount(item) {
+  return (item.alts?.length ?? 0) + (item.lean && item.lean.trim() && resolveLeanAltIndex(item) < 0 ? 1 : 0);
+}
+
 /** The owner's answer line, composed by the server (only quoted item values are agent text). */
 function answerLine(item, ans) {
-  if (ans.choice === "lean") return `Go with your lean: ${quoteLine(item.lean)}.`;
+  if (ans.choice === "lean") {
+    const li = resolveLeanAltIndex(item);
+    if (li >= 0) return `Go with your lean, option ${li + 1}: ${quoteLine(item.alts[li])}.`;
+    return `Go with your lean: ${quoteLine(item.lean)}.`;
+  }
   if (ans.choice === "alt") return `Go with option ${ans.altIndex + 1}: ${quoteLine(item.alts[ans.altIndex])}.`;
+  if (ans.choice === "not" && optionCount(item) >= 2) return "None of these: do NOT go with any of the options listed below.";
   if (ans.choice === "not") return item.lean ? `Not that: do NOT go with your lean ${quoteLine(item.lean)}.` : "Not that: no, do not go ahead.";
   return "See the owner's reply below.";
 }
@@ -543,8 +564,16 @@ export function resolveAnswerTarget(item, agents, teams, pickLiveAgent) {
   return null;
 }
 
-const choiceLabel = (item, ans) =>
-  ans.choice === "lean" ? `lean ${quoteLine(item.lean, 60)}` : ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteLine(item.alts[ans.altIndex], 60)}` : ans.choice === "not" ? "not that" : ans.choice === "reply" ? `reply ${quoteLine(ans.text, 60)}` : "dismissed";
+const choiceLabelBase = (item, ans) => {
+  if (ans.choice === "lean") {
+    const li = resolveLeanAltIndex(item);
+    return li >= 0 ? `lean, option ${li + 1} ${quoteLine(item.alts[li], 60)}` : `lean ${quoteLine(item.lean, 60)}`;
+  }
+  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteLine(item.alts[ans.altIndex], 60)}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteLine(ans.text, 60)}` : "dismissed";
+};
+// C2b idea-1152: an option picked with a typed note keeps the note in the summary.
+export const choiceLabel = (item, ans) =>
+  ans.choice !== "reply" && ans.choice !== "dismiss" && ans.text ? `${choiceLabelBase(item, ans)} + reply ${quoteLine(ans.text, 60)}` : choiceLabelBase(item, ans);
 
 // Process-wide answer state: ids being sent right now, and ids answered / dismissed by this process (a log append that
 // failed after a delivery must not reopen the item for a second send). Single server process per VIBESQUAD_HOME.

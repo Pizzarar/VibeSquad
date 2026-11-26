@@ -153,6 +153,36 @@ export function hasDecisionOptions(item: Pick<DecisionItem, "kind" | "lean" | "a
   return Boolean(item.lean && item.lean.trim()) || (Array.isArray(item.alts) && item.alts.length > 0);
 }
 
+/**
+ * C2b idea-1149: a bare-letter lean ("B", "b", "(b)", "Option B") names one of the lettered options ("A: …", "B) …").
+ * Returns that option's index, or -1 when the lean is not a bare letter or no option carries the letter.
+ */
+export function resolveLeanAlt(item: Pick<DecisionItem, "lean" | "alts">): number {
+  const m = /^\s*(?:option\s+)?\(?([A-Za-z])\)?[.:]?\s*$/i.exec(item.lean ?? "");
+  if (!m) return -1;
+  const letter = m[1].toUpperCase();
+  return (item.alts ?? []).findIndex((a) => {
+    const am = /^\s*(?:option\s+)?\(?([A-Za-z])(?:[\s.:)\-–—]|$)/i.exec(a);
+    return Boolean(am) && am![1].toUpperCase() === letter;
+  });
+}
+
+/** True when the lean is a bare letter that no option resolves (shown as the letter, pointing to Show source). */
+export function isUnresolvedBareLean(item: Pick<DecisionItem, "lean" | "alts">): boolean {
+  return /^\s*(?:option\s+)?\(?[A-Za-z]\)?[.:]?\s*$/i.test(item.lean ?? "") && resolveLeanAlt(item) < 0;
+}
+
+/** C2b idea-1151: distinct options on a card (a lean that resolves to an option is the same choice, not another). */
+export function decisionOptionCount(item: Pick<DecisionItem, "lean" | "alts">): number {
+  const alts = (item.alts ?? []).length;
+  return alts + (item.lean && item.lean.trim() && resolveLeanAlt(item) < 0 ? 1 : 0);
+}
+
+/** The "not" button label: "None of these" with 2+ options, else "Not that". */
+export function notChoiceLabel(item: Pick<DecisionItem, "lean" | "alts">): string {
+  return decisionOptionCount(item) >= 2 ? "None of these" : "Not that";
+}
+
 /** True when a card should show the `Show source ▾` disclosure: every inferred card, and any card with context (C2). */
 export function hasSourceDisclosure(item: Pick<DecisionItem, "inferred" | "context">): boolean {
   return Boolean(item.inferred || (typeof item.context === "string" && item.context.trim().length > 0));
@@ -241,7 +271,10 @@ export function buildAnswerBatch(items: DecisionItem[], staged: Readonly<Record<
       out.push({ id: item.id, choice: "dismiss" });
     } else {
       const text = typeof sel.text === "string" ? sel.text.trim() : "";
-      out.push(text ? { id: item.id, choice: sel.choice, text } : { id: item.id, choice: sel.choice });
+      // C2b: a lean that names a lettered option is that option: send one consistent answer (the option's definition).
+      const li = sel.choice === "lean" ? resolveLeanAlt(item) : -1;
+      const choice = li >= 0 ? (`alt:${li}` as const) : sel.choice;
+      out.push(text ? { id: item.id, choice, text } : { id: item.id, choice });
     }
   }
   return out;
@@ -997,7 +1030,8 @@ export function BoringDecisionDesk({
                 const age = formatAge(item.ts, now);
                 const askerLabel = item.asker?.title ? cleanTitle(item.asker.title) : item.askerId || "";
                 const groupCount = item.groupSize && item.groupSize > 1 ? item.groupSize : Array.isArray(item.sourceIds) && item.sourceIds.length > 1 ? item.sourceIds.length : 0;
-                const leanStaged = sel?.choice === "lean";
+                const leanAlt = resolveLeanAlt(item);
+                const leanStaged = sel?.choice === "lean" || (leanAlt >= 0 && sel?.choice === `alt:${leanAlt}`);
                 const replyValue = sel && sel.choice !== "dismiss" ? (sel.text ?? "") : "";
                 return (
                   <article
@@ -1041,7 +1075,7 @@ export function BoringDecisionDesk({
 
                     {hasOptions && (
                       <div className="boring-decision-choices" role="group" aria-label={`Options for ${item.ask}`}>
-                        {item.lean && (
+                        {item.lean && leanAlt < 0 && (
                           <button
                             type="button"
                             className={`boring-decision-choice is-lean${leanStaged ? " selected staged" : " suggested"}`}
@@ -1052,22 +1086,25 @@ export function BoringDecisionDesk({
                           >
                             <span className="boring-decision-choice-tag">{sel?.choice === "lean" ? "✓ Lean" : "Lean"}</span>
                             <span>{item.lean}</span>
+                            {isUnresolvedBareLean(item) && <span className="boring-decision-lean-hint">(letter only; see Show source)</span>}
                           </button>
                         )}
                         {(item.alts ?? []).map((alt, idx) => {
                           const key = `alt:${idx}` as const;
                           const on = sel?.choice === key;
+                          const isLean = idx === leanAlt;
                           return (
                             <button
                               key={key}
                               type="button"
-                              className={`boring-decision-choice${on ? " selected staged" : ""}`}
+                              className={`boring-decision-choice${isLean ? " is-lean" : ""}${on ? " selected staged" : isLean ? " suggested" : ""}`}
                               data-testid={`boring-decision-alt-${item.id}-${idx}`}
                               aria-pressed={on}
                               disabled={Boolean(pending) || sending}
                               onClick={() => toggleChoice(item.id, { choice: key })}
                             >
-                              {alt}
+                              {isLean && <span className="boring-decision-choice-tag">{on ? "✓ Lean" : "Lean"}</span>}
+                              <span>{alt}</span>
                             </button>
                           );
                         })}
@@ -1080,7 +1117,7 @@ export function BoringDecisionDesk({
                             disabled={Boolean(pending) || sending}
                             onClick={() => toggleChoice(item.id, { choice: "not" })}
                           >
-                            Not that
+                            {notChoiceLabel(item)}
                           </button>
                         )}
                       </div>
