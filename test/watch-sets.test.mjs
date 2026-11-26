@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords, agentVerdictRole, stepSet } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -3386,4 +3386,127 @@ test("idea-1093: a remove event inside SNAP_REFRESH_MS of an idle final-read sti
   } finally {
     rmSync(sb, { recursive: true, force: true });
   }
+});
+
+// ---- idea-1126: non-reviewer roles show `done (impl)` instead of NO VERDICT ----
+
+test("idea-1126 agentVerdictRole: classifies implementers, reviewers/pre-check, and unknown roles fail-safe", () => {
+  for (const a of [
+    { labels: { role: "worker", profile: "Implement" } },
+    { labels: { role: "worker", profile: "Implement - Sonnet" } },
+    { labels: { role: "worker", profile: "Implement - Gemini (trial)" } },
+    { labels: { role: "worker", profile: "Planner" } },
+    { labels: { role: "worker", profile: "Planner - Sonnet" } },
+    { labels: { role: "worker", profile: "Work Order - DSP" } },
+    { labels: { role: "worker", profile: "Art Director" } },
+    { labels: { role: "implement" } },
+    { labels: { role: "planner" } },
+  ]) {
+    assert.equal(agentVerdictRole(a), "impl", JSON.stringify(a));
+  }
+  for (const a of [
+    { labels: { role: "worker", profile: "Review" } },
+    { labels: { role: "worker", profile: "Review - Gemini" } },
+    { labels: { role: "worker", profile: "Review - Sonnet" } },
+    { labels: { role: "worker", profile: "Pre-check" } },
+    { labels: { role: "worker", profile: "Pre-check - Flash" } },
+    { labels: { role: "worker", profile: "Check - Haiku" } },
+    { labels: { role: "worker", profile: "Audit - DSF" } },
+    { labels: { role: "review" } },
+    { labels: { role: "pre-check" } },
+    { labels: { role: "worker" }, title: "Review - Gemini" },
+    { labels: { role: "worker", profile: "Implement" }, title: "Bug7 · review 1126" },
+    { labels: { role: "worker", profile: "Planner" }, title: "re-review 1126" },
+    { labels: { role: "worker", profile: "Implement" }, title: "audit of X" },
+    { labels: { role: "implement" }, title: "Pre-check 1126" },
+  ]) {
+    assert.equal(agentVerdictRole(a), "review", JSON.stringify(a));
+  }
+  for (const a of [
+    null,
+    {},
+    { labels: { role: "worker" } },
+    { labels: { role: "worker", profile: "CustomUnknown" } },
+  ]) {
+    assert.equal(agentVerdictRole(a), null, JSON.stringify(a));
+  }
+});
+
+test("idea-1126 completion ping: sole implementer reads done (impl) with no Verdicts tally", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "im-1" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    engine.onRunnerEvent(agentEv("im-1", "idle", { labels: { role: "worker", profile: "Implement - Gemini (trial)" } }));
+    engine.onLogEntry("vibesquad", doneEntry("im-1", T0 + 1000, "### Summary of Changes\nFixed it."));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const text = engine.get(id).pings[0].text;
+    assert.match(text, /^Watch \S+ complete: all 1 item done\.\n/, "no Verdicts: line when only impls finished");
+    assert.doesNotMatch(text, /NO VERDICT/);
+    assert.match(text, /\n- agent im-1: done \(impl\) — ### Summary of Changes/);
+    assert.equal(delivered.length, 1);
+  } finally {
+    sb.cleanup?.();
+  }
+});
+
+test("idea-1126 completion ping: mixed roles keep NO VERDICT for reviewers, pre-check, and unknown; omit impls from verdict tally", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["im-1", "pl-1", "rv-pass", "rv-none", "pc-none", "uk-none"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const { engine, clock } = engineFor(sb);
+    engine.onRunnerEvent(agentEv("im-1", "idle", { labels: { role: "worker", profile: "Implement" } }));
+    engine.onRunnerEvent(agentEv("pl-1", "idle", { labels: { role: "worker", profile: "Planner - Sonnet" } }));
+    engine.onRunnerEvent(agentEv("rv-pass", "idle", { labels: { role: "worker", profile: "Review - Gemini" } }));
+    engine.onRunnerEvent(agentEv("rv-none", "idle", { labels: { role: "worker", profile: "Review - Sonnet" } }));
+    engine.onRunnerEvent(agentEv("pc-none", "idle", { labels: { role: "worker", profile: "Pre-check - Flash" } }));
+    engine.onRunnerEvent(agentEv("uk-none", "idle")); // unknown profile: fail safe
+    engine.onLogEntry("vibesquad", doneEntry("im-1", T0 + 1000, "Implemented M1; 5/5 tests pass."));
+    engine.onLogEntry("vibesquad", doneEntry("pl-1", T0 + 1000, "Wrote docs/PLAN.md."));
+    engine.onLogEntry("vibesquad", doneEntry("rv-pass", T0 + 1000, "PASS 0/0/1 abcdef12\nClean."));
+    engine.onLogEntry("vibesquad", doneEntry("rv-none", T0 + 1000, "Looks good to me."));
+    engine.onLogEntry("vibesquad", doneEntry("pc-none", T0 + 1000, "Checked diff, all fine."));
+    engine.onLogEntry("vibesquad", doneEntry("uk-none", T0 + 1000, "Finished task."));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const text = engine.get(id).pings[0].text;
+    assert.match(text, /^Watch \S+ complete: all 6 items done\. Verdicts: 1 PASS, 3 NO VERDICT\./, "impl + planner excluded from verdict tally");
+    assert.match(text, /\n- agent im-1: done \(impl\) — Implemented M1/);
+    assert.match(text, /\n- agent pl-1: done \(impl\) — Wrote docs\/PLAN\.md/);
+    assert.match(text, /\n- agent rv-pass: done — PASS 0\/0\/1 abcdef12 Clean\./);
+    assert.match(text, /\n- agent rv-none: done — NO VERDICT — Looks good to me\./);
+    assert.match(text, /\n- agent pc-none: done — NO VERDICT — Checked diff, all fine\./);
+    assert.match(text, /\n- agent uk-none: done — NO VERDICT — Finished task\./);
+  } finally {
+    sb.cleanup?.();
+  }
+});
+
+test("idea-1126 verdictBlock: impl shows done (impl); reviewer and unknown show NO VERDICT; explicit verdict still wins", () => {
+  const set = {
+    items: [
+      { kind: "agent", ref: "im-1", state: "done", agentRole: "impl", report: "Implemented feature" },
+      { kind: "agent", ref: "im-v", state: "done", agentRole: "impl", report: "PASS 0/0/0 deadbeef" },
+      { kind: "agent", ref: "rv-1", state: "done", agentRole: "review", report: "No verdict line here" },
+      { kind: "agent", ref: "uk-1", state: "done", report: "No role known" },
+    ],
+  };
+  assert.equal(
+    verdictBlock(set).split("\n").slice(1).join("\n"),
+    "- agent im-1: done (impl)\n- agent im-v: PASS 0/0/0 deadbeef\n- agent rv-1: NO VERDICT\n- agent uk-1: NO VERDICT",
+  );
+});
+
+test("idea-1126 stepSet: agentRole re-resolves each observation (null clears stale impl; missing record keeps it)", () => {
+  const item = { kind: "agent", ref: "a1", state: "done", agentRole: "impl" };
+  const set = { id: "w1", items: [item], stallMin: 15, createdAt: new Date(0).toISOString() };
+  const run = (agent) => { delete set.firedAt; stepSet(set, { now: 1000, agents: new Map(agent ? [["a1", agent]] : []) }); };
+  run(undefined);
+  assert.equal(item.agentRole, "impl");
+  run({ id: "a1", labels: { role: "worker" } });
+  assert.equal(item.agentRole, undefined);
+  run({ id: "a1", labels: { role: "worker", profile: "Implement" } });
+  assert.equal(item.agentRole, "impl");
 });
