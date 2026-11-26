@@ -148,7 +148,9 @@ stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; expor
 stub("usageHelpers.mjs", `export const OPEN_USAGE_EVENT = "vs:open-usage"; export const takeColdUsageFocus = () => false;`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
-stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
+stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; }; export const needsYouRows = () => globalThis.__needsYouRows ?? []; export const needsYouReason = (i) => i.reason ?? "";`);
+// B17: the real picker (pure builders + presentational component), transformed like BoringAde itself.
+writeFileSync(join(dir, "BoringPanePicker.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + transformSync("BoringPanePicker.tsx", readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace(/from "react"/, `from ${JSON.stringify(reactUrl)}`));
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
@@ -713,7 +715,7 @@ test("D1: type + colour tokens, no vw type, flat canvas, measure and row density
   assert.ok(!css.includes("font-size: clamp("), "no clamp()/vw font sizes");
   for (const t of ["--surface-0", "--surface-1", "--surface-2", "--surface-3", "--surface-sunken", "--border-strong", "--text-1", "--text-2", "--text-3", "--focus", "--st-run", "--st-attn", "--st-err", "--st-done", "--st-ok"]) assert.ok(css.includes(t + ":"), t);
   assert.ok(css.includes("--surface-0: #f7f6f3; --surface-1: #ffffff"), "neutral light surfaces");
-  assert.ok(css.includes("--measure-col: 880px") && css.includes("--measure-prose: 760px"));
+  assert.ok(css.includes("--measure-col: clamp(880px, 90%, 1680px)") && css.includes("--measure-prose: min(100%, 960px)"));
   assert.ok(css.includes("--row-h: 32px"));
   assert.ok(css.includes("@media (pointer: coarse) { html[data-vibe=\"boring\"] { --row-h: 40px; } }"));
   assert.ok(/\.boring-app::before \{[^}]*height: 2px; background: var\(--titlebar\)/.test(css));
@@ -1649,6 +1651,22 @@ test("idea-1075: split + a dormant Bugs row shows the Bugs empty card (the scree
   }
 });
 
+test("idea-1075 r2 (B17): split with the RIGHT pane active (empty): a sidebar click on a dormant Bugs row shows the Bugs card, not the picker/split", () => {
+  const dormant = squad({ bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  intoChat(dormant);
+  try {
+    globalThis.__panes = splitState({ rightActiveId: null, activePane: "right" });
+    assert.ok(byId(render(props(dormant)), "boring-chat-split"));
+    byId(render(props(dormant)), "boring-core-bugs").props.onClick();
+    const t = render(props(dormant));
+    assert.equal(byId(t, "boring-chat-split"), null);
+    assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+    assert.ok(!JSON.stringify(t).includes("Split · pick an agent"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
 test("split: an empty right pane shows the placeholder with Close split", () => {
   const view = squad();
   intoChat(view);
@@ -1657,7 +1675,7 @@ test("split: an empty right pane shows the placeholder with Close split", () => 
     const t = render(props(view));
     const empty = byId(t, "boring-split-empty");
     assert.ok(empty);
-    assert.match(JSON.stringify(empty.props.children), /Click an agent in the sidebar or Needs you to open it here\./);
+    assert.match(JSON.stringify(empty.props.children), /Shift\+click any sidebar row to open it on the right\./);
     assert.deepEqual(drawers(t).map((d) => d.props.agent.id), ["zz-l"]);
     byId(t, "boring-split-close").props.onClick();
     assert.deepEqual(globalThis.__calls.at(-1), ["toggleSplit"]);

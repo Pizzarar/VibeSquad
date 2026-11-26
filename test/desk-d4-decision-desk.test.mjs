@@ -84,7 +84,10 @@ const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }
 stub("useNowTick.mjs", "export const useNowTick = () => Date.now();");
 stub("boringBusts.mjs", `export const bustUrl = (r) => "/ui/busts/" + r + ".png";`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => Promise.resolve([]); export const useInboxCards = () => []; export const useFocusedInboxCard = () => null;`);
-for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed", "BoringInbox"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
+for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
+stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; }; export const needsYouRows = () => globalThis.__needsYouRows ?? []; export const needsYouReason = (i) => i.reason ?? "";`);
+// B17: the real picker (pure builders + presentational component), transformed like BoringAde itself.
+writeFileSync(join(dir, "BoringPanePicker.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + transformSync("BoringPanePicker.tsx", readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace(/from "react"/, `from ${JSON.stringify(reactUrl)}`));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
 stub("CommandPalette.mjs", `export { parseUrlState, serializeUrlState } from "./urlState.mjs"; export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = () => []; export const laneCtxItems = () => []; export const openContextMenu = () => {};`);
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
