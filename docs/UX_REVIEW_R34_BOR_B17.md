@@ -296,3 +296,50 @@ None.
 
 ## Verdict
 On the merged tree, all the B17 behaviour hold at 1280/2560/4K, dark and light: M4 (42/42 right-pane starts keep the split), the right-card reset on project switch, the quick-jumps, the strip, N7 and N8. They combine cleanly with the @desk URL keys. The right card writes no URL. Start, the strip, quick-jumps and Needs-you rows push exactly one entry each. Back/Forward never fold the split or double-pop, including the 2× race. `tab=` survives a round trip through a split session and resets on a project switch, and the breadcrumb `tab:` merge adds nothing in chat mode. Reload restores a two-agent split and drops a pane-local card (by design). The column measure is unchanged. Open: N9 (minor, from r4). P1 and P2 are pre-existing on master and not counted. **PASS 0/0/1**.
+
+---
+
+# R34 r6 (current master: desk D3/D4/P2): merge tip `d3c991fa`
+
+Scope: what changed under `src` between `8688c0e6` (r5) and `d3c991fa`: @desk D3, the U3 fix, D4 Decision Desk (`src/BoringDecisionDesk.tsx`, a new `mode: "decisions"` in `BoringAde.tsx`, the `deskLandingGate` / `?view=decisions` effects in `App.tsx` + `urlSync.ts`, `.boring-decision-*` CSS) and P2 polish. The focus is how they interact with B17's measure column, context panel, split and right card.
+
+Evidence: I rebuilt `dist` from `d3c991fa` (`npx vite build`) and drove it with Playwright on Chromium at 1280x720, 2560x1440 and 3200x1800@1.2 (4K at 120%), dark and light. Every sequence used a fresh context with a `pushState` / `replaceState` / `POP` hook. Scripts are in `/tmp/uxr34r6/` (`desk.mjs`, `ctx.mjs`, `meas.mjs`, `m4.mjs`). Shots are in `artifacts/boring-b17/ux-r34r6/` (untracked, as before). No page errors in any run.
+
+Tests on `d3c991fa`: `test/bor-b17-deadspace.test.mjs` + `test/desk-nav-history-u2-e2e.test.mjs` **15/15 pass**; `test/desk-d4-decision-desk{,-e2e}.test.mjs` **29/29 pass**.
+
+## Status vs R34 r5
+
+| r5 item | r6 | Evidence |
+|---|---|---|
+| **M4**: a right-card Start keeps the split | **Holds.** RiffBot (routed demo): 12/12 across the 6 combos, with the split on at every 10ms sample and the left agent unchanged. Wiki card Start: 6/6 in the Desk runs (`L=demo-impl-1 R=demo-bs-wiki-*`). | `m4.mjs`, `desk.mjs` card+desk; `m4-*.png` |
+| Column measure at 2560 / 4K | **Unchanged** from r3–r5, to the pixel (table below) | `meas.mjs`; `chat-ctx*-*.png`, `split-two-*.png` |
+| N9 (minor): closing the split mid-start steals focus | Still open, unchanged | — |
+| P1 / P2 (pre-existing, not counted) | Not re-tested; D3/D4 did not touch `pickBugs` / `pickCore` | — |
+
+| Viewport | ctx open: column / prose right / user right / `pre` | ctx collapsed | split: each pane |
+|---|---|---|---|
+| 2560x1440 | 1720 / 1484 / 1484 / 497–2002 | 2144 / 1630 / 1630 / 643–2280 | 1090 / 1090 |
+| 4K@120% | 2360 / 1738 / 1738 / 751–2388 | 2784 / 1950 / 1950 / 963–2600 | 1410 / 1410 |
+
+## Decision Desk × B17
+
+| Check | Result | Verdict |
+|---|---|---|
+| **Desk layout next to the measure column / container query** | The Desk renders in `.boring-main` as `.boring-dashboard-wrap.boring-decision-wrap`, outside any `.drawer`. So neither `--measure-*` nor the `.drawer` container query applies, and nothing is doubled. Widths (CSS px): at 1280 the wrap is 990 and the desk 910, single column (feed = strip = 910). At 2560 the wrap is 2180 and the desk 2000 (`is-wide`: feed 1096 + strip 880). At 4K the wrap is 2200, centred 690–2890, and the desk 2000. In every case: `scrollWidth == clientWidth`, 0 descendants outside the wrap, 0 clipped `overflow` boxes, 0 truncated ellipsis texts, no page h-scroll. Dark = light. | OK |
+| **Context panel open/collapsed** | The panel is not rendered on the Desk, which is correct (it describes an agent). The collapsed/open state survives a trip through the Desk. Collapse at 2560 → Desk → Back: column 2144, user right 1630. After Desk → a Live-status lane, the new agent keeps the same state (2144/1630). At 1280 the default-collapsed toggle (open → 530/796) also survives the round trip. 4K matches (2784/1950). | OK, `ctx-after-desk-*.png` |
+| **Sidebar "Decisions · 12" next to the Needs-you strip** | It is one full-width row (12–367 px, the same box as the Needs-you strip) directly above `Needs you 6 Ctrl+J`. It is `.on` on the Desk (the only `.on` row) and off elsewhere. The two counts measure different things: open decision cards (12 = 9 here + 3 off-screen, matching the Desk summary `12 open · 9 here · 3 off-screen`) vs agents blocked on a permission/turn (6). Each agrees with its own screen. At 1280x720 the Needs-you rows still push Projects below the fold. That is pre-existing (r5 shots show the same) and was not caused by the Desk row. | OK, `desk-from-split-*.png` |
+| **Desk landing / pop with the split open** | Split (`L=demo-impl-1 R=demo-aud`) → `Decisions` pushes `?view=decisions` (+1), crumb `Decision Desk`. **Back** restores the split with both agents, and the crumb and `.on` row are those of the right agent. Fwd → Desk; Back → split again. Desk → sidebar worker → Back returns to the Desk. 0 `replaceState` during pops. | OK, all 6 combos |
+| **Right card across the Desk** | Split + right `wiki` card → Desk → **Back**: the card is still on the right (`card:wiki`, crumb `VibeSquad›wiki`, no `.on` row). Start from it puts `demo-bs-wiki-*` on the right with the split kept. Desk → Back again keeps that two-agent split. | OK, `desk-card-*.png` |
+| **Opening an agent from the Desk while the split is on** | A Live-status lane (`wiki`) opens `demo-lead-wiki` in the **right** pane (`L=demo-impl-1`), so the split comes back with the new agent where B17 puts new opens. Back → Desk. | OK, `desk-openagent-*.png` |
+| **Bare load** | `?demo=1&riff=1` with no team/agent lands on the Desk (`?view=decisions`, crumb `Decision Desk`, the Decisions row on) and never writes `?team=` first. Same layout numbers as above. | OK, `desk-bare-*.png` |
+
+## New findings
+None.
+
+Observation (not counted, owner of copy = @desk): `Decisions · 12` and `Needs you 6` sit next to each other with different counts. They are different queues and each is correct, but a first-time reader may expect them to match. Leave it unless the owner says it confuses.
+
+## Owner decisions
+None.
+
+## Verdict
+On current master, the Decision Desk and B17 combine cleanly at 1280/2560/4K, dark and light. The Desk lives outside the drawer, so the measure column and container query cannot double or clip it. The split (two agents or right card), the context-panel state and the B17 right-pane placement all survive Desk round trips and Back/Forward. M4 holds (18/18), and the column measure is pixel-identical to r5. Open: N9 (minor, from r4). **PASS 0/0/1**.
