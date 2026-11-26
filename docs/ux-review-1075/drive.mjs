@@ -28,6 +28,7 @@ const state = (page) => page.evaluate(() => {
     left: pane("left"), right: pane("right"),
     head: t('[data-testid="boring-lane-no-agent-head"]') ?? t('.boring-chat-column > * [data-testid="boring-agent-name"]'),
     card: document.querySelector('.boring-chat-column [data-testid="boring-empty-card"]') ? t('.boring-chat-column [data-testid="boring-empty-card"]') : null,
+    panes: (() => { const v = JSON.parse(localStorage.getItem("vs.panes.v1") || "null"); return v && { a: v.activePane, l: v.leftActiveId, r: v.rightActiveId }; })(),
     selected: [...document.querySelectorAll('[aria-current="true"],[aria-current="page"]')].map((e) => e.dataset.testid).filter(Boolean),
     splitToggle: (() => { const e = document.querySelector('[data-testid="boring-split-toggle"]'); return e ? (e.getAttribute("aria-pressed") ?? e.className) : null; })(),
   };
@@ -37,7 +38,7 @@ async function step(page, tag, label, shot = false) {
   await page.waitForTimeout(350);
   const s = await state(page);
   log.push(`${tag} ${String(++n).padStart(2, "0")} ${label}\n   ${JSON.stringify(s)}`);
-  if (shot) await page.screenshot({ path: path.join(OUT, `${tag}-${String(n).padStart(2, "0")}-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`) });
+  if (shot) await page.screenshot({ path: path.join(OUT, `r2-${tag}-${String(n).padStart(2, "0")}-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`) });
   return s;
 }
 const click = (page, id, mod) => page.locator(`[data-testid="${id}"]`).first().click(mod ? { modifiers: [mod] } : {});
@@ -80,6 +81,15 @@ for (const [theme, w, h, dpr] of [["dark", 1920, 1080, 1], ["light", 3200, 1800,
     await page.goForward(); await step(page, tag, "forward");
     await click(page, "boring-worker-demo-mech"); await step(page, tag, "click agent", shots);
     await ctx.close(); }
+  // S5: Back/Forward while B17's right card is open
+  for (const pill of ["boring-pp-open-_bugs-open", "boring-pp-open-_overlord-open"]) {
+    n = 0; const tag = `${T}-s5-${pill.includes("bugs") ? "bugs" : "overlord"}`; const { ctx, page } = await open(theme, w, h, dpr);
+    await click(page, "boring-worker-demo-mech"); await click(page, "boring-split-toggle"); await page.waitForTimeout(300);
+    await click(page, pill); await step(page, tag, "B17 card open", shots);
+    await page.goBack(); await step(page, tag, "back with card open", shots);
+    await page.goForward(); await step(page, tag, "forward", shots);
+    await click(page, "boring-worker-demo-rev"); await step(page, tag, "click agent");
+    await ctx.close(); }
   // S4: non-split unchanged
   for (const slot of ["boring-core-bugs", "boring-core-overlord"]) {
     n = 0; const tag = `${T}-s4-${slot.replace("boring-core-", "")}`; const { ctx, page } = await open(theme, w, h, dpr);
@@ -89,6 +99,6 @@ for (const [theme, w, h, dpr] of [["dark", 1920, 1080, 1], ["light", 3200, 1800,
     await click(page, "boring-worker-demo-mech"); await step(page, tag, "click agent");
     await ctx.close(); }
 }
-fs.writeFileSync(path.join(OUT, "drive-log.txt"), log.join("\n") + "\n");
+fs.writeFileSync(path.join(OUT, "r2-drive-log.txt"), log.join("\n") + "\n");
 console.log(log.join("\n"));
 await b.close(); server.close();
