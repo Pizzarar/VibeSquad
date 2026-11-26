@@ -512,20 +512,22 @@ export function agentVerdictRole(agent) {
   if (!agent || typeof agent !== "object") return null;
   const labels = agent.labels && typeof agent.labels === "object" ? agent.labels : {};
   const role = String(labels.role ?? agent.role ?? "").trim().toLowerCase();
-  if (REVIEW_ROLE_KEYS.has(role)) return "review";
-  if (IMPL_ROLE_KEYS.has(role)) return "impl";
-
   const profile = String(labels.profile ?? agent.profile ?? "").trim();
+  const title = String(agent.title ?? "").trim();
+  // Any review signal wins over an impl signal (fail safe: a reviewer under an Implement profile keeps NO VERDICT).
+  if (REVIEW_ROLE_KEYS.has(role)) return "review";
+  let profileRole = null;
   if (profile) {
     const legacy = legacyProfileRole(profile);
-    if (legacy) return REVIEW_ROLE_KEYS.has(legacy.role) ? "review" : IMPL_ROLE_KEYS.has(legacy.role) ? "impl" : null;
-    const norm = profile.toLowerCase().replace(/[\s_]+/g, "-");
-    if (REVIEW_PROFILE_RE.test(norm)) return "review";
-    if (IMPL_PROFILE_RE.test(norm)) return "impl";
+    if (legacy) profileRole = REVIEW_ROLE_KEYS.has(legacy.role) ? "review" : IMPL_ROLE_KEYS.has(legacy.role) ? "impl" : null;
+    else {
+      const norm = profile.toLowerCase().replace(/[\s_]+/g, "-");
+      profileRole = REVIEW_PROFILE_RE.test(norm) ? "review" : IMPL_PROFILE_RE.test(norm) ? "impl" : null;
+    }
   }
-
-  const title = String(agent.title ?? "").trim();
-  if (title && (isReviewerAgent({ labels, profile, title }) || /^pre-check\b/i.test(title))) return "review";
+  if (profileRole === "review") return "review";
+  if (title && (isReviewerAgent({ labels, profile, title }) || /^pre-check\b/i.test(title) || /\b(?:re-?review|pre-check|audit)\b/i.test(title) || /\breview\b/i.test(title) && !/\breview\s+fix/i.test(title))) return "review";
+  if (IMPL_ROLE_KEYS.has(role) || profileRole === "impl") return "impl";
   return null;
 }
 
@@ -656,8 +658,13 @@ export function stepSet(set, ctx) {
   const at = iso(ctx.now);
   for (const item of set.items) {
     if (item.kind === "agent") {
-      const role = agentVerdictRole(ctx.agents.get(item.ref));
-      if (role && role !== item.agentRole) item.agentRole = role;
+      const rec = ctx.agents.get(item.ref);
+      const role = agentVerdictRole(rec);
+      if (!rec) {
+        /* no record this tick (removed/unobserved): keep the last known role */
+      } else if (role) {
+        if (role !== item.agentRole) item.agentRole = role;
+      } else delete item.agentRole; // re-resolve each observation: a null result clears a stale role
     }
     if (item.state === "done") continue; // sticky
     // Restart resume: until the runner snapshot of a stalled-idle worker loads, classifyItem would read it as never-seen

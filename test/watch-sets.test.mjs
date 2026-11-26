@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords, agentVerdictRole } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, completedTurnText, finalsBlock, finalsTextFor, itemVerdict, verdictBlock, maskVerdictWords, agentVerdictRole, stepSet } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -3415,6 +3415,10 @@ test("idea-1126 agentVerdictRole: classifies implementers, reviewers/pre-check, 
     { labels: { role: "review" } },
     { labels: { role: "pre-check" } },
     { labels: { role: "worker" }, title: "Review - Gemini" },
+    { labels: { role: "worker", profile: "Implement" }, title: "Bug7 · review 1126" },
+    { labels: { role: "worker", profile: "Planner" }, title: "re-review 1126" },
+    { labels: { role: "worker", profile: "Implement" }, title: "audit of X" },
+    { labels: { role: "implement" }, title: "Pre-check 1126" },
   ]) {
     assert.equal(agentVerdictRole(a), "review", JSON.stringify(a));
   }
@@ -3493,4 +3497,16 @@ test("idea-1126 verdictBlock: impl shows done (impl); reviewer and unknown show 
     verdictBlock(set).split("\n").slice(1).join("\n"),
     "- agent im-1: done (impl)\n- agent im-v: PASS 0/0/0 deadbeef\n- agent rv-1: NO VERDICT\n- agent uk-1: NO VERDICT",
   );
+});
+
+test("idea-1126 stepSet: agentRole re-resolves each observation (null clears stale impl; missing record keeps it)", () => {
+  const item = { kind: "agent", ref: "a1", state: "done", agentRole: "impl" };
+  const set = { id: "w1", items: [item], stallMin: 15, createdAt: new Date(0).toISOString() };
+  const run = (agent) => { delete set.firedAt; stepSet(set, { now: 1000, agents: new Map(agent ? [["a1", agent]] : []) }); };
+  run(undefined);
+  assert.equal(item.agentRole, "impl");
+  run({ id: "a1", labels: { role: "worker" } });
+  assert.equal(item.agentRole, undefined);
+  run({ id: "a1", labels: { role: "worker", profile: "Implement" } });
+  assert.equal(item.agentRole, "impl");
 });
