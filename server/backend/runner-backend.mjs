@@ -597,7 +597,7 @@ export const CLAUDE_QUOTA_RE = new RegExp(`^\\s*(?:\\u26a0\\ufe0f?\\s*)?(?:(?:ap
 
 // idea-1101: Gemini / agy Gemini quota notices (e.g. "RESOURCE_EXHAUSTED", "Quota exceeded for quota metric ...",
 // "You have exhausted your capacity on this model. Your quota will reset after 2h15m.", "TerminalQuotaError").
-const GEMINI_QUOTA_CORE = /(?:\bRESOURCE_EXHAUSTED\b|\bTerminalQuotaError\b|resource has been exhausted|quota exceeded for quota metric|exhausted your capacity on this model|(?:gemini|model)\s+quota\s+(?:reached|exceeded))/i;
+const GEMINI_QUOTA_CORE = /(?:\bRESOURCE_EXHAUSTED\b|\bTerminalQuotaError\b|resource has been exhausted|quota exceeded for quota metric|(?:you(?:'ve| have)\s+)?exhausted your capacity on this model|(?:gemini|model)\s+quota\s+(?:reached|exceeded))/i;
 export const GEMINI_QUOTA_RE = new RegExp(`^\\s*(?:\\u26a0\\ufe0f?\\s*)?(?:(?:api\\s+)?error:\\s*)?${GEMINI_QUOTA_CORE.source}[^\\n]*$`, "i");
 
 /** Default cap TTL for a Claude/Gemini quota notice that carries no parseable reset duration. */
