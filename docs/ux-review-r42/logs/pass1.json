@@ -1,0 +1,1184 @@
+{
+ "dark-1366-lanes24": {
+  "wide": false,
+  "desk": {
+   "x": 330,
+   "y": 76,
+   "w": 996,
+   "h": 2237
+  },
+  "feed": {
+   "x": 330,
+   "y": 118,
+   "w": 996,
+   "h": 1494
+  },
+  "off": {
+   "x": 330,
+   "y": 1626,
+   "w": 996,
+   "h": 314
+  },
+  "strip": {
+   "x": 330,
+   "y": 1954,
+   "w": 996,
+   "h": 269
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "268.8px",
+   "ovY": "auto",
+   "overscroll": "contain"
+  },
+  "stripScroll": {
+   "clientH": 269,
+   "scrollH": 500
+  },
+  "scrollMore": "true",
+  "fadeDisplay": "block",
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 974,
+    "trunc": []
+   }
+  ],
+  "sendTop": 708,
+  "innerHeight": 768,
+  "cardsAbove": 3,
+  "cardsStart": 4,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "light-1366-lanes24": {
+  "wide": false,
+  "desk": {
+   "x": 330,
+   "y": 76,
+   "w": 996,
+   "h": 2237
+  },
+  "feed": {
+   "x": 330,
+   "y": 118,
+   "w": 996,
+   "h": 1494
+  },
+  "off": {
+   "x": 330,
+   "y": 1626,
+   "w": 996,
+   "h": 314
+  },
+  "strip": {
+   "x": 330,
+   "y": 1954,
+   "w": 996,
+   "h": 269
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "268.8px",
+   "ovY": "auto",
+   "overscroll": "contain"
+  },
+  "stripScroll": {
+   "clientH": 269,
+   "scrollH": 500
+  },
+  "scrollMore": "true",
+  "fadeDisplay": "block",
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 974,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 974,
+    "trunc": []
+   }
+  ],
+  "sendTop": 708,
+  "innerHeight": 768,
+  "cardsAbove": 3,
+  "cardsStart": 4,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "dark-1600-lanes24": {
+  "wide": false,
+  "desk": {
+   "x": 385,
+   "y": 76,
+   "w": 1120,
+   "h": 2283
+  },
+  "feed": {
+   "x": 385,
+   "y": 118,
+   "w": 1120,
+   "h": 1494
+  },
+  "off": {
+   "x": 385,
+   "y": 1626,
+   "w": 1120,
+   "h": 314
+  },
+  "strip": {
+   "x": 385,
+   "y": 1954,
+   "w": 1120,
+   "h": 315
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "315px",
+   "ovY": "auto",
+   "overscroll": "contain"
+  },
+  "stripScroll": {
+   "clientH": 315,
+   "scrollH": 500
+  },
+  "scrollMore": "true",
+  "fadeDisplay": "block",
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 1098,
+    "trunc": []
+   }
+  ],
+  "sendTop": 840,
+  "innerHeight": 900,
+  "cardsAbove": 4,
+  "cardsStart": 5,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "light-1600-lanes24": {
+  "wide": false,
+  "desk": {
+   "x": 385,
+   "y": 76,
+   "w": 1120,
+   "h": 2283
+  },
+  "feed": {
+   "x": 385,
+   "y": 118,
+   "w": 1120,
+   "h": 1494
+  },
+  "off": {
+   "x": 385,
+   "y": 1626,
+   "w": 1120,
+   "h": 314
+  },
+  "strip": {
+   "x": 385,
+   "y": 1954,
+   "w": 1120,
+   "h": 315
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "315px",
+   "ovY": "auto",
+   "overscroll": "contain"
+  },
+  "stripScroll": {
+   "clientH": 315,
+   "scrollH": 500
+  },
+  "scrollMore": "true",
+  "fadeDisplay": "block",
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 1098,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 1098,
+    "trunc": []
+   }
+  ],
+  "sendTop": 840,
+  "innerHeight": 900,
+  "cardsAbove": 4,
+  "cardsStart": 5,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "dark-1920-lanes24": {
+  "wide": true,
+  "desk": {
+   "x": 347,
+   "y": 76,
+   "w": 1533,
+   "h": 1968
+  },
+  "feed": {
+   "x": 347,
+   "y": 132,
+   "w": 834,
+   "h": 1494
+  },
+  "off": {
+   "x": 347,
+   "y": 1640,
+   "w": 834,
+   "h": 314
+  },
+  "strip": {
+   "x": 1206,
+   "y": 132,
+   "w": 674,
+   "h": 480
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "940px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 480,
+   "scrollH": 480
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 664,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1020,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "light-1920-lanes24": {
+  "wide": true,
+  "desk": {
+   "x": 347,
+   "y": 76,
+   "w": 1533,
+   "h": 1968
+  },
+  "feed": {
+   "x": 347,
+   "y": 132,
+   "w": 834,
+   "h": 1494
+  },
+  "off": {
+   "x": 347,
+   "y": 1640,
+   "w": 834,
+   "h": 314
+  },
+  "strip": {
+   "x": 1206,
+   "y": 132,
+   "w": 674,
+   "h": 480
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "940px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 480,
+   "scrollH": 480
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 664,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1020,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "dark-3200-lanes24": {
+  "wide": true,
+  "desk": {
+   "x": 790,
+   "y": 76,
+   "w": 2000,
+   "h": 1968
+  },
+  "feed": {
+   "x": 790,
+   "y": 132,
+   "w": 1096,
+   "h": 1494
+  },
+  "off": {
+   "x": 790,
+   "y": 1640,
+   "w": 1096,
+   "h": 314
+  },
+  "strip": {
+   "x": 1910,
+   "y": 132,
+   "w": 880,
+   "h": 480
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "1660px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 480,
+   "scrollH": 480
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 870,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1740,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "light-3200-lanes24": {
+  "wide": true,
+  "desk": {
+   "x": 790,
+   "y": 76,
+   "w": 2000,
+   "h": 1968
+  },
+  "feed": {
+   "x": 790,
+   "y": 132,
+   "w": 1096,
+   "h": 1494
+  },
+  "off": {
+   "x": 790,
+   "y": 1640,
+   "w": 1096,
+   "h": 314
+  },
+  "strip": {
+   "x": 1910,
+   "y": 132,
+   "w": 880,
+   "h": 480
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "1660px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 480,
+   "scrollH": 480
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 870,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1740,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "quietBtns": [
+   "+24 quiet"
+  ],
+  "search": "?demo=&view=decisions&lanes=24",
+  "errs": []
+ },
+ "dark-1920": {
+  "wide": true,
+  "desk": {
+   "x": 347,
+   "y": 76,
+   "w": 1533,
+   "h": 1968
+  },
+  "feed": {
+   "x": 347,
+   "y": 132,
+   "w": 834,
+   "h": 1494
+  },
+  "off": {
+   "x": 347,
+   "y": 1640,
+   "w": 834,
+   "h": 314
+  },
+  "strip": {
+   "x": 1206,
+   "y": 132,
+   "w": 674,
+   "h": 454
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "940px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 454,
+   "scrollH": 454
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 664,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1020,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "quietBtns": [],
+  "search": "?demo=&view=decisions",
+  "errs": []
+ },
+ "light-1920": {
+  "wide": true,
+  "desk": {
+   "x": 347,
+   "y": 76,
+   "w": 1533,
+   "h": 1968
+  },
+  "feed": {
+   "x": 347,
+   "y": 132,
+   "w": 834,
+   "h": 1494
+  },
+  "off": {
+   "x": 347,
+   "y": 1640,
+   "w": 834,
+   "h": 314
+  },
+  "strip": {
+   "x": 1206,
+   "y": 132,
+   "w": 674,
+   "h": 454
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "940px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 454,
+   "scrollH": 454
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 664,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 664,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1020,
+  "innerHeight": 1080,
+  "cardsAbove": 5,
+  "cardsStart": 6,
+  "quietBtns": [],
+  "search": "?demo=&view=decisions",
+  "errs": []
+ },
+ "dark-3200": {
+  "wide": true,
+  "desk": {
+   "x": 790,
+   "y": 76,
+   "w": 2000,
+   "h": 1968
+  },
+  "feed": {
+   "x": 790,
+   "y": 132,
+   "w": 1096,
+   "h": 1494
+  },
+  "off": {
+   "x": 790,
+   "y": 1640,
+   "w": 1096,
+   "h": 314
+  },
+  "strip": {
+   "x": 1910,
+   "y": 132,
+   "w": 880,
+   "h": 454
+  },
+  "feedBeforeOff": "before",
+  "offBeforeStrip": "before",
+  "stripCss": {
+   "maxH": "1660px",
+   "ovY": "auto",
+   "overscroll": "auto"
+  },
+  "stripScroll": {
+   "clientH": 454,
+   "scrollH": 454
+  },
+  "scrollMore": null,
+  "fadeDisplay": null,
+  "nLines": 11,
+  "truncLines": 0,
+  "lineInfo": [
+   {
+    "t": "Desk | running | DECISION | Decision Desk approved for Normal default landing | 25m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Plugins | @plugins | waiting · 1 | DONE | Merged U1+U2 URL history cleanup | 18m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Bois | @ui-bois | waiting · 1 | DONE | Shipped D2 owner-only decisions API | 11m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Art Direction | @art-direction | waiting · 1 | No recent done/decision | 8m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Runner Pilot | @runner-pilot | waiting · 1 | No recent done/decision | 12m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "wiki | @wiki | idle | No recent done/decision | 15m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | DONE | Nightly build green on all zones | 30m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Main Game | @main-game | needs you | DONE | Bounty tracker refactor landed | 14m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "UI Lab | @ui-lab | waiting · 2 | No recent done/decision | 3m",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Desk | no lead | No recent done/decision",
+    "w": 870,
+    "trunc": []
+   },
+   {
+    "t": "Site Polish | @site-polish | waiting · 4 | DECISION | Standardized PNG compression at level 6 | 22m",
+    "w": 870,
+    "trunc": []
+   }
+  ],
+  "sendTop": 1740,
+  "innerHeight": 1800,
+  "cardsAbove": 9,
+  "cardsStart": 9,
+  "quietBtns": [],
+  "search": "?demo=&view=decisions",
+  "errs": []
+ }
+}
