@@ -1949,6 +1949,11 @@ html[data-vibe="boring"] .boring-decision-feed {
   gap: 14px;
 }
 html[data-vibe="boring"] .boring-decision-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 20px 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2382,3 +2387,24 @@ html[data-vibe="boring"] .is-wide .boring-decision-code {
 }
 /* P2b r3: tag chip keeps rail lines a uniform height */
 html[data-vibe="boring"] .is-wide .boring-decision-strip-event .boring-decision-ev-tag { line-height: 16px; }
+
+/* @desk F1 (PLAN_DESK_DD_FILTER): Decision Desk project filter pills */
+html[data-vibe="boring"] .boring-decision-pills { flex: 1 0 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding-top: 2px; }
+html[data-vibe="boring"] .boring-decision-pill-presets { display: inline-flex; align-items: center; gap: 4px; padding-right: 10px; border-right: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-decision-pill-preset { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); color: var(--text-2); font: 600 12px/16px var(--sans); cursor: pointer; }
+html[data-vibe="boring"] .boring-decision-pill-preset:hover { background: var(--surface-2); color: var(--text-1); border-color: var(--border-strong); }
+html[data-vibe="boring"] .boring-decision-pill-preset.on { border-color: var(--accent); background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-decision-pill-preset:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-decision-pill-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+html[data-vibe="boring"] .boring-decision-pill-group.is-on-hold { padding-left: 10px; border-left: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-decision-pill-group-label { font: 600 11px/16px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+html[data-vibe="boring"] .boring-decision-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); color: var(--text-2); font: 500 12px/16px var(--sans); cursor: pointer; }
+html[data-vibe="boring"] .boring-decision-pill:hover { background: var(--surface-2); color: var(--text-1); border-color: var(--border-strong); }
+html[data-vibe="boring"] .boring-decision-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+html[data-vibe="boring"] .boring-decision-pill.on { border-color: var(--accent); background: var(--surface-2); color: var(--text-1); font-weight: 600; }
+html[data-vibe="boring"] .boring-decision-pill.is-asleep { border-style: dashed; border-color: var(--border); background: transparent; color: var(--text-3); }
+html[data-vibe="boring"] .boring-decision-pill.is-asleep:hover { border-color: var(--border-strong); background: var(--surface-1); color: var(--text-2); }
+html[data-vibe="boring"] .boring-decision-pill.is-asleep.on { border-style: solid; border-color: var(--accent); background: var(--surface-2); color: var(--text-1); }
+html[data-vibe="boring"] .boring-decision-pill-name { white-space: nowrap; }
+html[data-vibe="boring"] .boring-decision-pill-count { font: 600 11px/14px var(--mono); color: var(--text-3); }
+html[data-vibe="boring"] .boring-decision-pill.on .boring-decision-pill-count { color: var(--text-2); }

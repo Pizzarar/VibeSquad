@@ -5,8 +5,22 @@ import { formatAge } from "./attentionItems";
 import { laneCode, laneDisplayName } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, pinsForSquad, quickBugsChipState } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
-import type { TeamView } from "./teams";
+import type { FolderDef, TeamView } from "./teams";
 import { cleanTitle } from "./ui";
+import {
+  applyActivePreset,
+  applyAllPreset,
+  buildDecisionPills,
+  countHiddenStaged,
+  countVisibleDecisions,
+  decisionFilterPresetState,
+  filterDecisionItems,
+  readDecisionFilterOverrides,
+  toggleDecisionPill,
+  visibleSquadIds,
+  writeDecisionFilterOverrides,
+  type DecisionFilterOverrides,
+} from "./decisionFilter";
 
 // @desk D4 (docs/PLAN_DESK_DECISION_DESK.md): cross-Squad Decision Desk.
 // One landing page: live status strip per lane (grouped by Squad), oldest-first decision feed
@@ -355,6 +369,7 @@ const subscribeStore = (f: () => void) => {
 export function resetDecisionStoreForTest() {
   storeState = { items: [], loaded: false, loading: false, error: null, demoFallback: false };
   inFlightFetch = null;
+  filterOverrides = null;
 }
 
 export async function refreshDecisions(): Promise<void> {
@@ -415,16 +430,34 @@ const subscribeDecisionView = (f: () => void) => {
 export const getBoringDecisionView = () => decisionViewOpen;
 export const useBoringDecisionView = () => useSyncExternalStore(subscribeDecisionView, getBoringDecisionView, () => false);
 
-/** Sidebar hook: subscribes to the open decision count and keeps it fresh in the background. */
-export function useDecisionCount(): number {
+const EMPTY_OVERRIDES: DecisionFilterOverrides = {};
+let filterOverrides: DecisionFilterOverrides | null = null;
+const filterSubs = new Set<() => void>();
+function getFilterOverrides(): DecisionFilterOverrides {
+  if (filterOverrides === null) filterOverrides = readDecisionFilterOverrides();
+  return filterOverrides;
+}
+function setFilterOverrides(next: DecisionFilterOverrides) {
+  filterOverrides = next;
+  writeDecisionFilterOverrides(next);
+  for (const f of filterSubs) f();
+}
+const subscribeFilterOverrides = (f: () => void) => {
+  filterSubs.add(f);
+  return () => void filterSubs.delete(f);
+};
+
+/** Sidebar hook: subscribes to the filtered open decision count and keeps it fresh in the background. */
+export function useDecisionCount(views: readonly TeamView[] = [], folders: readonly FolderDef[] = []): number {
   const s = useSyncExternalStore(subscribeStore, () => storeState, () => storeState);
+  const overrides = useSyncExternalStore(subscribeFilterOverrides, getFilterOverrides, () => EMPTY_OVERRIDES);
   useEffect(() => {
     void refreshDecisions();
     if (typeof window === "undefined") return;
     const h = window.setInterval(() => void refreshDecisions(), 15_000);
     return () => window.clearInterval(h);
   }, []);
-  return s.items.length;
+  return useMemo(() => countVisibleDecisions(views, folders, s.items, overrides), [views, folders, s.items, overrides]);
 }
 
 async function dispatchAnswerBatch(batch: AnswerPayloadItem[]): Promise<{ ok: boolean; results: AnswerResultItem[]; error?: string }> {
@@ -456,18 +489,21 @@ type PendingSend = {
 
 export function BoringDecisionDesk({
   views,
+  folders = [],
   now,
   onOpenAgent,
   onOpenProject,
   undoMs = DECISION_UNDO_MS,
 }: {
   views: TeamView[];
+  folders?: FolderDef[];
   now: number;
   onOpenAgent?: (view: TeamView, agentId: string) => void;
   onOpenProject?: (teamId: string) => void;
   undoMs?: number;
 }) {
   const store = useSyncExternalStore(subscribeStore, () => storeState, () => storeState);
+  const overrides = useSyncExternalStore(subscribeFilterOverrides, getFilterOverrides, () => EMPTY_OVERRIDES);
   const [staged, setStaged] = useState<Record<string, StagedChoice>>({});
   const [logsByTeam, setLogsByTeam] = useState<Record<string, FeedEntry[]>>({});
   const [logRev, setLogRev] = useState(0);
@@ -519,12 +555,23 @@ export function BoringDecisionDesk({
     if (tickRef.current) clearInterval(tickRef.current);
   }, []);
 
-  const statusGroups = useMemo(() => buildStatusStrip(views, logsByTeam, now, store.items), [views, logsByTeam, now, store.items]);
-  const offscreenItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) === "offscreen"), [store.items]);
-  const feedItems = useMemo(() => store.items.filter((i) => classifyDecisionRow(i) !== "offscreen"), [store.items]);
+  const updateOverrides = (next: DecisionFilterOverrides) => {
+    setFilterOverrides(next);
+  };
+
+  const pills = useMemo(() => buildDecisionPills(views, folders, store.items, overrides), [views, folders, store.items, overrides]);
+  const presetState = useMemo(() => decisionFilterPresetState(pills.all), [pills.all]);
+  const visibleIds = useMemo(() => visibleSquadIds(pills.all), [pills.all]);
+  const visibleItems = useMemo(() => filterDecisionItems(store.items, visibleIds), [store.items, visibleIds]);
+  const visibleViews = useMemo(() => views.filter((v) => visibleIds.has(v.team.id.toLowerCase())), [views, visibleIds]);
+
+  const statusGroups = useMemo(() => buildStatusStrip(visibleViews, logsByTeam, now, visibleItems), [visibleViews, logsByTeam, now, visibleItems]);
+  const offscreenItems = useMemo(() => visibleItems.filter((i) => classifyDecisionRow(i) === "offscreen"), [visibleItems]);
+  const feedItems = useMemo(() => visibleItems.filter((i) => classifyDecisionRow(i) !== "offscreen"), [visibleItems]);
   const squadFeed = useMemo(() => groupFeedBySquad(feedItems), [feedItems]);
   const stripGroups = useMemo(() => orderStripLikeFeed(statusGroups, squadFeed), [statusGroups, squadFeed]);
-  const batch = useMemo(() => buildAnswerBatch(store.items, staged), [store.items, staged]);
+  const batch = useMemo(() => buildAnswerBatch(visibleItems, staged), [visibleItems, staged]);
+  const hiddenStagedCount = useMemo(() => countHiddenStaged(store.items, visibleIds, staged), [store.items, visibleIds, staged]);
   const unstagedLeanIds = useMemo(
     () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !staged[i.id]).map((i) => i.id),
     [feedItems, staged],
@@ -686,7 +733,9 @@ export function BoringDecisionDesk({
     <div className={`boring-decision-desk${wide ? " is-wide" : ""}`} data-testid="boring-decision-desk">
       <header className="boring-decision-head">
         <span className="boring-decision-sub" title="Open decisions = shown in the feed here + off-screen items below">
-          <span data-testid="boring-decision-summary">{decisionSummary(store.items)}</span>
+          <span data-testid="boring-decision-summary">
+            {visibleItems.length === 0 && store.items.length > 0 ? "0 open in selected projects" : decisionSummary(visibleItems)}
+          </span>
           {offscreenCount > 0 && (
             <button type="button" className="boring-decision-offscreen-link" data-testid="boring-decision-offscreen-link" onClick={jumpToOffscreen}>
               jump to off-screen
@@ -696,6 +745,69 @@ export function BoringDecisionDesk({
         <button type="button" className="boring-decision-refresh" data-testid="boring-decision-refresh" disabled={store.loading} onClick={() => { void refreshDecisions(); setLogRev((n) => n + 1); }}>
           {store.loading ? "Refreshing…" : "Refresh"}
         </button>
+        {pills.all.length > 0 && (
+          <div className="boring-decision-pills" data-testid="boring-decision-pills" role="region" aria-label="Filter by project">
+            <div className="boring-decision-pill-presets">
+              <button
+                type="button"
+                className={`boring-decision-pill-preset${presetState.isActivePreset ? " on" : ""}`}
+                data-testid="boring-decision-preset-active"
+                aria-pressed={presetState.isActivePreset}
+                onClick={() => updateOverrides(applyActivePreset())}
+              >
+                Active
+              </button>
+              <button
+                type="button"
+                className={`boring-decision-pill-preset${presetState.isAllPreset ? " on" : ""}`}
+                data-testid="boring-decision-preset-all"
+                aria-pressed={presetState.isAllPreset}
+                onClick={() => updateOverrides(applyAllPreset(pills.all))}
+              >
+                All
+              </button>
+            </div>
+            {pills.awake.length > 0 && (
+              <div className="boring-decision-pill-group" data-testid="boring-decision-pills-awake">
+                {pills.awake.map((p) => (
+                  <button
+                    key={p.squadId}
+                    type="button"
+                    className={`boring-decision-pill${p.active ? " on" : ""}`}
+                    data-testid={`boring-decision-pill-${p.squadId}`}
+                    aria-pressed={p.active}
+                    aria-label={`${p.squadName}, ${p.openCount} open`}
+                    onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
+                  >
+                    <span className="boring-decision-pill-name">{p.squadName}</span>
+                    <span className="boring-decision-pill-count">{p.openCount}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {pills.onHold.length > 0 && (
+              <div className="boring-decision-pill-group is-on-hold" data-testid="boring-decision-pills-on-hold">
+                <span className="boring-decision-pill-group-label" title="In an asleep folder. Click a pill to show anyway.">Asleep</span>
+                {pills.onHold.map((p) => (
+                  <button
+                    key={p.squadId}
+                    type="button"
+                    className={`boring-decision-pill is-asleep${p.active ? " on" : ""}`}
+                    data-testid={`boring-decision-pill-${p.squadId}`}
+                    data-asleep="true"
+                    aria-pressed={p.active}
+                    aria-label={`${p.squadName}, ${p.openCount} open`}
+                    title="In an asleep folder. Click to show anyway."
+                    onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
+                  >
+                    <span className="boring-decision-pill-name">{p.squadName}</span>
+                    <span className="boring-decision-pill-count">{p.openCount}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </header>
 
       {store.error && (
@@ -712,7 +824,23 @@ export function BoringDecisionDesk({
         </div>
         {feedItems.length === 0 && offscreenItems.length === 0 && store.loaded && (
           <div className="boring-decision-empty" data-testid="boring-decision-empty">
-            No open decisions right now. Lanes are running on their own.
+            {store.items.length > 0 ? (
+              <>
+                <span>
+                  {`No open decisions in the selected projects (${store.items.length} ${store.items.length === 1 ? "item" : "items"} hidden by the filter).`}
+                </span>
+                <button
+                  type="button"
+                  className="boring-decision-pill-preset"
+                  data-testid="boring-decision-empty-show-all"
+                  onClick={() => updateOverrides(applyAllPreset(pills.all))}
+                >
+                  Show all
+                </button>
+              </>
+            ) : (
+              "No open decisions right now. Lanes are running on their own."
+            )}
           </div>
         )}
         {squadFeed.map((grp) => (
@@ -1024,7 +1152,9 @@ export function BoringDecisionDesk({
                 disabled={batch.length === 0 || sending}
                 onClick={startSend}
               >
-                {sending ? "Sending…" : `Send ${batch.length} ${batch.length === 1 ? "answer" : "answers"}`}
+                {sending
+                  ? "Sending…"
+                  : `Send ${batch.length} ${batch.length === 1 ? "answer" : "answers"}${hiddenStagedCount > 0 ? ` (+${hiddenStagedCount} hidden)` : ""}`}
               </button>
             </>
           )}
