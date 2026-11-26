@@ -79,6 +79,12 @@ export function compactLanding(events, { since } = {}) {
   return "direct";
 }
 
+function parseJsonlLines(text, dropFirst = false) {
+  const lines = text.split("\n");
+  if (dropFirst) lines.shift(); // torn first line
+  return lines.flatMap((l) => { try { return l.trim() ? [JSON.parse(l)] : []; } catch { return []; } });
+}
+
 /** Default log reader: the tail (last maxBytes, default 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events, oldest first; [] when unreadable. Also brainstorm.mjs's G1 carry scan. */
 export function readAgentLogTail(id, maxBytes = 512 * 1024) {
   try {
@@ -88,10 +94,87 @@ export function readAgentLogTail(id, maxBytes = 512 * 1024) {
     const fd = openSync(file, "r");
     let text;
     try { const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); text = buf.toString("utf8"); } finally { closeSync(fd); }
-    const lines = text.split("\n");
-    if (from > 0) lines.shift(); // torn first line
-    return lines.flatMap((l) => { try { return l.trim() ? [JSON.parse(l)] : []; } catch { return []; } });
+    return parseJsonlLines(text, from > 0);
   } catch { return []; }
+}
+
+/**
+ * Incremental tail reader for `<VIBESQUAD_HOME>/runner/agents/<id>.jsonl`: skips reading when size/mtime/inode are unchanged,
+ * reads and parses only appended bytes when the file grows, and falls back to a full tail read on truncation, rotation, or rewrite.
+ */
+export function createAgentLogTailReader(id, maxBytes = 512 * 1024) {
+  let initialized = false;
+  let lastSize = 0;
+  let lastMtimeMs = -1;
+  let lastIno = null;
+  let committedOffset = 0;
+  let committedEvents = [];
+  let cachedEvents = [];
+
+  return function read() {
+    try {
+      const file = join(vibesquadHome(), "runner", "agents", `${id}.jsonl`);
+      const st = statSync(file);
+      if (initialized && st.size === lastSize && st.mtimeMs === lastMtimeMs && st.ino === lastIno) {
+        return cachedEvents;
+      }
+      const rotated = initialized && (
+        st.ino !== lastIno
+        || st.size < lastSize
+        || (st.size === lastSize && st.mtimeMs !== lastMtimeMs)
+        || st.size - committedOffset > maxBytes
+      );
+      let from;
+      let dropFirst = false;
+      if (!initialized || rotated) {
+        committedEvents = [];
+        from = Math.max(0, st.size - maxBytes);
+        dropFirst = from > 0;
+      } else {
+        from = committedOffset;
+      }
+      const len = Math.max(0, st.size - from);
+      let buf = Buffer.alloc(0);
+      if (len > 0) {
+        const fd = openSync(file, "r");
+        try {
+          buf = Buffer.alloc(len);
+          const n = readSync(fd, buf, 0, len, from);
+          if (n < len) buf = buf.subarray(0, n);
+        } finally {
+          closeSync(fd);
+        }
+      }
+      const lastNl = buf.lastIndexOf(0x0a);
+      let trailing = [];
+      if (lastNl >= 0) {
+        const parsed = parseJsonlLines(buf.subarray(0, lastNl + 1).toString("utf8"), dropFirst);
+        if (parsed.length) committedEvents.push(...parsed);
+        committedOffset = from + lastNl + 1;
+        if (lastNl + 1 < buf.length) {
+          trailing = parseJsonlLines(buf.subarray(lastNl + 1).toString("utf8"), false);
+        }
+      } else {
+        committedOffset = from;
+        if (buf.length > 0) trailing = parseJsonlLines(buf.toString("utf8"), dropFirst);
+      }
+      initialized = true;
+      lastSize = from + buf.length;
+      lastMtimeMs = st.mtimeMs;
+      lastIno = st.ino;
+      cachedEvents = trailing.length ? [...committedEvents, ...trailing] : committedEvents;
+      return cachedEvents;
+    } catch {
+      initialized = false;
+      lastSize = 0;
+      lastMtimeMs = -1;
+      lastIno = null;
+      committedOffset = 0;
+      committedEvents = [];
+      cachedEvents = [];
+      return [];
+    }
+  };
 }
 
 export function isClaudeAgent(agent) {
@@ -232,8 +315,8 @@ export function createCompactor({
     }
   }
 
-  const landing = async (id, since) => {
-    try { return compactLanding(await readEvents(id), { since }); } catch { return "direct"; } // unreadable log: re-send as before
+  const landing = async (id, since, read = readEvents) => {
+    try { return compactLanding(await read(id), { since }); } catch { return "direct"; } // unreadable log: re-send as before
   };
 
   /**
@@ -241,7 +324,7 @@ export function createCompactor({
    * while the runner shows idle. Re-sending at once would compact twice (and skew the adapter's turn count), so wait for that
    * boundary first: "compacted", or "none" at the deadline / once the process is parked or exits (the held /compact died).
    */
-  async function awaitLate(w, id, since, hardCap) {
+  async function awaitLate(w, id, since, hardCap, read) {
     const deadline = Date.now() + lateBoundaryMs;
     for (;;) {
       const left = deadline - Date.now();
@@ -250,7 +333,7 @@ export function createCompactor({
       if (s === "compacted") return "compacted";
       if (s === "cancelled") return "none";
       if (s !== "tick") continue;
-      if ((await landing(id, since)) === "gone") return "none";
+      if ((await landing(id, since, read)) === "gone") return "none";
       if (Number.isFinite(hardCap)) {
         const now = await freshAgent(id);
         if (overCap(now, hardCap)) return capStop(now);
@@ -368,8 +451,9 @@ export function createCompactor({
         if (got !== "no-boundary") break;
         // C1/C3/C4: the /compact rode along with another message. A steered one first gets its late boundary window (C1), also
         // on the last attempt: the CLI can still run the held /compact, and the caller's handoff must not overlap it.
-        if ((await landing(id, sentAt)) === "steered") {
-          const late = await awaitLate(w, id, sentAt, hardCap);
+        const readForLate = readEvents === readAgentLogTail ? createAgentLogTailReader(id) : readEvents;
+        if ((await landing(id, sentAt, readForLate)) === "steered") {
+          const late = await awaitLate(w, id, sentAt, hardCap, readForLate);
           if (late === "compacted") { got = "compacted"; break; }
           if (capped(late)) break;
         }

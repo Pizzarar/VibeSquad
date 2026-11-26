@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
-import { createCompactor, compactLanding, compactSpendFromLog, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { createCompactor, compactLanding, compactSpendFromLog, createAgentLogTailReader, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
 import { compactNotAttempted } from "../server/compact-crossing.mjs";
 import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../server/lead-handoff.mjs";
 
@@ -868,4 +868,108 @@ test("K2a fix: a Buddy busy skip defers (no restart) and its turn_ended alone re
   assert.equal(calls.length, 2);
   assert.equal(restarts.length, 0);
   w.stop();
+});
+
+test("M2b awaitLate: skips re-parsing when the agent log is unchanged and parses only appended delta bytes", async () => {
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "vs-compact-inc-")); tmpDirs.push(dir);
+  const agentsDir = join(dir, "runner", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  process.env.VIBESQUAD_HOME = dir;
+
+  const id = "rn-inc";
+  const logFile = join(agentsDir, `${id}.jsonl`);
+  const a = K(id);
+  const listeners = new Set();
+  const emit = (e) => { for (const l of listeners) l({ agentId: id, ...e }); };
+  const later = (ms, e) => setTimeout(() => emit(e), ms);
+  let sends = 0;
+  let parseCalls = 0;
+  let parsesAtRetry = -1;
+  const runner = {
+    subscribeEvents(l) { listeners.add(l); return () => listeners.delete(l); },
+    async updateAgent(_id, { labels }) { a.labels = { ...a.labels, ...labels }; },
+    async sendAgentPrompt() {
+      sends++;
+      if (sends === 1) {
+        const now = Date.now();
+        writeFileSync(logFile, [
+          ev("status", { ts: now - 5, status: "idle" }),
+          ev("input", { ts: now - 4, text: "wake" }),
+          ev("status", { ts: now - 3, status: "running" }),
+          ev("input", { ts: now, text: "/compact x" }),
+          ev("status", { ts: now + 1, status: "running" }),
+        ].map((x) => JSON.stringify(x)).join("\n") + "\n");
+        later(10, ENDED);
+      } else {
+        parsesAtRetry = parseCalls;
+        later(10, COMPACTED);
+      }
+      return { ok: true, queued: false };
+    },
+    async fetchAgent() { return { agent: a }; },
+  };
+
+  const origParse = JSON.parse;
+  JSON.parse = (...args) => { parseCalls++; return origParse(...args); };
+  try {
+    // Use default readEvents (readAgentLogTail) so awaitLate uses the incremental tail reader.
+    const c = createCompactor({ runner, timeoutMs: 200, settleMs: 20, idlePollMs: 10, lateBoundaryMs: 1_000 });
+    const runPromise = c.run(a, { focus: "x", cap: 200_000 });
+    await tick(70); // ~5 idlePollMs ticks inside awaitLate while log file is unchanged
+    assert.equal(parseCalls, 5, "initial 5 lines parsed once, 0 re-parses across unchanged ticks");
+    assert.equal(sends, 1, "still waiting in awaitLate");
+    appendFileSync(logFile, JSON.stringify(ev("parked", { ts: Date.now() })) + "\n");
+    const res = await runPromise;
+    assert.equal(res.outcome, "ok");
+    assert.equal(res.attempts, 2);
+    assert.equal(parsesAtRetry, 6, "awaitLate parsed only the 1 appended parked line (5 initial + 1 delta)");
+  } finally {
+    JSON.parse = origParse;
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+  }
+});
+
+test("M2b createAgentLogTailReader: skips unchanged, reads delta on append, falls back to full tail on truncation or rotation", () => {
+  const prevHome = process.env.VIBESQUAD_HOME;
+  const dir = mkdtempSync(join(tmpdir(), "vs-compact-tail-")); tmpDirs.push(dir);
+  const agentsDir = join(dir, "runner", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  process.env.VIBESQUAD_HOME = dir;
+
+  const id = "rn-tail";
+  const logFile = join(agentsDir, `${id}.jsonl`);
+  writeFileSync(logFile, [ev("status", { status: "idle" }), ev("input", { text: "/compact" })].map((x) => JSON.stringify(x)).join("\n") + "\n");
+
+  const origParse = JSON.parse;
+  let parseCalls = 0;
+  JSON.parse = (...args) => { parseCalls++; return origParse(...args); };
+  try {
+    const read = createAgentLogTailReader(id);
+    assert.equal(read().length, 2);
+    assert.equal(parseCalls, 2);
+    // Unchanged: 0 parses
+    assert.equal(read().length, 2);
+    assert.equal(parseCalls, 2);
+    // Append 1 line: only 1 parse
+    appendFileSync(logFile, JSON.stringify(ev("parked")) + "\n");
+    const afterAppend = read();
+    assert.equal(afterAppend.length, 3);
+    assert.equal(afterAppend[2].type, "parked");
+    assert.equal(parseCalls, 3);
+    // Truncate to 1 shorter line: full re-read
+    writeFileSync(logFile, JSON.stringify(ev("status", { status: "idle" })) + "\n");
+    const afterTrunc = read();
+    assert.equal(afterTrunc.length, 1);
+    assert.equal(afterTrunc[0].type, "status");
+    // Rotate (new inode, larger file): full re-read
+    unlinkSync(logFile);
+    writeFileSync(logFile, [ev("status", { status: "running" }), ev("exit", { code: 0 })].map((x) => JSON.stringify(x)).join("\n") + "\n");
+    const afterRotate = read();
+    assert.equal(afterRotate.length, 2);
+    assert.equal(afterRotate[1].type, "exit");
+  } finally {
+    JSON.parse = origParse;
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+  }
 });
