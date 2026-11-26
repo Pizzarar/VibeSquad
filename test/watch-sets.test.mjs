@@ -3364,3 +3364,26 @@ test("idea-1091: archived mid-second-turn with a stale running status does not r
   assert.equal(r.item.state, "stalled", JSON.stringify(r.item));
   assert.equal(r.item.reason, "archived");
 });
+
+test("idea-1093: a remove event inside SNAP_REFRESH_MS of an idle final-read still reads the completed report (finalChecked reset)", async () => {
+  const sb = mkdtempSync(join(tmpdir(), "vs-watch-1093-"));
+  try {
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }], stallMin: 30 }, { home: sb, now: clock.t });
+    const snap = { id: "rn-w", status: "idle", lastProgressAt: new Date(clock.t + 1000).toISOString() };
+    const reads = [];
+    const eng = createWatchEngine({ home: sb, now: () => clock.t, getAgent: async () => snap, lastMessage: async (_ref, o) => { reads.push(!!o?.completedOnly); return o?.completedOnly ? completedTurnText([U, A("PASS 0/0/0 abc1234 TOTAL 5 specs", true)]) : ""; }, deliver: () => true, retryMs: 0 });
+    await eng.tick(); // idle: the plain final read runs (finalChecked = now) and finds nothing
+    assert.deepEqual(reads, [false], "the idle tick did the throttled plain read");
+    clock.t += 5_000; // well inside SNAP_REFRESH_MS
+    eng.onRunnerEvent({ kind: "remove", agentId: "rn-w" });
+    await eng.tick();
+    const w = listWatches({ all: true }, { home: sb }).find((x) => x.id === id);
+    eng.stop?.();
+    assert.deepEqual(reads, [false, true], "the archive read was not throttled by the earlier idle read");
+    assert.equal(w.items[0].state, "done", JSON.stringify(w.items[0]));
+    assert.match(JSON.stringify(w.pings), /PASS 0\/0\/0 abc1234/);
+  } finally {
+    rmSync(sb, { recursive: true, force: true });
+  }
+});

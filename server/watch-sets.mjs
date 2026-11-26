@@ -267,6 +267,58 @@ export function reownWatchesAsync(spec, { home, now = Date.now() } = {}) {
   return mutateDocAsync(watchesPath({ home }), reownSets(spec, now), now);
 }
 
+/**
+ * idea-1101: re-point open watch sets' agent item from a cut/respawned worker (`from`) to its successor (`to`), so
+ * watches and their code-read verdicts follow the new agent id automatically. Completed (`done`), fired and cancelled
+ * sets are left untouched.
+ */
+function retargetSets({ from, to, reason } = {}, now) {
+  const src = String(from ?? "").trim();
+  const dst = String(to ?? "").trim();
+  if (!src || !dst) throw new Error("retargetWatches: from and to are required");
+  return (doc) => {
+    const retargeted = [];
+    if (src === dst) return { retargeted };
+    for (const set of doc.sets) {
+      if (!isOpen(set)) continue;
+      let changed = false;
+      const hasDst = (set.items ?? []).some((i) => i.kind === "agent" && i.ref === dst);
+      for (const item of set.items ?? []) {
+        if (item.kind !== "agent" || item.ref !== src || item.state === "done") continue;
+        if (hasDst) continue;
+        item.ref = dst;
+        item.state = "waiting";
+        item.phase = "running";
+        item.phaseSince = iso(now);
+        delete item.reason;
+        delete item.report;
+        delete item.doneAt;
+        delete item.stallFiredAt;
+        delete item.esc1At;
+        delete item.esc2At;
+        delete item.nudgeDueAt;
+        delete item.nudgeSentAt;
+        delete item.finalText;
+        delete item.finalChecked;
+        item.retargeted = [...(Array.isArray(item.retargeted) ? item.retargeted : []), { from: src, to: dst, at: iso(now), ...(reason ? { reason: oneLine(reason, 80) } : {}) }];
+        changed = true;
+      }
+      if (changed) retargeted.push(set.id);
+    }
+    return { retargeted };
+  };
+}
+
+/** idea-1101: retarget open watch sets watching agent `from` to `to` (sync; CLI/tests). Returns `{retargeted: ids}`. */
+export function retargetWatches(spec, { home, now = Date.now() } = {}) {
+  return mutateDoc(watchesPath({ home }), retargetSets(spec, now), now);
+}
+
+/** retargetWatches for the server process (respawn / mid-run quota resume): never blocks the event loop on the lock. */
+export function retargetWatchesAsync(spec, { home, now = Date.now() } = {}) {
+  return mutateDocAsync(watchesPath({ home }), retargetSets(spec, now), now);
+}
+
 // ---------------------------------------------------------------------------
 // State machine (pure given its inputs; exported for tests)
 // ---------------------------------------------------------------------------
@@ -1189,6 +1241,22 @@ export function createWatchEngine({
   }
 
   /**
+   * idea-1101: retarget open watch sets from a cut worker (`from`) to its respawned/resumed successor (`to`).
+   * Never rejects.
+   */
+  async function retarget(from, to, reason = "quota resume") {
+    let out = { retargeted: [] };
+    try {
+      out = await mutate(retargetSets({ from, to, reason }, now()));
+    } catch (e) {
+      log(`watch retarget ${from} -> ${to} failed: ${e?.message ?? e}`);
+    }
+    cacheStamp = "";
+    reload();
+    return out;
+  }
+
+  /**
    * idea-219: true when the ping's set was cancelled (fresh from disk). The plugin checks it right before the send.
    * idea-572: fresh = reload()'s stat check (mtime + size + inode), not a forced re-parse of the whole registry (5 MB on 11-22,
    * 0.5-1s per parse under load, once per pending ping per tick). A cancel is a writeFileAtomic rename (new inode, new size),
@@ -1274,6 +1342,7 @@ export function createWatchEngine({
     markDelivered,
     markFailed,
     reown,
+    retarget,
     get: (id) => {
       const s = reload().sets.find((x) => x.id === id);
       return s ? structuredClone(s) : null;
