@@ -1949,6 +1949,11 @@ html[data-vibe="boring"] .boring-decision-feed {
   gap: 14px;
 }
 html[data-vibe="boring"] .boring-decision-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 20px 16px;
   border: 1px solid var(--border);
   border-radius: 10px;

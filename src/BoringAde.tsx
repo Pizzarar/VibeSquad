@@ -467,7 +467,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const [selectedRole, setSelectedRole] = useState<Role>(() => ((urlLane0 && urlKeys0?.role === "lead") || boringBugsLeadCard(view, urlKeys0?.slot, urlKeys0?.role) ? "lead" : "brainstorm"));
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
-  const decisionCount = useDecisionCount();
+  const allViews = views.length > 0 ? views : view ? [view] : [];
+  const decisionCount = useDecisionCount(allViews, folders);
   useEffect(() => {
     if (mode === "project" && (url0?.view === "decisions" || (DECISION_DESK_DEFAULT_LANDING && !url0?.team && !url0?.agent))) setMode("decisions");
   }, []);
@@ -539,7 +540,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     if (id === otherVisible) return setActivePane(otherSide);
     return openAgentInTab(id, live.activePane);
   };
-  const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.
   // R5-1: also when it becomes landable: a deep-linked agent can reach the roster after the first render.
   const activeLandable = !!boringAgentLanding(allViews, activeAgentId, (id) => agents.has(id));

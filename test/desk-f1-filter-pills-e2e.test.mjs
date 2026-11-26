@@ -113,14 +113,26 @@ for (const cfg of [
     const { context, page, errs } = await openDesk(cfg);
     try {
       // 1. Asleep pills are dimmed and OFF; their items are absent from all 3 sections
-      for (const id of ["forework", "sbb"]) {
+      assert.equal(await page.locator('[data-testid="boring-decision-pills-on-hold"] .boring-decision-pill-group-label').textContent(), "Asleep");
+      for (const [id, name, count] of [
+        ["forework", "Forework", 2],
+        ["sbb", "SBB", 1],
+      ]) {
         const pill = page.locator(`[data-testid="boring-decision-pills-on-hold"] [data-testid="boring-decision-pill-${id}"]`);
-        assert.equal(await pill.count(), 1, `${id} sits in On hold group`);
+        assert.equal(await pill.count(), 1, `${id} sits in Asleep group`);
         assert.equal(await pill.getAttribute("aria-pressed"), "false", `${id} defaults OFF`);
+        assert.equal(await pill.getAttribute("aria-label"), `${name}, ${count} open`, `${id} has accessible label`);
+        assert.equal(await pill.getAttribute("title"), "In an asleep folder. Click to show anyway.", `${id} has asleep tooltip`);
         assert.equal(await pill.evaluate((el) => getComputedStyle(el).borderTopStyle), "dashed", `${id} is dimmed/dashed when OFF`);
       }
-      for (const id of ["vibesquad", "efi", "site"]) {
-        assert.equal(await page.locator(`[data-testid="boring-decision-pill-${id}"]`).getAttribute("aria-pressed"), "true", `${id} defaults ON`);
+      for (const [id, name, count] of [
+        ["vibesquad", "VibeSquad", 2],
+        ["efi", "Main Game Project", 1],
+        ["site", "Site", 1],
+      ]) {
+        const pill = page.locator(`[data-testid="boring-decision-pill-${id}"]`);
+        assert.equal(await pill.getAttribute("aria-pressed"), "true", `${id} defaults ON`);
+        assert.equal(await pill.getAttribute("aria-label"), `${name}, ${count} open`, `${id} has accessible label`);
       }
       assert.equal(await page.locator('[data-testid="boring-decision-squad-forework"]').count(), 0, "forework absent from feed");
       assert.equal(await page.locator('[data-testid="boring-decision-squad-sbb"]').count(), 0, "sbb absent from feed");
@@ -128,6 +140,7 @@ for (const cfg of [
       assert.equal(await page.locator('[data-testid="boring-decision-strip-squad-forework"]').count(), 0, "forework absent from status rail");
       assert.equal(await page.locator('[data-testid="boring-decision-strip-squad-sbb"]').count(), 0, "sbb absent from status rail");
       assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "4 open · 3 here · 1 off-screen");
+      assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 4", "sidebar badge matches filtered open count");
 
       // Capture viewport screenshot at the needed size only
       await page.screenshot({ path: path.join(SHOTS_DIR, `${cfg.name}.png`), fullPage: false });
@@ -141,6 +154,7 @@ for (const cfg of [
         assert.equal(await page.locator('[data-testid="boring-decision-squad-forework"]').count(), 1);
         assert.equal(await page.locator('[data-testid="boring-decision-offscreen-ny-f1-06"]').count(), 1);
         assert.equal(await page.locator('[data-testid="boring-decision-strip-squad-sbb"]').count(), 1);
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 6", "sidebar badge updates live on pill toggles");
         assert.equal(await page.evaluate(() => location.search), "?demo=&view=decisions", "filter is not in the URL");
 
         await page.reload({ waitUntil: "domcontentloaded" });
@@ -153,15 +167,18 @@ for (const cfg of [
         assert.equal(await page.locator('[data-testid="boring-decision-squad-forework"]').count(), 1);
         assert.equal(await page.locator('[data-testid="boring-decision-offscreen-ny-f1-06"]').count(), 1);
         assert.equal(await page.locator('[data-testid="boring-decision-strip-squad-sbb"]').count(), 1);
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 6", "sidebar badge stays synced after reload");
 
         // 3. All & Active presets
         await page.locator('[data-testid="boring-decision-preset-all"]').click();
         assert.equal(await page.locator('[data-testid="boring-decision-pill-site"]').getAttribute("aria-pressed"), "true");
         assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "7 open · 5 here · 2 off-screen");
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 7", "sidebar badge matches All preset");
         await page.locator('[data-testid="boring-decision-preset-active"]').click();
         assert.equal(await page.locator('[data-testid="boring-decision-pill-forework"]').getAttribute("aria-pressed"), "false");
         assert.equal(await page.locator('[data-testid="boring-decision-pill-sbb"]').getAttribute("aria-pressed"), "false");
         assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "4 open · 3 here · 1 off-screen");
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 4", "sidebar badge matches Active preset");
 
         // 4. Stage an answer, hide its project -> "+1 hidden"; unhide -> answer intact
         await page.locator('[data-testid="boring-decision-lean-ny-f1-01"]').click();
@@ -170,6 +187,7 @@ for (const cfg of [
         const sendBtn = page.locator('[data-testid="boring-decision-send-btn"]');
         assert.equal(await sendBtn.textContent(), "Send 0 answers (+1 hidden)");
         assert.equal(await sendBtn.isDisabled(), true, "0 visible answers keeps Send disabled");
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 2", "sidebar badge drops when vibesquad hidden");
 
         // Stage a visible answer too -> "Send 1 answer (+1 hidden)"
         await page.locator('[data-testid="boring-decision-lean-ny-f1-03"]').click();
@@ -180,6 +198,7 @@ for (const cfg of [
         await page.locator('[data-testid="boring-decision-pill-vibesquad"]').click();
         assert.equal(await page.locator('[data-testid="boring-decision-lean-ny-f1-01"]').getAttribute("aria-pressed"), "true", "staged answer survived toggle");
         assert.equal(await sendBtn.textContent(), "Send 2 answers");
+        assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 4", "sidebar badge restores when vibesquad unhidden");
       }
 
       assert.deepEqual(errs, [], `no pageerrors: ${errs.join("; ")}`);
@@ -188,3 +207,26 @@ for (const cfg of [
     }
   });
 }
+
+test("F1 Done-check (on-hold only): sidebar badge is 0 and empty state offers Show all", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  state.items = state.items.filter((i) => i.squad === "forework" || i.squad === "sbb");
+  const { context, page, errs } = await openDesk({ theme: "dark", width: 1920, height: 1080, dpr: 1 });
+  try {
+    assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 0", "sidebar badge is 0 when only asleep projects have items");
+    assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "0 open in selected projects");
+    const emptyText = await page.locator('[data-testid="boring-decision-empty"]').textContent();
+    assert.match(emptyText ?? "", /3 items hidden by the filter/, "empty state reports hidden count");
+    const showAll = page.locator('[data-testid="boring-decision-empty-show-all"]');
+    assert.equal(await showAll.textContent(), "Show all");
+
+    await showAll.click();
+    assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 3", "Show all updates sidebar badge live");
+    assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "3 open · 2 here · 1 off-screen");
+    assert.equal(await page.locator('[data-testid="boring-decision-empty"]').count(), 0);
+    assert.deepEqual(errs, [], `no pageerrors: ${errs.join("; ")}`);
+  } finally {
+    await context.close();
+  }
+});

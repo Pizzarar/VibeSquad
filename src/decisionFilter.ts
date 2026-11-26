@@ -174,6 +174,17 @@ export function filterDecisionItems<T extends { squad: string }>(items: readonly
   return items.filter((i) => visible.has(i.squad.toLowerCase()));
 }
 
+/** Count open decisions visible under the current filter (saved overrides + asleep-folder defaults). */
+export function countVisibleDecisions(
+  views: readonly TeamView[],
+  folders: readonly FolderDef[],
+  items: readonly { squad: string; squadName?: string }[],
+  overrides: Readonly<DecisionFilterOverrides>,
+): number {
+  const pills = buildDecisionPills(views, folders, items, overrides);
+  return filterDecisionItems(items, visibleSquadIds(pills.all)).length;
+}
+
 export function filterStatusGroups<T extends { squadId: string }>(groups: readonly T[], visible: ReadonlySet<string>): T[] {
   return groups.filter((g) => visible.has(g.squadId.toLowerCase()));
 }

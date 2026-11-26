@@ -183,16 +183,38 @@ test("F1 filtering + staged answers: covers feed/offscreen/rail; staged survive 
   assert.deepEqual(staged.d4, { choice: "alt:0" });
 });
 
+test("F1 visible count (UX R45 M1): badge count matches filtered page count by default, with overrides, and when only on-hold projects have items", () => {
+  // Default Active: vs (2) + efi (1) = 3 visible; forework (1) + sbb (1) hidden
+  assert.equal(F.countVisibleDecisions(VIEWS, FOLDERS, ITEMS, {}), 3);
+
+  // Explicit overrides: efi OFF, forework ON -> vs (2) + forework (1) = 3
+  assert.equal(F.countVisibleDecisions(VIEWS, FOLDERS, ITEMS, { efi: false, forework: true }), 3);
+
+  // All preset -> all 5 items visible
+  const allOv = F.applyAllPreset(F.buildDecisionPills(VIEWS, FOLDERS, ITEMS, {}).all);
+  assert.equal(F.countVisibleDecisions(VIEWS, FOLDERS, ITEMS, allOv), 5);
+
+  // Only on-hold (asleep) projects have items -> default count is 0, All preset count is 2
+  const onHoldOnly = ITEMS.filter((i) => i.squad === "forework" || i.squad === "sbb");
+  assert.equal(F.countVisibleDecisions(VIEWS, FOLDERS, onHoldOnly, {}), 0);
+  const allOnHold = F.applyAllPreset(F.buildDecisionPills(VIEWS, FOLDERS, onHoldOnly, {}).all);
+  assert.equal(F.countVisibleDecisions(VIEWS, FOLDERS, onHoldOnly, allOnHold), 2);
+});
+
 test("F1 source contracts: BoringAde passes allViews+folders, CSS scoped to .boring-decision-pill*, no @media/@container, leans stay opt-in", () => {
   const ade = readSrc("BoringAde.tsx");
   const dd = readSrc("BoringDecisionDesk.tsx");
   const css = readSrc("boring.css");
+  assert.match(ade, /useDecisionCount\(allViews, folders\)/);
   assert.match(ade, /<BoringDecisionDesk views=\{allViews\} folders=\{folders\}/);
   assert.match(dd, /export const DECISION_LEANS_OPT_IN = true;/);
   assert.match(dd, /data-testid="boring-decision-pills"/);
   assert.match(dd, /data-testid="boring-decision-preset-active"/);
   assert.match(dd, /data-testid="boring-decision-preset-all"/);
   assert.match(dd, /data-testid="boring-decision-pills-on-hold"/);
+  assert.match(dd, /data-testid="boring-decision-empty-show-all"/);
+  assert.match(dd, />Asleep<\/span>/);
+  assert.match(dd, /aria-label=\{\`\$\{p\.squadName\}, \$\{p\.openCount\} open\`\}/);
   assert.match(dd, /\(\+\$\{hiddenStagedCount\} hidden\)/);
 
   const f1Start = css.indexOf("/* @desk F1 (PLAN_DESK_DD_FILTER)");
