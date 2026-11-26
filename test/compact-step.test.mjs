@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { appendVsLogEntry } from "../server/brainstorm.mjs";
-import { createCompactor, compactLanding, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
+import { createCompactor, compactLanding, compactSpendFromLog, canCompact, compactCommand, COMPACTED_AT_LABEL, COMPACT_TIMEOUT_MS, BUDDY_COMPACT_FOCUS, LEAD_COMPACT_FOCUS } from "../server/compact-step.mjs";
 import { compactNotAttempted } from "../server/compact-crossing.mjs";
 import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../server/lead-handoff.mjs";
 
@@ -429,6 +429,34 @@ test("compact-step without a readable log omits costUsd/tokens instead of guessi
   assert.equal(res.outcome, "ok");
   assert.equal(res.costUsd, undefined);
   assert.doesNotMatch(lines[0], /costUsd=|tokens=/);
+});
+
+test("compactSpendFromLog matches a /compact line after a coalesced wake prefix (ignores earlier /compact)", () => {
+  const events = [
+    ev("input", { text: "/compact earlier" }),
+    ev("compacted", { before: 120000, after: 25000 }),
+    ev("turn_done", { costUsd: 0.5 }),
+    ev("input", { text: "work" }),
+    ev("usage", { inputTokens: 8000, outputTokens: 1000 }),
+    ev("turn_done", { costUsd: 1.5 }),
+    ev("input", { text: "<wake>\n\n/compact keep the brief" }),
+    ev("compacted", { before: 150000, after: 30000 }),
+    ev("usage", { inputTokens: 30000, outputTokens: 0 }),
+    ev("turn_done", { costUsd: 1.8 }),
+  ];
+  assert.deepEqual(compactSpendFromLog(events), { costUsd: 0.3, tokens: 30000 });
+});
+
+test("compactSpendFromLog does not match /compact mentioned mid-sentence", () => {
+  const events = [
+    ev("input", { text: "work" }),
+    ev("turn_done", { costUsd: 1.0 }),
+    ev("input", { text: "please run /compact later\nand mention /compact mid-line too" }),
+    ev("compacted", { before: 150000, after: 30000 }),
+    ev("usage", { inputTokens: 30000, outputTokens: 0 }),
+    ev("turn_done", { costUsd: 1.25 }),
+  ];
+  assert.equal(compactSpendFromLog(events), null);
 });
 
 // ---- K2a (docs/lanes/perfection/K2A.md): per-cause guards ----

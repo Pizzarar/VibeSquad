@@ -23,7 +23,6 @@ export const COMPACT_SETTLE_MS = 1_500;
 
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
-const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
 // An input that carries a /compact line anywhere: also one coalesced behind a queued wake (C3: "<wake>\n\n/compact ...").
 const COMPACT_LINE_RE = /(^|\n)\s*\/compact\b/i;
 /** Per-turn cost from session-cumulative `turn_done.costUsd`: delta vs the previous turn_done (a drop means the session restarted: take it whole). */
@@ -42,7 +41,7 @@ export function compactSpendFromLog(events) {
   for (let i = events.length - 1; i >= 0; i--) if (events[i]?.type === "compacted") { c = i; break; }
   if (c < 0) return null;
   let j = -1;
-  for (let i = c - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_INPUT_RE.test(String(events[i].text ?? ""))) { j = i; break; }
+  for (let i = c - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_LINE_RE.test(String(events[i].text ?? ""))) { j = i; break; }
   if (j < 0) return null;
   let base = 0;
   for (let i = j - 1; i >= 0; i--) if (events[i]?.type === "turn_done" && Number.isFinite(Number(events[i].costUsd))) { base = Number(events[i].costUsd); break; }
