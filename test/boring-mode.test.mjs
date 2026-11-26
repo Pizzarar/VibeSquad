@@ -1635,6 +1635,38 @@ test("split: two AgentDrawer panes side by side, the active pane is highlighted 
   }
 });
 
+test("idea-1075: split + a dormant Bugs row shows the Bugs empty card (the screen the ?slot=bugs URL names), not the split panes", () => {
+  const dormant = squad({ bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  intoChat(dormant);
+  try {
+    globalThis.__panes = splitState();
+    assert.ok(byId(render(props(dormant)), "boring-chat-split")); // before the click: the split panes
+    byId(render(props(dormant)), "boring-core-bugs").props.onClick();
+    const t = render(props(dormant));
+    assert.equal(byId(t, "boring-chat-split"), null);
+    assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+    assert.ok(!JSON.stringify(t).includes("Split · pick an agent"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("idea-1075 r2 (B17): split with the RIGHT pane active (empty): a sidebar click on a dormant Bugs row shows the Bugs card, not the picker/split", () => {
+  const dormant = squad({ bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  intoChat(dormant);
+  try {
+    globalThis.__panes = splitState({ rightActiveId: null, activePane: "right" });
+    assert.ok(byId(render(props(dormant)), "boring-chat-split"));
+    byId(render(props(dormant)), "boring-core-bugs").props.onClick();
+    const t = render(props(dormant));
+    assert.equal(byId(t, "boring-chat-split"), null);
+    assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+    assert.ok(!JSON.stringify(t).includes("Split · pick an agent"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
 test("split: an empty right pane shows the placeholder with Close split", () => {
   const view = squad();
   intoChat(view);
@@ -2393,4 +2425,14 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   assert.match(sect, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-now, /);
   assert.ok(!/!important/.test(sect));
   assert.match(readFileSync(resolve(import.meta.dirname, "..", "src", "PermissionCard.tsx"), "utf8"), /style=\{vibe === "boring" \? undefined : \{ fontFamily: "monospace", fontSize: 11 \}\}/);
+});
+
+test("idea-1075 r3 (UX M1): the split picker only grabs focus on mount when the right pane is active (a left-active remount must not flip the active pane)", () => {
+  const pp = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8");
+  const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
+  assert.match(pp, /if \(focusOnMount\) filterRef\.current\?\.focus\(\)/);
+  assert.match(ade, /focusOnMount=\{panes\.activePane === "right"\}/);
+  // one entry for every slot-lane screen: sidebar pick, popstate landing, cold-load ?slot=
+  assert.equal((ade.match(/enterSlotLane\(/g) ?? []).length, 4); // pickCore + pickBugs + landing + cold load
+  assert.match(ade, /const enterSlotLane = \(laneId: string\) => \{\n    setRightCard\(null\);/);
 });

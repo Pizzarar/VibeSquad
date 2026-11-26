@@ -68,7 +68,7 @@ export function buildPickerData(m: ModelLike, h: PickerHandlers, strip: StripIte
  * `getData` runs only while the picker is mounted (the host's split tree is built every render). A dormant pill selects the lane in the host, then
  * `renderEmpty` shows that lane's empty card here with a Back link. Keyboard: filter autofocuses, Enter opens the first match, Esc backs out / clears / closes.
  */
-export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTarget, onClose, children }: { getData: () => PickerData; renderEmpty?: (t: CardTarget) => ReactNode; emptyTarget?: CardTarget | null; onEmptyTarget?: (t: CardTarget | null) => void; onClose?: () => void; children?: ReactNode }) {
+export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTarget, onClose, focusOnMount = true, children }: { focusOnMount?: boolean; getData: () => PickerData; renderEmpty?: (t: CardTarget) => ReactNode; emptyTarget?: CardTarget | null; onEmptyTarget?: (t: CardTarget | null) => void; onClose?: () => void; children?: ReactNode }) {
   const [q, setQ] = useState("");
   const [localEmpty, setLocalEmpty] = useState<CardTarget | null>(null);
   // Controlled when the host passes emptyTarget (so its breadcrumb can name the lane); local otherwise.
@@ -76,7 +76,8 @@ export function BoringPanePicker({ getData, renderEmpty, emptyTarget, onEmptyTar
   const setEmptyFor = (t: CardTarget | null) => { setLocalEmpty(t); onEmptyTarget?.(t); };
   const filterRef = useRef<HTMLInputElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { filterRef.current?.focus(); }, []);
+  // idea-1075 (UX R1 M1): the focus grab makes the right pane active (host onFocusCapture), so a remount while the LEFT pane is active must not take it.
+  useEffect(() => { if (focusOnMount) filterRef.current?.focus(); }, []);
   // The grid unmounts under a clicked pill: park focus on Back (or the filter on return) so Esc/Tab keep working.
   const didShow = useRef(false);
   useEffect(() => { if (emptyFor) { didShow.current = true; backRef.current?.focus(); } else if (didShow.current) { didShow.current = false; filterRef.current?.focus(); } }, [emptyFor]);
