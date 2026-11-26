@@ -222,6 +222,10 @@ export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
 // .githooks/pre-push (server/push-guard.mjs). Owner/lead override: `git -c vs.verdictOverride=<sha> merge|push` or
 // VS_VERDICT_OVERRIDE=<sha>[,<sha>] (the merge or tip sha); every use is logged as a `decision` entry in the Squad log.
 
+/** Capability token exposed on /api/health by a server that writes the server-attested `verdict` field on digest `done`
+ * entries (idea-941). INFO ONLY: the merge/push gate never reads it (a marker any process can write must not weaken it). */
+export const VERDICT_WRITER_CAPABILITY = "attested-verdict";
+
 /** A unit merge subject: `Merge unit-…` / `Merge branch 'unit-…'` (unit branches are `unit-<lane>-<idea>…`, made with `vs worktree create`; the
  * lead's `Merge unit-<x>: … (@<lane> …)` subject is the one server/push-guard.mjs reads the lane tag from). */
 // Also git's default for `git merge origin/unit-x`: Merge remote-tracking branch 'origin/unit-x'. Never `Merge master into unit-x`.
@@ -360,7 +364,8 @@ export function evaluateMergeVerdicts({ merges = [], recorded = () => null, over
 }
 
 /** Human-readable refusal for stderr; "" when every unit merge has a recorded PASS (or is overridden). `squads`: the Squad
- * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). */
+ * logs that were read ([] = the repo matches no Squad in teams.json, so nothing can be recorded). idea-941: there is no rollout
+ * window or other bypass switch; a missing verdict points at the per-commit owner/lead override (vs.verdictOverride). */
 export function formatVerdictRefusal(result, { action = "push", squads } = {}) {
   if (result.ok) return "";
   const short = (s) => String(s ?? "").slice(0, 8);
@@ -382,6 +387,12 @@ export function formatVerdictRefusal(result, { action = "push", squads } = {}) {
     );
   }
   lines.push("Get a review PASS on the exact tip (vs verdict <reviewer> --branch <unit> exits 0), then retry.");
+  if (result.refused.some((r) => r.reason !== "fail")) {
+    lines.push(
+      "Missing verdict: pre-restart PASS digests (written before the server restarted onto the verdict-writer build) never get the `verdict` field retroactively.",
+      "Re-review the tip, or the owner/lead overrides that one commit with vs.verdictOverride (below). There is no rollout window or global bypass (idea-941).",
+    );
+  }
   const shas = result.refused.map((r) => short(r.tip || r.sha)).join(",");
   lines.push(
     "Docs-only or lead-checked unit (no code reviewer, or a docs:<path> review, which names no commit): the lead overrides with the tip",

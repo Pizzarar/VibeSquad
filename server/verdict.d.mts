@@ -1,5 +1,6 @@
 export const VERDICT_LINE_RE: RegExp;
 export const VERDICT_PREFIX_SRC: string;
+export const VERDICT_WRITER_CAPABILITY: "attested-verdict";
 export function extractVerdictLine(text: unknown): string | null;
 export function parseVerdictLine(line: unknown): { verdict: "PASS" | "FAIL"; high: number | null; medium: number | null; low: number | null; severity: "H" | "M" | "L" | null; hash: string } | null;
 export function isDocsTarget(token: unknown): boolean;
