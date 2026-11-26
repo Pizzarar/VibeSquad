@@ -55,8 +55,21 @@ export function newFold() {
 //                runner reads that one line back by seq when it needs the prompt (role prompts stay out of the index);
 //   refused    - the last park-drain-refused, stopped the last bg-stopped, each since the last non-steer-only input (notices);
 //   lastStatus - the last status event's status/resume/ts (_cutTurn, the queue age); lastState that, or 'exited' after an exit;
-//   pending    - text inputs (not steer-only) after the last non-queued status: what a queued-then-restarted agent still owes;
+//   pending    - text inputs (not steer-only) not yet delivered: what a queued-then-restarted agent still owes. An untagged input
+//                is delivered by the next non-queued status (bar a queued park); one tagged `ownTurn` (or held by `inputs-held`) waits
+//                for a turn of its own and is delivered only by an `inputs-consumed` marker covering its seq (idea-869);
 //   seqMono    - every seq so far a safe integer above the one before: only then is a by-seq read of `park` that one event.
+//
+// INVARIANT (idea-869), when a pending input is consumed (leaves `pending`); nothing else ever removes one:
+//   - any input: at the first later `inputs-consumed` whose `upTo` is >= its seq (no `upTo`: every pending input);
+//   - untagged (every log older than idea-869, and an input that rides the next turn) also at the first later `status` that is
+//     not `queued` and not a park tagged `queued: true` (that park only freed a queued agent's process: nothing was delivered);
+//   - tagged `own` (input `ownTurn: true`, or named by a later `inputs-held`): ONLY by that marker; another turn's status never
+//     consumes it. The runner logs the marker when
+//     the job carrying the input is handed to the agent (_deliverJob), fails to start (_failJob), is dropped (archive), or when
+//     a restart left it behind a cut turn and the agent may no longer act on it (Runner._owedOwn / _dropOwed). A restart that
+//     finds own inputs no job carries re-queues them on the agent's next resume or send (_owedOwn), so each is delivered once
+//     and none is left to replay on a later queued restart (recoverQueued replays `pending` whole when the log ends queued).
 function newSpecFold() {
   return { seqMono: true, archived: false, park: null, refused: null, stopped: null, lastStatus: null, lastState: null, pending: [] };
 }
@@ -79,8 +92,15 @@ export function foldEvent(st, e) {
     st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined;
     st.lastStatus = { status: e.status, resume: e.resume, ts: e.ts };
     st.lastState = e.status;
-    if (e.status !== 'queued') { st.pending = []; if (e.status !== 'parked') st.park = null; }
+    // idea-868: a park tagged `queued: true` freed a queued agent's process: its queued inputs are still owed (not delivered).
+    // idea-869: a status delivers the inputs that ride the next turn (untagged: the legacy rule, every older log); an input that
+    // waits for a turn of its own (`own`) is another turn's status away from delivery and leaves only by an `inputs-consumed` marker.
+    if (e.status !== 'queued') { if (!(e.status === 'parked' && e.queued === true)) st.pending = st.pending.filter((p) => p.own === true); if (e.status !== 'parked') st.park = null; }
   }
+  // idea-869: the runner delivered (or failed/dropped) the job holding every input up to seq `upTo` (an agent's jobs run in send order).
+  else if (e.type === 'inputs-consumed') st.pending = Number.isSafeInteger(e.upTo) ? st.pending.filter((p) => !(Number.isSafeInteger(p.seq) && p.seq <= e.upTo)) : [];
+  // idea-869: untagged inputs (an older runner's coalesced queue) re-admitted as a later turn of their own: owed until consumed.
+  else if (e.type === 'inputs-held') { const seqs = new Set(Array.isArray(e.seqs) ? e.seqs : []); st.pending = st.pending.map((p) => (seqs.has(p.seq) ? { ...p, own: true } : p)); }
   else if (e.type === 'parked') st.park = { seq: e.seq, ts: e.ts, sessionId: e.sessionId, prompt: e.systemPrompt != null };
   else if (e.type === 'park-drain-refused') st.refused = { drain: e.drain, work: e.work };
   else if (e.type === 'bg-stopped') st.stopped = { work: e.work };
@@ -88,7 +108,11 @@ export function foldEvent(st, e) {
     if (!e.steerOnly) { // a steer-only input joined a running turn: the notices still owe, and it never starts a turn
       st.refused = null;
       st.stopped = null;
-      if (typeof e.text === 'string') st.pending.push({ text: e.text, owner: e.owner, ts: e.ts });
+      if (typeof e.text === 'string') {
+        const seq = Number.isSafeInteger(e.seq) ? { seq: e.seq } : {};
+        // idea-869: `resume` marks a cut turn's continue (CONTINUE_PROMPT): recovery keeps it first and its own turn (turnGroups).
+        st.pending.push({ text: e.text, owner: e.owner, ts: e.ts, ...seq, ...(e.ownTurn === true && seq.seq !== undefined ? { own: true } : {}), ...(e.resume === true ? { resume: true } : {}) });
+      }
     }
   }
   // K2b: `compacted` marks the ACP adapter's post-compact ESTIMATE (no real reading until the next turn); the crossing re-arm ignores it.
@@ -140,7 +164,7 @@ export function loadFold(o) {
   // resume paths decide park/resume/lost/cut from them, so the entry is folded from 0 instead. FOLD_VERSION already drops an
   // index from older fold code wholesale; this is the per-entry backstop. A missing key reads as undefined, which fails here.
   if (typeof o.seqMono !== 'boolean' || typeof o.archived !== 'boolean') throw new Error('bad spec fold');
-  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string')) throw new Error('bad spec fold');
+  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string' && (p.seq === undefined || Number.isSafeInteger(p.seq)) && (p.own === undefined || p.own === true) && (p.resume === undefined || p.resume === true))) throw new Error('bad spec fold');
   for (const k of ['park', 'refused', 'stopped', 'lastStatus']) if (o[k] !== null && !isObj(o[k])) throw new Error('bad spec fold');
   if (o.park !== null && typeof o.park.prompt !== 'boolean') throw new Error('bad spec fold');
   if (o.lastState !== null && typeof o.lastState !== 'string') throw new Error('bad spec fold'); // a non-string status already fails o.status
