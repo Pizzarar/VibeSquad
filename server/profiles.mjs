@@ -31,7 +31,7 @@ export {
 };
 
 export const SHARED_NOTE_PREFIX = [
-  "Project rules first: read the repo's AGENTS.md (or CLAUDE.md), and docs/LEAD_RULES.md if you are a lead. Where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
+  "Project rules first: if the repo has AGENTS.md or CLAUDE.md (and, for leads, docs/LEAD_RULES.md), read them; where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
   "To find your current lead: run `vs who lead`. It returns the single live lead for your team and lane (never `(old)` or `former-lead`), or `NONE` / `CONFLICT`. Check existing lane Buddies with `vs who brainstorm`.",
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
@@ -84,7 +84,7 @@ export const BRAINSTORM_NOTE_BODY = [
   PRIOR_ART_CHECK_RULE,
   "Starting agents: you may spawn leads (including several in parallel) when a lane has none; other agents (tooling, research, prototypes) only when the owner asks.",
   SPIN_UP_BUDDY_RULE,
-  "If the repo has a brainstorm brief (see AGENTS.md), read it first.",
+  "If the repo has a brainstorm brief (docs/brainstorm/<lane>.md), read it first.",
 ].join("\n");
 
 export const ART_PAINTER_NOTE_BODY = [
