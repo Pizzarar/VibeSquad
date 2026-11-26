@@ -109,6 +109,7 @@ writeFileSync(
   join(dir, "react-hooks.mjs"),
   `export * from ${JSON.stringify(reactUrl)};
 export const useRef = (init) => { const h = globalThis.__hs; const k = h.i++; if (!h.slots[k]) h.slots[k] = { current: init }; return h.slots[k]; };
+export const useMemo = (fn) => fn();
 export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
 // BoringApp now owns a 30s `now` tick (R3 L1); the useEffect stub really runs it, so unref it or node never exits.
@@ -128,7 +129,7 @@ stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); exp
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);
 writeFileSync(join(dir, "projectOrder.mjs"), transformSync("projectOrder.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "projectOrder.ts"), "utf8"), { lang: "ts" }).code);
-stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
+stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const clearRightPane = ${rec("clearRightPane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
 stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {}; export const setBoringScreenKeys = () => {}; export const setBoringLandedGen = () => {};`);
@@ -1099,7 +1100,7 @@ test("D3a: boring.css section is appended, scoped, and never accent-fills the he
   const i = css.indexOf("/* ===== D3a (@desk, UX_REVIEW 2.6): BoringAgentHeader ===== */");
   assert.ok(i > 0 && css.indexOf("/* ===== D3", i + 10) === -1, "section present and last");
   const sect = css.slice(i);
-  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media") && !line.startsWith("@container")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
   assert.ok(!/\.boring-agent-menu[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
   assert.ok(!/\.boring-hdr-btn[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
 });
@@ -2412,7 +2413,7 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const i = css.indexOf("/* ---- B13d:");
   assert.ok(i > 0);
   const sect = css.slice(i);
-  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media") && !line.startsWith("@container")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
   assert.ok(!/@keyframes/.test(sect));
   assert.match(sect, /\.boring-now\[data-state="busy"\] \.boring-now-big \{ box-shadow: 0 0 0 2px var\(--living-warm\)/);
   assert.match(sect, /\.boring-now\[data-state="idle"\] \.boring-now-big \{ filter: grayscale/);

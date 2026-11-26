@@ -107,8 +107,8 @@ test("empty-lane quick-jumps: sibling role, live worker, other active lanes (nev
 
 test("r3/r4: Start Brainstorm from the right pane keeps the split; right card is pane-local; Esc returns focus to Split; labels", () => {
   const ade = read("src", "BoringAde.tsx"), pf = read("src", "pinFocus.ts"), pp = read("src", "BoringPanePicker.tsx");
-  // UX M4: spinUpPin(..., "right") carries `into` on PinFocus so reconcile + post-resolve both call show(..., "right")
-  assert.match(pf, /const show = \(id: string, into\?: "right"\) => \{\n  if \(into === "right" && getPanes\(\)\.split\) return openAgentInTab\(id, "right"\);/);
+  // UX M4 + B18d N9: spinUpPin(..., "right") carries `into` on PinFocus; if split closed mid-start, show(id, "right") no-ops
+  assert.match(pf, /const show = \(id: string, into\?: "right"\) => \{\n  if \(into === "right"\) \{\n    if \(getPanes\(\)\.split\) openAgentInTab\(id, "right"\);\n    return;/);
   assert.match(pf, /into\?: "right"/);
   assert.match(pf, /if \(d\.open \|\| f\.into === "right"\) show\(d\.agentId, f\.into\);/);
   assert.match(pf, /show\(id, f\.into \?\? into\)/);
@@ -229,7 +229,7 @@ test("r4 M4 behavioral: spinUpPin(..., 'right') keeps split when agent lands in 
     resolveSpawn2("new-bs-2");
     await p2;
 
-    // Case 3: user closes split mid-spawn -> does NOT re-open split
+    // Case 3 (B18d / UX N9): user closes split mid-spawn -> does NOT re-open split AND does NOT steal single-pane focus (reconcile path)
     callsLog.length = 0;
     panes.split = true; panes.leftActiveId = "left-agent"; panes.rightActiveId = null;
     currentPin = { ...currentPin, brainstorm: null };
@@ -241,6 +241,21 @@ test("r4 M4 behavioral: spinUpPin(..., 'right') keeps split when agent lands in 
     resolveSpawn3("new-bs-3");
     await p3;
     assert.equal(panes.split, false, "closing split mid-spawn does not re-open it");
+    assert.equal(panes.leftActiveId, "left-agent", "B18d N9: closing split mid-spawn leaves single-pane agent untouched");
+    assert.ok(!callsLog.some((c) => c[0] === "openAgent" || c[0] === "openAgentInTab"), "B18d N9: show(id, 'right') no-ops when split closed");
+
+    // Case 4 (B18d / UX N9): user closes split mid-spawn, agent arrives only on promise resolve (no mid-flight reconcile) -> still no-op
+    callsLog.length = 0;
+    panes.split = true; panes.leftActiveId = "left-agent"; panes.rightActiveId = null;
+    currentPin = { ...currentPin, brainstorm: null };
+    let resolveSpawn4;
+    const p4 = spinUpPin(currentPin, undefined, () => new Promise((r) => { resolveSpawn4 = r; }), "right");
+    panes.split = false;
+    resolveSpawn4("new-bs-4");
+    await p4;
+    assert.equal(panes.split, false, "B18d N9 post-resolve: closing split mid-spawn does not re-open it");
+    assert.equal(panes.leftActiveId, "left-agent", "B18d N9 post-resolve: single-pane agent untouched");
+    assert.ok(!callsLog.some((c) => c[0] === "openAgent" || c[0] === "openAgentInTab"), "B18d N9 post-resolve: show(id, 'right') no-ops");
   } finally {
     delete globalThis.__b17pf;
     rmSync(pfDir, { recursive: true, force: true });
@@ -253,7 +268,7 @@ test("CSS: fluid measure vars, B17 section scoped/single-line, Psycho + styles.c
   const a = css.indexOf("/* ---- B17 deadspace"), b = css.indexOf("/* --- D4 polish");
   assert.ok(a > 0 && b > a, "B17 section sits before D4 polish");
   const sec = css.slice(a, b);
-  for (const line of sec.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*"))) assert.match(line, /^html\[data-vibe="boring"\] /);
+  for (const line of sec.split("\n").filter((l) => l.includes("{") && !l.startsWith("/*") && !l.startsWith("@container"))) assert.match(line.trim(), /^html\[data-vibe="boring"\] /);
   assert.doesNotMatch(sec, /!important|@media|@keyframes/);
   assert.ok(sec.includes(".boring-empty-card { max-width: 720px;"));
   for (const sel of [".timeline > *", ".composer > *", ".perm-card", '[data-testid="tl-pinned-todo"]']) assert.ok(css.includes(`html[data-vibe="boring"] ${sel} {`) , sel);
