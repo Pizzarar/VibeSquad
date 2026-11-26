@@ -21,7 +21,7 @@ import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "..
 import { lookupRole } from "../role-route.mjs";
 import { SPAWN_REASON, formatSoftReason, routeSoftReason, routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
 import { ART_DUET, ART_PAINTERS } from "../art-duet.mjs";
-import { NEEDS_YOU_KINDS, validateNeedsYouFields } from "../needs-you-fields.mjs";
+import { NEEDS_YOU_KINDS, NEEDS_YOU_LETTERED_WARNING, namesLetteredOptions, validateNeedsYouFields } from "../needs-you-fields.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -730,7 +730,8 @@ async function reportTool(ctx, args = {}) {
   const fields = validateNeedsYouFields(type, text, structured);
   await verifyCaller(ctx); // X1b: 403 on a bad token before the server is asked; the server re-attributes the entry
   const entry = await ctx.writeLog({ type, text, refs: args.refs, ...(fields ?? {}) });
-  return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}) };
+  const warning = type === "needs-you" && namesLetteredOptions(text) && !(Array.isArray(args.alt) ? args.alt.length : clean(args.alt)) ? NEEDS_YOU_LETTERED_WARNING : "";
+  return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}), ...(warning ? { warning } : {}) };
 }
 
 const HANDOFF_DEDUPE_MS = 10 * 60_000;

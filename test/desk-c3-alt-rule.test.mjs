@@ -59,3 +59,9 @@ test("writer rule is in the role prompt and docs/WORKFLOWS.md", () => {
   assert.match(readFileSync("server/hooks/agent-duties.ts", "utf8"), /Never log a needs-you that asks \\"A, B or C\?\\" without one `--alt` per option/);
   assert.match(readFileSync("docs/WORKFLOWS.md", "utf8"), /never log "A, B or C\?" without one `--alt` per option/);
 });
+
+test("idea-1142: phone cockpit vs:decision rule says each alt defines its option and do: defines the lean", async () => {
+  const { HUB_LEAD_RULES } = await import("../server/hooks/agent-duties.ts");
+  assert.match(HUB_LEAD_RULES, /alt: <label>: <what it means, one line>/);
+  assert.match(HUB_LEAD_RULES, /`do:` names and defines the lean/);
+});
