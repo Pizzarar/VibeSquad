@@ -3,7 +3,7 @@
 // Entity   = { id, kind, display, aliases[], source:{path,line}, links:[{rel,kind,id,project?}], production, data:{},
 //              productionSlots?:{[slot]: state|null} }
 // Snapshot = { schemaVersion:1, project, ref, sha, generatedAt, entities[], findings[], warnings[] }
-// Finding  = { check:'#1'..'#12', severity:'error'|'warn'|'info', entityRef:{kind,id}|null, msg, source:{path,line}|null }
+// Finding  = { check:'#1'..'#12'|'#18', severity:'error'|'warn'|'info', entityRef:{kind,id}|null, msg, source:{path,line}|null }
 //
 // Identity is (kind,id) inside a project, NOT id alone: EFI's `doc` is both a trader and a squad member. Across projects
 // it is the studio ID <project>:<kind>:<id> (ids.mjs).
@@ -15,7 +15,7 @@ import { PROJECT_RE } from "./ids.mjs";
 export const SCHEMA_VERSION = 1;
 export const PRODUCTION_STATES = Object.freeze(["missing", "placeholder", "ai-draft", "needs-review", "final"]);
 export const SEVERITIES = Object.freeze(["error", "warn", "info"]);
-export const CHECK_IDS = Object.freeze(Array.from({ length: 12 }, (_, i) => `#${i + 1}`));
+export const CHECK_IDS = Object.freeze([...Array.from({ length: 12 }, (_, i) => `#${i + 1}`), "#18"]);
 
 const isStr = (v) => typeof v === "string";
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
@@ -64,7 +64,7 @@ export function makeSchema(table) {
   function validateFinding(f) {
     const errors = [];
     if (!isObj(f)) return { ok: false, errors: ["finding is not an object"] };
-    if (!CHECK_IDS.includes(f.check)) errors.push(`check must be one of #1..#12`);
+    if (!CHECK_IDS.includes(f.check)) errors.push(`check must be one of #1..#12 or #18`);
     if (!SEVERITIES.includes(f.severity)) errors.push(`severity must be ${SEVERITIES.join("|")}`);
     if (f.entityRef !== null && !(isObj(f.entityRef) && ALL_KINDS.includes(f.entityRef.kind) && isStr(f.entityRef.id) && f.entityRef.id !== "")) errors.push("entityRef must be {kind,id} or null");
     if (!isStr(f.msg) || !f.msg) errors.push("msg must be a non-empty string");
