@@ -730,7 +730,7 @@ async function reportTool(ctx, args = {}) {
   const fields = validateNeedsYouFields(type, text, structured);
   await verifyCaller(ctx); // X1b: 403 on a bad token before the server is asked; the server re-attributes the entry
   const entry = await ctx.writeLog({ type, text, refs: args.refs, ...(fields ?? {}) });
-  const warning = type === "needs-you" && namesLetteredOptions(text) && !(Array.isArray(args.alt) ? args.alt.length : clean(args.alt)) ? NEEDS_YOU_LETTERED_WARNING : "";
+  const warning = type === "needs-you" && namesLetteredOptions(text) && !fields?.alt?.length ? NEEDS_YOU_LETTERED_WARNING : "";
   return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}), ...(warning ? { warning } : {}) };
 }
 

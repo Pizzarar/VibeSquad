@@ -372,6 +372,8 @@ test('report needs-you: lettered options without alts warn (idea-1142); alts pre
   assert.equal(ctx.logs.length, 1, 'still logged');
   const r2 = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['B: slow', 'C: skip'] });
   assert.equal(r2.warning, undefined);
+  const rd = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['A: fast'] });
+  assert.match(rd.warning, /lettered/, 'an alt that duplicates do is stripped, so it still warns');
   const r3 = await callTool(ctx, 'report', { type: 'blocker', text: 'Pick A, B, or C?' });
   assert.equal(r3.warning, undefined);
 });
