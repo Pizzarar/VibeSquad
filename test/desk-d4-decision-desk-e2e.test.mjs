@@ -464,6 +464,12 @@ for (const cfg of [
             return { st, ev };
           }),
           widths: [...document.querySelector(".boring-decision-strip-line").children].map((c) => Math.round(c.getBoundingClientRect().width)),
+          dots: [...document.querySelectorAll(".boring-decision-strip-line")].map((l) => ({
+            gap: l.querySelector(".boring-decision-strip-lane-name").getBoundingClientRect().left - l.querySelector(".boring-decision-dot").getBoundingClientRect().right,
+            h: l.getBoundingClientRect().height,
+            dbg: [l.getBoundingClientRect().height, ...[...l.children].map((c) => Math.round(c.getBoundingClientRect().height))].join("/"),
+            codeWrap: (() => { const c = l.querySelector(".boring-decision-code"); return c ? c.getBoundingClientRect().height > 22 : false; })(),
+          })),
           eventTrunc: [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent),
           squadHeadPosition: getComputedStyle(squadBtn).position,
           barTop: bar.top,
@@ -485,6 +491,13 @@ for (const cfg of [
         assert.ok(g.strip.left >= g.feed.right, `wide rail sits right of feed (${JSON.stringify(g)})`);
         assert.ok(Math.abs(g.strip.top - g.feed.top) < 40, "wide rail aligns with top of feed");
         assert.equal(g.fade.present, false, "P2b r2 L1: no strip fade element in wide mode");
+        {
+          const gaps = g.dots.map((d) => d.gap), hs = g.dots.map((d) => d.h);
+          assert.ok(Math.min(...gaps) >= 0, `P2b r3: status dot never overlaps lane name (min gap ${Math.min(...gaps)})`);
+          assert.ok(Math.max(...hs) - Math.min(...hs) <= 1, `P2b r3: rail lines uniform height (${Math.min(...hs)}..${Math.max(...hs)}) ${JSON.stringify(g.dots.map((d) => d.dbg))}`);
+          assert.ok(g.dots.every((d) => !d.codeWrap), "P2b r3: code chips do not wrap");
+          console.log(`P2b r3 ${cfg.name}: minDotNameGap=${Math.min(...gaps)} lineH=${Math.min(...hs)}..${Math.max(...hs)}`);
+        }
         {
           const stL = g.cols.map((c) => c.st), evL = g.cols.map((c) => c.ev);
           assert.ok(g.cols.length >= 10, `rail has many lines (${g.cols.length})`);

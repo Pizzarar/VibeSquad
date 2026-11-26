@@ -2265,8 +2265,8 @@ html[data-vibe="boring"] .boring-decision-desk:not(.is-wide) .boring-decision-st
 /* P2b r2 (UX R40 m1): one shared column set for every rail line across all Squads via nested subgrid */
 html[data-vibe="boring"] .is-wide .boring-decision-strip-groups {
   display: grid;
-  grid-template-columns: 10px max-content max-content max-content minmax(0, 1fr) auto;
-  column-gap: 6px;
+  grid-template-columns: max-content max-content max-content max-content minmax(0, 1fr) auto;
+  column-gap: 4px;
   row-gap: 10px;
 }
 html[data-vibe="boring"] .is-wide .boring-decision-strip-squad,
@@ -2277,7 +2277,8 @@ html[data-vibe="boring"] .is-wide .boring-decision-strip-line {
   grid-template-columns: subgrid;
 }
 html[data-vibe="boring"] .is-wide .boring-decision-strip-squad { row-gap: 4px; }
-html[data-vibe="boring"] .is-wide .boring-decision-strip-line { padding-inline: 6px; }
+html[data-vibe="boring"] .is-wide .boring-decision-strip-line { padding-inline: 2px; }
+html[data-vibe="boring"] .is-wide .boring-decision-strip-squad { padding-inline: 4px; }
 html[data-vibe="boring"] .is-wide .boring-decision-strip-lanes { row-gap: 2px; }
 html[data-vibe="boring"] .is-wide .boring-decision-strip-squad-btn,
 html[data-vibe="boring"] .is-wide .boring-decision-quiet-btn {
@@ -2287,5 +2288,15 @@ html[data-vibe="boring"] .is-wide .boring-decision-strip-lane-name {
   max-width: 112px;
 }
 html[data-vibe="boring"] .is-wide .boring-decision-code-slot {
-  max-width: 58px;
+  max-width: 62px;
 }
+html[data-vibe="boring"] .is-wide .boring-decision-code {
+  display: block;
+  line-height: 16px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* P2b r3: tag chip keeps rail lines a uniform height */
+html[data-vibe="boring"] .is-wide .boring-decision-strip-event .boring-decision-ev-tag { line-height: 16px; }

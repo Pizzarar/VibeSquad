@@ -941,7 +941,7 @@ export function BoringDecisionDesk({
                           >
                             <span className={`boring-decision-dot st-${stClass}`} aria-hidden="true" />
                             <span className="boring-decision-strip-lane-name">{lane.label}</span>
-                            <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code">{lane.code}</code> : null}</span>
+                            <span className="boring-decision-code-slot">{lane.code ? <code className="boring-decision-code" title={lane.code}>{lane.code}</code> : null}</span>
                             <span className={`boring-decision-strip-state st-${stClass}`}>{leadStateLabel(lane)}</span>
                             <span className="boring-decision-strip-event" title={lane.lastEvent || undefined}>
                               {lane.lastEvent ? (
