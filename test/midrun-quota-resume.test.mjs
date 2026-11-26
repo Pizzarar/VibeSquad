@@ -4,6 +4,7 @@
 // SAME linked worktree with a resume brief (original goal + git commits/diff + last report), links old->new
 // agent id (labels + decision log + watch retargeting), keeps 0-turn behavior intact, enforces all 4 invariants.
 // Temp homes and temp git repos only: never touches the host's ~/.vibesquad or the real repo.
+import "./setup/hermetic.mjs"; // hermetic env for a direct `node --test <file>` run (run-tests.mjs preloads this)
 import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
