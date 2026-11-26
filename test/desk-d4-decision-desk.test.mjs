@@ -53,6 +53,8 @@ writeFileSync(join(dir, "boringLocation.mjs"), transformSync("boringLocation.ts"
 stub("pins.mjs", `export const isHubPin = (p) => Boolean(p.lane.hub); export const pinsForSquad = (v) => ({ pinned: v.pins ?? [], done: [] }); export const isLive = (m) => Boolean(m) && !m.agent.archivedAt && m.agent.status !== "closed"; export const liveBuddyId = (p) => (isLive(p.brainstorm) ? p.brainstorm.agent.id : null); export const quickBugsChipState = (v) => v.bugs ?? { pin: null, leadRunning: false, needsYou: 0 }; export const perfectionPin = () => null;`);
 stub("skyZonesLogic.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("ui.mjs", `export const StatusDot = () => null; export const cleanTitle = (t) => String(t ?? "").replace(/^★\\s*lead\\s*·\\s*/i, "").trim();`);
+stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
+writeFileSync(join(dir, "decisionFilter.mjs"), transformSync("decisionFilter.ts", readFileSync(join(ROOT, "src", "decisionFilter.ts"), "utf8"), { lang: "ts" }).code.replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`));
 
 const ddSrc = readFileSync(join(ROOT, "src", "BoringDecisionDesk.tsx"), "utf8");
 const ddCode = transformSync("BoringDecisionDesk.tsx", ddSrc, { lang: "tsx", jsx: { runtime: "classic" } })

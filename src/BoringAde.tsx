@@ -1327,7 +1327,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         )}
         {!opening && mode === "decisions" && (
           <div className="boring-dashboard-wrap boring-decision-wrap" data-testid="boring-decisions-view">
-            <BoringDecisionDesk views={awakeViews} now={now} onOpenAgent={openAgentIn} onOpenProject={(id) => { onSelectSquad(id); setMode("project"); }} />
+            <BoringDecisionDesk views={allViews} folders={folders} now={now} onOpenAgent={openAgentIn} onOpenProject={(id) => { onSelectSquad(id); setMode("project"); }} />
           </div>
         )}
         {!opening && mode === "usage" && (
