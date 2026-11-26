@@ -67,6 +67,35 @@ export function routeSoftReason(routeText) {
   return m ? m[1] : "";
 }
 
+/** Provider id -> the one name the UI uses for it (also src/roleSpawn.ts PROVIDER_NAME). */
+export const PROVIDER_DISPLAY_NAME = { claude: "Claude", "agy-claude": "Claude (AGY)", "antigravity-cli": "Gemini", opencode: "OpenCode" };
+const displayName = (id) => PROVIDER_DISPLAY_NAME[id] ?? id;
+
+/**
+ * C fu2 UX m1: ONE formatter for the soft reason in UI text (drawer tooltip, New Agent badge tooltip, spawn_worker result).
+ * "claude pool 78% >= soft 70: interruptible only -> antigravity-cli" -> "Claude pool at 78%, soft line 70%". The raw `>=` / `->`
+ * tail stays in the server strings (machine detail); `family` names the skipped pool when the caller knows it, otherwise
+ * the leading family token in `raw` is used (never guessed backwards from the `-> <target>` tail).
+ * @param {string} raw @param {{ family?: string }} [opts]
+ */
+export function formatSoftReason(raw, { family = "" } = {}) {
+  const s = String(raw ?? "").trim();
+  const explicitFam = String(family ?? "").trim();
+  if (!s) return explicitFam ? `${displayName(explicitFam)} pool past its soft line` : "";
+  const tail = /\s*->\s*(\S+)\s*$/.exec(s);
+  const body = (tail ? s.slice(0, tail.index) : s).trim();
+  const m = /^(?:([a-z0-9-]+)\s+)?pool (\d+(?:\.\d+)?)% >= soft (\d+(?:\.\d+)?)/i.exec(body);
+  if (m) {
+    const fam = explicitFam || (m[1] ? m[1].toLowerCase() : "");
+    return `${fam ? `${displayName(fam)} pool` : "Pool"} at ${m[2]}%, soft line ${m[3]}%`;
+  }
+  const noRow = /^no quota row for ([^:]+)/i.exec(body);
+  if (noRow) return `No quota row for ${noRow[1].split("+").map((p) => displayName(p.trim())).join(" + ")}`;
+  const softPref = /^([a-z0-9-]+)\s+soft quota\b/i.exec(body);
+  const fam = explicitFam || (softPref ? softPref[1].toLowerCase() : "");
+  return fam ? `${displayName(fam)} pool past its soft line` : "Pool past its soft line";
+}
+
 /** `Implement · claude-sonnet-5-5 · arm` (parts that are empty drop out). */
 export function spawnShownLine({ role, model, reason }) {
   return [role, model, reason].map((s) => String(s ?? "").trim()).filter(Boolean).join(" · ");

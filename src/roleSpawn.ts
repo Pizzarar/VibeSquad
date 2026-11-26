@@ -4,7 +4,7 @@
 //   - no model unless the spawner picked an override; stakes go in labels.stakes (as spawn_worker does);
 //   - an override sends provider (+ model) AND the `vs.route-override` label (same shape spawn_worker stamps).
 
-import { LEGACY_SPAWN_REASONS, SPAWN_REASON, routeSoftReason, routeWhy } from "../server/spawn-reason.mjs";
+import { LEGACY_SPAWN_REASONS, PROVIDER_DISPLAY_NAME, SPAWN_REASON, formatSoftReason, routeSoftReason, routeWhy } from "../server/spawn-reason.mjs";
 import { INTERRUPTIBLE_KINDS, isInterruptibleWork } from "../server/interruptible-work.mjs";
 
 /** Same shape as routeOverrideLabel in server/route-override.mjs (no .d.ts for it; test/r1-fix-ui-r2-spawn.test.mjs pins parity). */
@@ -17,13 +17,24 @@ export function drawerSpawnWhy(labels: Record<string, string>, liveModel: string
   if (staged) return "";
   const spawned = labels["vs.model"];
   if (spawned && liveModel && liveModel !== spawned) return "override";
+  if (armSoftReason(labels)) return SPAWN_REASON.SOFT;
   return routeWhy(labels["vs.route"]);
 }
 
 /** C fu1 L3: the soft-line text the hook put on `vs.route` (` soft="..."`), "" when the route skipped no soft family. */
 export function drawerSoftReason(labels: Record<string, string>): string {
-  return routeSoftReason(labels["vs.route"]);
+  return routeSoftReason(labels["vs.route"]) || armSoftReason(labels);
 }
+
+/** C fu2 L1: an exp6 Sonnet/Neon pick that skipped an arm for its soft line left the soft text on `vs.arm-reason` (the hook
+ *  then sees an ordinary pick); a hard cap skip says `capped:...` there, so it never matches. */
+export function armSoftReason(labels: Record<string, string>): string {
+  const r = labels["vs.arm-reason"] ?? "";
+  return /(?:pool \d+(?:\.\d+)?% >= soft|soft quota: interruptible only)/.test(r) ? r : "";
+}
+
+/** One shared UI text for the soft reason ("Claude pool at 78%, soft line 70%"); see server/spawn-reason.mjs. */
+export { formatSoftReason };
 
 /** One word per reason in the UI: the server's SPAWN_REASONS words (server/spawn-reason.mjs); an old label value still on a
  *  live agent reads as today's word (LEGACY_SPAWN_REASONS). */
@@ -35,7 +46,7 @@ export const SPAWN_REASON_GLOSS: Record<string, string> = {
   [SPAWN_REASON.ARM]: "Arm: an alternating Sonnet/Gemini trial picked this model.",
   [SPAWN_REASON.OVERRIDE]: "Override: you or the caller picked the provider or model.",
   [SPAWN_REASON.FAILOVER]: "Failover: the preferred provider was capped, so a fallback ran instead.",
-  [SPAWN_REASON.SOFT]: "Soft line: the preferred pool is past its soft quota line, so only interruptible work runs there and this ran on the next pool with room.",
+  [SPAWN_REASON.SOFT]: "Soft line: the preferred provider passed the quota line, so a fallback ran.",
   [SPAWN_REASON.LEGACY_NAME]: "Legacy name: an old profile name ran its stored profile.",
   [SPAWN_REASON.ALL_CAPPED]: "All capped: every provider was capped, so it started on the first and waits or fails over.",
 };
@@ -45,15 +56,22 @@ export function spawnChipTitle(opts: { role?: string; model?: string; reason: st
   const head = [opts.role, opts.model].filter(Boolean).join(" · ");
   if (opts.staged) return `${head} (staged switch: applies on your next message)`;
   const reason = spawnReasonLabel(opts.reason);
-  const gloss = reason ? (SPAWN_REASON_GLOSS[reason] ?? "") : "";
+  // C fu2 m1/m2: cause before result, "soft line" at most once per tooltip, never the raw `>=` / `->` route text.
+  const softText = reason === SPAWN_REASON.SOFT && opts.softReason ? formatSoftReason(opts.softReason) : "";
+  const softInline = softText
+    .replace(/, soft line (\d+(?:\.\d+)?%)/i, " (line $1)")
+    .replace(/\bpast its soft line\b/i, "past the line");
+  const gloss = softInline
+    ? `Soft line: ${softInline}, so a fallback ran.`
+    : reason
+      ? (SPAWN_REASON_GLOSS[reason] ?? "")
+      : "";
   const on = (reason === SPAWN_REASON.FAILOVER || reason === SPAWN_REASON.SOFT) && opts.provider ? ` Runs on ${opts.provider}.` : "";
-  // C fu1 L3: the soft line's own words (e.g. "pool 78% >= soft 70: interruptible only -> antigravity-cli").
-  const soft = reason === SPAWN_REASON.SOFT && opts.softReason ? ` (${opts.softReason})` : "";
-  return [head, gloss + on + soft].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
+  return [head, gloss + on].filter(Boolean).join(". ").replace(/\.\./g, ".").trim();
 }
 
 /** Provider id -> the name the role editor shows. */
-export const PROVIDER_NAME: Record<string, string> = { claude: "Claude", "agy-claude": "Claude (AGY)", "antigravity-cli": "Gemini", opencode: "OpenCode" };
+export const PROVIDER_NAME: Record<string, string> = PROVIDER_DISPLAY_NAME;
 export const providerName = (id: string) => PROVIDER_NAME[id] ?? id;
 
 const AGY_CLAUDE_FAMILY = "agy-claude";
@@ -141,7 +159,7 @@ export function landingPick(
   ladder: LadderLike | undefined,
   stakes: string,
   opts: { capped?: readonly string[]; softCapped?: readonly string[] | Record<string, string | boolean>; unknown?: readonly string[]; kind?: string; override?: Override | null; roleKey?: string } = {},
-): { provider: string; model: string; via: string; allCapped: boolean } {
+): { provider: string; model: string; via: string; allCapped: boolean; detail?: string } {
   const ov = opts.override ?? null;
   const capped = opts.capped ?? [];
   const tier = tierFor(role, stakes);
@@ -162,22 +180,26 @@ export function landingPick(
   const pick = softInPlay ? (free.find((p) => !unknownSet.has(p)) ?? free[0]) : free[0];
   if (pick) {
     const skipped = ov ? [`${providerName(ov.provider)} capped`] : [];
+    const detail: string[] = ov ? [`${providerName(ov.provider)} capped`] : [];
     let soft = false;
     for (const provider of walk) {
       if (provider === pick) break;
-      if (capped.includes(provider)) skipped.push(`${providerName(provider)} capped`);
+      if (capped.includes(provider)) { skipped.push(`${providerName(provider)} capped`); detail.push(`${providerName(provider)} capped`); }
       else if (softMap.has(provider)) {
         soft = true;
         const msg = softMap.get(provider);
+        detail.push(formatSoftReason(msg || "", { family: provider }));
         skipped.push(msg ? `${providerName(provider)} ${msg}` : `${providerName(provider)} past soft line`);
       } else if (unknownSet.has(provider)) {
         soft = true;
         skipped.push(`${providerName(provider)} no quota row`);
+        detail.push(`No quota row for ${providerName(provider)}`);
       }
     }
     // The hook keeps the caller's model only when it belongs to the hop target's family; this badge has no family table, so it shows the ladder model.
-    const via = skipped.length ? `${soft ? "soft" : "failover"} (${skipped.join(", ")} → ${providerName(pick)})` : "ladder";
-    return { provider: pick, model: modelOf(pick), via, allCapped: false };
+    // C fu2 m2: the badge is the short label ("soft" / failover (...)); the soft detail rides the tooltip (`detail`).
+    const via = skipped.length ? (soft ? "soft" : `failover (${skipped.join(", ")} → ${providerName(pick)})`) : "ladder";
+    return { provider: pick, model: modelOf(pick), via, allCapped: false, ...(soft ? { detail: `${detail.join("; ")}. Runs on ${providerName(pick)}.` } : {}) };
   }
 
   // Pass 2: every family is past soft (or hard). Fall back to the first family under the hard line.

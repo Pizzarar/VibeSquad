@@ -19,7 +19,7 @@ import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, read
 import { claimHoldNotice, holdText, laneSpawnHold, releaseHoldNotice, spawnStreakPath } from "../spawn-streak.mjs";
 import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 import { lookupRole } from "../role-route.mjs";
-import { routeSoftReason, routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
+import { SPAWN_REASON, formatSoftReason, routeSoftReason, routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
 import { ART_DUET, ART_PAINTERS } from "../art-duet.mjs";
 import { NEEDS_YOU_KINDS, validateNeedsYouFields } from "../needs-you-fields.mjs";
 
@@ -600,7 +600,7 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   // pick: after the hook, no model means the provider's own default runs, so the pre-hook `model` would name one that doesn't.
   const hookWhy = routeWhy(agent?.labels?.["vs.route"]);
   const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || (hookWhy ? "" : model) || "";
-  const reasonShown =
+  let reasonShown =
     hookWhy ||
     shownSpawnReason({
       // A pre-R2 hook's `reason=` (no `why=`) still names a failover; so does an agent that came back on another provider
@@ -613,11 +613,13 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
       routed: Boolean(profile),
     });
   const roleName = lookupRole(profile?.name || profileName)?.role?.name || "";
+  // C fu2 L1: an arm pick that skipped a family for its soft line shows `soft`, distinct from a hard cap skip (`capped`).
+  if (ab?.soft) reasonShown = SPAWN_REASON.SOFT;
   result.spawned = spawnShownLine({ role: roleName, model: actualModel, reason: reasonShown });
   // C fu1 L3: name the soft line itself ("pool 78% >= soft 70: interruptible only -> antigravity-cli"), from the hook's
   // vs.route or an arm pick that skipped a soft pool; a soft skip is never reported as capped.
   const softShown = routeSoftReason(agent?.labels?.["vs.route"]) || (ab?.soft ? String(ab.reason ?? "") : "");
-  if (softShown) result.soft = softShown;
+  if (softShown) result.soft = formatSoftReason(softShown); // machine text stays on result.ab.reason
   if (ab) {
     const shown = labels.profile ?? profileName;
     result.ab = {

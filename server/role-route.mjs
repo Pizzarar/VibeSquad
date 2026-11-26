@@ -387,8 +387,9 @@ export function resolveRoute({ role, stakes, kind, explicit, caps, softCaps, unk
         const unknownHit = head.filter((p) => !capped.has(p) && !softMap.has(p) && unknownSet.has(p));
         if (softHit || (softInPlay && unknownHit.length)) {
           softFailover = true;
+          const rawMsg = softHit ? softMap.get(softHit) : "";
           const baseMsg = softHit
-            ? softMap.get(softHit) || "soft quota: interruptible only"
+            ? (rawMsg ? (rawMsg.startsWith(`${softHit} `) ? rawMsg : `${softHit} ${rawMsg}`) : `${softHit} soft quota: interruptible only`)
             : `no quota row for ${unknownHit.join("+")}: ranked after known under soft`;
           softReason = `${baseMsg} -> ${provider}`;
         }

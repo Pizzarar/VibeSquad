@@ -27,7 +27,8 @@ import { decideArm, readArmCaps } from "../server/exp6-arm.mjs";
 import { resolveLeadProfile } from "../server/lead-handoff.mjs";
 import { seedDefaultPack } from "../server/vibesquad-api.mjs";
 import { createPlugin, ROUTE_LABEL } from "../server/hooks/agent-duties.ts";
-import { drawerSoftReason, drawerSpawnWhy, isInterruptibleRole, landingPick, roleLandingPick, spawnChipTitle } from "../src/roleSpawn.ts";
+import { SPAWN_REASON, formatSoftReason } from "../server/spawn-reason.mjs";
+import { SPAWN_REASON_GLOSS, drawerSoftReason, drawerSpawnWhy, isInterruptibleRole, landingPick, roleLandingPick, spawnChipTitle } from "../src/roleSpawn.ts";
 
 const iso = (ms) => new Date(ms).toISOString();
 const MIN = 60_000;
@@ -80,7 +81,7 @@ test("2. configurable per-family soft line via env and opts; whitespace/unparsea
   // Per-family threshold actually governs softOverQuota.
   const q65 = isProviderOverQuota("claude", [row("claude", 65)], undefined, { softThresholds: { claude: 60 } });
   assert.equal(q65.softOverQuota, true);
-  assert.equal(q65.softReason, "pool 65% >= soft 60: interruptible only");
+  assert.equal(q65.softReason, "claude pool 65% >= soft 60: interruptible only");
   const q75 = isProviderOverQuota("claude", [row("claude", 75)], undefined, { softThresholds: { claude: 80 } });
   assert.equal(q75.softOverQuota, false);
 });
@@ -91,20 +92,20 @@ test("3. normal & tierA-* Implement at 75% claude pool route to next family and 
   const caps = cappedFamilies(usage, [], { ignoreDiskCaps: true });
   const softCaps = softCappedFamilies(usage, [], { ignoreDiskCaps: true, stakes: "normal", role: "Implement" });
   assert.deepEqual(caps, []);
-  assert.equal(softCaps.claude, "pool 75% >= soft 70: interruptible only");
-  assert.equal(softCaps[AGY_CLAUDE_FAMILY], "pool 75% >= soft 70: interruptible only");
+  assert.equal(softCaps.claude, "claude pool 75% >= soft 70: interruptible only");
+  assert.equal(softCaps[AGY_CLAUDE_FAMILY], "agy-claude pool 75% >= soft 70: interruptible only");
 
   const hit = roleSpawnProfile("Implement", { stakes: "normal", caps, softCaps });
   assert.equal(hit.route.provider, "antigravity-cli");
   assert.equal(hit.route.softFailover, true);
-  assert.equal(hit.route.softReason, "pool 75% >= soft 70: interruptible only -> antigravity-cli");
+  assert.equal(hit.route.softReason, "agy-claude pool 75% >= soft 70: interruptible only -> antigravity-cli");
   assert.ok(hit.route.reasons.includes("failover"));
 
   // tierA-invariant also skips soft-capped pools.
   const tierA = roleSpawnProfile("Implement", { stakes: "tierA-invariant", caps, softCaps });
   assert.equal(tierA.route.provider, "antigravity-cli");
   assert.equal(tierA.route.softFailover, true);
-  assert.equal(tierA.route.softReason, "pool 75% >= soft 70: interruptible only -> antigravity-cli");
+  assert.equal(tierA.route.softReason, "agy-claude pool 75% >= soft 70: interruptible only -> antigravity-cli");
 
   // Only agy-claude at 78%, direct claude at 20% -> routes to direct claude (next family in chain).
   const agyOnly = roleSpawnConfig("Implement", {
@@ -113,14 +114,14 @@ test("3. normal & tierA-* Implement at 75% claude pool route to next family and 
   });
   assert.equal(agyOnly.route.provider, "claude");
   assert.equal(agyOnly.route.softFailover, true);
-  assert.equal(agyOnly.route.softReason, "pool 78% >= soft 70: interruptible only -> claude");
+  assert.equal(agyOnly.route.softReason, "agy-claude pool 78% >= soft 70: interruptible only -> claude");
 
   // Legacy profile resolveProfileWithFailover: Implement - Sonnet at 78% claude -> Lead - Gemini with soft reason.
   const fo = resolveProfileWithFailover("Implement - Sonnet", DEFAULT_PACK_PROFILES, [row("claude", 78), row("antigravity-cli", 20)], { stakes: "normal" });
   assert.equal(fo.failedOver, true);
   assert.equal(fo.softFailover, true);
   assert.equal(fo.profile.name, "Lead - Gemini");
-  assert.equal(fo.reason, "pool 78% >= soft 70: interruptible only -> antigravity-cli");
+  assert.equal(fo.reason, "claude pool 78% >= soft 70: interruptible only -> antigravity-cli");
 });
 
 test("4. mechanical, Pre-check, docs, audit, spike at 75% still route to that family (interruptible)", () => {
@@ -239,7 +240,7 @@ test("6. exp6-arm decideArm respects soft line (and falls back when all arms >= 
     assert.equal(pick.arm, "neon");
     assert.equal(pick.provider, "antigravity-cli");
     assert.equal(pick.softFailover, true);
-    assert.equal(pick.reason, "pool 75% >= soft 70: interruptible only -> antigravity-cli");
+    assert.equal(pick.reason, "agy-claude pool 75% >= soft 70: interruptible only -> antigravity-cli");
 
     // Interruptible kind=docs ignores soft cap and keeps Sonnet's turn.
     const docsPick = await decideArm({
@@ -291,7 +292,7 @@ test("7. lead-handoff prefers a family under its soft line and preserves G2 disk
       usageProviders: [row("claude", 78), row("antigravity-cli", 20)],
     });
     assert.equal(roleSoft.spawnCfg.provider, "antigravity-cli");
-    assert.equal(roleSoft.failover?.reason, "pool 78% >= soft 70: interruptible only -> antigravity-cli");
+    assert.equal(roleSoft.failover?.reason, "claude pool 78% >= soft 70: interruptible only -> antigravity-cli");
 
     // All families past soft (under hard): keeps Claude.
     const roleAllSoft = resolveLeadProfile(oldRoleLead, profilesPath, {
@@ -347,7 +348,7 @@ test("8. spawn hook stamps soft line reason into vs.route label and shows why=so
       const normal = await spawn({ profile: "Implement", stakes: "normal" });
       assert.equal(normal.config.provider, "antigravity-cli");
       assert.match(normal.config.model, /^gemini-/);
-      assert.match(normal.labels[ROUTE_LABEL], /pool 78% >= soft 70: interruptible only -> antigravity-cli/);
+      assert.match(normal.labels[ROUTE_LABEL], /agy-claude pool 78% >= soft 70: interruptible only -> antigravity-cli/);
       assert.match(normal.labels[ROUTE_LABEL], /why=soft$/);
 
       // Interruptible kind=docs -> stays on agy-claude (no soft failover).
@@ -444,11 +445,12 @@ test("fu1 L2: the New Agent badge (roles GET capped + softCapped + quotaUnknown)
       }
     }
     const soft = getRolesState({ ...paths, usage: cases[0] });
-    assert.equal(soft.softCapped.claude, "pool 78% >= soft 70: interruptible only");
+    assert.equal(soft.softCapped.claude, "claude pool 78% >= soft 70: interruptible only");
     assert.deepEqual(soft.quotaUnknown, ["opencode"]);
     assert.ok(getRolesState({ ...paths, usage: cases[2] }).capped.includes("claude"), "a family past its hard line is capped on the badge too");
     const badge = roleLandingPick("implement", soft.roles.implement, soft.ladder, "normal", null, soft);
-    assert.match(badge.via, /^soft \(.*pool 78% >= soft 70: interruptible only.* → Gemini\)$/);
+    assert.equal(badge.via, "soft"); // C fu2 m2: short badge label, no repeated route text
+    assert.equal(badge.detail, "Claude (AGY) pool at 78%, soft line 70%; Claude pool at 78%, soft line 70%. Runs on Gemini.");
     // The dialog feeds the badge from that same GET (useProfiles), not the bare capped list.
     const tsx = readFileSync(new URL("../src/TeamActions.tsx", import.meta.url), "utf8");
     assert.match(tsx, /roleLandingPick\(roleKey, roleDef, ladder, stakes, override, quota\)/);
@@ -469,7 +471,7 @@ test("fu1 L3: the soft reason is its own reason (result, drawer, tooltip) and a 
   assert.equal(alt.capped, undefined, "soft is not capped");
   const gemSoft = { "antigravity-cli": { reason: "pool 80% >= soft 70: interruptible only", quota: true, soft: true } };
   const optIn = await decideArm({ profile: "Implement", stakes: "normal", labels: { ab: "flash" }, lane: "feat", team: "mx", listAgents: async () => [], capProbe: async () => gemSoft });
-  assert.match(optIn.reason, /^pool 80% >= soft 70: interruptible only -> /);
+  assert.match(optIn.reason, /^antigravity-cli pool 80% >= soft 70: interruptible only -> /);
   assert.equal(optIn.soft, true);
   assert.equal(optIn.capped, undefined, "opt-in soft branch is not capped");
   const hard = await decideArm({ profile: "Implement", stakes: "normal", lane: "feat", team: "mx", listAgents: async () => [], capProbe: async () => ({ claude: { reason: "x", quota: true }, [AGY_CLAUDE_FAMILY]: { reason: "x", quota: true } }) });
@@ -520,19 +522,21 @@ test("fu1 L3: the soft reason is its own reason (result, drawer, tooltip) and a 
     // Hook route skips both Claude pools for their soft line.
     const res = await callTool(ctxFor(async () => ({})), "spawn_worker", { title: "t", prompt: "go", profile: "Implement", stakes: "normal", labels: { ab: "pin" } });
     assert.match(res.spawned, / · soft$/);
-    assert.equal(res.soft, "pool 78% >= soft 70: interruptible only -> antigravity-cli");
+    assert.equal(res.soft, "Claude (AGY) pool at 78%, soft line 70%");
     assert.equal(res.ab?.capped, undefined);
     // Arm pick skipped the soft Claude arm: result.ab.soft, never capped, and the soft line named in the result.
     const armRes = await callTool(ctxFor(async () => softCaps), "spawn_worker", { title: "t2", prompt: "go", profile: "Implement", stakes: "normal" });
     assert.equal(armRes.ab.soft, true);
     assert.equal(armRes.ab.capped, undefined);
-    assert.match(armRes.soft, /^pool 75% >= soft 70: interruptible only -> antigravity-cli$/);
+    assert.equal(armRes.soft, "Claude (AGY) pool at 75%, soft line 70%");
+    assert.match(armRes.spawned, / · soft$/, "C fu2 L1: arm soft skip shows soft, not capped");
     // Drawer badge + tooltip read the same label.
     const labels = agents[0].labels;
     assert.equal(drawerSpawnWhy(labels, agents[0].model, false), "soft");
-    assert.equal(drawerSoftReason(labels), "pool 78% >= soft 70: interruptible only -> antigravity-cli");
+    assert.equal(drawerSoftReason(labels), "agy-claude pool 78% >= soft 70: interruptible only -> antigravity-cli");
     const title = spawnChipTitle({ role: "Implement", model: agents[0].model, reason: "soft", provider: "Gemini", softReason: drawerSoftReason(labels) });
-    assert.match(title, /Soft line: .*Runs on Gemini\. \(pool 78% >= soft 70: interruptible only -> antigravity-cli\)$/);
+    assert.equal(title, `Implement · ${agents[0].model}. Soft line: Claude (AGY) pool at 78% (line 70%), so a fallback ran. Runs on Gemini.`);
+    assert.doesNotMatch(title, />=|->/);
     assert.doesNotMatch(title, /capped/);
   } finally {
     stop?.();
@@ -546,7 +550,7 @@ test("fu1 L4: no-row (or stale) families rank after known-under-soft; capped sta
   const known = roleSpawnConfig("Implement", { stakes: "normal", usageList: [row("claude", 75), row("antigravity-cli", 75), row("opencode", 30)] });
   assert.equal(known.route.provider, "opencode");
   assert.equal(known.route.softFailover, true);
-  assert.equal(known.route.softReason, "pool 75% >= soft 70: interruptible only -> opencode");
+  assert.equal(known.route.softReason, "claude pool 75% >= soft 70: interruptible only -> opencode");
   // Same with opencode unread too: no known family under soft, so the first unread one in walk order (agy-claude).
   const unread = roleSpawnConfig("Implement", { stakes: "tierA-invariant", usageList: [row("claude", 75), row("antigravity-cli", 75)] });
   assert.equal(unread.route.provider, AGY_CLAUDE_FAMILY);
@@ -651,3 +655,84 @@ test("fu1 L5: a kind=docs worker respawned after a quota death stays interruptib
 function ladderFirst(roleKey, stakes) {
   return resolveRoute({ role: roleKey, stakes }).provider;
 }
+
+test("C fu2 m1/m3/L1: shared soft formatter, short soft gloss, arm soft-skip label distinct from cap", async () => {
+  // Explicit family in text -> names the skipped family accurately (never guessed backwards from `-> target`).
+  assert.equal(formatSoftReason("claude pool 78% >= soft 70: interruptible only -> antigravity-cli"), "Claude pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("agy-claude pool 78% >= soft 70: interruptible only -> antigravity-cli"), "Claude (AGY) pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("agy-claude pool 78% >= soft 70: interruptible only -> claude"), "Claude (AGY) pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("antigravity-cli pool 80% >= soft 70: interruptible only -> claude"), "Gemini pool at 80%, soft line 70%");
+  assert.equal(formatSoftReason("claude pool 75% >= soft 70: interruptible only -> opencode"), "Claude pool at 75%, soft line 70%");
+  assert.equal(formatSoftReason("pool 61% >= soft 55: interruptible only", { family: "antigravity-cli" }), "Gemini pool at 61%, soft line 55%");
+  assert.equal(formatSoftReason("no quota row for opencode: ranked after known under soft -> claude"), "No quota row for OpenCode");
+  // Unknown family (unprefixed text, no opts.family) -> generic "Pool", never a guess from the landing target.
+  assert.equal(formatSoftReason("pool 78% >= soft 70: interruptible only -> claude"), "Pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("pool 78% >= soft 70: interruptible only -> antigravity-cli"), "Pool at 78%, soft line 70%");
+  assert.equal(formatSoftReason("soft quota: interruptible only -> claude"), "Pool past its soft line");
+  assert.equal(formatSoftReason("antigravity-cli soft quota: interruptible only -> claude"), "Gemini pool past its soft line");
+  // Empty soft message with explicit family produces a clean sentence (not empty/malformed detail).
+  assert.equal(formatSoftReason(""), "");
+  assert.equal(formatSoftReason("", { family: "claude" }), "Claude pool past its soft line");
+  assert.equal(formatSoftReason("", { family: "antigravity-cli" }), "Gemini pool past its soft line");
+  for (const t of [formatSoftReason("claude pool 78% >= soft 70: x -> antigravity-cli"), formatSoftReason("soft quota: interruptible only -> claude")]) assert.doesNotMatch(t, />=|->/);
+  const words = (t) => t.trim().split(/\s+/).length;
+  assert.ok(words(SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT]) <= 13, SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT]);
+  // same provider wording as failover gloss
+  assert.match(SPAWN_REASON_GLOSS[SPAWN_REASON.SOFT], /preferred provider/);
+  assert.match(SPAWN_REASON_GLOSS[SPAWN_REASON.FAILOVER], /preferred provider/);
+
+  // neon -> sonnet arm soft skip names Gemini (never Claude (AGY)).
+  const neonTurnAgents = [{ labels: { lane: "feat", team: "mx", role: "worker", stakes: "normal", "vs.arm": "sonnet" } }];
+  const gemSoftCaps = { "antigravity-cli": { reason: "antigravity-cli pool 80% >= soft 70: interruptible only", quota: true, soft: true } };
+  const neonToSonnet = await decideArm({ profile: "Implement", stakes: "normal", lane: "feat", team: "mx", listAgents: async () => neonTurnAgents, capProbe: async () => gemSoftCaps });
+  assert.equal(neonToSonnet.arm, "sonnet");
+  assert.equal(neonToSonnet.soft, true);
+  assert.equal(neonToSonnet.reason, "antigravity-cli pool 80% >= soft 70: interruptible only -> claude");
+  assert.equal(formatSoftReason(neonToSonnet.reason), "Gemini pool at 80%, soft line 70%");
+  const neonTitle = spawnChipTitle({ role: "Implement", model: "claude-sonnet-5-5", reason: "soft", provider: "Claude", softReason: neonToSonnet.reason });
+  assert.equal(neonTitle, "Implement · claude-sonnet-5-5. Soft line: Gemini pool at 80% (line 70%), so a fallback ran. Runs on Claude.");
+
+  // Gemini-first role (Review) soft hop to Claude names Gemini.
+  const reviewSoft = roleSpawnConfig("Review", { stakes: "normal", usageList: [row("antigravity-cli", 82), row(AGY_CLAUDE_FAMILY, 20), row("claude", 20)] });
+  assert.equal(reviewSoft.route.softFailover, true);
+  assert.equal(reviewSoft.route.softReason, "antigravity-cli pool 82% >= soft 70: interruptible only -> agy-claude");
+  assert.equal(formatSoftReason(reviewSoft.route.softReason), "Gemini pool at 82%, soft line 70%");
+
+  // agy-claude -> Gemini soft hop names Claude (AGY).
+  const agyToGem = roleSpawnConfig("Implement", { stakes: "normal", usageList: [row(AGY_CLAUDE_FAMILY, 78), row("claude", 78), row("antigravity-cli", 20)] });
+  assert.equal(agyToGem.route.provider, "antigravity-cli");
+  assert.equal(formatSoftReason(agyToGem.route.softReason), "Claude (AGY) pool at 78%, soft line 70%");
+
+  // -> opencode target names the skipped family.
+  const toOpencode = roleSpawnConfig("Implement", { stakes: "normal", usageList: [row("claude", 75), row("antigravity-cli", 75), row("opencode", 30)] });
+  assert.equal(toOpencode.route.provider, "opencode");
+  assert.equal(formatSoftReason(toOpencode.route.softReason), "Claude pool at 75%, soft line 70%");
+
+  // drawer: arm soft skip (no hook soft= text) reads soft; a hard cap skip does not; post-spawn model switch overrides soft.
+  const armSoft = { "vs.model": "claude-sonnet-5-5", "vs.route": "reason=default why=arm", "vs.arm-reason": "antigravity-cli pool 80% >= soft 70: interruptible only -> claude" };
+  assert.equal(drawerSpawnWhy(armSoft, "claude-sonnet-5-5", false), "soft");
+  assert.equal(drawerSpawnWhy(armSoft, "claude-opus-5-5", false), "override", "post-spawn model switch overrides arm soft skip");
+  assert.equal(drawerSoftReason(armSoft), "antigravity-cli pool 80% >= soft 70: interruptible only -> claude");
+  const armCap = { "vs.route": "reason=default why=arm", "vs.arm-reason": "capped:claude" };
+  assert.equal(drawerSpawnWhy(armCap, "m", false), "arm");
+  assert.equal(drawerSoftReason(armCap), "");
+
+  // landingPick with boolean/array softCapped (empty message) does not produce malformed ". Runs on ..." detail.
+  const emptySoftArr = landingPick(ROLE_TABLE.lead, DEFAULT_TIER_LADDER, "normal", { softCapped: ["claude"], roleKey: "lead" });
+  assert.equal(emptySoftArr.via, "soft");
+  assert.equal(emptySoftArr.detail, "Claude pool past its soft line. Runs on Gemini.");
+  const emptySoftBool = landingPick(ROLE_TABLE.lead, DEFAULT_TIER_LADDER, "normal", { softCapped: { claude: true }, roleKey: "lead" });
+  assert.equal(emptySoftBool.detail, "Claude pool past its soft line. Runs on Gemini.");
+
+  // Tooltip order: cause before result, "soft line" at most once per tooltip.
+  const countSoftLine = (s) => (s.match(/soft line/gi) ?? []).length;
+  for (const t of [
+    spawnChipTitle({ role: "Implement", model: "gemini-4-neon", reason: "soft", provider: "Gemini", softReason: "claude pool 78% >= soft 70: interruptible only -> antigravity-cli" }),
+    spawnChipTitle({ role: "Implement", model: "claude-sonnet-5-5", reason: "soft", provider: "Claude", softReason: "antigravity-cli soft quota: interruptible only -> claude" }),
+    spawnChipTitle({ role: "Implement", model: "claude-sonnet-5-5", reason: "soft", provider: "Claude", softReason: "no quota row for agy-claude: ranked after known under soft -> claude" }),
+    spawnChipTitle({ role: "Implement", model: "gemini-4-neon", reason: "soft", provider: "Gemini" }),
+  ]) {
+    assert.ok(countSoftLine(t) <= 1, `expected <=1 "soft line" in: ${t}`);
+    assert.ok(t.endsWith("Runs on Gemini.") || t.endsWith("Runs on Claude."), `cause must precede result in: ${t}`);
+  }
+});

@@ -24,3 +24,6 @@ export function shownSpawnReason(f?: {
 export function routeWhy(routeText: unknown): SpawnReason | "";
 export function routeSoftReason(routeText: unknown): string;
 export function spawnShownLine(p: { role?: unknown; model?: unknown; reason?: unknown }): string;
+
+export const PROVIDER_DISPLAY_NAME: Record<string, string>;
+export function formatSoftReason(raw: string, opts?: { family?: string }): string;
