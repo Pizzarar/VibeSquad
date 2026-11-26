@@ -3,7 +3,7 @@
 // badge (src/roleSpawn.ts): pure, no node imports. C fu1 L1: it used to be copied into src/roleSpawn.ts, and both copies
 // missed the legacy "Check - Haiku" (normKey gave `check---haiku`).
 
-import { legacyProfileRole } from "./legacy-profile-roles.mjs";
+import { LEGACY_PROFILE_ROLES, legacyProfileRole } from "./legacy-profile-roles.mjs";
 
 /** Kinds (labels.kind) and role keys that are interruptible. */
 export const INTERRUPTIBLE_KINDS = Object.freeze(new Set(["docs", "audit", "spike", "pre-check"]));
@@ -19,6 +19,9 @@ export function normWorkKey(v) {
     .replace(/[\s_-]+/g, "-");
 }
 
+/** Old profile names by their normalized key (`check-haiku` -> pre-check), so any spacing/underscore spelling matches. */
+const LEGACY_ROLE_BY_KEY = new Map(Object.entries(LEGACY_PROFILE_ROLES).map(([name, role]) => [normWorkKey(name), role]));
+
 /**
  * True when the spawn may run on a family past its soft line: stakes=mechanical, a kind in INTERRUPTIBLE_KINDS, a role
  * key in it, an old profile name whose role is one (via legacy-profile-roles.mjs: Check - Haiku, Scout - Flash and
@@ -32,7 +35,7 @@ export function isInterruptibleWork({ stakes, kind, role } = {}) {
   const r = normWorkKey(role);
   if (!r) return false;
   if (INTERRUPTIBLE_KINDS.has(r)) return true;
-  const legacyRole = legacyProfileRole(role)?.role;
+  const legacyRole = legacyProfileRole(role)?.role ?? LEGACY_ROLE_BY_KEY.get(r);
   if (legacyRole && INTERRUPTIBLE_KINDS.has(legacyRole)) return true;
   return INTERRUPTIBLE_PREFIXES.some((p) => r.startsWith(p));
 }
