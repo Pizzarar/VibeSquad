@@ -1733,6 +1733,18 @@ function pickImplementer(cands) {
   return null;
 }
 
+/** usa-68: several implementer profiles in one unit: implementer = the EARLIEST run (usa-50 burst join stays put) and
+ * `shareCands` = every run that did work (zero-turn runs aside), for the pre-FAIL share split in mergedUnitV2. */
+function multiProfileHit(cands) {
+  const impls = cands.filter(isImplementerWorker);
+  const worked = impls.filter((a) => a.turns > 0);
+  const pool = worked.length ? worked : impls;
+  if (!pool.length) return null;
+  const created = (x) => (x.createdAt ?? Infinity);
+  const sorted = pool.slice().sort((x, y) => (created(x) === created(y) ? 0 : created(x) < created(y) ? -1 : 1) || String(x.agentId ?? "").localeCompare(String(y.agentId ?? "")));
+  return { implementer: sorted[0], miss: null, shareCands: sorted };
+}
+
 /** usa-55: several implementer profiles worked one unit's worktree (Implement + Work Order + Mechanical fixes...). Credit the
  * primary one: the costliest run that did work (ties: earliest created). The coverage gap was mostly this ambiguity. */
 function pickPrimaryImplementer(cands) {
@@ -1762,7 +1774,10 @@ function resolveImplementer(unit, agents, index) {
     if (cwdMatches.length === 1 && isImplementerWorker(cwdMatches[0])) return hit(cwdMatches[0]);
     if (cwdMatches.length > 0) {
       const impls = cwdMatches.filter(isImplementerWorker);
-      if (impls.length > 0) return hit(pickImplementer(impls) ?? pickPrimaryImplementer(impls)); // usa-44: zero-turn runs never spent anything
+      if (impls.length > 0) { // usa-44: zero-turn runs never spent anything
+        const one = pickImplementer(impls);
+        return one ? hit(one) : multiProfileHit(impls) ?? hit(pickPrimaryImplementer(impls)); // usa-68: several profiles -> earliest + shares
+      }
     }
     // usa-44: no implementer ran in the unit's worktree. Main-checkout implementers carry the unit in their own evidence
     // (label / work order / tool calls). A run credits one merge only: the earliest merge of that unit name (within the unit's
@@ -1778,6 +1793,8 @@ function resolveImplementer(unit, agents, index) {
       });
       const picked = pickImplementer(mine);
       if (picked) return hit(picked);
+      const multi = mine.length > 0 ? multiProfileHit(mine) : null; // usa-68: several profiles named this unit -> shares, not a miss
+      if (multi) return multi;
       return miss(mine.length > 0 ? "ambiguous-implementers" : "evidence-claimed-by-other-merge"); // never fall back to the lane guess (R1 M2)
     }
     // usa-58: no primary-evidence run. A run that implemented this unit as its 2nd/3rd unit is credited (identity only: its cost
@@ -2959,6 +2976,7 @@ function buildLedgerSnapshot(merged, rows) {
     implementerProvider: u.implementerProvider ?? null,
     ...(u.implementerModel ? { implementerModel: u.implementerModel } : {}),
     ...(u.implementerFamily ? { implementerFamily: u.implementerFamily } : {}),
+    ...(u.implementerShares ? { implementerShares: u.implementerShares } : {}),
     ...(u.implementerArm ? { implementerArm: u.implementerArm } : {}),
     ...(u.implementerArmReason ? { implementerArmReason: u.implementerArmReason } : {}),
     ...(u.stakes ? { stakes: u.stakes } : {}),
@@ -3843,7 +3861,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
-    const { implementer: found, miss: attributionMiss, shared } = resolveImplementer(u, agents, workerIndex);
+    const { implementer: found, miss: attributionMiss, shared, shareCands } = resolveImplementer(u, agents, workerIndex);
     const implementer = found;
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
@@ -3865,6 +3883,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       g.n += 1;
       if (f.next === "PASS") g.passN += 1;
     }
+    // usa-68: several implementer profiles before the first FAIL split the unit pro-rata by spend; spawns after the first FAIL are fix rounds.
+    const firstFailMs = verdicts.find((v) => v.verdict === "FAIL" && v.tsMs !== null)?.tsMs ?? null;
+    const shareRuns = shareCands && !shared ? shareCands.filter((a) => a === implementer || firstFailMs === null || a.createdAt === null || a.createdAt === undefined || a.createdAt <= firstFailMs) : [];
+    let implementerShares = null;
+    if (shareRuns.length > 1) {
+      const total = shareRuns.reduce((n, a) => n + (a.costUsd ?? 0), 0);
+      implementerShares = shareRuns.map((a) => ({ agentId: a.agentId, provider: a.provider, profile: a.profile, family: a.family ?? null, costUsd: a.costUsd ?? 0, share: total > 0 ? (a.costUsd ?? 0) / total : 1 / shareRuns.length }));
+    }
+    const sumOf = (k) => (implementerShares ? shareRuns.reduce((n, a) => n + (a[k] ?? 0), 0) : implementer?.[k]);
     const { lane: unitLane, laneSource } = backfillLane(u, implementer);
     return {
       ...unitRest, mergedAtMs,
@@ -3885,12 +3912,13 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
       attributionMiss: implementer ? null : attributionMiss,
+      ...(implementerShares ? { implementerShares } : {}),
       reviewerAgentId: reviewer ? reviewer.agentId : null,
       implementerShared: !!shared, // usa-58: the run's primary unit owns its cost; this merge is credited identity only
-      costUsd: implementer && !shared ? implementer.costUsd : null,
-      inputTokens: implementer && !shared ? implementer.inputTokens : 0,
-      outputTokens: implementer && !shared ? implementer.outputTokens : 0,
-      turns: implementer && !shared ? implementer.turns : 0,
+      costUsd: implementer && !shared ? sumOf("costUsd") : null,
+      inputTokens: implementer && !shared ? sumOf("inputTokens") : 0,
+      outputTokens: implementer && !shared ? sumOf("outputTokens") : 0,
+      turns: implementer && !shared ? sumOf("turns") : 0,
       reviewerFamily,
       workflowMode: workflow.mode,
       wfSource: workflow.source,
@@ -3944,18 +3972,24 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (!u.implementerAgentId) continue;
     const a = agentById.get(u.implementerAgentId);
     if (!a) continue;
-    const g = profileMap.get(profileKey(a));
-    if (!g) continue;
-    g.mergedUnits += 1;
     const ft = unitFirstTry(u);
-    if (ft !== null) { g.firstTryKnown += 1; if (ft) g.firstTryCount += 1; } // usa-60: unknown outcomes are not first-try PASSes
-    g.reviewRounds += u.reviewRounds;
-    if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
-    if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
-    const fg = g.families.get(familyKeyOf(a.family));
-    if (fg) {
-      fg.units += 1;
-      if (ft !== null) { fg.firstTryKnown += 1; if (ft) fg.firstTryPassCount += 1; }
+    // usa-68: a split unit adds fractionally to each share's profile row (weights sum to 1: units over profiles == merged units)
+    const parts = u.implementerShares?.length > 1 ? u.implementerShares.map((s) => ({ a: agentById.get(s.agentId), w: s.share })).filter((x) => x.a) : [];
+    const wsum = parts.reduce((n, x) => n + x.w, 0);
+    const list = parts.length > 1 && wsum > 0 ? parts.map((x) => ({ a: x.a, w: x.w / wsum })) : [{ a, w: 1 }];
+    for (const { a: pa, w } of list) {
+      const g = profileMap.get(profileKey(pa));
+      if (!g) continue;
+      g.mergedUnits += w;
+      if (ft !== null) { g.firstTryKnown += w; if (ft) g.firstTryCount += w; } // usa-60: unknown outcomes are not first-try PASSes
+      g.reviewRounds += u.reviewRounds * w;
+      if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs * w; g.unitCycleCount += w; }
+      if (u.fixAfterMerge) g.fixAfterMergeCount += w;
+      const fg = g.families.get(familyKeyOf(pa.family));
+      if (fg) {
+        fg.units += w;
+        if (ft !== null) { fg.firstTryKnown += w; if (ft) fg.firstTryPassCount += w; }
+      }
     }
   }
   // usa-60 (idea-988): fix rounds by the fixer's own profile row: spawns after the unit's first FAIL, and how often the next verdict passed.
@@ -3983,7 +4017,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   }
   const byProfile = [...profileMap.values()].map((g) => {
     const isReviewer = g.jobKind === "reviewer";
-    const mergedUnits = isReviewer ? g.reviewedUnits : g.mergedUnits;
+    const r6 = (n) => Math.round(n * 1e6) / 1e6; // usa-68: fractional units carry float noise
+    const mergedUnits = isReviewer ? g.reviewedUnits : r6(g.mergedUnits);
     return {
       provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
       runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
@@ -3997,9 +4032,9 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       errorCount: g.errorCount,
       reviewedUnits: isReviewer ? g.reviewedUnits : 0,
       mergedUnits,
-      firstTryCount: g.firstTryCount,
-      firstTryKnown: g.firstTryKnown,
-      unknownReviewUnits: isReviewer ? 0 : g.mergedUnits - g.firstTryKnown,
+      firstTryCount: r6(g.firstTryCount),
+      firstTryKnown: r6(g.firstTryKnown),
+      unknownReviewUnits: isReviewer ? 0 : r6(g.mergedUnits - g.firstTryKnown),
       fixRounds: g.fixRounds,
       fixPassRate: g.fixRounds ? Math.round((g.fixPassN / g.fixRounds) * 1000) / 1000 : null,
       reviewRounds: isReviewer ? g.reviewedReviewRounds : g.reviewRounds,
@@ -4097,7 +4132,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       mergedAt: r.ts ?? null, mergedAtMs: toMs(r.ts), firstBranchCtMs: null, subject: "",
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, laneSource: r.lane ? (r.laneSource && r.laneSource !== "none" ? r.laneSource : "ledger") : "none", squad: r.squad ?? null, repo: r.repo ?? null,
-      implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null, ...(Array.isArray(r.implementerShares) ? { implementerShares: r.implementerShares } : {}),
       // usa-58: ledger rows keep the profile, not the run id, so they can never count as attributed: say why (every miss carries a reason)
       attributionMiss: r.implementerProfile ? "ledger-archived-no-agent" : "ledger-archived-unattributed",
       implementerModel: r.implementerModel ?? null, implementerFamily: r.implementerFamily ?? null, implementerArm: r.implementerArm ?? null, implementerArmReason: r.implementerArmReason ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
