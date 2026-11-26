@@ -1,0 +1,637 @@
+{
+ "1920": {
+  "chips": [
+   {
+    "code": "@plugins",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@plugins"
+   },
+   {
+    "code": "@ui-bois",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@ui-bois"
+   },
+   {
+    "code": "@art-direction",
+    "need": 92.4,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@art-direction"
+   },
+   {
+    "code": "@runner-pilot",
+    "need": 85.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@runner-pilot"
+   },
+   {
+    "code": "@wiki",
+    "need": 33,
+    "box": 33,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@wiki"
+   },
+   {
+    "code": "@lane-1",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-1"
+   },
+   {
+    "code": "@lane-2",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-2"
+   },
+   {
+    "code": "@lane-3",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-3"
+   },
+   {
+    "code": "@lane-4",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-4"
+   },
+   {
+    "code": "@lane-5",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-5"
+   },
+   {
+    "code": "@lane-6",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-6"
+   },
+   {
+    "code": "@lane-7",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-7"
+   },
+   {
+    "code": "@lane-8",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-8"
+   },
+   {
+    "code": "@lane-9",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-9"
+   },
+   {
+    "code": "@lane-10",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-10"
+   },
+   {
+    "code": "@lane-11",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-11"
+   },
+   {
+    "code": "@lane-12",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-12"
+   },
+   {
+    "code": "@lane-13",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-13"
+   },
+   {
+    "code": "@lane-14",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-14"
+   },
+   {
+    "code": "@lane-15",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-15"
+   },
+   {
+    "code": "@lane-16",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-16"
+   },
+   {
+    "code": "@lane-17",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-17"
+   },
+   {
+    "code": "@lane-18",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-18"
+   },
+   {
+    "code": "@lane-19",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-19"
+   },
+   {
+    "code": "@lane-20",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-20"
+   },
+   {
+    "code": "@lane-21",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-21"
+   },
+   {
+    "code": "@lane-22",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-22"
+   },
+   {
+    "code": "@lane-23",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-23"
+   },
+   {
+    "code": "@lane-24",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-24"
+   },
+   {
+    "code": "@main-game",
+    "need": 66,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@main-game"
+   },
+   {
+    "code": "@ui-lab",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@ui-lab"
+   },
+   {
+    "code": "@site-polish",
+    "need": 79.2,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@site-polish"
+   }
+  ],
+  "ellipsized": [
+   "@plugins",
+   "@ui-bois",
+   "@art-direction",
+   "@runner-pilot",
+   "@lane-10",
+   "@lane-11",
+   "@lane-12",
+   "@lane-13",
+   "@lane-14",
+   "@lane-15",
+   "@lane-16",
+   "@lane-17",
+   "@lane-18",
+   "@lane-19",
+   "@lane-20",
+   "@lane-21",
+   "@lane-22",
+   "@lane-23",
+   "@lane-24",
+   "@main-game",
+   "@site-polish"
+  ],
+  "minSlack": 3,
+  "minSlackLane": "Desk"
+ },
+ "3200": {
+  "chips": [
+   {
+    "code": "@plugins",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@plugins"
+   },
+   {
+    "code": "@ui-bois",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@ui-bois"
+   },
+   {
+    "code": "@art-direction",
+    "need": 92.4,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@art-direction"
+   },
+   {
+    "code": "@runner-pilot",
+    "need": 85.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@runner-pilot"
+   },
+   {
+    "code": "@wiki",
+    "need": 33,
+    "box": 33,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@wiki"
+   },
+   {
+    "code": "@lane-1",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-1"
+   },
+   {
+    "code": "@lane-2",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-2"
+   },
+   {
+    "code": "@lane-3",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-3"
+   },
+   {
+    "code": "@lane-4",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-4"
+   },
+   {
+    "code": "@lane-5",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-5"
+   },
+   {
+    "code": "@lane-6",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-6"
+   },
+   {
+    "code": "@lane-7",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-7"
+   },
+   {
+    "code": "@lane-8",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-8"
+   },
+   {
+    "code": "@lane-9",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-9"
+   },
+   {
+    "code": "@lane-10",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-10"
+   },
+   {
+    "code": "@lane-11",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-11"
+   },
+   {
+    "code": "@lane-12",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-12"
+   },
+   {
+    "code": "@lane-13",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-13"
+   },
+   {
+    "code": "@lane-14",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-14"
+   },
+   {
+    "code": "@lane-15",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-15"
+   },
+   {
+    "code": "@lane-16",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-16"
+   },
+   {
+    "code": "@lane-17",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-17"
+   },
+   {
+    "code": "@lane-18",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-18"
+   },
+   {
+    "code": "@lane-19",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-19"
+   },
+   {
+    "code": "@lane-20",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-20"
+   },
+   {
+    "code": "@lane-21",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-21"
+   },
+   {
+    "code": "@lane-22",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-22"
+   },
+   {
+    "code": "@lane-23",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-23"
+   },
+   {
+    "code": "@lane-24",
+    "need": 52.8,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@lane-24"
+   },
+   {
+    "code": "@main-game",
+    "need": 66,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@main-game"
+   },
+   {
+    "code": "@ui-lab",
+    "need": 46.2,
+    "box": 46.2,
+    "ellipsized": false,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@ui-lab"
+   },
+   {
+    "code": "@site-polish",
+    "need": 79.2,
+    "box": 52,
+    "ellipsized": true,
+    "pad": "5px/5px",
+    "font": "11px \"JetBrains Mono\"",
+    "title": "@site-polish"
+   }
+  ],
+  "ellipsized": [
+   "@plugins",
+   "@ui-bois",
+   "@art-direction",
+   "@runner-pilot",
+   "@lane-10",
+   "@lane-11",
+   "@lane-12",
+   "@lane-13",
+   "@lane-14",
+   "@lane-15",
+   "@lane-16",
+   "@lane-17",
+   "@lane-18",
+   "@lane-19",
+   "@lane-20",
+   "@lane-21",
+   "@lane-22",
+   "@lane-23",
+   "@lane-24",
+   "@main-game",
+   "@site-polish"
+  ],
+  "minSlack": 208,
+  "minSlackLane": "Desk"
+ },
+ "hoverTitle": "@plugins"
+}

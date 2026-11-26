@@ -1,0 +1,452 @@
+{
+ "dark-1920": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ },
+ "rows1920": [
+  {
+   "name": "Desk",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": null,
+   "codeClip": null,
+   "codeEll": null,
+   "codeTitle": null,
+   "codeW": null,
+   "codeOverStL": null,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  },
+  {
+   "name": "Plugins",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@plugins",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  },
+  {
+   "name": "UI Bois",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@ui-bois",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  },
+  {
+   "name": "Art Direction",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": true,
+   "codeEll": true,
+   "codeTitle": true,
+   "codeText": "@art-direction",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  },
+  {
+   "name": "Runner Pilot",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": true,
+   "codeEll": true,
+   "codeTitle": true,
+   "codeText": "@runner-pilot",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  },
+  {
+   "name": "wiki",
+   "dotR": 1221,
+   "nameL": 1229,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@wiki",
+   "codeW": 43,
+   "codeOverStL": -27,
+   "nameTrunc": false,
+   "stL": 1386,
+   "evL": 1466,
+   "evTrunc": false
+  }
+ ],
+ "light-1920": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ },
+ "dark-3200": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ },
+ "rows3200": [
+  {
+   "name": "Desk",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": null,
+   "codeClip": null,
+   "codeEll": null,
+   "codeTitle": null,
+   "codeW": null,
+   "codeOverStL": null,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  },
+  {
+   "name": "Plugins",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@plugins",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  },
+  {
+   "name": "UI Bois",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@ui-bois",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  },
+  {
+   "name": "Art Direction",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": true,
+   "codeEll": true,
+   "codeTitle": true,
+   "codeText": "@art-direction",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  },
+  {
+   "name": "Runner Pilot",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": true,
+   "codeEll": true,
+   "codeTitle": true,
+   "codeText": "@runner-pilot",
+   "codeW": 62,
+   "codeOverStL": -8,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  },
+  {
+   "name": "wiki",
+   "dotR": 1925,
+   "nameL": 1933,
+   "overlapPx": -8,
+   "lineH": 24,
+   "codeH": 18,
+   "codeClip": false,
+   "codeEll": false,
+   "codeTitle": true,
+   "codeText": "@wiki",
+   "codeW": 43,
+   "codeOverStL": -27,
+   "nameTrunc": false,
+   "stL": 2090,
+   "evL": 2171,
+   "evTrunc": false
+  }
+ ],
+ "light-3200": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    24
+   ],
+   "codeWrapped": [],
+   "codeClipped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeEllipsized": [
+    "@art-direction",
+    "@runner-pilot",
+    "@main-game",
+    "@site-polish"
+   ],
+   "codeNoTitle": [],
+   "codeMaxW": 62,
+   "codeIntoState": 0,
+   "nameTrunc": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ }
+}

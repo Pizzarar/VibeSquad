@@ -1,0 +1,74 @@
+{
+ "1920-asBuilt": {
+  "chips": 32,
+  "ellipsized": 21,
+  "evTrunc": 0,
+  "minSlack": 3.1,
+  "lineH": [
+   24
+  ]
+ },
+ "1920-slot63": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 2.1,
+  "lineH": [
+   24
+  ]
+ },
+ "1920-slot64": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 1.1,
+  "lineH": [
+   24
+  ]
+ },
+ "1920-pad4": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 3.1,
+  "lineH": [
+   24
+  ]
+ },
+ "3200-asBuilt": {
+  "chips": 32,
+  "ellipsized": 21,
+  "evTrunc": 0,
+  "minSlack": 208.6,
+  "lineH": [
+   24
+  ]
+ },
+ "3200-slot63": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 207.6,
+  "lineH": [
+   24
+  ]
+ },
+ "3200-slot64": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 206.6,
+  "lineH": [
+   24
+  ]
+ },
+ "3200-pad4": {
+  "chips": 32,
+  "ellipsized": 4,
+  "evTrunc": 0,
+  "minSlack": 208.6,
+  "lineH": [
+   24
+  ]
+ }
+}

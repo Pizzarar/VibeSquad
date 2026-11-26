@@ -325,17 +325,23 @@ test("D4 r3: no dead .boring-decision-dot.st-waiting rule (waiting lanes render 
 
 test("D4 P2 (UX R38 m2 + m4, idea-1070): wide rail grows past 580px; stacked layout puts feed before scroll-capped strip", () => {
   const dd = readFileSync(join(ROOT, "src", "BoringDecisionDesk.tsx"), "utf8");
-  const feedIdx = dd.indexOf('data-testid="boring-decision-feed"');
-  const stripIdx = dd.indexOf('data-testid="boring-decision-strip"');
-  assert.ok(feedIdx > 0 && stripIdx > 0 && feedIdx < stripIdx, "m4: decision feed precedes status strip in DOM order for stacked layout");
+  const jsx = dd.slice(dd.indexOf('data-testid="boring-decision-desk"'));
+  const feedIdx = jsx.indexOf('data-testid="boring-decision-feed"');
+  const offscreenIdx = jsx.indexOf('data-testid="boring-decision-offscreen"');
+  const stripIdx = jsx.indexOf('data-testid="boring-decision-strip"');
+  assert.ok(feedIdx > 0 && offscreenIdx > 0 && stripIdx > 0 && feedIdx < offscreenIdx && offscreenIdx < stripIdx, "P2b m1: DOM/tab order is feed -> off-screen -> strip");
   assert.equal(DECISION_LEANS_OPT_IN, true, "leans stay opt-in");
 
   const css = readFileSync(join(ROOT, "src", "boring.css"), "utf8");
   const d4Start = css.indexOf("/* @desk D4 r2");
   const tail = css.slice(d4Start);
-  assert.doesNotMatch(tail, /@(media|container)\b/, "no @media/@container at-rules in boring.css D4/P2 block");
+  assert.doesNotMatch(tail, /@(media|container)\b/, "no @media/@container at-rules in boring.css D4/P2/P2b block");
   assert.match(css, /\.boring-decision-desk\s*\{[^}]*width:\s*100%/, "desk stretches inside column flex wrap");
   assert.doesNotMatch(tail, /minmax\(500px,\s*580px\)/, "m2: 580px rail cap removed");
   assert.match(tail, /\.boring-decision-desk\.is-wide\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*clamp\(/, "m2: wide rail uses responsive clamp()");
   assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip\s*\{[^}]*max-height:\s*min\(320px,\s*35vh\);[^}]*overflow-y:\s*auto;/, "m4: stacked strip has capped scroll height");
+  assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip-squad-btn\s*\{[^}]*position:\s*sticky;/, "P2b m2: sticky Squad heads in stacked strip");
+  assert.match(tail, /\.boring-decision-desk:not\(\.is-wide\)\s+\.boring-decision-strip\.has-scroll-more\s+\.boring-decision-strip-fade\s*\{[^}]*position:\s*sticky;/, "P2b m2: bottom fade scroll cue when stacked strip overflows");
+  assert.match(tail, /\.is-wide\s+\.boring-decision-strip-groups\s*\{[^}]*grid-template-columns:\s*max-content\s+max-content\s+max-content\s+max-content\s+minmax\(0,\s*1fr\)\s+auto;/, "P2b r2 m1: rail lines share one column set");
+  assert.match(tail, /\.is-wide\s+\.boring-decision-strip-line\s*\{[^}]*grid-template-columns:\s*subgrid;/, "P2b r2 m1: rail lines subgrid from the shared columns");
 });

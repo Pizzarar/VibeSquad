@@ -1,0 +1,6282 @@
+{
+ "dark-1920": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 380.703px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 10,
+    "spread": 7
+   }
+  },
+  "nLines": 11,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 674,
+   "h": 590,
+   "bottom": 722
+  },
+  "innerHeight": 1080,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1850,
+      "r": 1863,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1850,
+      "r": 1863,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ],
+  "errs": []
+ },
+ "dark-3200": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 586.266px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 10,
+    "spread": 7
+   }
+  },
+  "nLines": 11,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 880,
+   "h": 590,
+   "bottom": 722
+  },
+  "innerHeight": 1800,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ],
+  "errs": []
+ },
+ "dark-3200-quietOpen": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 586.266px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 34,
+    "spread": 7
+   }
+  },
+  "nLines": 35,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 880,
+   "h": 1532,
+   "bottom": 1664
+  },
+  "innerHeight": 1800,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 1",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 2",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 3",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 3",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-3",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 4",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 5",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 5",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-5",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 6",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 6",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-6",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 7",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 7",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-7",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 8",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 8",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-8",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 9",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 9",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-9",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 10",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 10",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-10",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 11",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 11",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-11",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 12",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 12",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-12",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 13",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 13",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-13",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 14",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 14",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-14",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 15",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 15",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-15",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 16",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 16",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-16",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 17",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 17",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-17",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 18",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 18",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-18",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 19",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 19",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-19",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 20",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 20",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-20",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 21",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 21",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-21",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 22",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 22",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-22",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 23",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 23",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-23",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 24",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 24",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-24",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ]
+ },
+ "light-1920": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 380.703px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 10,
+    "spread": 7
+   }
+  },
+  "nLines": 11,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 674,
+   "h": 590,
+   "bottom": 722
+  },
+  "innerHeight": 1080,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1850,
+      "r": 1863,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1850,
+      "r": 1863,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1217,
+    "lineR": 1869,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1223,
+      "r": 1231,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1223,
+      "r": 1302,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 1310,
+      "r": 1368,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 1376,
+      "r": 1448,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 1456,
+      "r": 1835,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 1843,
+      "r": 1863,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ],
+  "errs": []
+ },
+ "light-3200": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 586.266px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 11,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 10,
+    "spread": 7
+   }
+  },
+  "nLines": 11,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 880,
+   "h": 590,
+   "bottom": 722
+  },
+  "innerHeight": 1800,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ],
+  "errs": []
+ },
+ "light-3200-quietOpen": {
+  "cols": {
+   "groups": "10px 81.3125px 60px 74.6094px 586.266px 37.8125px",
+   "squad": "subgrid [] [] [] [] [] [] []",
+   "lanes": "subgrid [] [] [] [] [] [] []",
+   "line": "subgrid [] [] [] [] [] [] []"
+  },
+  "lineTemplatesDistinct": 1,
+  "spreads": {
+   "boring-decision-dot": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-lane-name": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-code-slot": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-state": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-strip-event": {
+    "n": 35,
+    "spread": 0
+   },
+   "boring-decision-age": {
+    "n": 34,
+    "spread": 7
+   }
+  },
+  "nLines": 35,
+  "truncLines": 3,
+  "trunc": [
+   {
+    "name": "Plugins",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "Art Direction",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "t": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   }
+  ],
+  "overflowRight": [],
+  "strip": {
+   "w": 880,
+   "h": 1532,
+   "bottom": 1664
+  },
+  "innerHeight": 1800,
+  "fade": false,
+  "rows": [
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "running",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionDecision Desk approved for Norma",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "25m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Plugins",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Plugins",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@plugins",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneMerged U1+U2 URL history cleanup",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "18m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@plugins",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "UI Bois",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-bois",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneShipped D2 owner-only decisions API",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "11m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Art Direction",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Art Direction",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@art-direction",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "8m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@art-direction",
+      "shown": 58,
+      "need": 69
+     }
+    ]
+   },
+   {
+    "name": "Runner Pilot",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Runner Pilot",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@runner-pilot",
+      "trunc": true
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "12m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": [
+     {
+      "cls": "boring-decision-code-slot",
+      "text": "@runner-pilot",
+      "shown": 58,
+      "need": 63
+     }
+    ]
+   },
+   {
+    "name": "wiki",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@wiki",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "15m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 1",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-1",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 2",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 3",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 3",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-3",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 4",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 5",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 5",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-5",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 6",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 6",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-6",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 7",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 7",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-7",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 8",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 8",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-8",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 9",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 9",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-9",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 10",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 10",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-10",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 11",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 11",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-11",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 12",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 12",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-12",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 13",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 13",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-13",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 14",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 14",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-14",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 15",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 15",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-15",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 16",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 16",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-16",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 17",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 17",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-17",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 18",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 18",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-18",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 19",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 19",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-19",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 20",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 20",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-20",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 21",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 21",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-21",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 22",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 22",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-22",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 23",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 23",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-23",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Lane 24",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Lane 24",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@lane-24",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "idle",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "5h",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneNightly build green on all zones",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "30m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Main Game",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Main Game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@main-game",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "needs you",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "doneBounty tracker refactor landed",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "14m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "UI Lab",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "UI Lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@ui-lab",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 2",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2760,
+      "r": 2773,
+      "text": "3m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Desk",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Desk",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "no lead",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "No recent done/decision",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   },
+   {
+    "name": "Site Polish",
+    "lineX": 1921,
+    "lineR": 2779,
+    "kids": [
+     {
+      "cls": "boring-decision-dot",
+      "x": 1927,
+      "r": 1935,
+      "text": "",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-lane-name",
+      "x": 1927,
+      "r": 2006,
+      "text": "Site Polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-code-slot",
+      "x": 2014,
+      "r": 2072,
+      "text": "@site-polish",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-state",
+      "x": 2080,
+      "r": 2153,
+      "text": "waiting · 4",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-strip-event",
+      "x": 2161,
+      "r": 2745,
+      "text": "decisionStandardized PNG compression at ",
+      "trunc": false
+     },
+     {
+      "cls": "boring-decision-age",
+      "x": 2753,
+      "r": 2773,
+      "text": "22m",
+      "trunc": false
+     }
+    ],
+    "truncSpans": []
+   }
+  ]
+ }
+}
