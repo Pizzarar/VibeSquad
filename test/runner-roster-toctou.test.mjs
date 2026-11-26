@@ -9,6 +9,7 @@ import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -24,13 +25,20 @@ function seed(dir) {
       .map((l) => JSON.stringify(l)).join('\n') + '\n');
 }
 
+// idea-1144: these tests are about the guard's stat/identity logic, not real inotify. A real fs.watch fails with EMFILE/ENOSPC
+// when the per-user inotify instance budget (max_user_instances, 128) is exhausted — which happens in the full suite — and
+// the runner records that as a permanent failure, leaving `_rosterWatch` null. Inject a fake watcher so no inotify is used.
+const fakeWatchFactory = () => Object.assign(new EventEmitter(), { close() {} });
+
 // A fresh runner on a temp agents dir, seeded, with a fast guard interval.
 function mkRunner() {
   const home = tmp();
   const dir = path.join(home, 'agents');
   mkdirSync(dir, { recursive: true });
   seed(dir);
-  return { home, dir, r: new Runner({ dir, adapters: {}, rosterWatchGuardMs: 25 }) };
+  const r = new Runner({ dir, adapters: {}, rosterWatchGuardMs: 25 });
+  r.rosterWatchFactory = fakeWatchFactory;
+  return { home, dir, r };
 }
 
 const enoent = () => { const e = new Error('ENOENT: no such file or directory'); e.code = 'ENOENT'; return e; };
