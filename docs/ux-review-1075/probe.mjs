@@ -1,0 +1,30 @@
+import path from "node:path"; import fs from "node:fs";
+const ROOT = process.argv[2]; const OUT = path.join(ROOT, "docs/ux-review-1075");
+const E = await import(path.join(ROOT, "scripts/ui-overlap/env.mjs"));
+const pw = E.resolvePlaywright(); const { server, baseUrl } = await E.serveDist();
+const b = await pw.chromium.launch({ executablePath: E.findBrowser(), args: ["--no-sandbox"] });
+const init = `try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"boring","app.theme":"dark"}));}catch{}`;
+const log = [];
+async function open() { const ctx = await b.newContext({ viewport: { width: 1920, height: 1080 } }); await ctx.addInitScript(init); await E.installRoutes(ctx); const page = await ctx.newPage(); await page.goto(`${baseUrl}/?demo=1`); await page.locator('[data-testid="boring-worker-demo-aud"]').click({ timeout: 15000 }); await page.waitForTimeout(500); return { ctx, page }; }
+const st = (page) => page.evaluate(() => { const pane = (s) => { const e = document.querySelector(`[data-testid="boring-pane-${s}"]`); if (!e) return null; const n = e.querySelector('[data-testid="boring-agent-name"]'); const c = e.querySelector('[data-testid="boring-empty-card"]'); return (n ? n.innerText : c ? "card" : "picker") + (e.className.includes("active") ? "*" : ""); }; return { url: location.search, crumb: [...document.querySelectorAll('[data-testid^="boring-crumb-"]')].map((e) => e.innerText.trim()).join(" › "), split: !!document.querySelector('[data-testid="boring-chat-split"]'), L: pane("left"), R: pane("right"), card: !!document.querySelector('.boring-chat-column [data-testid="boring-empty-card"]'), toggle: document.querySelector('[data-testid="boring-split-toggle"]')?.innerText ?? null, sel: [...document.querySelectorAll('[aria-current="true"]')].map((e) => e.dataset.testid), panes: (() => { const k = "vs.panes.v1"; if (!k) return null; const v = JSON.parse(localStorage.getItem(k)); return { a: v.activePane, l: v.leftActiveId, r: v.rightActiveId }; })() }; });
+const c = (p, id, m) => p.locator(`[data-testid="${id}"]`).first().click(m ? { modifiers: [m] } : {});
+const S = async (p, t) => { await p.waitForTimeout(350); log.push(t + " " + JSON.stringify(await st(p))); };
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-pane-left"); await S(page, "G0 left active"); await c(page, "boring-core-bugs"); await S(page, "G1 left active, Bugs"); await c(page, "boring-worker-demo-mech"); await S(page, "G2 click mech, no Back"); await page.screenshot({ path: path.join(OUT, "dark1920-g2-agent-after-dormant-left-active.png") }); await ctx.close(); }
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-pane-left"); await c(page, "boring-crumb-project"); await S(page, "H1 left active, project overview"); await c(page, "boring-worker-demo-mech"); await S(page, "H2 click mech from overview (control: pre-existing path?)"); await ctx.close(); }
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-pane-left"); await c(page, "boring-core-overlord"); await c(page, "boring-worker-demo-mech"); await S(page, "G3 same via Overlord (Desk)"); await ctx.close(); }
+console.log(log.join("\n")); process.exit(0);
+// A: baseline - left active, right picker, click agent directly
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-pane-left"); await S(page, "A1 left active"); await c(page, "boring-worker-demo-mech"); await S(page, "A2 click mech (no dormant step)"); await ctx.close(); }
+// B: Unsplit from the dormant card
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-worker-demo-rev", "Shift"); await c(page, "boring-core-bugs"); await S(page, "B1 dormant in split"); await c(page, "boring-split-toggle"); await S(page, "B2 click Unsplit on card"); await c(page, "boring-worker-demo-mech"); await S(page, "B3 click agent"); await page.goBack(); await S(page, "B4 back"); await page.goBack(); await S(page, "B5 back"); await ctx.close(); }
+// C: Shift+click dormant Bugs (hint says opens on the right)
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-core-bugs", "Shift"); await S(page, "C1 shift+click Bugs, right picker"); await page.screenshot({ path: path.join(OUT, "dark1920-c1-shift-click-bugs.png") }); await ctx.close(); }
+{ const { ctx, page } = await open(); await c(page, "boring-core-bugs", "Shift"); await S(page, "C2 shift+click Bugs, no split"); await ctx.close(); }
+// D: B17 card then click agent in left pane / Ctrl+J
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-pp-open-_bugs-open"); await S(page, "D1 B17 card"); await c(page, "boring-pane-left"); await S(page, "D2 click left pane"); await c(page, "boring-pane-right"); await S(page, "D3 click right pane again"); await ctx.close(); }
+// E: deep link ?slot=bugs with split on (reload)
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-worker-demo-rev", "Shift"); await c(page, "boring-core-bugs"); await page.reload(); await page.waitForTimeout(1200); await S(page, "E1 reload on ?slot=bugs while split"); await ctx.close(); }
+// F: keyboard Ctrl+J from dormant card in split
+{ const { ctx, page } = await open(); await c(page, "boring-split-toggle"); await c(page, "boring-worker-demo-rev", "Shift"); await c(page, "boring-core-bugs"); await page.keyboard.press("Control+j"); await S(page, "F1 Ctrl+J from dormant card"); await ctx.close(); }
+console.log(log.join("\n")); fs.writeFileSync(path.join(OUT, "probe2-log.txt"), log.join("\n") + "\n");
+await b.close(); server.close();
