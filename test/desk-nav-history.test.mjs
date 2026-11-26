@@ -409,3 +409,33 @@ test("U1 wiring: BoringApp publishes the slot/tab keys (team-tagged); App's sync
   assert.match(app, /urlSyncScreen\(\{ boring: vibe === "boring", live: getBoringScreenKeys\(\), rendered: boringScreen, team: activeTeamId \|\| null, kept: parseUrlState\(location\.search\) \}\)/);
   assert.match(app, /\}, \[activeTeamId, urlAgentId, pinLayout, pinsHome, squadsHome, boringScreen, boringLanded\]\);/);
 });
+
+// ── idea-1075 r3 (Gemini M1): Back/Forward onto ?slot= goes through the same entry as a sidebar pick, so B17's right card cannot outlive it ──
+test("idea-1075 r3: split, right pane active, B17 right card shown; popstate to ?slot=bugs clears the card and shows the Bugs card (URL = screen)", () => {
+  reset();
+  const view = squad({ bugs: { pin: lanePin("bug", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  globalThis.__agents.set("ade-ld", { id: "ade-ld" });
+  try {
+    globalThis.__panes = { split: true, activePane: "right", leftActiveId: "ade-ld", rightActiveId: null };
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view)); // mount at navGen 0, then pop to the agent
+    render(props(view, { navGen: 1 }));
+    let t = render(props(view, { navGen: 1 }));
+    walk(t, (n) => n.props && typeof n.props.onEmptyTarget === "function")[0].props.onEmptyTarget({ key: "_overlord", pill: "open" }); // B17: a dormant right-pane card
+    t = render(props(view, { navGen: 1 }));
+    assert.ok(byId(t, "boring-chat-split"), "the right card lives inside the split");
+    globalThis.location = { search: "?team=vs&slot=bugs" };
+    render(props(view, { navGen: 2 }));
+    t = render(props(view, { navGen: 2 }));
+    assert.equal(byId(t, "boring-chat-split"), null, "the split yields to the slot the URL names");
+    assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+    // the cleared card does not come back when the split does
+    globalThis.__panes = { split: true, activePane: "right", leftActiveId: "ade-ld", rightActiveId: null };
+    globalThis.location = { search: "?team=vs&agent=ade-ld" };
+    render(props(view, { navGen: 3 }));
+    t = render(props(view, { navGen: 3 }));
+    assert.equal(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget ?? null, null);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});

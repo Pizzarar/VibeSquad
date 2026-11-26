@@ -603,6 +603,14 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
+  // idea-1075 r3: the ONE way a slot lane becomes the screen (sidebar pick, Back/Forward landing, cold-load ?slot=). It clears B17's
+  // pane-local right card, so ?slot= (urlSlot) and the rendered card can never name different screens.
+  const enterSlotLane = (laneId: string) => {
+    setRightCard(null);
+    setSelectedLaneId(laneId);
+    setSelectedWorkerId(null);
+    setMode("chat");
+  };
   const navGen0 = useRef(navGen); // B1: a remount starts with the current navGen; only a pop after mount re-lands
   // U2 (idea-983): the pop whose landing this render shows (set with the landing's own state, so it commits in the same render).
   const [landedGen, setLandedGen] = useState(navGen);
@@ -630,10 +638,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     } else if (land.mode === "decisions") {
       setMode("decisions");
     } else if (land.mode === "slot") {
-      setSelectedLaneId(SLOT_LANE[land.slot]);
+      enterSlotLane(SLOT_LANE[land.slot]);
       setSelectedRole("brainstorm");
-      setSelectedWorkerId(null);
-      setMode("chat");
     } else {
       setOverviewTab((land.tab && TAB_FROM_URL[land.tab]) || "overview", land.teamId ?? view?.team.id ?? null); // Back to ?team= alone = the Overview tab
       setMode("project");
@@ -654,18 +660,12 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   });
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null, teamId?: string) => {
     if (teamId && teamId !== view?.team.id) onSelectSquad(teamId);
-    setRightCard(null); // idea-1075: the sidebar pick is the screen now (and what ?slot= names), not a pane-local right card
-    setSelectedLaneId(laneId);
-    setSelectedWorkerId(null);
-    setMode("chat");
+    enterSlotLane(laneId);
     if (agentId) openHere(agentId);
   };
   const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
-    setRightCard(null); // idea-1075: see pickCore
-    setSelectedLaneId("_bugs");
+    enterSlotLane("_bugs");
     setSelectedRole("brainstorm");
-    setSelectedWorkerId(null);
-    setMode("chat");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
     if (b.pin && b.agentId) openHere(b.agentId);
   };
@@ -712,10 +712,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     if (p && p.team === screenTeam) {
       pendingUrl0.current = null;
       if (p.slot) {
-        setSelectedLaneId(SLOT_LANE[p.slot]);
+        enterSlotLane(SLOT_LANE[p.slot]);
         setSelectedRole("brainstorm");
-        setSelectedWorkerId(null);
-        setMode("chat");
       }
       setTabFor({ team: screenTeam, tab: (p.tab && TAB_FROM_URL[p.tab]) || "overview" });
       return;
@@ -894,7 +892,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
           <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
         ) : (
           <div className="boring-split-empty" data-testid="boring-split-empty">
-            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton}>
+            <BoringPanePicker key={view?.team.id} getData={() => buildPickerData(model, pickerHandlers, pickerStrip())} renderEmpty={(t) => emptyCard(t)} emptyTarget={rightCard} onEmptyTarget={setRightCard} onClose={closeSplitToButton} focusOnMount={panes.activePane === "right"}>
               <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={closeSplitToButton}>Close split</button>
             </BoringPanePicker>
             <p className="boring-split-hint">Shift+click any sidebar row to open it on the right.</p>

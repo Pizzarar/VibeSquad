@@ -2426,3 +2426,13 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   assert.ok(!/!important/.test(sect));
   assert.match(readFileSync(resolve(import.meta.dirname, "..", "src", "PermissionCard.tsx"), "utf8"), /style=\{vibe === "boring" \? undefined : \{ fontFamily: "monospace", fontSize: 11 \}\}/);
 });
+
+test("idea-1075 r3 (UX M1): the split picker only grabs focus on mount when the right pane is active (a left-active remount must not flip the active pane)", () => {
+  const pp = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8");
+  const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
+  assert.match(pp, /if \(focusOnMount\) filterRef\.current\?\.focus\(\)/);
+  assert.match(ade, /focusOnMount=\{panes\.activePane === "right"\}/);
+  // one entry for every slot-lane screen: sidebar pick, popstate landing, cold-load ?slot=
+  assert.equal((ade.match(/enterSlotLane\(/g) ?? []).length, 4); // pickCore + pickBugs + landing + cold load
+  assert.match(ade, /const enterSlotLane = \(laneId: string\) => \{\n    setRightCard\(null\);/);
+});
