@@ -1559,6 +1559,19 @@ html[data-vibe="boring"] .boring-empty-lane { margin: 0; font-size: var(--t-titl
 html[data-vibe="boring"] .boring-empty-card > p { margin: 0; color: var(--text-1); font-size: var(--t-body); }
 html[data-vibe="boring"] .boring-empty-jumps { display: flex; flex-direction: column; gap: 14px; width: 100%; padding-top: 12px; border-top: 1px solid var(--border); }
 html[data-vibe="boring"] .boring-empty-jumps > section { display: flex; flex-direction: column; gap: 8px; }
+/* B18b composer (@bor) */
+html[data-vibe="boring"] .composer-row.boring-composer-row { container-type: inline-size; container-name: boring-composer; }
+html[data-vibe="boring"] .boring-composer-bar { gap: 6px 8px; }
+html[data-vibe="boring"] .boring-composer-cfg { flex: 0 1 auto; gap: 4px 6px; }
+html[data-vibe="boring"] .boring-composer-pair { display: inline-flex; align-items: center; gap: 4px 6px; flex-wrap: nowrap; min-width: 0; }
+html[data-vibe="boring"] .boring-composer-field { white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+html[data-vibe="boring"] .boring-composer-cfg select, html[data-vibe="boring"] .boring-composer-cfg input { max-width: 172px; }
+html[data-vibe="boring"] .boring-composer-cfg select[aria-label="Provider"] { max-width: 112px; }
+html[data-vibe="boring"] .boring-composer-field select { max-width: 108px; }
+html[data-vibe="boring"] .boring-composer-bar > .btn.small { min-height: 32px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-send { white-space: nowrap; }
+html[data-vibe="boring"] .boring-composer-send .boring-composer-send-btn { padding: 0 14px; }
+html[data-vibe="boring"] .boring-composer-bar { @container boring-composer (max-width: 680px) { gap: 6px; .boring-composer-cfg { flex: 1 0 100%; order: 1; } .boring-composer-cfg select[aria-label="Provider"] { max-width: 96px; } .boring-composer-cfg select[aria-label="Model"], .boring-composer-cfg input[aria-label="Model"] { flex: 1 1 80px; min-width: 0; } .boring-composer-field select { max-width: 96px; } .boring-composer-actions { order: 2; } & > .btn.small { order: 3; padding: 0 8px; font-size: 11px; } .boring-composer-send { order: 4; gap: 4px; } .boring-composer-send .composer-interrupt-btn { padding: 0 8px; font-size: 12px; } .boring-composer-send .boring-composer-send-btn { padding: 0 12px; } .boring-composer-staged { order: 5; } } }
 /* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
 /* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
