@@ -9,9 +9,9 @@ for (const [theme, w, h] of [["dark", 1920, 1080], ["light", 1600, 900]]) {
   const S = async (...a) => { let r; try { r = await step(...a); } catch (e) { r = { label: a[1], error: String(e).split("\n")[0] }; } out.push(r); console.log(JSON.stringify(r).slice(0, 700)); return r; };
   let { page, ctx } = await open(browser, { port: PORT, theme, w, h, q: "?demo=&team=vibesquad&lane=runner-pilot" });
   if (!(await page.$(T("boring-project-lanes-efi")))) { await page.click(T("boring-project-toggle-efi")); await page.waitForTimeout(400); }
-  await S(page, "efi Overlord slot (no agent)", () => page.locator(`${T("boring-project-lanes-efi")} ${T("boring-core-overlord")}`).click());
-  await S(page, "efi RiffBot slot", () => page.locator(`${T("boring-project-lanes-efi")} ${T("boring-core-riffbot")}`).click());
-  await S(page, "efi Bugs slot", () => page.locator(`${T("boring-project-lanes-efi")} ${T("boring-core-bugs")}`).click());
+  await S(page, "efi Overlord slot (no agent)", () => page.locator(`${T("boring-project-lanes-efi")} [data-testid^="boring-core-overlord"]`).click());
+  await S(page, "efi RiffBot slot", () => page.locator(`${T("boring-project-lanes-efi")} [data-testid^="boring-core-riffbot"]`).click());
+  await S(page, "efi Bugs slot", () => page.locator(`${T("boring-project-lanes-efi")} [data-testid^="boring-core-bugs"]`).click());
   await S(page, "Back (RiffBot)", () => page.goBack());
   await S(page, "Back (Overlord)", () => page.goBack());
   await S(page, "Back (runner-pilot card)", () => page.goBack());

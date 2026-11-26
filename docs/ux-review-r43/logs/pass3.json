@@ -2,90 +2,150 @@
  "dark-1920": [
   {
    "label": "efi Overlord slot (no agent)",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 3,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=overlord"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
+   ]
   },
   {
    "label": "efi RiffBot slot",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=riffbot",
+   "hist": 4,
+   "selected": [
+    "boring-core-riffbot | RiffBot / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › RiffBot",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=riffbot"
+   ],
+   "frames": [
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot"
+   ]
   },
   {
    "label": "efi Bugs slot",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=bugs",
+   "hist": 5,
+   "selected": [
+    "boring-core-bugs | Bugs / no agent"
+   ],
+   "crumb": "Main Game Project › Bugs › Brainstorm",
+   "head": null,
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=bugs"
+   ],
+   "frames": [
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot",
+    " @ Main Game Project›Bugs›Brainstorm"
+   ]
   },
   {
    "label": "Back (RiffBot)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=efi&slot=riffbot",
+   "hist": 5,
+   "selected": [
+    "boring-core-riffbot | RiffBot / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › RiffBot",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    " @ Main Game Project›Bugs›Brainstorm",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot"
    ]
   },
   {
    "label": "Back (Overlord)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
    "label": "Back (runner-pilot card)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 5,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
    ]
   },
   {
    "label": "Forward (Overlord)",
-   "url": "?demo=&team=vibesquad&lane=runner-pilot",
-   "hist": 2,
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
    "selected": [
-    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    "boring-core-overlord | ★ Overlord / no agent"
    ],
-   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
-   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
    "empty": true,
    "title": "(5) VibeSquad",
-   "h": [],
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -",
-    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
    "label": "reload (Overlord)",
-   "url": "?demo=&team=vibesquad&lane=runner-pilot",
-   "hist": 2,
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
    "selected": [
-    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    "boring-core-overlord | ★ Overlord / no agent"
    ],
-   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
-   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
    "empty": true,
    "title": "(5) VibeSquad",
    "h": [],
    "frames": [
     " @ -",
-    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
@@ -204,90 +264,152 @@
  "light-1600": [
   {
    "label": "efi Overlord slot (no agent)",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 3,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=overlord"
+   ],
+   "frames": [
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
+   ]
   },
   {
    "label": "efi RiffBot slot",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=riffbot",
+   "hist": 4,
+   "selected": [
+    "boring-core-riffbot | RiffBot / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › RiffBot",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=riffbot"
+   ],
+   "frames": [
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot"
+   ]
   },
   {
    "label": "efi Bugs slot",
-   "error": "TimeoutError: locator.click: Timeout 6000ms exceeded."
+   "url": "?demo=&team=efi&slot=bugs",
+   "hist": 5,
+   "selected": [
+    "boring-core-bugs | Bugs / no agent"
+   ],
+   "crumb": "Main Game Project › Bugs › Brainstorm",
+   "head": null,
+   "empty": false,
+   "title": "(5) VibeSquad",
+   "h": [
+    "pushState /?demo=&team=efi&slot=bugs"
+   ],
+   "frames": [
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot",
+    " @ Main Game Project›Bugs›Brainstorm"
+   ]
   },
   {
    "label": "Back (RiffBot)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=efi&slot=riffbot",
+   "hist": 5,
+   "selected": [
+    "boring-core-riffbot | RiffBot / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › RiffBot",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    " @ Main Game Project›Bugs›Brainstorm",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot"
    ]
   },
   {
    "label": "Back (Overlord)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
+   "selected": [
+    "boring-core-overlord | ★ Overlord / no agent"
+   ],
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›RiffBot",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
    "label": "Back (runner-pilot card)",
-   "url": "",
-   "hist": 2,
-   "selected": [],
-   "crumb": null,
-   "head": null,
-   "empty": false,
-   "title": "",
-   "h": [],
+   "url": "?demo=&team=vibesquad&lane=runner-pilot",
+   "hist": 5,
+   "selected": [
+    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+   ],
+   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
+   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "empty": true,
+   "title": "(5) VibeSquad",
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord",
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
    ]
   },
   {
    "label": "Forward (Overlord)",
-   "url": "?demo=&team=vibesquad&lane=runner-pilot",
-   "hist": 2,
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
    "selected": [
-    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    "boring-core-overlord | ★ Overlord / no agent"
    ],
-   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
-   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
    "empty": true,
    "title": "(5) VibeSquad",
-   "h": [],
+   "h": [
+    "POP"
+   ],
    "frames": [
-    " @ -",
-    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm",
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
    "label": "reload (Overlord)",
-   "url": "?demo=&team=vibesquad&lane=runner-pilot",
-   "hist": 2,
+   "url": "?demo=&team=efi&slot=overlord",
+   "hist": 5,
    "selected": [
-    "boring-conv-runner-pilot | ▾ / Runner Pilot / 12m ago / ⋯ / Lead / 12m ago"
+    "boring-core-overlord | ★ Overlord / no agent"
    ],
-   "crumb": "VibeSquad › Runner Pilot › Brainstorm",
-   "head": "Runner Pilot · Lead idle · no Brainstorm",
+   "crumb": "Main Game Project › Desk › Overlord",
+   "head": "Desk · no Overlord or RiffBot running",
    "empty": true,
    "title": "(5) VibeSquad",
    "h": [],
    "frames": [
     " @ -",
-    "CARD Runner Pilot · Lead idle · no Brainstorm @ VibeSquad›Runner Pilot›Brainstorm"
+    "CARD Desk · no Overlord or RiffBot running @ Main Game Project›Desk›Overlord"
    ]
   },
   {
