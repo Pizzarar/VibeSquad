@@ -1,0 +1,102 @@
+{
+ "dark-1920-pre": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi"
+ },
+ "dark-1920-afterShowAll": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen",
+  "ls": "{\"forework\":true,\"sbb\":true}",
+  "pressed": "pills=null preset-active=false preset-all=true pills-awake=null pill-vibesquad=true pill-efi=true pill-site=true pills-on-hold=null pill-forework=true pill-sbb=true"
+ },
+ "dark-1920-afterReload": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen"
+ },
+ "dark-1920-awayFromDesk": {
+  "nav": "· 0",
+  "deskMounted": false
+ },
+ "dark-1920": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi",
+  "errs": []
+ },
+ "light-1920-pre": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi"
+ },
+ "light-1920-afterShowAll": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen",
+  "ls": "{\"forework\":true,\"sbb\":true}",
+  "pressed": "pills=null preset-active=false preset-all=true pills-awake=null pill-vibesquad=true pill-efi=true pill-site=true pills-on-hold=null pill-forework=true pill-sbb=true"
+ },
+ "light-1920-afterReload": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen"
+ },
+ "light-1920-awayFromDesk": {
+  "nav": "· 0",
+  "deskMounted": false
+ },
+ "light-1920": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi",
+  "errs": []
+ },
+ "dark-3200-pre": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi"
+ },
+ "dark-3200-afterShowAll": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen",
+  "ls": "{\"forework\":true,\"sbb\":true}",
+  "pressed": "pills=null preset-active=false preset-all=true pills-awake=null pill-vibesquad=true pill-efi=true pill-site=true pills-on-hold=null pill-forework=true pill-sbb=true"
+ },
+ "dark-3200-afterReload": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen"
+ },
+ "dark-3200-awayFromDesk": {
+  "nav": "· 0",
+  "deskMounted": true
+ },
+ "dark-3200": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi",
+  "errs": []
+ },
+ "light-3200-pre": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi"
+ },
+ "light-3200-afterShowAll": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen",
+  "ls": "{\"forework\":true,\"sbb\":true}",
+  "pressed": "pills=null preset-active=false preset-all=true pills-awake=null pill-vibesquad=true pill-efi=true pill-site=true pills-on-hold=null pill-forework=true pill-sbb=true"
+ },
+ "light-3200-afterReload": {
+  "nav": "· 3",
+  "summary": "3 open · 2 here · 1 off-screen"
+ },
+ "light-3200-awayFromDesk": {
+  "nav": "· 0",
+  "deskMounted": true
+ },
+ "light-3200": {
+  "nav": "· 0",
+  "summary": "0 open in selected projects",
+  "empty": "0 open in selected projects | Refresh | Active | All | VibeSquad | 0 | Main Game Project | 0 | Site | 0 | ASLEEP | Forework | 2 | SBB | 1 | DECISIONS | Oldest first · 0 | No open decisions in the selected projects (3 items hidden by the filter). | Show all | LIVE STATUS | 7 lanes | VibeSquad | Desk | running | No recent done/decision | now | Desk lane | @desk | no lead | DONE | Decision Desk F1 ready | 15m | Main Game Project | Desk | no lead | No recent done/decisi",
+  "errs": []
+ }
+}

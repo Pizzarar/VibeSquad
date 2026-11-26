@@ -1,0 +1,818 @@
+{
+ "dark-1920": {
+  "barHTML": "<div class=\"boring-decision-pills\" data-testid=\"boring-decision-pills\" role=\"region\" aria-label=\"Filter by project\"><div class=\"boring-decision-pill-presets\"><button type=\"button\" class=\"boring-decision-pill-preset on\" data-testid=\"boring-decision-preset-active\" aria-pressed=\"true\">Active</button><button type=\"button\" class=\"boring-decision-pill-preset\" data-testid=\"boring-decision-preset-all\" aria-pressed=\"false\">All</button></div><div class=\"boring-decision-pill-group\" data-testid=\"boring-decision-pills-awake\"><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-vibesquad\" aria-pressed=\"true\" aria-label=\"VibeSquad, 2 open\"><span class=\"boring-decision-pill-name\">VibeSquad</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-efi\" aria-pressed=\"true\" aria-label=\"Main Game Project, 1 open\"><span class=\"boring-decision-pill-name\">Main Game Project</span><span class=\"boring-decision-pill-count\">1</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-site\" aria-pressed=\"true\" aria-label=\"Site, 1 open\"><span class=\"boring-decision-pill-name\">Site</span><span class=\"boring-decision-pill-count\">1</span></button></div><div class=\"boring-decision-pill-group is-on-hold\" data-testid=\"boring-decision-pills-on-hold\"><span class=\"boring-decision-pill-group-label\" title=\"In an asleep folder. Click a pill to show anyway.\">Asleep</span><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-forework\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"Forework, 2 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">Forework</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-sbb\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"SBB, 1 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">SBB</span><span class=\"boring-decision-pill-count\">1</span></button></div></div>",
+  "chain": [
+   "boring-decision-pills boring-decision-pills",
+   "boring-decision-head ",
+   "boring-decision-desk is-wide boring-decision-desk",
+   "boring-dashboard-wrap boring-decision-wrap boring-decisions-view"
+  ],
+  "barRect": [
+   347,
+   116,
+   1533,
+   28
+  ],
+  "pills": [
+   {
+    "id": "boring-decision-preset-active",
+    "text": "Active",
+    "title": "",
+    "aria": "true",
+    "label": null,
+    "rect": [
+     347,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(38, 38, 50)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-preset-all",
+    "text": "All",
+    "title": "",
+    "aria": "false",
+    "label": null,
+    "rect": [
+     410,
+     118,
+     36,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(195, 192, 207)",
+    "bg": "rgb(22, 22, 29)",
+    "border": "solid rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-vibesquad",
+    "text": "VibeSquad\n2",
+    "title": "",
+    "aria": "true",
+    "label": "VibeSquad, 2 open",
+    "rect": [
+     469,
+     118,
+     99,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-efi",
+    "text": "Main Game Project\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Main Game Project, 1 open",
+    "rect": [
+     574,
+     118,
+     144,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-site",
+    "text": "Site\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Site, 1 open",
+    "rect": [
+     724,
+     118,
+     57,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-forework",
+    "text": "Forework\n2",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "Forework, 2 open",
+    "rect": [
+     853,
+     118,
+     89,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(154, 151, 168)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-sbb",
+    "text": "SBB\n1",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "SBB, 1 open",
+    "rect": [
+     948,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(154, 151, 168)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   }
+  ],
+  "summary": "4 open · 3 here · 1 off-screen",
+  "url": "?demo=&view=decisions",
+  "headings": [
+   [
+    "H2",
+    "DECISIONS",
+    [
+     347,
+     174,
+     72,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "OFF-SCREEN · TEST, MONEY & RELEASE",
+    [
+     347,
+     776,
+     254,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "LIVE STATUS",
+    [
+     1206,
+     174,
+     79,
+     16
+    ]
+   ]
+  ],
+  "errs": [
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+ },
+ "light-1920": {
+  "barHTML": "<div class=\"boring-decision-pills\" data-testid=\"boring-decision-pills\" role=\"region\" aria-label=\"Filter by project\"><div class=\"boring-decision-pill-presets\"><button type=\"button\" class=\"boring-decision-pill-preset on\" data-testid=\"boring-decision-preset-active\" aria-pressed=\"true\">Active</button><button type=\"button\" class=\"boring-decision-pill-preset\" data-testid=\"boring-decision-preset-all\" aria-pressed=\"false\">All</button></div><div class=\"boring-decision-pill-group\" data-testid=\"boring-decision-pills-awake\"><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-vibesquad\" aria-pressed=\"true\" aria-label=\"VibeSquad, 2 open\"><span class=\"boring-decision-pill-name\">VibeSquad</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-efi\" aria-pressed=\"true\" aria-label=\"Main Game Project, 1 open\"><span class=\"boring-decision-pill-name\">Main Game Project</span><span class=\"boring-decision-pill-count\">1</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-site\" aria-pressed=\"true\" aria-label=\"Site, 1 open\"><span class=\"boring-decision-pill-name\">Site</span><span class=\"boring-decision-pill-count\">1</span></button></div><div class=\"boring-decision-pill-group is-on-hold\" data-testid=\"boring-decision-pills-on-hold\"><span class=\"boring-decision-pill-group-label\" title=\"In an asleep folder. Click a pill to show anyway.\">Asleep</span><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-forework\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"Forework, 2 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">Forework</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-sbb\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"SBB, 1 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">SBB</span><span class=\"boring-decision-pill-count\">1</span></button></div></div>",
+  "chain": [
+   "boring-decision-pills boring-decision-pills",
+   "boring-decision-head ",
+   "boring-decision-desk is-wide boring-decision-desk",
+   "boring-dashboard-wrap boring-decision-wrap boring-decisions-view"
+  ],
+  "barRect": [
+   347,
+   116,
+   1533,
+   28
+  ],
+  "pills": [
+   {
+    "id": "boring-decision-preset-active",
+    "text": "Active",
+    "title": "",
+    "aria": "true",
+    "label": null,
+    "rect": [
+     347,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(230, 227, 221)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-preset-all",
+    "text": "All",
+    "title": "",
+    "aria": "false",
+    "label": null,
+    "rect": [
+     410,
+     118,
+     36,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(74, 69, 88)",
+    "bg": "rgb(255, 255, 255)",
+    "border": "solid rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-vibesquad",
+    "text": "VibeSquad\n2",
+    "title": "",
+    "aria": "true",
+    "label": "VibeSquad, 2 open",
+    "rect": [
+     469,
+     118,
+     99,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-efi",
+    "text": "Main Game Project\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Main Game Project, 1 open",
+    "rect": [
+     574,
+     118,
+     144,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-site",
+    "text": "Site\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Site, 1 open",
+    "rect": [
+     724,
+     118,
+     57,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-forework",
+    "text": "Forework\n2",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "Forework, 2 open",
+    "rect": [
+     853,
+     118,
+     89,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(94, 88, 104)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-sbb",
+    "text": "SBB\n1",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "SBB, 1 open",
+    "rect": [
+     948,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(94, 88, 104)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   }
+  ],
+  "summary": "4 open · 3 here · 1 off-screen",
+  "url": "?demo=&view=decisions",
+  "headings": [
+   [
+    "H2",
+    "DECISIONS",
+    [
+     347,
+     174,
+     72,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "OFF-SCREEN · TEST, MONEY & RELEASE",
+    [
+     347,
+     776,
+     254,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "LIVE STATUS",
+    [
+     1206,
+     174,
+     79,
+     16
+    ]
+   ]
+  ],
+  "errs": [
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+ },
+ "dark-3200": {
+  "barHTML": "<div class=\"boring-decision-pills\" data-testid=\"boring-decision-pills\" role=\"region\" aria-label=\"Filter by project\"><div class=\"boring-decision-pill-presets\"><button type=\"button\" class=\"boring-decision-pill-preset on\" data-testid=\"boring-decision-preset-active\" aria-pressed=\"true\">Active</button><button type=\"button\" class=\"boring-decision-pill-preset\" data-testid=\"boring-decision-preset-all\" aria-pressed=\"false\">All</button></div><div class=\"boring-decision-pill-group\" data-testid=\"boring-decision-pills-awake\"><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-vibesquad\" aria-pressed=\"true\" aria-label=\"VibeSquad, 2 open\"><span class=\"boring-decision-pill-name\">VibeSquad</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-efi\" aria-pressed=\"true\" aria-label=\"Main Game Project, 1 open\"><span class=\"boring-decision-pill-name\">Main Game Project</span><span class=\"boring-decision-pill-count\">1</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-site\" aria-pressed=\"true\" aria-label=\"Site, 1 open\"><span class=\"boring-decision-pill-name\">Site</span><span class=\"boring-decision-pill-count\">1</span></button></div><div class=\"boring-decision-pill-group is-on-hold\" data-testid=\"boring-decision-pills-on-hold\"><span class=\"boring-decision-pill-group-label\" title=\"In an asleep folder. Click a pill to show anyway.\">Asleep</span><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-forework\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"Forework, 2 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">Forework</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-sbb\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"SBB, 1 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">SBB</span><span class=\"boring-decision-pill-count\">1</span></button></div></div>",
+  "chain": [
+   "boring-decision-pills boring-decision-pills",
+   "boring-decision-head ",
+   "boring-decision-desk is-wide boring-decision-desk",
+   "boring-dashboard-wrap boring-decision-wrap boring-decisions-view"
+  ],
+  "barRect": [
+   790,
+   116,
+   2000,
+   28
+  ],
+  "pills": [
+   {
+    "id": "boring-decision-preset-active",
+    "text": "Active",
+    "title": "",
+    "aria": "true",
+    "label": null,
+    "rect": [
+     790,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(38, 38, 50)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-preset-all",
+    "text": "All",
+    "title": "",
+    "aria": "false",
+    "label": null,
+    "rect": [
+     853,
+     118,
+     36,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(195, 192, 207)",
+    "bg": "rgb(22, 22, 29)",
+    "border": "solid rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-vibesquad",
+    "text": "VibeSquad\n2",
+    "title": "",
+    "aria": "true",
+    "label": "VibeSquad, 2 open",
+    "rect": [
+     912,
+     118,
+     99,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-efi",
+    "text": "Main Game Project\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Main Game Project, 1 open",
+    "rect": [
+     1017,
+     118,
+     144,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-site",
+    "text": "Site\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Site, 1 open",
+    "rect": [
+     1167,
+     118,
+     57,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(243, 241, 247)",
+    "bg": "rgb(29, 29, 38)",
+    "border": "solid rgb(155, 114, 232)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-forework",
+    "text": "Forework\n2",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "Forework, 2 open",
+    "rect": [
+     1295,
+     118,
+     89,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(154, 151, 168)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-sbb",
+    "text": "SBB\n1",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "SBB, 1 open",
+    "rect": [
+     1391,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(154, 151, 168)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(43, 43, 56)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   }
+  ],
+  "summary": "4 open · 3 here · 1 off-screen",
+  "url": "?demo=&view=decisions",
+  "headings": [
+   [
+    "H2",
+    "DECISIONS",
+    [
+     790,
+     174,
+     72,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "OFF-SCREEN · TEST, MONEY & RELEASE",
+    [
+     790,
+     776,
+     254,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "LIVE STATUS",
+    [
+     1910,
+     174,
+     79,
+     16
+    ]
+   ]
+  ],
+  "errs": [
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+ },
+ "light-3200": {
+  "barHTML": "<div class=\"boring-decision-pills\" data-testid=\"boring-decision-pills\" role=\"region\" aria-label=\"Filter by project\"><div class=\"boring-decision-pill-presets\"><button type=\"button\" class=\"boring-decision-pill-preset on\" data-testid=\"boring-decision-preset-active\" aria-pressed=\"true\">Active</button><button type=\"button\" class=\"boring-decision-pill-preset\" data-testid=\"boring-decision-preset-all\" aria-pressed=\"false\">All</button></div><div class=\"boring-decision-pill-group\" data-testid=\"boring-decision-pills-awake\"><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-vibesquad\" aria-pressed=\"true\" aria-label=\"VibeSquad, 2 open\"><span class=\"boring-decision-pill-name\">VibeSquad</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-efi\" aria-pressed=\"true\" aria-label=\"Main Game Project, 1 open\"><span class=\"boring-decision-pill-name\">Main Game Project</span><span class=\"boring-decision-pill-count\">1</span></button><button type=\"button\" class=\"boring-decision-pill on\" data-testid=\"boring-decision-pill-site\" aria-pressed=\"true\" aria-label=\"Site, 1 open\"><span class=\"boring-decision-pill-name\">Site</span><span class=\"boring-decision-pill-count\">1</span></button></div><div class=\"boring-decision-pill-group is-on-hold\" data-testid=\"boring-decision-pills-on-hold\"><span class=\"boring-decision-pill-group-label\" title=\"In an asleep folder. Click a pill to show anyway.\">Asleep</span><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-forework\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"Forework, 2 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">Forework</span><span class=\"boring-decision-pill-count\">2</span></button><button type=\"button\" class=\"boring-decision-pill is-asleep\" data-testid=\"boring-decision-pill-sbb\" data-asleep=\"true\" aria-pressed=\"false\" aria-label=\"SBB, 1 open\" title=\"In an asleep folder. Click to show anyway.\"><span class=\"boring-decision-pill-name\">SBB</span><span class=\"boring-decision-pill-count\">1</span></button></div></div>",
+  "chain": [
+   "boring-decision-pills boring-decision-pills",
+   "boring-decision-head ",
+   "boring-decision-desk is-wide boring-decision-desk",
+   "boring-dashboard-wrap boring-decision-wrap boring-decisions-view"
+  ],
+  "barRect": [
+   790,
+   116,
+   2000,
+   28
+  ],
+  "pills": [
+   {
+    "id": "boring-decision-preset-active",
+    "text": "Active",
+    "title": "",
+    "aria": "true",
+    "label": null,
+    "rect": [
+     790,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(230, 227, 221)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-preset-all",
+    "text": "All",
+    "title": "",
+    "aria": "false",
+    "label": null,
+    "rect": [
+     853,
+     118,
+     36,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(74, 69, 88)",
+    "bg": "rgb(255, 255, 255)",
+    "border": "solid rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-vibesquad",
+    "text": "VibeSquad\n2",
+    "title": "",
+    "aria": "true",
+    "label": "VibeSquad, 2 open",
+    "rect": [
+     912,
+     118,
+     99,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-efi",
+    "text": "Main Game Project\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Main Game Project, 1 open",
+    "rect": [
+     1017,
+     118,
+     144,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-site",
+    "text": "Site\n1",
+    "title": "",
+    "aria": "true",
+    "label": "Site, 1 open",
+    "rect": [
+     1167,
+     118,
+     57,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(29, 26, 36)",
+    "bg": "rgb(240, 238, 234)",
+    "border": "solid rgb(109, 75, 201)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-forework",
+    "text": "Forework\n2",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "Forework, 2 open",
+    "rect": [
+     1295,
+     118,
+     89,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(94, 88, 104)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   },
+   {
+    "id": "boring-decision-pill-sbb",
+    "text": "SBB\n1",
+    "title": "In an asleep folder. Click to show anyway.",
+    "aria": "false",
+    "label": "SBB, 1 open",
+    "rect": [
+     1391,
+     118,
+     59,
+     26
+    ],
+    "font": "12px",
+    "color": "rgb(94, 88, 104)",
+    "bg": "rgba(0, 0, 0, 0)",
+    "border": "dashed rgb(218, 214, 206)",
+    "opacity": "1",
+    "tag": "BUTTON",
+    "tabindex": 0
+   }
+  ],
+  "summary": "4 open · 3 here · 1 off-screen",
+  "url": "?demo=&view=decisions",
+  "headings": [
+   [
+    "H2",
+    "DECISIONS",
+    [
+     790,
+     174,
+     72,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "OFF-SCREEN · TEST, MONEY & RELEASE",
+    [
+     790,
+     776,
+     254,
+     16
+    ]
+   ],
+   [
+    "H2",
+    "LIVE STATUS",
+    [
+     1910,
+     174,
+     79,
+     16
+    ]
+   ]
+  ],
+  "errs": [
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)",
+   "console:Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+ }
+}
