@@ -244,7 +244,7 @@ test("B14b: CSS section is scoped, placed before D4 polish, and has no !importan
   assert.doesNotMatch(section, /@keyframes/, "no top-level @keyframes in the B14b section");
   // every rule in the section is scoped under html[data-vibe="boring"] (or inside an @media wrapper whose inner rules are).
   const noComments = section.replace(/\/\*[\s\S]*?\*\//g, "");
-  for (const sel of noComments.split("}").map((b) => b.replace(/@media[^{]*\{/g, "").split("{")[0]).flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean)) {
+  for (const sel of noComments.split("}").map((b) => b.replace(/@(?:media|container)[^{]*\{/g, "").split("{")[0]).flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean)) {
     assert.ok(sel.startsWith('html[data-vibe="boring"]'), `unscoped selector in B14b: ${sel}`);
   }
 });

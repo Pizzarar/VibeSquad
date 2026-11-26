@@ -1100,7 +1100,7 @@ test("D3a: boring.css section is appended, scoped, and never accent-fills the he
   const i = css.indexOf("/* ===== D3a (@desk, UX_REVIEW 2.6): BoringAgentHeader ===== */");
   assert.ok(i > 0 && css.indexOf("/* ===== D3", i + 10) === -1, "section present and last");
   const sect = css.slice(i);
-  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media") && !line.startsWith("@container")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
   assert.ok(!/\.boring-agent-menu[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
   assert.ok(!/\.boring-hdr-btn[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
 });
@@ -2413,7 +2413,7 @@ test("B13d: AgentDrawer mounts the card + chat vars in Normal only; css is borin
   const i = css.indexOf("/* ---- B13d:");
   assert.ok(i > 0);
   const sect = css.slice(i);
-  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media") && !line.startsWith("@container")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
   assert.ok(!/@keyframes/.test(sect));
   assert.match(sect, /\.boring-now\[data-state="busy"\] \.boring-now-big \{ box-shadow: 0 0 0 2px var\(--living-warm\)/);
   assert.match(sect, /\.boring-now\[data-state="idle"\] \.boring-now-big \{ filter: grayscale/);
