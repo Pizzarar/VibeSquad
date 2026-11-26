@@ -1,0 +1,294 @@
+{
+ "1920-asBuilt": {
+  "closed": {
+   "n": 11,
+   "overlapping": 11,
+   "maxOverlap": 8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "UI Bois",
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeClipped": [
+    "Plugins",
+    "Art Direction",
+    "Runner Pilot"
+   ],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 35,
+   "maxOverlap": 8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "UI Bois",
+    "Art Direction",
+    "Runner Pilot",
+    "Lane 10",
+    "Lane 11",
+    "Lane 12",
+    "Lane 13",
+    "Lane 14",
+    "Lane 15",
+    "Lane 16",
+    "Lane 17",
+    "Lane 18",
+    "Lane 19",
+    "Lane 20",
+    "Lane 21",
+    "Lane 22",
+    "Lane 23",
+    "Lane 24",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeClipped": [
+    "Plugins",
+    "Art Direction",
+    "Runner Pilot"
+   ],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ },
+ "1920-candidateFix": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Site Polish"
+   ],
+   "codeClipped": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": [
+    "Desk"
+   ]
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Site Polish"
+   ],
+   "codeClipped": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": [
+    "Desk"
+   ]
+  }
+ },
+ "3200-asBuilt": {
+  "closed": {
+   "n": 11,
+   "overlapping": 11,
+   "maxOverlap": 8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "UI Bois",
+    "Art Direction",
+    "Runner Pilot",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeClipped": [
+    "Plugins",
+    "Art Direction",
+    "Runner Pilot"
+   ],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 35,
+   "maxOverlap": 8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "UI Bois",
+    "Art Direction",
+    "Runner Pilot",
+    "Lane 10",
+    "Lane 11",
+    "Lane 12",
+    "Lane 13",
+    "Lane 14",
+    "Lane 15",
+    "Lane 16",
+    "Lane 17",
+    "Lane 18",
+    "Lane 19",
+    "Lane 20",
+    "Lane 21",
+    "Lane 22",
+    "Lane 23",
+    "Lane 24",
+    "Main Game",
+    "Site Polish"
+   ],
+   "codeClipped": [
+    "Plugins",
+    "Art Direction",
+    "Runner Pilot"
+   ],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ },
+ "rows3200": [
+  {
+   "name": "Desk",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 26,
+   "codeH": null,
+   "codeClip": null,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  },
+  {
+   "name": "Plugins",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 26,
+   "codeH": 20,
+   "codeClip": true,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  },
+  {
+   "name": "UI Bois",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 44,
+   "codeH": 38,
+   "codeClip": false,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  },
+  {
+   "name": "Art Direction",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 44,
+   "codeH": 38,
+   "codeClip": true,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  },
+  {
+   "name": "Runner Pilot",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 44,
+   "codeH": 38,
+   "codeClip": true,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  },
+  {
+   "name": "wiki",
+   "dotR": 1935,
+   "nameL": 1927,
+   "overlapPx": 8,
+   "lineH": 26,
+   "codeH": 20,
+   "codeClip": false,
+   "stL": 2080,
+   "evL": 2161,
+   "evTrunc": false
+  }
+ ],
+ "3200-candidateFix": {
+  "closed": {
+   "n": 11,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Site Polish"
+   ],
+   "codeClipped": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  },
+  "quietOpen": {
+   "n": 35,
+   "overlapping": 0,
+   "maxOverlap": -8,
+   "lineH": [
+    26,
+    44,
+    24
+   ],
+   "codeWrapped": [
+    "Art Direction",
+    "Runner Pilot",
+    "Site Polish"
+   ],
+   "codeClipped": [],
+   "stSpread": 0,
+   "evSpread": 0,
+   "evTrunc": []
+  }
+ }
+}
