@@ -247,11 +247,16 @@ function fakeStatefulAcp({ caps, failLoad = false } = {}) {
   });
   return { spawnImpl, state };
 }
+// idea-1095: a resumed turn re-arms the park-grace timer (runner.mjs _armPark, 3 s default) and leaves the fake child alive; with no
+// shutdown both outlive the test and fire into whatever test is running under suite load. Shut every ACP-park runner down after its test.
+const parkRunners = [];
+const trackRunner = (r) => { parkRunners.push(r); return r; };
+test.afterEach(() => { for (const r of parkRunners.splice(0)) r.shutdown(); });
 const acpAdapter = (spawnImpl) => createAcpAdapter({ spawnImpl, provider: 'antigravity-cli', mcp: false, resolved: { file: '/bin/fake', args: [] } });
 
 test('acp park: next send resumes the same session via session/load, remembers the earlier fact, replay not double-logged', async () => {
   const { spawnImpl, state } = fakeStatefulAcp({ caps: { loadSession: true } });
-  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+  const runner = trackRunner(new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } }));
   const id = runner.create({ provider: 'antigravity-cli', cwd: '.', prompt: 'the code is 42' });
   for (let i = 0; i < 6; i++) await tick();
   runner.park(id);
@@ -267,7 +272,7 @@ test('acp park: next send resumes the same session via session/load, remembers t
 
 test('acp park prefers session/resume over session/load when advertised', async () => {
   const { spawnImpl, state } = fakeStatefulAcp({ caps: { loadSession: true, sessionCapabilities: { resume: {}, load: {} } } });
-  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+  const runner = trackRunner(new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } }));
   const id = runner.create({ provider: 'antigravity-cli', cwd: '.', prompt: 'a' });
   for (let i = 0; i < 6; i++) await tick();
   runner.park(id);
@@ -280,7 +285,7 @@ test('acp park prefers session/resume over session/load when advertised', async 
 for (const [label, opts] of [['no load advertised', { caps: {} }], ['load fails', { caps: { loadSession: true }, failLoad: true }]]) {
   test(`acp park, ${label}: falls back to a primed session/new and logs resume_fallback`, async () => {
     const { spawnImpl, state } = fakeStatefulAcp(opts);
-    const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } });
+    const runner = trackRunner(new Runner({ dir: tmp(), adapters: { 'antigravity-cli': acpAdapter(spawnImpl) } }));
     const id = runner.create({ provider: 'antigravity-cli', cwd: '.', systemPrompt: 'You are Zed.', prompt: 'the code is 42' });
     for (let i = 0; i < 6; i++) await tick();
     runner.park(id);
