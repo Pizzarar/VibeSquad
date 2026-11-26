@@ -1,5 +1,5 @@
 import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
-import { drawerSpawnWhy } from "./roleSpawn";
+import { drawerSoftReason, drawerSpawnWhy } from "./roleSpawn";
 import { RoleModelChip } from "./RoleModelChip";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -716,7 +716,7 @@ export function DrawerHeader({
   // R2: reason from the spawn hook's vs.route why=. A staged switch hides it; a live model switch since spawn shows override.
   const spawnWhy = drawerSpawnWhy(labelsOf, agent.model, !!staged);
   const roleModelChip = (
-    <RoleModelChip role={roleName} model={staged?.model ?? agent.model} reason={spawnWhy} staged={!!staged} provider={agent.provider} />
+    <RoleModelChip role={roleName} model={staged?.model ?? agent.model} reason={spawnWhy} staged={!!staged} provider={agent.provider} softReason={drawerSoftReason(labelsOf)} />
   );
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copyIdFlash, setCopyIdFlash] = useState(false);

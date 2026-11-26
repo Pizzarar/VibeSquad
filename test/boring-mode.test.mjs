@@ -1173,7 +1173,14 @@ stubHdr("attentionItems.mjs", "export const openToolOf = () => null;");
 stubHdr("profiles.mjs", "export const useProfiles = () => ({ roles: undefined });\nexport const roleNameFor = () => null;\nexport const shortModel = (m) => String(m ?? '');");
 // R2: the real role chip + reason helpers (not fakes), so the header test also pins the chip's own reason span.
 const spawnReasonUrl = pathToFileURL(resolve(import.meta.dirname, "..", "server", "spawn-reason.mjs")).href;
-writeFileSync(join(hdrDir, "roleSpawn.mjs"), transformSync("roleSpawn.ts", d3src("roleSpawn.ts"), { lang: "ts" }).code.replace(/from "\.\.\/server\/spawn-reason\.mjs"/g, `from ${JSON.stringify(spawnReasonUrl)}`));
+// roleSpawn.ts imports pure server modules (spawn-reason.mjs; C fu1: interruptible-work.mjs): point each at the real file.
+const serverUrl = (f) => pathToFileURL(resolve(import.meta.dirname, "..", "server", f)).href;
+writeFileSync(
+  join(hdrDir, "roleSpawn.mjs"),
+  transformSync("roleSpawn.ts", d3src("roleSpawn.ts"), { lang: "ts" })
+    .code.replace(/from "\.\.\/server\/spawn-reason\.mjs"/g, `from ${JSON.stringify(spawnReasonUrl)}`)
+    .replace(/from "\.\.\/server\/([\w-]+\.mjs)"/g, (_m, f) => `from ${JSON.stringify(serverUrl(f))}`),
+);
 writeFileSync(
   join(hdrDir, "RoleModelChip.mjs"),
   transformSync("RoleModelChip.tsx", d3src("RoleModelChip.tsx"), { lang: "tsx", jsx: { runtime: "classic" } })

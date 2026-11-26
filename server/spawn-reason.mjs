@@ -9,19 +9,22 @@ export const SPAWN_REASON = Object.freeze({
   OVERRIDE: "override",
   ARM: "arm",
   FAILOVER: "failover",
+  SOFT: "soft",
   LEGACY_NAME: "legacy-name",
   ALL_CAPPED: "all-capped",
 });
 
 /** The reasons a spawn can show. ladder = the role x stakes tier ladder; override = the caller named a provider and/or model
  *  (or a non-routed raw spawn); arm = an R0 implementer alternation pick; failover = a capped/over-quota provider was
- *  skipped; legacy-name = an old profile name (or alias) ran its stored profile (P5f removes these); all-capped = every
+ *  skipped; soft = a family past its soft quota line (@per PLAN_PER_QUOTA_FIT_1126 C) was skipped because this work is
+ *  not interruptible; legacy-name = an old profile name (or alias) ran its stored profile (P5f removes these); all-capped = every
  *  provider on the route was capped, so the first one runs anyway. */
 export const SPAWN_REASONS = Object.freeze([
   SPAWN_REASON.LADDER,
   SPAWN_REASON.OVERRIDE,
   SPAWN_REASON.ARM,
   SPAWN_REASON.FAILOVER,
+  SPAWN_REASON.SOFT,
   SPAWN_REASON.LEGACY_NAME,
   SPAWN_REASON.ALL_CAPPED,
 ]);
@@ -33,14 +36,15 @@ export const LEGACY_SPAWN_REASONS = Object.freeze({ rung: SPAWN_REASON.LADDER })
 export const ROUTE_WHY_KEY = "why";
 
 /**
- * The reason a spawn shows, from the hook's route facts. Precedence: failover (the model differs from what was asked)
- * > override (the caller's pick) > all-capped > arm > legacy-name > ladder.
- * @param {{ hookReason?: string, failover?: boolean, override?: boolean, allCapped?: boolean, arm?: boolean, legacyName?: boolean, routed?: boolean }} f
+ * The reason a spawn shows, from the hook's route facts. Precedence: soft (a family was skipped for its soft quota line,
+ * C fu1 L3) > failover (the model differs from what was asked) > override (the caller's pick) > all-capped > arm > legacy-name > ladder.
+ * @param {{ hookReason?: string, soft?: boolean, failover?: boolean, override?: boolean, allCapped?: boolean, arm?: boolean, legacyName?: boolean, routed?: boolean }} f
  *   hookReason: the hook's `reason=` (default | ladder | explicit | explicit+ladder | override | override+failover | failover | all-capped);
  *   routed: false when no stored profile or role matched (the caller's own provider/model ran = override).
  */
-export function shownSpawnReason({ hookReason = "", failover = false, override = false, allCapped = false, arm = false, legacyName = false, routed = true } = {}) {
+export function shownSpawnReason({ hookReason = "", soft = false, failover = false, override = false, allCapped = false, arm = false, legacyName = false, routed = true } = {}) {
   const r = String(hookReason ?? "");
+  if (soft) return SPAWN_REASON.SOFT;
   if (failover || /\bfailover\b/.test(r)) return SPAWN_REASON.FAILOVER;
   if (override || /^(override|explicit)/.test(r) || !routed) return SPAWN_REASON.OVERRIDE;
   if (allCapped || /(?:^|\+)all-capped\b/.test(r)) return SPAWN_REASON.ALL_CAPPED;
@@ -55,6 +59,12 @@ export function routeWhy(routeText) {
   if (!m) return "";
   const v = Object.hasOwn(LEGACY_SPAWN_REASONS, m[1]) ? LEGACY_SPAWN_REASONS[m[1]] : m[1];
   return SPAWN_REASONS.includes(v) ? v : "";
+}
+
+/** The soft-line text in a `vs.route` label (routeMetricText ` soft="pool 78% >= soft 70: interruptible only -> claude"`), or "". */
+export function routeSoftReason(routeText) {
+  const m = /(?:^|\s)soft="([^"]*)"/.exec(String(routeText ?? ""));
+  return m ? m[1] : "";
 }
 
 /** `Implement · claude-sonnet-5-5 · arm` (parts that are empty drop out). */
