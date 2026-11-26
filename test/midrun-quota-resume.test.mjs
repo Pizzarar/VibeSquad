@@ -508,6 +508,59 @@ test("1101-9: Invariant 3 — normal completion, archived, or cancelled worker i
   assert.match(metricsFor("rn-arch-mid").at(-1).text, /reason=archived/);
 });
 
+test("1101-9b: H1 — assistant text quoting a quota wall never caps a provider, fails a turn, or resumes a finished worker", async () => {
+  // Classifier: streamed assistant output only ever matches agy's own whole-event pool notice.
+  for (const text of [
+    "RESOURCE_EXHAUSTED is now classified as a Gemini quota wall.",
+    "Usage limit reached handling is covered by test 1101-2.",
+    CLAUDE_LIMIT,
+    GEMINI_QUOTA,
+    "Quota exceeded for quota metric 'generate_content' in tests.",
+  ]) assert.equal(providerFaultOf({ type: "output", text }), null, `output never a quota fault: ${text}`);
+  assert.equal(providerFaultOf({ type: "output", text: AGY_NOTICE })?.kind, "quota", "agy's own pool notice still is (idea-1077)");
+
+  // RunnerBackend, reviewer repro: a normally finished Gemini (ACP: one output per chunk) and Claude worker.
+  const ts = Date.now();
+  const cases = [
+    { provider: "antigravity-cli", model: "gemini-4-neon-medium", chunk: "RESOURCE_EXHAUSTED is now classified as a Gemini quota wall." },
+    { provider: "claude", model: "claude-opus-5-5", chunk: "Usage limit reached handling is covered by test 1101-2." },
+    { provider: "claude", model: "claude-opus-5-5", chunk: CLAUDE_LIMIT },
+  ];
+  for (const [i, c] of cases.entries()) {
+    writeCaps({});
+    const agent = { id: `rn-h1-${i}`, provider: c.provider, model: c.model, status: "idle", cwd: LINKED_WT, labels: { role: "worker" } };
+    const ev = await backendEvents([
+      { seq: 0, ts, type: "created", provider: c.provider, model: c.model },
+      { seq: 1, ts, type: "input", text: ORIG_PROMPT },
+      { seq: 2, ts, type: "status", status: "running" },
+      { seq: 3, ts, type: "output", text: c.chunk },
+      { seq: 4, ts, type: "tool", phase: "call", id: "t1", name: "Bash", input: { command: "npm test" } },
+      { seq: 5, ts, type: "tool", phase: "result", id: "t1", isError: false },
+      { seq: 6, ts, type: "output", text: "All tests pass.\nPASS: done" },
+      { seq: 7, ts, type: "turn_done", stopReason: "end_turn" },
+      { seq: 8, ts, type: "status", status: "idle" },
+      { seq: 9, ts, type: "exit", code: 0 },
+    ], agent);
+    assert.equal(ev.filter((e) => e.kind === "upstream_exit").length, 0, `${c.provider}: no upstream_exit`);
+    const ended = ev.filter((e) => e.kind === "turn_ended");
+    assert.equal(ended.length, 1);
+    assert.equal(ended[0].outcome.kind, "completed", `${c.provider}: the worker's real report stays a completed turn`);
+    assert.deepEqual(liveCaps(), {}, `${c.provider}: no provider capped`);
+  }
+
+  // L1: an exit whose reason quotes a quota wall AFTER the turn completed is not a mid-run death: no hand-off.
+  writeCaps({});
+  const late = await backendEvents([
+    { seq: 0, ts, type: "created", provider: "opencode", model: "deepseek/deepseek-v4-pro" },
+    { seq: 1, ts, type: "input", text: ORIG_PROMPT },
+    { seq: 2, ts, type: "status", status: "running" },
+    { seq: 3, ts, type: "output", text: "Done." },
+    { seq: 4, ts, type: "status", status: "idle" },
+    { seq: 5, ts, type: "exit", code: 1, error: DEEPSEEK_CREDIT, upstream: false },
+  ], { id: "rn-l1", provider: "opencode", model: "deepseek/deepseek-v4-pro", status: "idle", cwd: LINKED_WT, labels: { role: "worker" } });
+  assert.equal(late.filter((e) => e.kind === "upstream_exit").length, 0, "exit after a completed turn never resumes");
+});
+
 // ---- 7. Invariant #4: successor never runs git writes in the main checkout ----
 
 test("1101-10: Invariant 4 — main checkout with no linked worktree is refused; sanctuary worktree resolves to linked path", async () => {

@@ -646,8 +646,11 @@ export function geminiQuotaOf(text, { wholeEvent = false } = {}) {
  * the ACP adapter). Task-side failures (bad tool call, gone cwd) are never one.
  */
 export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
-  // idea-1077 / idea-1101: provider quota notices can arrive as standalone assistant output (or as an error / exit reason).
-  if (e?.type === "output") return quotaFault(e.text, { wholeEvent: true });
+  // idea-1077: agy's own pool notice is the ONLY quota wall read from assistant `output` (agy sends it as plain text, then
+  // end_turn). idea-1101 H1: Claude / Gemini walls are read only from provider error channels (the Claude adapter's failed-result
+  // `error`, the ACP adapter's JSON-RPC `error`, an `exit` reason), never from streamed assistant text: the ACP adapter emits one
+  // `output` per chunk and workers routinely write "usage limit" / "RESOURCE_EXHAUSTED" in reports.
+  if (e?.type === "output") return quotaFault(e.text, { agyOnly: true });
   if (e?.type !== "exit" && e?.type !== "error") return null;
   const msg = String((e.type === "exit" ? e.error : e.message) ?? "");
   if (e.type === "error") {
@@ -656,7 +659,7 @@ export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
     if (/^error_/i.test(String(e.subtype ?? ""))) return null;
     if (msg.length > PROVIDER_ERROR_MAX_CHARS) return null;
   }
-  const quota = quotaFault(msg, { wholeEvent: false });
+  const quota = quotaFault(msg);
   if (quota) return quota;
   if (msg && BALANCE_ERROR_RE.test(msg)) return { kind: "balance", ttlMs: BALANCE_CAP_TTL_MS, msg };
   // A runner from before the spawnErrorMessage cwd check still names the binary when the agent's cwd is gone: not a binary fault.
@@ -665,13 +668,15 @@ export function providerFaultOf(e, { cwd, exists = fs.existsSync } = {}) {
   return null;
 }
 
-/** A quota fault holds to the notice's own reset; with none parsed it holds for the provider's default window. */
-function quotaFault(text, { wholeEvent = false } = {}) {
+/** A quota fault holds to the notice's own reset; with none parsed it holds for the provider's default window.
+ *  `agyOnly` (assistant output): only agy's whole-event pool notice counts. */
+function quotaFault(text, { agyOnly = false } = {}) {
   const agy = agyQuotaOf(text);
   if (agy) return { kind: "quota", ttlMs: agy.resetInMs ?? AGY_CLAUDE_MIN_CAP_TTL_MS, msg: agy.msg, resetParsed: agy.resetInMs !== null, families: AGY_QUOTA_FAMILIES, reasonPrefix: "third-party quota" };
-  const claude = claudeQuotaOf(text, { wholeEvent });
+  if (agyOnly) return null;
+  const claude = claudeQuotaOf(text);
   if (claude) return { kind: "quota", ttlMs: claude.resetInMs ?? PROVIDER_QUOTA_DEFAULT_TTL_MS, msg: claude.msg, resetParsed: claude.resetInMs !== null, families: CLAUDE_QUOTA_FAMILIES, reasonPrefix: "provider quota" };
-  const gemini = geminiQuotaOf(text, { wholeEvent });
+  const gemini = geminiQuotaOf(text);
   if (gemini) return { kind: "quota", ttlMs: gemini.resetInMs ?? PROVIDER_QUOTA_DEFAULT_TTL_MS, msg: gemini.msg, resetParsed: gemini.resetInMs !== null, families: GEMINI_QUOTA_FAMILIES, reasonPrefix: "provider quota" };
   return null;
 }
@@ -1881,7 +1886,10 @@ export class RunnerBackend {
       const capped = capProviderOnUpstreamExit(fam, e, { cwd: agent.cwd, agentId: id });
       const rawFault = providerFaultOf(e, { cwd: agent.cwd });
       const fault = capped?.kind ?? (rawFault && faultMatchesFamily(rawFault, normalizeProviderFamily(fam)) ? rawFault.kind : undefined);
-      const isQuotaWall = fault === "quota" || fault === "balance";
+      // idea-1101 L1: a quota/credit exit only hands off when it cut an open turn (died mid-turn). An exit after a turn that
+      // already ended (completed, or failed and handed off at its own turn_ended) is never a reason to resume (invariant 3).
+      const diedMidTurn = lifecycle?.kind === "turn_ended" && lifecycle.outcome?.kind === "failed";
+      const isQuotaWall = (fault === "quota" || fault === "balance") && diedMidTurn;
       if (!emittedUpstream && (e.upstream === true || fault === "binary-missing" || isQuotaWall) && !t?.cancelled) {
         this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts, ...(isQuotaWall ? { quota: true } : {}) });
       }
