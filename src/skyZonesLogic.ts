@@ -134,7 +134,7 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
   const profileName = p?.name ?? deps.profileName;
   const squad = view.team.id;
   const labels = { team: squad, lane, lead: lane, role: "lead", profile: profileName, ord: String(ord) };
-  const prompt = `You are the Overlord (hub lead) of the ${view.team.name ?? squad} Squad. Read AGENTS.md and your role pack, then run \`vs log --since-me\` and \`vs who all\` to catch up on every lane.`;
+  const prompt = `You are the Overlord (hub lead) of the ${view.team.name ?? squad} Squad. If the repo has AGENTS.md, read it. Read your role pack, then run \`vs log --since-me\` and \`vs who all\` to catch up on every lane.`;
   const r = await deps.spawn({
     provider: p?.provider ?? (gemini ? "antigravity-cli" : "claude"),
     model: p?.model ?? (gemini ? GEMINI_TOP_MODEL : "claude-opus-5-5"),
