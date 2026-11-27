@@ -11,11 +11,12 @@ import {
   applyActivePreset,
   applyAllPreset,
   buildDecisionPills,
-  countHiddenStaged,
   countVisibleDecisions,
   decisionFilterPresetState,
   filterDecisionItems,
+  formatHiddenStagedLabel,
   readDecisionFilterOverrides,
+  summarizeHiddenStaged,
   toggleDecisionPill,
   visibleSquadIds,
   writeDecisionFilterOverrides,
@@ -731,6 +732,14 @@ async function dispatchAnswerBatch(batch: AnswerPayloadItem[]): Promise<{ ok: bo
   return { ok: Boolean(body?.ok), results };
 }
 
+/** Pick the next unresolved bare-letter lean card id to jump to, cycling through the list (idea-1164). */
+export function nextNeedLookId(ids: readonly string[], lastId: string | null): string | null {
+  if (ids.length === 0) return null;
+  if (!lastId) return ids[0];
+  const idx = ids.indexOf(lastId);
+  return idx < 0 ? ids[0] : ids[(idx + 1) % ids.length];
+}
+
 // ---- Component --------------------------------------------------------------------------------
 
 type PendingSend = {
@@ -769,8 +778,11 @@ export function BoringDecisionDesk({
   const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
   const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [flashCardId, setFlashCardId] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastNeedLookRef = useRef<string | null>(null);
 
   const teamKey = views.map((v) => v.team.id).join("|");
 
@@ -809,6 +821,7 @@ export function BoringDecisionDesk({
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current);
     if (tickRef.current) clearInterval(tickRef.current);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
   }, []);
 
   const updateOverrides = (next: DecisionFilterOverrides) => {
@@ -827,15 +840,17 @@ export function BoringDecisionDesk({
   const squadFeed = useMemo(() => groupFeedBySquad(feedItems), [feedItems]);
   const stripGroups = useMemo(() => orderStripLikeFeed(statusGroups, squadFeed), [statusGroups, squadFeed]);
   const batch = useMemo(() => buildAnswerBatch(visibleItems, staged), [visibleItems, staged]);
-  const hiddenStagedCount = useMemo(() => countHiddenStaged(store.items, visibleIds, staged), [store.items, visibleIds, staged]);
+  const hiddenStaged = useMemo(() => summarizeHiddenStaged(store.items, visibleIds, staged, pills.all), [store.items, visibleIds, staged, pills.all]);
+  const hiddenStagedLabel = useMemo(() => formatHiddenStagedLabel(hiddenStaged), [hiddenStaged]);
   // L3 idea-1161: only sendable leans are batch-staged; bare letters no option defines are skipped (card button still works by hand).
   const unstagedLeanIds = useMemo(
     () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !isUnresolvedBareLean(i) && !staged[i.id]).map((i) => i.id),
     [feedItems, staged],
   );
-  const needLookCount = useMemo(
-    () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && isUnresolvedBareLean(i) && !staged[i.id]).length,
-    [feedItems, staged],
+  // S2 idea-1164: ordered by visual squadFeed order so repeat clicks cycle top-to-bottom.
+  const needLookIds = useMemo(
+    () => squadFeed.flatMap((g) => g.items).filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && isUnresolvedBareLean(i) && !staged[i.id]).map((i) => i.id),
+    [squadFeed, staged],
   );
 
   // Option (a) of UX R37 M1: auto-stage each lean once when its card first arrives (the owner can still toggle it off).
@@ -958,6 +973,25 @@ export function BoringDecisionDesk({
   };
 
   const jumpToOffscreen = () => document.querySelector('[data-testid="boring-decision-offscreen"]')?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  const jumpToNeedLook = () => {
+    const targetId = nextNeedLookId(needLookIds, lastNeedLookRef.current);
+    if (!targetId) return;
+    lastNeedLookRef.current = targetId;
+    const el = document.querySelector<HTMLElement>(`[data-testid="boring-decision-card-${targetId}"]`);
+    el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    el?.focus?.({ preventScroll: true });
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashCardId(null);
+    const trigger = () => {
+      setFlashCardId(targetId);
+      flashTimerRef.current = setTimeout(() => {
+        setFlashCardId((cur) => (cur === targetId ? null : cur));
+        flashTimerRef.current = null;
+      }, 1200);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(trigger);
+    else trigger();
+  };
   const offscreenCount = offscreenItems.length;
   const stripRef = useRef<HTMLElement | null>(null);
   const stripLaneCount = stripGroups.reduce((n, g) => n + g.lanes.length, 0);
@@ -1037,41 +1071,58 @@ export function BoringDecisionDesk({
             </div>
             {pills.awake.length > 0 && (
               <div className="boring-decision-pill-group" data-testid="boring-decision-pills-awake">
-                {pills.awake.map((p) => (
-                  <button
-                    key={p.squadId}
-                    type="button"
-                    className={`boring-decision-pill${p.active ? " on" : ""}`}
-                    data-testid={`boring-decision-pill-${p.squadId}`}
-                    aria-pressed={p.active}
-                    aria-label={`${p.squadName}, ${p.openCount} open`}
-                    onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
-                  >
-                    <span className="boring-decision-pill-name">{p.squadName}</span>
-                    <span className="boring-decision-pill-count">{p.openCount}</span>
-                  </button>
-                ))}
+                {pills.awake.map((p) => {
+                  const hiddenCount = !p.active ? (hiddenStaged.bySquad[p.squadId.toLowerCase()] ?? 0) : 0;
+                  return (
+                    <button
+                      key={p.squadId}
+                      type="button"
+                      className={`boring-decision-pill${p.active ? " on" : ""}${hiddenCount > 0 ? " has-hidden-staged" : ""}`}
+                      data-testid={`boring-decision-pill-${p.squadId}`}
+                      aria-pressed={p.active}
+                      aria-label={hiddenCount > 0 ? `${p.squadName}, ${p.openCount} open, ${hiddenCount} staged hidden` : `${p.squadName}, ${p.openCount} open`}
+                      title={hiddenCount > 0 ? `${hiddenCount} staged ${hiddenCount === 1 ? "answer" : "answers"} hidden` : undefined}
+                      onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
+                    >
+                      {hiddenCount > 0 && (
+                        <span className="boring-decision-pill-staged-dot" data-testid={`boring-decision-pill-staged-dot-${p.squadId}`} aria-hidden="true" />
+                      )}
+                      <span className="boring-decision-pill-name">{p.squadName}</span>
+                      <span className="boring-decision-pill-count">{p.openCount}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
             {pills.onHold.length > 0 && (
               <div className="boring-decision-pill-group is-on-hold" data-testid="boring-decision-pills-on-hold">
                 <span className="boring-decision-pill-group-label" title="In an asleep folder. Click a pill to show anyway.">Asleep</span>
-                {pills.onHold.map((p) => (
-                  <button
-                    key={p.squadId}
-                    type="button"
-                    className={`boring-decision-pill is-asleep${p.active ? " on" : ""}`}
-                    data-testid={`boring-decision-pill-${p.squadId}`}
-                    data-asleep="true"
-                    aria-pressed={p.active}
-                    aria-label={`${p.squadName}, ${p.openCount} open`}
-                    title="In an asleep folder. Click to show anyway."
-                    onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
-                  >
-                    <span className="boring-decision-pill-name">{p.squadName}</span>
-                    <span className="boring-decision-pill-count">{p.openCount}</span>
-                  </button>
-                ))}
+                {pills.onHold.map((p) => {
+                  const hiddenCount = !p.active ? (hiddenStaged.bySquad[p.squadId.toLowerCase()] ?? 0) : 0;
+                  return (
+                    <button
+                      key={p.squadId}
+                      type="button"
+                      className={`boring-decision-pill is-asleep${p.active ? " on" : ""}${hiddenCount > 0 ? " has-hidden-staged" : ""}`}
+                      data-testid={`boring-decision-pill-${p.squadId}`}
+                      data-asleep="true"
+                      aria-pressed={p.active}
+                      aria-label={hiddenCount > 0 ? `${p.squadName}, ${p.openCount} open, ${hiddenCount} staged hidden` : `${p.squadName}, ${p.openCount} open`}
+                      title={
+                        hiddenCount > 0
+                          ? `${hiddenCount} staged ${hiddenCount === 1 ? "answer" : "answers"} hidden. In an asleep folder. Click to show.`
+                          : "In an asleep folder. Click to show anyway."
+                      }
+                      onClick={() => updateOverrides(toggleDecisionPill(overrides, p.squadId, p.asleep))}
+                    >
+                      {hiddenCount > 0 && (
+                        <span className="boring-decision-pill-staged-dot" data-testid={`boring-decision-pill-staged-dot-${p.squadId}`} aria-hidden="true" />
+                      )}
+                      <span className="boring-decision-pill-name">{p.squadName}</span>
+                      <span className="boring-decision-pill-count">{p.openCount}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1132,7 +1183,8 @@ export function BoringDecisionDesk({
                 return (
                   <article
                     key={item.id}
-                    className={`boring-decision-card${isStaged ? " staged" : ""}`}
+                    tabIndex={-1}
+                    className={`boring-decision-card${isStaged ? " staged" : ""}${flashCardId === item.id ? " is-flash" : ""}`}
                     data-testid={`boring-decision-card-${item.id}`}
                     data-row-type={rowType}
                   >
@@ -1463,8 +1515,16 @@ export function BoringDecisionDesk({
             </>
           ) : (
             <>
-              {needLookCount > 0 && (
-                <span className="boring-decision-need-look" data-testid="boring-decision-need-look">{`${needLookCount} need a look`}</span>
+              {needLookIds.length > 0 && (
+                <button
+                  type="button"
+                  className="boring-decision-need-look"
+                  data-testid="boring-decision-need-look"
+                  title="Lean names a letter no option defines. Click to jump to the next card."
+                  onClick={jumpToNeedLook}
+                >
+                  {`${needLookIds.length} need a look`}
+                </button>
               )}
               {unstagedLeanIds.length > 0 && (
                 <button type="button" className="boring-decision-leans-btn" data-testid="boring-decision-stage-leans" disabled={sending} onClick={stageAllLeans}>
@@ -1475,12 +1535,13 @@ export function BoringDecisionDesk({
                 type="button"
                 className="boring-decision-send-btn"
                 data-testid="boring-decision-send-btn"
+                title={hiddenStagedLabel.title || undefined}
                 disabled={batch.length === 0 || sending}
                 onClick={startSend}
               >
                 {sending
                   ? "Sending…"
-                  : `Send ${batch.length} ${batch.length === 1 ? "answer" : "answers"}${hiddenStagedCount > 0 ? ` (+${hiddenStagedCount} hidden)` : ""}`}
+                  : `Send ${batch.length} ${batch.length === 1 ? "answer" : "answers"}${hiddenStagedLabel.suffix}`}
               </button>
             </>
           )}

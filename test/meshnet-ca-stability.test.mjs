@@ -75,7 +75,8 @@ function assertExactSlash32(expectIps) {
 
 /** Real RFC 5280 path validation, nameConstraints included (OpenSSL enforces permitted subtrees on SAN IPs). */
 function opensslVerify(caFile = tls("ca.crt"), leafFile = tls("server.crt")) {
-  const r = spawnSync("openssl", ["verify", "-CAfile", caFile, leafFile], { encoding: "utf8" });
+  // auth.opensslBin: the binary the server itself runs (Git for Windows' openssl.exe on win32, where none is on PATH)
+  const r = spawnSync(auth.opensslBin(), ["verify", "-CAfile", caFile, leafFile], { encoding: "utf8", windowsHide: true });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 }
 

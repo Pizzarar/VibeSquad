@@ -46,6 +46,17 @@ test("B18a: every text stop is >= 4.5:1 on every new gradient stop, dark + light
   console.log(report.join("\n"));
 });
 
+test("idea-1062: collapsed rail badge contrast >= 4.5:1 on st-err and st-attn, dark + light", () => {
+  assert.match(css, /\.boring-ctx-rail-badge \{[^}]*color: var\(--on-accent\)/);
+  for (const theme of ["dark", "light"]) {
+    const v = themeVars(theme);
+    for (const bg of ["st-err", "st-attn"]) {
+      const r = ratio(hex(v["on-accent"]), hex(v[bg]));
+      assert.ok(r >= 4.5, `${theme} on-accent on ${bg} = ${r.toFixed(2)} < 4.5`);
+    }
+  }
+});
+
 test("B18a: new section sits between B17 and D4 polish, hygiene, O2 floors untouched", () => {
   assert.ok(css.indexOf("/* B18a/c visual (@bor) */") > css.indexOf("B17 deadspace"));
   assert.ok(section.length > 200);
@@ -189,6 +200,16 @@ test("browser: Other projects disclosure is live in the real app (collapsed, fil
       assert.equal(await page.locator('[data-testid="boring-pane-right"]').count(), 1, "split stays open");
       assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 0, "right pane now shows the agent, not the picker");
     } else assert.fail("no live other-project pill in the demo cast");
+
+    // idea-1062: Overlord, RiffBot and Bugs tile labels fit without ellipsis at 1920x1080 and 1280x720
+    for (const [w, h] of [[1920, 1080], [1280, 720]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(100);
+      for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) {
+        const m = await page.locator(`[data-testid="${id}"] .boring-mate-name`).first().evaluate((el) => ({ text: el.textContent, sw: el.scrollWidth, cw: el.clientWidth }));
+        assert.ok(m.sw <= m.cw, `${id} ("${m.text}") truncated at ${w}x${h}: scrollWidth ${m.sw} > clientWidth ${m.cw}`);
+      }
+    }
     await ctx.close();
   } finally { await b.close(); server.close(); }
 });

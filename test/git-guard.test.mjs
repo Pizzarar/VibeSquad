@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { findViolation, gitGuardDecision, repoKind, tokenize } from '../runner/git-guard.mjs';
+import { findViolation, gitGuardDecision, msysToWin, repoKind, tokenize } from '../runner/git-guard.mjs';
 import { createClaudeAdapter, drainHookSettings, DRAIN_HOOK_SCRIPT, isWorkerAgent } from '../runner/adapters/claude.mjs';
 
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'vs-git-guard-')));
@@ -31,12 +31,17 @@ git(MAIN, 'commit', '-q', '-m', 'init');
 git(MAIN, 'worktree', 'add', '-q', '-b', 'unit-x', WT);
 const env = { HOME: root, WT };
 
+// win32: the temp paths are C:\Users\..., and these commands are bash (Claude's Bash tool runs Git Bash there). Unquoted, bash
+// eats those backslashes (`cd C:\Users\x` is `cd C:Usersx`, which fails), and the guard models that. So spell them as a Git
+// Bash user does, C:/Users/...; the quoted-backslash and /c/... MSYS forms have their own win32 test below.
+const ROOT_RE = new RegExp(`${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s'"$;&|()<>]*`, 'g');
+const sh = (cmd) => (process.platform === 'win32' ? cmd.replace(ROOT_RE, (p) => p.replace(/\\/g, '/')) : cmd);
 const bad = (cmd, cwd = MAIN, e = env) => {
-  const v = findViolation(cmd, { cwd, env: e });
-  assert.ok(v, `expected refusal: ${cmd} (cwd ${cwd})`);
+  const v = findViolation(sh(cmd), { cwd, env: e });
+  assert.ok(v, `expected refusal: ${sh(cmd)} (cwd ${cwd})`);
   return v;
 };
-const ok = (cmd, cwd = MAIN, e = env) => assert.equal(findViolation(cmd, { cwd, env: e }), null, `expected pass: ${cmd} (cwd ${cwd})`);
+const ok = (cmd, cwd = MAIN, e = env) => assert.equal(findViolation(sh(cmd), { cwd, env: e }), null, `expected pass: ${sh(cmd)} (cwd ${cwd})`);
 
 test('repoKind: main checkout = .git directory, linked worktree = .git file, plain dir = none', () => {
   assert.deepEqual(repoKind(MAIN), { kind: 'main', root: MAIN });
@@ -297,6 +302,38 @@ test('tokenize: quotes, escapes, redirections and comments', () => {
   ok(`vs inbox add "$(cat <<'EOF'\nworker ran git reset --hard\ngit clean -fd\nEOF\n)"`);
   ok(`cat > notes.md <<EOF\ngit stash\nEOF\ngit status`);
   bad(`cat > notes.md <<-EOF\n\tgit status\n\tEOF\ngit reset --hard`);
+});
+
+test('tokenize: in "...", a backslash is kept unless it escapes $ ` " \\ or a newline (bash rules)', () => {
+  const words = (s) => tokenize(s, { env }).tokens.filter((t) => t.type === 'word').map((t) => t.text);
+  assert.deepEqual(words('cd "C:\\Users\\x\\repo"'), ['cd', 'C:\\Users\\x\\repo']);
+  assert.deepEqual(words('echo "a\\$b \\` \\" \\\\ \\n"'), ['echo', 'a$b ` " \\ \\n']);
+  assert.deepEqual(words('echo "a\\\nb"'), ['echo', 'ab']); // backslash-newline in "..." is a line continuation
+  assert.deepEqual(words('cd C:\\Users\\x'), ['cd', 'C:Usersx']); // unquoted: bash removes the backslashes
+});
+
+test('msysToWin: Git Bash /c/... and /cygdrive/c/... are drive paths on win32 only', () => {
+  assert.equal(msysToWin('/c/Users/x/repo', 'win32'), 'C:/Users/x/repo');
+  assert.equal(msysToWin('/cygdrive/d/w', 'win32'), 'D:/w');
+  assert.equal(msysToWin('/c', 'win32'), 'C:/');
+  assert.equal(msysToWin('/cc/x', 'win32'), '/cc/x');
+  assert.equal(msysToWin('C:\\x', 'win32'), 'C:\\x');
+  assert.equal(msysToWin('/c/Users/x', 'linux'), '/c/Users/x');
+});
+
+test('win32: Git Bash spellings of the main checkout are refused ("C:\\...", C:/..., /c/...)', { skip: process.platform !== 'win32' && 'win32 paths' }, () => {
+  const msys = (p) => `/${p[0].toLowerCase()}${p.slice(2).replace(/\\/g, '/')}`;
+  for (const m of [`"${MAIN}"`, `'${MAIN}'`, MAIN.replace(/\\/g, '/'), msys(MAIN), `/cygdrive${msys(MAIN)}`]) {
+    for (const cmd of [`cd ${m} && git reset --hard`, `git -C ${m} clean -fd`, `env -C ${m} git stash`, `pushd ${m}; git checkout .`]) {
+      const v = findViolation(cmd, { cwd: WT, env });
+      assert.ok(v, `expected refusal: ${cmd}`);
+      assert.equal(v.root.toLowerCase(), MAIN.toLowerCase());
+    }
+    const gd = m.startsWith('"') || m.startsWith("'") ? `${m.slice(0, -1)}/.git${m.at(-1)}` : `${m}/.git`;
+    assert.ok(findViolation(`GIT_DIR=${gd} GIT_WORK_TREE=${m} git restore .`, { cwd: WT, env }), `GIT_DIR=${gd}`);
+  }
+  // still bash: an unquoted C:\... loses its backslashes, so that cd fails and nothing runs in the main checkout
+  assert.equal(findViolation(`cd ${MAIN} && git reset --hard`, { cwd: WT, env }), null);
 });
 
 test('gitGuardDecision: Bash and PowerShell only, refusal names vs worktree create + cd', () => {

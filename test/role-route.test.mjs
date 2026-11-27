@@ -170,7 +170,8 @@ test("role names keep today's third failover hop (two providers capped)", () => 
     assert.deepEqual(pick(r), want, role);
     assert.deepEqual(r.reasons, ["failover"], role);
   }
-  for (const [k, r] of Object.entries(ROLE_TABLE)) assert.equal(r.providers.length, 3, k);
+  // R1 fu: UX Review walks only Claude and Gemini (no DeepSeek); every other role keeps three hops.
+  for (const [k, r] of Object.entries(ROLE_TABLE)) assert.equal(r.providers.length, k === "ux-review" ? 2 : 3, k);
 });
 
 test("explicit wins; explicit on a capped provider is reported (capped + explicit-capped)", () => {
@@ -207,6 +208,7 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
     implement: "mid",
     "work-order": "mid",
     review: "mid",
+    "ux-review": "top",
     "pre-check": "cheap",
     "art-director": "mid",
     "art-painter": "top",
@@ -248,8 +250,8 @@ test("R7: opencode cheap rung is DeepSeek Flash (mechanical + cheap-tier roles);
   assert.deepEqual([legacy.provider, legacy.model], [O, "deepseek/deepseek-flash"]);
 });
 
-test("role table: 9 roles, every preferred provider has a ladder and a mode; lookup order", () => {
-  assert.equal(Object.keys(ROLE_TABLE).length, 9);
+test("role table: 10 roles, every preferred provider has a ladder and a mode; lookup order", () => {
+  assert.equal(Object.keys(ROLE_TABLE).length, 10);
   for (const [k, r] of Object.entries(ROLE_TABLE)) {
     assert.ok(TIERS.includes(r.tier), k);
     for (const p of r.providers) {
@@ -375,4 +377,39 @@ test("R1: planner role (mid, claude first) and work-order hidden from listings b
   assert.equal(isHiddenRole("implement"), false);
   assert.deepEqual(listedRoleKeys(), Object.keys(ROLE_TABLE).filter((k) => k !== "work-order"));
   assert.equal(isHiddenRole("work-order", { "work-order": { name: "Work Order" } }), true, "a stored role keeps the shipped flag");
+});
+
+test("UX Review role (R1 fu): top tier, Opus first then Gemini Neon high, no DeepSeek; not interruptible", () => {
+  assert.deepEqual([ROLE_TABLE["ux-review"].name, ROLE_TABLE["ux-review"].tier, ROLE_TABLE["ux-review"].providers], ["UX Review", "top", [C, A]]);
+  assert.deepEqual(ROLE_PROVIDER_CHAINS["ux-review"], [C, A]);
+  for (const n of ["UX Review", "ux-review", "ux review", "UX_REVIEW"]) assert.equal(lookupRole(n)?.key, "ux-review", n);
+  assert.equal(lookupRole("UX Review").legacy, null);
+  // R10: a worker role tries Claude on agy first; both are Opus top.
+  const d = resolveRoute({ role: "UX Review" });
+  assert.deepEqual([d.provider, d.model, d.effort, d.tier, d.reason, d.interruptible], [AGY, "claude-opus-5-5-high", "high", "top", "default", false]);
+  assert.deepEqual(d.walk, [AGY, C, A]);
+  const direct = resolveRoute({ role: "UX Review", caps: [AGY] });
+  assert.deepEqual(pick(direct), row(C, "claude-opus-5-5", "high", "auto"));
+  assert.deepEqual(direct.reasons, ["failover"]);
+  // Claude hard-capped (direct + agy): Gemini Neon at the top rung (high), accept-edits so it can write its review doc.
+  const gem = resolveRoute({ role: "UX Review", caps: [AGY, "anthropic"] });
+  assert.deepEqual(pick(gem), row(A, "gemini-4-neon", "high", "accept-edits"));
+  assert.deepEqual(gem.reasons, ["failover"]);
+  assert.deepEqual(gem.skipped, [AGY, C]);
+  // Every family capped: never DeepSeek; keeps direct claude (R10 fu2).
+  const all = resolveRoute({ role: "UX Review", caps: [AGY, C, A, O] });
+  assert.deepEqual([all.provider, all.reason, all.capped], [C, "all-capped", true]);
+  // Not interruptible: the soft line applies, same as Review.
+  const soft = resolveRoute({ role: "UX Review", softCaps: { [AGY]: "agy-claude 80%", [C]: "claude 75%" } });
+  assert.deepEqual([soft.provider, soft.softFailover, soft.interruptible], [A, true, false]);
+});
+
+test("UX Reviewer - Opus stays a hidden legacy alias of UX Review (reason=legacy-name, today's routing replayed)", () => {
+  const hit = lookupRole("UX Reviewer - Opus");
+  assert.deepEqual([hit.key, hit.legacy?.name], ["ux-review", "UX Reviewer - Opus"]);
+  assert.equal(LEGACY_ROUTES["UX Reviewer - Opus"].role, "ux-review");
+  const r = resolveRoute({ role: "UX Reviewer - Opus" });
+  assert.deepEqual([r.role, r.legacy, r.reason, r.hop, r.tier], ["ux-review", "UX Reviewer - Opus", "legacy-name", "UX Reviewer - Opus", "top"]);
+  assert.deepEqual(pick(r), OPUS_MED);
+  assert.equal(lookupRole("ux reviewer - opus")?.key, "ux-review");
 });

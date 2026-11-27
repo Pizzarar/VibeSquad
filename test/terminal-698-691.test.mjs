@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { TerminalManager, loadNodePty } from "../server/terminals.mjs";
 import { chunkInput, exitNotice, isCopyKey, isPasteKey, LOST_NOTICE, makeInputSender } from "../src/terminalIo.ts";
@@ -19,14 +20,20 @@ async function waitProgress(done, { progress, exited, stallMs, maxMs, startedAt 
   return true;
 }
 const hasPty = Boolean(await loadNodePty());
+// The flood is a bash pipeline: /bin/bash on POSIX, Git for Windows' bash.exe under ConPTY on win32 (skipped if it is absent).
+const WIN = process.platform === "win32";
+const FLOOD_BASH = WIN ? `${process.env.ProgramFiles || "C:\\Program Files"}\\Git\\bin\\bash.exe` : "/bin/bash";
+const floodSkip = !hasPty ? "node-pty unavailable" : WIN && !existsSync(FLOOD_BASH) ? `no Git Bash at ${FLOOD_BASH}` : false;
+// ConPTY moves ~0.2 MB/s (30 MB measured at 154 s on DEVPC, past MAX_WAIT_MS), so win32 floods 3 MB: still 15x the 200 KB ring.
+const FLOOD_BYTES = WIN ? 3_000_000 : 30_000_000;
 
-test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subscriber (backpressure ruled out)", { skip: !hasPty }, async () => {
-  const m = new TerminalManager({ shell: { file: "/bin/bash", args: [] } });
+test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subscriber (backpressure ruled out)", { skip: floodSkip }, async () => {
+  const m = new TerminalManager({ shell: { file: FLOOD_BASH, args: [] } });
   try {
-    const t = await m.create({ cwd: "/tmp" });
+    const t = await m.create({ cwd: WIN ? tmpdir() : "/tmp" });
     let got = 0;
     m.subscribe(t.id, { onData: (d) => { got += d.length; }, onExit: () => {} });
-    m.input(t.id, "yes 'long apt-like output line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -c 30000000; echo FLOOD_$((40+2))\r");
+    m.input(t.id, `yes 'long apt-like output line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -c ${FLOOD_BYTES}; echo FLOOD_$((40+2))\r`);
     // idea-993: no fixed wall-clock budget. Under full-suite CPU load the 30 MB drain legitimately takes longer than any
     // fixed number we pick (and one deadline shared by both waits starved the second). Wait for the pty to finish
     // (marker, then the full count) and give up only when it makes no progress for STALL_MS.
@@ -39,8 +46,8 @@ test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subs
     await waitDrained(() => m.output(t.id).includes("FLOOD_42"));
     assert.ok(m.output(t.id).includes("FLOOD_42"), `flood marker never arrived (got ${got} chars, stalled ${STALL_MS} ms)`);
     // The marker can reach the ring before the last flood chunks reach this subscriber's onData: wait for the count.
-    await waitDrained(() => got >= 30_000_000);
-    assert.ok(got >= 30_000_000, `got ${got} of 30000000 chars`);
+    await waitDrained(() => got >= FLOOD_BYTES);
+    assert.ok(got >= FLOOD_BYTES, `got ${got} of ${FLOOD_BYTES} chars`);
     assert.equal(m.get(t.id).exited, null);
     assert.ok(m.output(t.id).length <= 200_000);
   } finally { m.killAll({ sync: true }); }

@@ -1,11 +1,11 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
 import { stat as fspStat } from 'node:fs/promises';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
-import { LimitStore, createAgyUsagePoller, agyPollConfigFromEnv, CreditStore, createCreditPoller } from './limits.mjs';
+import { LimitStore, createAgyUsagePoller, agyPollConfigFromEnv } from './limits.mjs';
 import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { sha256 } from './reap.mjs';
@@ -446,7 +446,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), creditsFile = path.join(path.dirname(limitsFile), 'credits.json'), pollAgy = false, agyUsage, pollCredits = false, creditFetch, creditResolveKey, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS, detachedProbe = null, detachedFile = null, detachedScanMs = 15_000, onDetached = null }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS, detachedProbe = null, detachedFile = null, detachedScanMs = 15_000, onDetached = null }) {
     this.store = new LogStore(dir);
     this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
     this._startGen = new Map(); // id -> how many processes this runner started for it (idea-1140 review L2: a reap armed before a restart of the agent never fires)
@@ -475,10 +475,8 @@ export class Runner {
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
-    this.credits = new CreditStore(creditsFile);
     // idea-701: the default poller runs `agy -p /usage` in an isolated HOME, so it needs no busy guard; an injected run (tests) keeps the idea-349 guard.
     this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...agyPollConfigFromEnv(), ...(agyUsage ? { run: agyUsage, canRun: () => !this._agyBusy() } : {}) }) : null;
-    this._pollCredits = pollCredits ? createCreditPoller({ store: this.credits, ...(creditFetch ? { fetchImpl: creditFetch } : {}), ...(creditResolveKey ? { resolveKey: creditResolveKey } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
@@ -808,8 +806,9 @@ export class Runner {
     const job = {
       id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta), ...(isSlashText(prompt) ? { slash: true } : {}),
       run: () => {
-        this._makeRoom(id, { owner: job.owner === true }); // a coalesced owner send makes the queued create an owner job
         const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
+        this._requireCwd(cwd); // idea-1198: before _makeRoom, so a doomed create never parks another agent for a slot it cannot use
+        this._makeRoom(id, { owner: job.owner === true }); // a coalesced owner send makes the queued create an owner job
         const entry = this._start(id, { provider, model: cur.model ?? model, cwd, meta: cur, systemPrompt });
         if (job.text) { this._noteOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
       },
@@ -886,8 +885,17 @@ export class Runner {
     return job ? { queued: true, ahead: job.ahead } : { queued: false };
   }
 
+  // idea-1195/1198: refuses a missing cwd (a swept worktree). Callers check it before making room; _start keeps it as a backstop.
+  _requireCwd(cwd) {
+    if (typeof cwd === 'string' && cwd && !existsSync(cwd)) throw new Error(`worktree removed: ${cwd}`);
+  }
+
   // The only place an agent process is started (create and resume-from-park).
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
+    // idea-1195: never spawn into a missing cwd (a swept worktree). Fail before the live entry exists, with a plain reason:
+    // a resume re-parks (_failJob) and the log carries the error, not a spawn ENOENT that reads as a provider/binary fault.
+    // Not recreated here: the runner does not know whether the worktree is a managed one whose branch still exists.
+    this._requireCwd(cwd);
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
     this._startGen.set(id, (this._startGen.get(id) ?? 0) + 1); // before the start: a reap armed by an earlier end sees it at once
@@ -926,7 +934,6 @@ export class Runner {
       else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
       else if (type === 'limit') { try { this.limits.record({ ...data, agentId: id }); } catch { /* limits are best-effort */ } }
       else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'antigravity-cli') this._pollAgy?.(id);
-      else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'opencode') this._pollCredits?.();
       this.store.append(id, type === 'status' ? 'status' : type, data);
       // idea-230: _armPark's timer skips an agent with a pending permission and never re-arms; a permission that resolves while
       // the agent is idle (no turn left to end and re-arm) would leave it unparked forever, so re-arm when the last one clears.
@@ -1235,9 +1242,11 @@ export class Runner {
       const id = job.id;
       this.store.append(id, 'error', { message: err.message });
       this._consumed(job, 'failed'); // idea-869: a job that failed to start owes nothing after a restart (the status below says so for untagged inputs)
+      // idea-1198: a send queued while the agent was live has no job.spec; a parked/lost agent is re-parked from its log all the same.
+      const reparkSpec = this.live.get(id) ? null : job.spec?.resume ? job.spec : (this._parkedSpec(id) ?? this._lostSpec(id));
       if (this.live.get(id)) this.store.append(id, 'status', { status: 'idle' });
-      else if (job.spec?.resume) {
-        this.store.append(id, 'parked', { sessionId: job.spec.resume, systemPrompt: job.spec.systemPrompt ?? null });
+      else if (reparkSpec?.resume) {
+        this.store.append(id, 'parked', { sessionId: reparkSpec.resume, systemPrompt: reparkSpec.systemPrompt ?? null });
         this.store.append(id, 'status', { status: 'parked' });
       } else if (!this._fold(id)?.exit) this.store.append(id, 'exit', { code: null, error: err.message });
     } catch { /* log gone */ }
@@ -1944,6 +1953,7 @@ export class Runner {
   _resume(id, fallbackSpec = null, { promptless = false, yieldHolds = true, owner = false } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
+    this._requireCwd(spec.cwd); // idea-1198: before _makeRoom and the 'starting' status
     if (!this._makeRoom(id, { yieldHolds, owner })) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
@@ -2683,7 +2693,6 @@ export class Runner {
     this._coldAbort?.abort(); // a boot's prefold still folding: its worker threads are terminated
     this._coldAbort = null;
     this._pollAgy?.shutdown();
-    this._pollCredits?.shutdown();
     this.closeRosterWatch(); // closes the handle and stops the guard timer (idea-594)
     clearInterval(this._quietSweep);
     this._disarmDetachedScan();

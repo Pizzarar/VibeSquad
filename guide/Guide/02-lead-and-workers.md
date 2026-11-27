@@ -86,7 +86,7 @@ Each feature is its own team with its own Buddy and Lead, so you can run them si
 
 ## When the Lead needs you
 
-A Lead that is stuck on a decision only you can make sets the `needs-you` flag on itself. In VibeSquad its card moves up. Answer it in the Lead's chat.
+A Lead that is stuck on a decision only you can make sets the `needs-you` flag on itself. In VibeSquad its card moves up. Answer it in the Lead's chat, or click the item in the [Needs you](../Concepts/Needs-You.md) list at the top of the sidebar.
 
 ## Watch the Lead's context
 

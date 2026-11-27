@@ -1023,3 +1023,83 @@ test("P3 e2e (Bor3): the split's right-pane lane card (rightCard) writes no URL 
   assert.equal(s1.hlen, s0.hlen);
   await context.close();
 });
+
+// ── S1 (PLAN_DESK_SWEEP_1127; idea-1096, idea-1104, idea-1105): empty Lead cell/pill + split + reload ─────────────────────────────────
+for (const theme of ["dark", "light"]) {
+  test(`S1 e2e (${theme}, 1920): empty Lead cell & pill keep split and show Lead card; reload keeps card and right pane`, async (t) => {
+    if (unavailable) return t.skip(unavailable);
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: theme });
+    await context.addInitScript(HISTORY_WRAP);
+    await context.addInitScript(`try{ localStorage.setItem("vs.vibePicked","1"); const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({...p,"app.vibe":"boring","app.theme":"${theme}"})); }catch{}`);
+    const page = await context.newPage();
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    await page.goto(`${baseUrl}/?demo=&riff=1&team=vibesquad`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(900);
+    const take = () => page.evaluate(() => ({ h: window.__h.splice(0), hlen: history.length, url: location.search }));
+    const savedPanes = () => page.evaluate(() => JSON.parse(localStorage.getItem("vs.panes.v1") || "{}"));
+    await take();
+
+    // 1) idea-1096: Overview Lead cell on Bug Chaser (has Brainstorm, no Lead) opens the Lead empty card, not Brainstorm.
+    const h0 = await page.evaluate(() => history.length);
+    await page.locator('[data-testid="boring-lane-row-bug-chaser"] td:nth-child(3) button').click();
+    await page.waitForTimeout(900);
+    const sCell = await take();
+    assert.equal(sCell.url, "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead", "Overview Lead cell opens Lead card URL");
+    assert.equal(pushes(sCell), 1, "Overview Lead cell: 1 pushState");
+    assert.equal(sCell.hlen - h0, 1, "Overview Lead cell: history.length +1");
+    assert.equal(await laneHead(page), "Bug Chaser · Brainstorm ready · no Lead", "Overview Lead cell shows Lead empty card");
+
+    // 2) Switch to Bug Chaser Brainstorm, open split, and put Plugins Lead in the right pane.
+    await page.locator('[data-testid="boring-empty-cta"]').click();
+    await page.waitForTimeout(800);
+    await page.locator('[data-testid="boring-split-toggle"]').click();
+    await page.waitForSelector('[data-testid="boring-split-empty"]', { timeout: 5000 });
+    await page.locator('[data-testid="boring-pp-open-plugins-lead"]').click();
+    await page.waitForSelector('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]', { timeout: 5000 });
+    await page.waitForTimeout(600);
+    const leftIdBefore = await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id");
+    const rightIdBefore = await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id");
+    assert.ok(leftIdBefore && rightIdBefore && leftIdBefore !== rightIdBefore, `both split panes open: L=${leftIdBefore} R=${rightIdBefore}`);
+
+    // Focus the left pane (Bug Chaser Brainstorm) so the topbar shows Bug Chaser's Lead · none pill.
+    await page.locator('[data-testid="boring-pane-left"]').click({ position: { x: 20, y: 20 } });
+    await page.waitForTimeout(400);
+    const sBeforePill = await take();
+
+    // 3) idea-1104: Click empty Lead pill -> shows Lead empty card AND keeps split open (right pane preserved).
+    await page.locator('[data-testid="boring-top-lead"]').click();
+    await page.waitForTimeout(900);
+    const sPill = await take();
+    assert.equal(sPill.url, "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead", "Lead pill opens Lead card URL");
+    assert.equal(pushes(sPill), 1, "Lead pill: 1 pushState");
+    assert.equal(sPill.hlen - sBeforePill.hlen, 1, "Lead pill: history.length +1");
+    assert.equal(await laneHead(page), "Bug Chaser · Brainstorm ready · no Lead", "Lead pill shows Lead empty card");
+    assert.equal((await page.locator('[data-testid="boring-split-toggle"]').innerText()).trim(), "◫ Back to split", "split is parked, not folded");
+    const panesAfterPill = await savedPanes();
+    assert.equal(panesAfterPill.split, true, "persisted split stays true after Lead pill click");
+    assert.equal(panesAfterPill.rightActiveId, rightIdBefore, "persisted rightActiveId stays intact after Lead pill click");
+
+    // 4) idea-1105: Reload on the empty Lead card -> same card shown, 0 pushes, and Back restores BOTH panes intact.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".boring-sidebar", { timeout: 20000 });
+    await page.waitForTimeout(1200);
+    const sReload = await take();
+    assert.equal(sReload.url, "?demo=&riff=1&team=vibesquad&lane=bug-chaser&role=lead", "reload keeps Lead card URL");
+    assert.equal(pushes(sReload), 0, "reload writes no history entry");
+    assert.equal(await laneHead(page), "Bug Chaser · Brainstorm ready · no Lead", "reload shows Lead empty card");
+    assert.equal((await page.locator('[data-testid="boring-split-toggle"]').innerText()).trim(), "◫ Back to split", "reload keeps Back to split");
+
+    // Back returns to the split with BOTH left and right agents restored (right pane is NOT blank/picker).
+    await page.goBack();
+    await page.waitForSelector('[data-testid="boring-chat-split"]', { timeout: 8000 });
+    await page.waitForTimeout(900);
+    assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftIdBefore, "Back after reload restores left pane");
+    assert.equal(await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), rightIdBefore, "Back after reload restores right pane (not empty picker)");
+    assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 0, "right pane is not the empty picker");
+
+    assert.deepEqual(errs, [], "no page errors");
+    await context.close();
+  });
+}

@@ -33,9 +33,9 @@ Each item below shows how a specific finding was caught.
 
 ## 3. What to add
 
-### A. A UX reviewer profile (separate from the Art Director)
+### A. A UX Review role (separate from the Art Director)
 
-Needs vision + code reading + a browser (Playwright). Never edits source. A draft note body to add to `server/profiles.mjs` next to `ART_DIRECTOR_NOTE_BODY`:
+Needs vision + code reading + a browser (Playwright). Never edits source. Spawn by role name **`UX Review`** (`vs spawn --profile "UX Review"` or MCP `spawn_worker` with `profile: "UX Review"`; `"UX Reviewer - Opus"` still works as a legacy alias until R5, `>=12-05`). Note body in `server/profiles.mjs` next to `ART_DIRECTOR_NOTE_BODY`:
 
 ```text
 UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_<lane>_R<n>.md and its screenshots (<lane> = your lane code, lowercase; n counts per lane: one more than the highest existing docs/UX_REVIEW_<lane>_R*.md, starting at R1, so two lanes never pick the same file; the old shared docs/UX_REVIEW_R<n>.md files stay where they are).

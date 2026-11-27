@@ -16,4 +16,5 @@ Then give 0-5 bullets, one line each, under 200 characters each, no preamble. Ea
 - evidence cites the numbers above. If you have no solid evidence, write "watch:" and name the metric that would settle it.
 
 Use `engine-bug` only for defects in VibeSquad itself (crashes, wrong metrics, spawn or restart failures). Those cards go to @bug.
+A profile or routing finding (model, rung, arm, cap, failover) must cite only spawns from after the last change to that route. Find that change with `git log -1 --format=%cs -- <the routing file>`, e.g. server/stakes-ladder.mjs, server/role-route.mjs, server/exp6-arm.mjs or server/provider-failover.mjs. If no single change applies, use the last 14 days. The finding must state the window it used (idea-1191 cited 11-10/11 Fable spawns from a rung that 73c9113a had already fixed on 11-11).
 Zero bullets is a valid answer when nothing clears the evidence bar.

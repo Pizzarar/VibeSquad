@@ -1,0 +1,144 @@
+{
+ "dark-1920": {
+  "cards": [
+   {
+    "id": "01",
+    "hasToggle": false,
+    "text": "@desk ⏎ Desk · Lead 2 ⏎ 1h ⏎ Make Decision Desk the default Normal landing page? ⏎ Decides: Sets whether opening the app lands on Decision Desk or Project Overview ⏎ LEAN ⏎ Yes, default landing + sidebar entry ⏎ Sidebar entry only ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "02",
+    "hasToggle": false,
+    "text": "@ade ⏎ ADE · Lead 1 ⏎ 1h ⏎ Merge URL history cleanup into master now? ⏎ Decides: Ships U1+U2 Back/Forward fixes ahead of the next beta cut ⏎ LEAN ⏎ Merge after green suite ⏎ Hold for D4 bundle ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "03",
+    "hasToggle": false,
+    "text": "@bug ⏎ Bugs · Lead 1 ⏎ 1h ⏎ Which default timeout (ms) should idle worker health checks use? ⏎ Decides: Controls when quiet workers flip to stalled in the sidebar ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "13",
+    "hasToggle": true,
+    "text": "@desk ⏎ Overlord ⏎ inferred ⏎ 3m ⏎ Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block? ⏎ Decides: A spec change for partial-fill entries, plus whether the owner can veto the check-5 block ⏎ Hide source ▴ ⏎ A: fill-or-kill at entry — cancel the order unless it fills completely ⏎ B: keep the partial fill and resize the stop to the filled size ⏎ C: top up",
+    "source": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?"
+   },
+   {
+    "id": "05",
+    "hasToggle": false,
+    "text": "@quests ⏎ Quests · Lead 3 ⏎ 57m ⏎ Keep daily bounty resets at 00:00 UTC or align to server midnight? ⏎ Decides: Changes quest rollover timing for all players ⏎ LEAN ⏎ Keep 00:00 UTC ⏎ Align to server local midnight ⏎ Rolling 24h per player ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "06",
+    "hasToggle": false,
+    "text": "@combat ⏎ Combat · Lead 1 ⏎ inferred ⏎ 48m ⏎ Drop legacy parry buffer window from 180ms to 120ms? ⏎ Decides: Tightens parry timing across melee weapons ⏎ LEAN ⏎ Drop to 120ms ⏎ Try 150ms first ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "07",
+    "hasToggle": false,
+    "text": "@world ⏎ World · Lead 2 ⏎ 40m ⏎ What max player cap should the harbor zone use for stress tests? ⏎ Decides: Sets the bot spawn count in the harbor benchmark ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "09",
+    "hasToggle": false,
+    "text": "@exporter ⏎ Exporter · Lead 1 ⏎ ×2 grouped ⏎ 26m ⏎ Switch sprite atlas packing from shelf to maxrects? ⏎ Decides: Cuts atlas VRAM by ~18% and regenerates sprite manifests ⏎ LEAN ⏎ Switch to maxrects ⏎ Keep shelf packer ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "10",
+    "hasToggle": false,
+    "text": "@importer ⏎ Importer · Lead 1 ⏎ 18m ⏎ Allow non-power-of-two textures in dev builds? ⏎ Decides: Relaxes asset import validation outside release builds ⏎ LEAN ⏎ Warn in dev, error in release ⏎ Error everywhere ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "11",
+    "hasToggle": false,
+    "text": "@ci ⏎ CI · Lead 1 ⏎ 11m ⏎ Which artifact retention window (days) do we want for nightly builds? ⏎ Decides: Sets storage cleanup policy on the build bucket ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "14",
+    "hasToggle": true,
+    "text": "@ci ⏎ CI · Lead 1 ⏎ inferred ⏎ 1m ⏎ U11 survivorship: (a) survivor-only with coverage %, or (b) stop at A1? ⏎ Decides: Sets U11 scope and whether delisted rows are deferred ⏎ Hide source ▴ ⏎ a: survivor-only — keep only listed tickers and report coverage % ⏎ b: stop at A1 — ship the A1 universe and defer delisted data ⏎ None of these",
+    "source": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+   }
+  ],
+  "errs": []
+ },
+ "light-3200": {
+  "cards": [
+   {
+    "id": "01",
+    "hasToggle": false,
+    "text": "@desk ⏎ Desk · Lead 2 ⏎ 1h ⏎ Make Decision Desk the default Normal landing page? ⏎ Decides: Sets whether opening the app lands on Decision Desk or Project Overview ⏎ LEAN ⏎ Yes, default landing + sidebar entry ⏎ Sidebar entry only ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "02",
+    "hasToggle": false,
+    "text": "@ade ⏎ ADE · Lead 1 ⏎ 1h ⏎ Merge URL history cleanup into master now? ⏎ Decides: Ships U1+U2 Back/Forward fixes ahead of the next beta cut ⏎ LEAN ⏎ Merge after green suite ⏎ Hold for D4 bundle ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "03",
+    "hasToggle": false,
+    "text": "@bug ⏎ Bugs · Lead 1 ⏎ 1h ⏎ Which default timeout (ms) should idle worker health checks use? ⏎ Decides: Controls when quiet workers flip to stalled in the sidebar ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "13",
+    "hasToggle": true,
+    "text": "@desk ⏎ Overlord ⏎ inferred ⏎ 3m ⏎ Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block? ⏎ Decides: A spec change for partial-fill entries, plus whether the owner can veto the check-5 block ⏎ Hide source ▴ ⏎ A: fill-or-kill at entry — cancel the order unless it fills completely ⏎ B: keep the partial fill and resize the stop to the filled size ⏎ C: top up",
+    "source": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?"
+   },
+   {
+    "id": "05",
+    "hasToggle": false,
+    "text": "@quests ⏎ Quests · Lead 3 ⏎ 57m ⏎ Keep daily bounty resets at 00:00 UTC or align to server midnight? ⏎ Decides: Changes quest rollover timing for all players ⏎ LEAN ⏎ Keep 00:00 UTC ⏎ Align to server local midnight ⏎ Rolling 24h per player ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "06",
+    "hasToggle": false,
+    "text": "@combat ⏎ Combat · Lead 1 ⏎ inferred ⏎ 48m ⏎ Drop legacy parry buffer window from 180ms to 120ms? ⏎ Decides: Tightens parry timing across melee weapons ⏎ LEAN ⏎ Drop to 120ms ⏎ Try 150ms first ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "07",
+    "hasToggle": false,
+    "text": "@world ⏎ World · Lead 2 ⏎ 40m ⏎ What max player cap should the harbor zone use for stress tests? ⏎ Decides: Sets the bot spawn count in the harbor benchmark ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "09",
+    "hasToggle": false,
+    "text": "@exporter ⏎ Exporter · Lead 1 ⏎ ×2 grouped ⏎ 26m ⏎ Switch sprite atlas packing from shelf to maxrects? ⏎ Decides: Cuts atlas VRAM by ~18% and regenerates sprite manifests ⏎ LEAN ⏎ Switch to maxrects ⏎ Keep shelf packer ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "10",
+    "hasToggle": false,
+    "text": "@importer ⏎ Importer · Lead 1 ⏎ 18m ⏎ Allow non-power-of-two textures in dev builds? ⏎ Decides: Relaxes asset import validation outside release builds ⏎ LEAN ⏎ Warn in dev, error in release ⏎ Error everywhere ⏎ None of these",
+    "source": null
+   },
+   {
+    "id": "11",
+    "hasToggle": false,
+    "text": "@ci ⏎ CI · Lead 1 ⏎ 11m ⏎ Which artifact retention window (days) do we want for nightly builds? ⏎ Decides: Sets storage cleanup policy on the build bucket ⏎ Dismiss",
+    "source": null
+   },
+   {
+    "id": "14",
+    "hasToggle": true,
+    "text": "@ci ⏎ CI · Lead 1 ⏎ inferred ⏎ 1m ⏎ U11 survivorship: (a) survivor-only with coverage %, or (b) stop at A1? ⏎ Decides: Sets U11 scope and whether delisted rows are deferred ⏎ Hide source ▴ ⏎ a: survivor-only — keep only listed tickers and report coverage % ⏎ b: stop at A1 — ship the A1 universe and defer delisted data ⏎ None of these",
+    "source": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+   }
+  ],
+  "errs": []
+ }
+}

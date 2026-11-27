@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { transformSync } from "rolldown/utils";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = (f) => readFileSync(join(root, "src", f), "utf8");
 const dir = mkdtempSync(join(tmpdir(), "po-"));
 writeFileSync(join(dir, "projectOrder.mjs"), transformSync("projectOrder.ts", src("projectOrder.ts"), { lang: "ts" }).code);
-const po = await import(join(dir, "projectOrder.mjs"));
+const po = await import(pathToFileURL(join(dir, "projectOrder.mjs")).href); // a C:\ path is not an import URL on win32
 
 const T = (id, folder, main) => ({ id, name: id, ...(folder ? { folder } : {}), ...(main ? { main: true } : {}) });
 const ids = (ts) => ts.map((t) => t.id);

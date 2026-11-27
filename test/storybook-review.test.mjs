@@ -147,13 +147,13 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
   );
   const reviewUrl = pathToFileURL(join(process.cwd(), "src/storybookReview.ts")).href;
   const logicUrl = pathToFileURL(join(process.cwd(), "src/storybookLogic.ts")).href;
-  const progressUrl = pathToFileURL(join(process.cwd(), "src/storybookProgress.ts")).href;
+  const progressUrl = pathToFileURL(join(process.cwd(), "src/storybookProgressLogic.ts")).href;
   const code = transformSync("StorybookText.tsx", readFileSync(new URL("../src/StorybookText.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/from "react"/g, `from "./react.mjs"`)
     .replace(/from "\.\/storybookReview"/g, `from "${reviewUrl}"`)
     .replace(/from "\.\/storybookLogic"/g, `from "${logicUrl}"`)
-    .replace(/from "\.\/storybookProgress"/g, `from "${progressUrl}"`);
+    .replace(/from "\.\/storybookProgressLogic"/g, `from "${progressUrl}"`);
   writeFileSync(join(dir, "StorybookText.mjs"), code);
 
   let mod;

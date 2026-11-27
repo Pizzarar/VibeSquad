@@ -227,6 +227,24 @@ export function limitSampledText(checkedAt: string | null | undefined, now: numb
   return `sampled ${relTime(Math.min(t, now - 1), now)}`;
 }
 
+/** Format a prepaid credit balance with leading sign before currency symbol (e.g. "-$0.06", "$14.50", "-CNY 0.06"). */
+export function formatCreditBalance(amount: number, currency?: string | null): string {
+  const cur = (currency ?? "USD").toUpperCase();
+  const sym = cur === "USD" ? "$" : `${cur} `;
+  const sign = amount < 0 ? "-" : "";
+  return `${sign}${sym}${Math.abs(amount).toFixed(2)}`;
+}
+
+/** Format a credit threshold using the row's currency (e.g. "$10", "CNY 10"). */
+export function formatCreditThreshold(threshold: number, currency?: string | null): string {
+  const cur = (currency ?? "USD").toUpperCase();
+  const sym = cur === "USD" ? "$" : `${cur} `;
+  const sign = threshold < 0 ? "-" : "";
+  const abs = Math.abs(threshold);
+  const formatted = Number.isInteger(abs) ? String(abs) : abs.toFixed(2);
+  return `${sign}${sym}${formatted}`;
+}
+
 /** Human duration from ms: `42m`, `3.1h`, `1.2d`, or `—` for missing/negative. */
 export function dur(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return "—";

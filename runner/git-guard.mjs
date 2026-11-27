@@ -35,7 +35,7 @@
 // still covers Claude workers there). git's own children (hooks, `pull` -> merge, an external git-<x>) get git's exec-path
 // first on PATH, so they bypass the shim; only the outer command is judged.
 import { spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, closeSync, constants as fsConstants, openSync, readSync, statSync, realpathSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants as fsConstants, fstatSync, openSync, readSync, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,6 +65,19 @@ const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const CD = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const UNKNOWN = Symbol('unknown-dir');
+
+/**
+ * Git Bash (MSYS) drive paths on win32: `/c/Users/x` and `/cygdrive/c/Users/x` are C:\Users\x (bash cd goes there, and MSYS
+ * converts such argv and GIT_DIR / GIT_WORK_TREE values before native git.exe sees them), while path.resolve('/c/x') is
+ * <current drive>:\c\x and would miss the main checkout. Other platforms, and other strings, are returned unchanged.
+ */
+export function msysToWin(p, platform = process.platform) {
+  if (platform !== 'win32' || typeof p !== 'string') return p;
+  const m = /^\/(?:cygdrive\/)?([A-Za-z])(\/.*)?$/.exec(p);
+  return m ? `${m[1].toUpperCase()}:${m[2] ?? '/'}` : p;
+}
+/** path.resolve over host paths: every part goes through msysToWin first. */
+const resolveHost = (...ps) => path.resolve(...ps.map((p) => msysToWin(p)));
 
 // ---- shell tokenizer ----
 
@@ -150,7 +163,13 @@ export function tokenize(src, { env = process.env, vars = {}, powershell = false
       start(); word.quoted = true;
       i++;
       while (i < s.length && s[i] !== '"') {
-        if (s[i] === '\\' && !powershell && i + 1 < s.length) { word.text += s[i + 1]; i += 2; continue; }
+        // In "...", bash keeps a backslash unless it escapes $ ` " \ or a newline: `cd "C:\Users\x\repo"` (Git Bash) is
+        // C:\Users\x\repo, not C:Usersxrepo (that misread let a Windows main-checkout reset through).
+        if (s[i] === '\\' && !powershell && i + 1 < s.length && '$`"\\\n'.includes(s[i + 1])) {
+          if (s[i + 1] !== '\n') word.text += s[i + 1];
+          i += 2;
+          continue;
+        }
         if (s[i] === '$') { i = expandVar(i); continue; }
         if (s[i] === '`' && !powershell) {
           const end = s.indexOf('`', i + 1);
@@ -339,7 +358,7 @@ export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: 
   let dir = cwd;
   let workTree = envWorkTree; // GIT_WORK_TREE / GIT_DIR from the command's env; --work-tree / --git-dir override them
   let gitDir = envGitDir;
-  const resolveFrom = (base, p) => (base === UNKNOWN || p === UNKNOWN ? (path.isAbsolute(String(p)) ? path.resolve(p) : UNKNOWN) : path.resolve(base, p));
+  const resolveFrom = (base, p) => (base === UNKNOWN || p === UNKNOWN ? (path.isAbsolute(String(p)) ? resolveHost(p) : UNKNOWN) : resolveHost(base, p));
   let k = 0;
   for (; k < argv.length; k++) {
     const w = argv[k];
@@ -517,8 +536,8 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
   let dir = cwd ? path.resolve(cwd) : UNKNOWN;
   const resolveDir = (base, w) => {
     if (!w || w === UNKNOWN || w.dynamic) return UNKNOWN;
-    if (path.isAbsolute(w.text)) return path.resolve(w.text);
-    return base === UNKNOWN ? UNKNOWN : path.resolve(base, w.text);
+    if (path.isAbsolute(w.text)) return resolveHost(w.text);
+    return base === UNKNOWN ? UNKNOWN : resolveHost(base, w.text);
   };
   // GIT_DIR / GIT_WORK_TREE every git here sees: inherited from the agent's env (the hook's own env), or handed down by the
   // caller (bash -c / eval / xargs / $(...) bodies get the env their shell had), then `export`/`unset` along the line.
@@ -616,7 +635,7 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         } else if (push && /^[+-]\d+$/.test(t.text)) {
           dir = UNKNOWN; // stack rotation
         } else {
-          const next = !t ? env?.HOME || os.homedir() : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
+          const next = !t ? resolveHost(env?.HOME || os.homedir()) : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
           if (push) dirStack.push(dir);
           dir = next;
         }
@@ -724,7 +743,7 @@ export const GIT_SHIM_MARKER = 'VibeSquad worker git gate';
 /**
  * Is PATH entry `dir` a VibeSquad git-shim dir, of ANY copy (this module's, the runtime's, an older checkout's)? Two tests,
  * both required: the cheap path rule first (basename `git-shim`, the same rule the shim uses to skip shims when it looks
- * for the real git), then the content rule (its `git` is a regular file whose first 512 bytes hold GIT_SHIM_MARKER). The
+ * for the real git), then the content rule (its `git` opens, following symlinks, to a regular file whose first 512 bytes hold GIT_SHIM_MARKER). The
  * path rule keeps the cost at zero I/O for ordinary entries; the content rule keeps a user's own `git-shim` dir that holds
  * some other git (or none) on PATH. A dir like /usr/bin is never even opened. Unreadable or missing `git`: not a shim.
  */
@@ -732,9 +751,11 @@ export function isGitShimDir(dir) {
   if (!dir || path.basename(path.resolve(dir)) !== 'git-shim') return false;
   let fd;
   try {
-    const file = path.join(dir, 'git');
-    if (!statSync(file).isFile()) return false;
-    fd = openSync(file, 'r');
+    // One open, then fstat and read on that same fd: no stat/open TOCTOU (Gemini Tier A low on d7f115fe). O_NONBLOCK so a
+    // FIFO named `git` fails the isFile check instead of hanging the open. Symlinks are followed (no O_NOFOLLOW): the fd is
+    // what gets checked, and a `git` that links to a real shim IS a shim; not stripping it would re-gate leads (idea-1167).
+    fd = openSync(path.join(dir, 'git'), fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+    if (!fstatSync(fd).isFile()) return false;
     const buf = Buffer.alloc(512);
     const n = readSync(fd, buf, 0, buf.length, 0);
     return buf.toString('utf8', 0, n).includes(GIT_SHIM_MARKER);

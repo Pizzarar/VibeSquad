@@ -289,7 +289,7 @@ test(
       assert.match(out.labels[ROUTE_LABEL], /\bfamily=agy-claude\b/);
 
       const counts = countArms([{ labels: out.labels }], { lane: "vibesquad" });
-      assert.deepEqual(counts, { sonnet: 1, neon: 0 });
+      assert.deepEqual(counts, { sonnet: 1, neon: 0, carbon: 0 });
     } finally {
       h.stop?.();
     }

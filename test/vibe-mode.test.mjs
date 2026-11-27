@@ -12,7 +12,7 @@ test("Buddy pack is byte-identical with Crunch mode off and gains only the rule 
   assert.match(on, /Crunch mode is ON/);
   assert.match(on, /\(auto\)/);
   assert.match(on, /ONE needs-you digest/);
-  assert.match(on, /UX Reviewer/);
+  assert.match(on, /UX Review and merge gates/);
   console.log(`crunch pack char delta: +${on.length - BRAINSTORM_PACK.length}`);
 });
 

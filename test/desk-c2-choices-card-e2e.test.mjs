@@ -141,7 +141,10 @@ before(async () => {
     const pathname = decodeURIComponent(u.pathname);
     if (pathname === "/api/teams" && req.method === "GET") {
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ teams: TEAMS, folders: [], revision: "c2-demo" }));
+      const teams = state.extraLanes?.length
+        ? TEAMS.map((t, i) => (i === 0 ? { ...t, lanes: [...t.lanes, ...state.extraLanes] } : t))
+        : TEAMS;
+      res.end(JSON.stringify({ teams, folders: [], revision: "c2-demo" }));
       return;
     }
     if (pathname === "/__vibesquad/decisions" && req.method === "GET") {
@@ -291,7 +294,7 @@ for (const cfg of [
 
         // F1 filter toggle preserves staged mixed-ask answer
         await page.locator('[data-testid="boring-decision-pill-vibesquad"]').click();
-        assert.equal(await page.locator('[data-testid="boring-decision-send-btn"]').textContent(), "Send 0 answers (+1 hidden)");
+        assert.equal(await page.locator('[data-testid="boring-decision-send-btn"]').textContent(), "Send 0 answers · +1 hidden (VibeSquad)");
         await page.locator('[data-testid="boring-decision-pill-vibesquad"]').click();
         assert.equal(await altB.getAttribute("aria-pressed"), "true", "option B survived F1 toggle");
         assert.equal(await pfInput.inputValue(), "Yes, add a 30s veto window", "veto reply survived F1 toggle");
@@ -444,5 +447,149 @@ test("L3 fix e2e: a failed second batch never shows the previous batch's details
     assert.deepEqual(errs.filter((e) => !/500/.test(e)), []);
   } finally {
     await context.close();
+  }
+});
+
+test("S2 e2e (idea-1081, idea-1164, idea-1165): rail 8-char code fit, need-a-look button jumps/focuses/flashes/cycles, Sent rows wrap inline at 1600", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  const longOpt = "Alpha: " + "ship the full dataset with coverage metrics per sector ".repeat(3).trim();
+  const seedS2 = () => {
+    resetBackend();
+    state.extraLanes = [
+      { id: "plugins", name: "Plugins", code: "plugins" },
+      { id: "art-direction", name: "Art Direction" },
+    ];
+    state.logs.vibesquad.push(
+      { ts: new Date(Date.now() - 10 * 60_000).toISOString(), lane: "plugins", agent: "Plugins · Lead 1", type: "done", text: "Plugin manifest updated", refs: [] },
+      { ts: new Date(Date.now() - 12 * 60_000).toISOString(), lane: "art-direction", agent: "Art Direction · Lead 1", type: "done", text: "Palette pass complete", refs: [] },
+    );
+    state.items.push(
+      {
+        id: "ny-00000000000000000005", source: "log", squad: "vibesquad", squadName: "VibeSquad", lane: "desk",
+        askerId: "a-vs-ld", asker: { id: "a-vs-ld", title: "Desk · Lead 2", live: true },
+        ask: "First unresolved bare-letter lean card?", decides: "S2 jump target 1", lean: "C", alts: [longOpt, "Beta: hold"],
+        kind: "yesno", structured: true, ts: Date.now() - 3 * 60_000,
+      },
+      {
+        id: "ny-00000000000000000006", source: "log", squad: "ledger", squadName: "Ledger", lane: "data",
+        askerId: "a-ld-1", asker: { id: "a-ld-1", title: "Data · Lead 1", live: true },
+        ask: "Second unresolved bare-letter lean card?", decides: "S2 jump target 2", lean: "D", alts: ["A: keep", "B: drop"],
+        kind: "yesno", structured: true, ts: Date.now() - 2 * 60_000,
+      },
+    );
+  };
+
+  // 1. idea-1081 (1920 wide rail) + idea-1164 (need a look button cycles)
+  seedS2();
+  {
+    const { context, page, errs } = await openDesk({ theme: "dark", width: 1920, height: 1080, dpr: 1 });
+    try {
+      const id5 = "ny-00000000000000000005";
+      const id6 = "ny-00000000000000000006";
+      await page.waitForSelector(`[data-testid="boring-decision-card-${id6}"]`);
+
+      // idea-1081: 8-char lane codes in wide rail fit unclipped (measured via Range width vs content box); long slugs ellipsis + title
+      const railCheck = await page.evaluate(() => {
+        const lines = [...document.querySelectorAll(".boring-decision-strip-line")];
+        const chips = [];
+        for (const l of lines) {
+          const code = l.querySelector(".boring-decision-code");
+          if (!code) continue;
+          const cs = getComputedStyle(code);
+          const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+          const contentW = code.getBoundingClientRect().width - pad;
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          const textW = range.getBoundingClientRect().width;
+          chips.push({
+            text: code.textContent || "",
+            title: code.getAttribute("title") || "",
+            h: code.getBoundingClientRect().height,
+            contentW,
+            textW,
+            clipped: textW > contentW + 0.5,
+          });
+        }
+        const evTrunc = [...document.querySelectorAll(".boring-decision-strip-event > span:last-child")]
+          .filter((el) => el.scrollWidth > el.clientWidth + 1)
+          .map((el) => el.textContent);
+        return { chips, evTrunc };
+      });
+      assert.ok(railCheck.chips.length > 0, "rail renders code chips");
+      const eightChar = railCheck.chips.find((c) => c.text === "@plugins");
+      const longSlug = railCheck.chips.find((c) => c.text === "@art-direction");
+      assert.ok(eightChar, `8-char @plugins chip present: ${JSON.stringify(railCheck.chips)}`);
+      assert.equal(eightChar.clipped, false, `8-char @plugins fits unclipped: ${JSON.stringify(eightChar)}`);
+      assert.ok(longSlug, `long slug @art-direction chip present: ${JSON.stringify(railCheck.chips)}`);
+      assert.equal(longSlug.title, "@art-direction", "long slug has full title tooltip");
+      assert.ok(longSlug.h <= 22, "long slug stays single line");
+      for (const c of railCheck.chips) {
+        assert.ok(c.h <= 22, `chip does not wrap: ${JSON.stringify(c)}`);
+        assert.equal(c.title, c.text, `chip has full title: ${JSON.stringify(c)}`);
+        if (c.text.length <= 8) {
+          assert.equal(c.clipped, false, `<=8-char code fits unclipped: ${JSON.stringify(c)}`);
+        }
+      }
+      assert.deepEqual(railCheck.evTrunc, [], `0 rail events truncated at 1920: ${JSON.stringify(railCheck.evTrunc)}`);
+
+      // idea-1164: "2 need a look" is a button; clicks scroll, focus, flash, and cycle through id5 -> id6 -> id5
+      const needBtn = page.locator('[data-testid="boring-decision-need-look"]');
+      assert.equal(await needBtn.evaluate((el) => el.tagName), "BUTTON");
+      assert.equal((await needBtn.textContent())?.trim(), "2 need a look");
+      assert.ok((await needBtn.getAttribute("title"))?.length > 0, "button has tooltip explaining cause");
+
+      await needBtn.click();
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), `boring-decision-card-${id5}`);
+      await page.waitForFunction((i) => document.querySelector(`[data-testid="boring-decision-card-${i}"]`)?.classList.contains("is-flash"), id5, { timeout: 2000 });
+
+      await needBtn.click();
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), `boring-decision-card-${id6}`);
+      await page.waitForFunction((i) => document.querySelector(`[data-testid="boring-decision-card-${i}"]`)?.classList.contains("is-flash"), id6, { timeout: 2000 });
+
+      await needBtn.click();
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), `boring-decision-card-${id5}`, "third click wraps back to first card");
+      assert.deepEqual(errs, []);
+    } finally {
+      await context.close();
+    }
+  }
+
+  // 2. idea-1165: long Sent-list row wraps inline at 1600 so @desk is not alone on line 1, with zero horizontal overflow
+  seedS2();
+  {
+    const { context, page, errs } = await openDesk({ theme: "dark", width: 1600, height: 900, dpr: 1 });
+    try {
+      const id5 = "ny-00000000000000000005";
+      await page.waitForSelector(`[data-testid="boring-decision-card-${id5}"]`);
+      await page.locator(`[data-testid="boring-decision-alt-${id5}-0"]`).click();
+      const longReply = "Long note: " + "segment-without-breaks-".repeat(12) + "END";
+      await page.locator(`[data-testid="boring-decision-input-${id5}"]`).fill(longReply);
+      await page.locator('[data-testid="boring-decision-send-btn"]').click();
+      await page.locator('[data-testid="boring-decision-send-now-btn"]').click();
+      await page.waitForFunction((i) => !document.querySelector(`[data-testid="boring-decision-card-${i}"]`), id5, { timeout: 10000 });
+      await page.locator('[data-testid="boring-decision-banner-toggle"]').click();
+
+      const wrap = await page.locator(`[data-testid="boring-decision-banner-item-${id5}"]`).evaluate((li) => {
+        const lane = li.querySelector(".boring-decision-banner-lane");
+        const sum = li.querySelector(".boring-decision-banner-summary");
+        const list = li.closest('[data-testid="boring-decision-banner-details"]');
+        const laneRect = lane.getBoundingClientRect();
+        const sumFirstRect = sum.getClientRects()[0];
+        return {
+          laneTop: laneRect.top,
+          sumFirstTop: sumFirstRect?.top ?? -1,
+          listSw: list.scrollWidth,
+          listCw: list.clientWidth,
+          docSw: document.documentElement.scrollWidth,
+          docCw: document.documentElement.clientWidth,
+        };
+      });
+      assert.ok(Math.abs(wrap.laneTop - wrap.sumFirstTop) <= 4, `@desk shares line 1 with summary (no orphan lane): ${JSON.stringify(wrap)}`);
+      assert.ok(wrap.listSw <= wrap.listCw + 1, `Sent list has no horizontal overflow at 1600: ${JSON.stringify(wrap)}`);
+      assert.ok(wrap.docSw <= wrap.docCw + 1, `Page has no horizontal overflow at 1600: ${JSON.stringify(wrap)}`);
+      assert.deepEqual(errs, []);
+    } finally {
+      await context.close();
+    }
   }
 });

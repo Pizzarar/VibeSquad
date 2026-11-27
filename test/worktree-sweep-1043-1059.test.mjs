@@ -52,7 +52,9 @@ function addWorktree(repo, sanct, branch, base = "HEAD", extra = []) {
 const byBranch = (res) => Object.fromEntries(res.results.map((r) => [r.branch ?? r.path, r]));
 function withTmp(fn) {
   const root = mkdtempSync(join(tmpdir(), "vs-sweep1043-"));
-  const done = () => rmSync(root, { recursive: true, force: true });
+  // win32: a timed-out git's grandchild (the idea-1059 `!sleep 3` alias) outlives the kill with its cwd in root, and Windows
+  // refuses to delete a live process's cwd (EPERM); rmSync retries EPERM/EBUSY until it exits.
+  const done = () => rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   let out;
   try {
     out = fn(root);

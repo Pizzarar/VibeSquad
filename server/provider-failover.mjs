@@ -90,6 +90,9 @@ export const ROLE_PROVIDER_CHAINS = Object.freeze({
   implement: Object.freeze(["claude", "antigravity-cli", "opencode"]),
   "work-order": Object.freeze(["opencode", "claude", "antigravity-cli"]),
   review: Object.freeze(["antigravity-cli", "claude", "opencode"]),
+  // R1 fu (@per, UX_REVIEW_PER_R1A owner decision 2): the UX gate. Opus first, then Gemini Neon; no DeepSeek (it never
+  // judged UI and can't see screenshots).
+  "ux-review": Object.freeze(["claude", "antigravity-cli"]),
   "pre-check": Object.freeze(["antigravity-cli", "claude", "opencode"]),
   "art-director": Object.freeze(["antigravity-cli", "claude", "opencode"]),
   "art-painter": Object.freeze(["claude", "antigravity-cli", "opencode"]),

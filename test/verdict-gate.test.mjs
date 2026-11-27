@@ -33,7 +33,9 @@ const { RunnerClient } = await import("../server/backend/runner-client.mjs");
 const { RunnerBackend } = await import("../server/backend/runner-backend.mjs");
 const { createVibesquadMiddleware, verbatimDigestText } = await import("../server/vibesquad-api.mjs");
 const { STANDING_RULES, renderLessonsDigest } = await import("../server/lessons.mjs");
-const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, isDocsTarget, GATE_EXIT, parseVerdictLine } = await import("../server/verdict.mjs");
+const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, isDocsTarget, GATE_EXIT, parseVerdictLine, IMPLEMENTER_PROFILE_FAMILIES, IMPLEMENTER_ROLE_KEYS } = await import("../server/verdict.mjs");
+const { LEGACY_PROFILE_ALIASES } = await import("../server/profile-aliases.mjs");
+const { LEGACY_PROFILE_ROLES } = await import("../server/legacy-profile-roles.mjs");
 const { commandVerdict } = await import("../cli/vs.mjs");
 const { unverifiedDigestText } = await import("../server/hooks/agent-duties.ts").catch(() => ({})); // .ts loads under tsx only
 
@@ -183,6 +185,122 @@ test("UX Reviewer is not an H/M/L code reviewer: digest 'done' is not rewritten 
   assert.ok(!d.text.startsWith("NO-VERDICT"), d.text);
   const g = evaluateVerdictGate({ agent: { labels: { profile: "UX Reviewer - Opus" } }, lastMessage: "PASS", tip: "abcdef1" });
   assert.equal(g.exitCode ?? g.code, GATE_EXIT.notReviewer);
+});
+
+test("idea-1200: profile and role label decide before the title; the title is only a fallback", () => {
+  const tip = "ed4da6e6aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  // Repro (Per4 rn-7a04150cd996 / rn-52607d95dc8a): a Review profile whose title mentions "UX Review" is a code reviewer.
+  const per4 = { id: "rn-7a04150cd996", profile: "Review", title: "Per4 · UX Review role re-review", labels: { role: "worker", "vs.route": "stakes=normal model=claude-sonnet-5-5 effort=medium reason=override tier=mid role=review why=override" } };
+  assert.equal(isReviewerAgent(per4), true);
+  assert.equal(evaluateVerdictGate({ agent: per4, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.pass);
+  for (const agent of [
+    { title: "Per4 · UX Review role review", labels: { profile: "Review" } },
+    { title: "UX Reviewer · R3", labels: { profile: "Review - Gemini" } },
+    { title: "UX review R3", labels: { profile: "Review - Sonnet" } },
+  ]) assert.equal(isReviewerAgent(agent), true, JSON.stringify(agent));
+  // A UX Reviewer profile (legacy name, new role label, normalized key) is refused whatever its title.
+  for (const p of ["UX Reviewer - Opus", "UX Review", "ux-review", "UX_Reviewer"]) {
+    for (const title of ["Review - Gemini", "R2 re-review", "R1 review", "", "UX review R3"]) {
+      const agent = { title, labels: { profile: p } };
+      assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+      assert.equal(evaluateVerdictGate({ agent, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.notReviewer);
+    }
+  }
+  assert.equal(isReviewerAgent({ profile: "UX Reviewer - Opus", title: "R2 review", labels: {} }), false); // top-level profile
+  // A ux-review role label refuses even under a Review profile (conflicting signals fail closed).
+  assert.equal(isReviewerAgent({ title: "R1 review", labels: { profile: "Review", role: "ux-review" } }), false);
+  assert.equal(isReviewerAgent({ title: "R1 review", labels: { profile: "Review", "vs.route": "stakes=normal tier=top role=ux-review" } }), false);
+  assert.equal(isReviewerAgent({ title: "Review - Gemini", role: "ux-reviewer", labels: {} }), false);
+  // No profile: the old title fallback still refuses a UX title and accepts a reviewer title.
+  assert.equal(isReviewerAgent({ title: "Per4 · UX Review role re-review", labels: { role: "worker" } }), false);
+  assert.equal(isReviewerAgent({ title: "UX review R3", labels: {} }), false);
+  assert.equal(isReviewerAgent({ title: "R2 re-review idea-160", labels: { role: "worker" } }), true);
+  // Implementer profiles never count as reviewers, whatever the title says.
+  for (const p of ["Implement", "Implement - Sonnet", "Implement - Gemini (trial)", "Planner", "Spec - Opus", "Work Order - DSP", "Mechanical - DSF", "Senior Reasoning - DSP", "Art Director", "Art Painter - Opus", "Lead - Claude", "Brainstorm"]) {
+    for (const title of ["Review - Gemini", "R2 re-review", "R1 review", "Reviewer pass"]) {
+      const agent = { title, labels: { profile: p } };
+      assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+    }
+  }
+  assert.equal(evaluateVerdictGate({ agent: { title: "Review - Gemini", labels: { profile: "Implement" } }, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.notReviewer);
+  // An unknown profile keeps exactly today's title fallback (no widening): reviewer title passes, UX / plain titles don't.
+  assert.equal(isReviewerAgent({ title: "R2 review", labels: { profile: "CustomUnknown" } }), true);
+  assert.equal(isReviewerAgent({ title: "UX review R3", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "Per4 · UX Review role re-review", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "fix the bug", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "Review fix R2", labels: { profile: "Pre-check - Flash" } }), false);
+});
+
+test("idea-1200 review M1: every profile is read; a blank labels.profile can't shadow agent.profile; conflicts refuse", () => {
+  for (const blank of ["", "   ", null, undefined]) {
+    assert.equal(isReviewerAgent({ profile: "Implement - Sonnet", title: "R2 review", labels: { profile: blank } }), false, `labels.profile=${JSON.stringify(blank)}`);
+    assert.equal(isReviewerAgent({ profile: "Review - Gemini", title: "fix the bug", labels: { profile: blank } }), true, `labels.profile=${JSON.stringify(blank)}`);
+  }
+  // labels.profile Review + agent.profile Implement (either way round): refused.
+  assert.equal(isReviewerAgent({ profile: "Implement", title: "Review - Gemini", labels: { profile: "Review" } }), false);
+  assert.equal(isReviewerAgent({ profile: "Review", title: "Review - Gemini", labels: { profile: "Implement - Sonnet" } }), false);
+  // Review + UX in the other slot: refused.
+  assert.equal(isReviewerAgent({ profile: "UX Reviewer - Opus", title: "R2 review", labels: { profile: "Review" } }), false);
+  // Review + an unknown profile: a conflict, refused (no title fallback).
+  assert.equal(isReviewerAgent({ profile: "CustomUnknown", title: "R2 review", labels: { profile: "Review - Gemini" } }), false);
+  // Two review profiles agree: reviewer.
+  assert.equal(isReviewerAgent({ profile: "Review - Sonnet", title: "x", labels: { profile: "Review" } }), true);
+});
+
+test("idea-1200 review M2: lead/Buddy identity roles and implementer vs.route roles are never reviewers", () => {
+  for (const role of ["lead", "brainstorm", "buddy", "former-lead", "former-brainstorm", "old-lead", "retired", "old", "overlord", "Lead", "digest"]) {
+    for (const agent of [
+      { title: "Bug7 · review queue", labels: { role } },
+      { title: "R2 re-review", role, labels: {} },
+      { title: "Review - Gemini", labels: { role, profile: "Review - Gemini" } },
+    ]) assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+  }
+  assert.equal(evaluateVerdictGate({ agent: { id: "rn-l", title: "Bug7 · review queue", labels: { role: "lead" } }, lastMessage: "PASS 0/0/0 abc1234", tip: "abc1234ffff" }).code, GATE_EXIT.notReviewer);
+  // A worker role is fine: real reviewers are workers.
+  assert.equal(isReviewerAgent({ title: "Bug7 · review queue", labels: { role: "worker" } }), true);
+  assert.equal(isReviewerAgent({ title: "x", labels: { role: "worker", profile: "Review" } }), true);
+  // vs.route role= of an implementer type refuses, whatever the profile/title.
+  for (const r of ["implement", "planner", "work-order", "art-director", "art-painter", "lead", "brainstorm"]) {
+    const agent = { title: "R2 review", labels: { role: "worker", profile: "Review", "vs.route": `stakes=normal model=m effort=medium reason=default tier=mid role=${r}` } };
+    assert.equal(isReviewerAgent(agent), false, r);
+  }
+  // vs.route role=review / pre-check doesn't refuse (and doesn't accept on its own).
+  assert.equal(isReviewerAgent({ title: "x", labels: { role: "worker", profile: "Review", "vs.route": "tier=mid role=review" } }), true);
+  assert.equal(isReviewerAgent({ title: "fix the bug", labels: { role: "worker", "vs.route": "tier=mid role=review" } }), false);
+});
+
+test("idea-1200 review M3: legacy aliases from server/profile-aliases.mjs resolve; implementer lists are derived and can't drift", () => {
+  for (const p of ["Builder - Gemini", "RiffBot", "riffbot", "Buddy", "Worker", "Coder", "Lead", "Brainstorm", "Lead - Opus", "Brainstorm - Opus", "Art - Gemini", "Art - Opus", "builder - gemini"]) {
+    for (const title of ["Review - Gemini", "R2 re-review", "R1 review"]) {
+      assert.equal(isReviewerAgent({ title, labels: { profile: p } }), false, `${p} / ${title}`);
+    }
+  }
+  for (const p of ["Reviewer", "Reviewer - Gemini", "reviewer - gemini", "Review - Gemini", "Review - Sonnet", "Review"]) {
+    assert.equal(isReviewerAgent({ title: "fix the bug", labels: { profile: p } }), true, p);
+  }
+  // Drift guard: every alias / old name maps to the side its role says.
+  const reviewNames = [...Object.keys(LEGACY_PROFILE_ROLES), ...Object.keys(LEGACY_PROFILE_ALIASES)]
+    .filter((n) => (LEGACY_PROFILE_ROLES[n] ?? LEGACY_PROFILE_ROLES[LEGACY_PROFILE_ALIASES[n]]) === "review");
+  for (const n of reviewNames) assert.equal(isReviewerAgent({ title: "x", labels: { profile: n } }), !/UX/.test(n), n);
+  for (const [n, target] of [...Object.entries(LEGACY_PROFILE_ALIASES), ...Object.keys(LEGACY_PROFILE_ROLES).map((k) => [k, k])]) {
+    const role = LEGACY_PROFILE_ROLES[target];
+    if (role === "review" || role === "pre-check") continue;
+    assert.ok(IMPLEMENTER_ROLE_KEYS.includes(role), `${n} -> ${role}`);
+    assert.equal(isReviewerAgent({ title: "R2 review", labels: { profile: n } }), false, n);
+  }
+  for (const f of ["builder", "riffbot", "worker", "coder", "senior-reasoning", "spec", "mechanical", "art"]) assert.ok(IMPLEMENTER_PROFILE_FAMILIES.includes(f), f);
+  // Pre-check aliases stay unknown: the title fallback decides (as before idea-1200).
+  assert.equal(isReviewerAgent({ title: "R2 review", labels: { profile: "Fast" } }), true);
+  assert.equal(isReviewerAgent({ title: "fix the bug", labels: { profile: "Fast" } }), false);
+});
+
+test("idea-1200 review L1: UX and Review(er) may be joined by spaces, _ or -; the census case stays profile-first", () => {
+  for (const p of ["UX-Review", "UX_Reviewer", "ux  review", "UX - Reviewer", "UX-Reviewer - Opus"]) {
+    assert.equal(isReviewerAgent({ title: "R2 review", labels: { profile: p } }), false, p);
+  }
+  for (const t of ["UX-Review R3", "UX_reviewer pass", "ux  review"]) assert.equal(isReviewerAgent({ title: t, labels: {} }), false, t);
+  // rn-337e76f208c4: profile Review - Sonnet, title "UX review B16 r2": the profile defines the role.
+  assert.equal(isReviewerAgent({ id: "rn-337e76f208c4", title: "UX review B16 r2", labels: { role: "worker", profile: "Review - Sonnet" } }), true);
 });
 
 test("/vs-log: a digest's done entry is rewritten in code from the worker's own message (FAIL kept over a PASS digest, NO-VERDICT, passthrough)", async () => {

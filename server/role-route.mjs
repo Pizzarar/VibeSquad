@@ -21,7 +21,7 @@ import {
 export { routeProviderFamily };
 
 /**
- * The 9 roles (8 from the 12 profiles in use 2026-11-17, + planner in R1). `providers` is the preference order walked on cap/quota, read
+ * The 10 roles (8 from the 12 profiles in use 2026-11-17, + planner in R1, + ux-review in R1 fu). `providers` is the preference order walked on cap/quota, read
  * from the role-keyed chain table (server/provider-failover.mjs ROLE_PROVIDER_CHAINS, R1): the same three hops the old
  * names' COUNTERPART_PROFILES + ROLE_FAILOVER_CHAINS land on.
  * `modes[provider]` = {modeId, effort}: copied from the profile today's failover lands on for that role + provider;
@@ -91,6 +91,17 @@ export const ROLE_TABLE = deepFreeze({
       "antigravity-cli": { modeId: "default", effort: "medium" }, // Review - Gemini
       claude: { modeId: "auto", effort: "medium" }, // Review - Sonnet
       opencode: { modeId: "build", effort: "high" }, // Work Order - DSP / Senior Reasoning - DSP
+    },
+  },
+  "ux-review": {
+    // R1 fu (UX_REVIEW_PER_R1A owner decision 2): the old "UX Reviewer - Opus" profile as its own visible role. Judges the
+    // whole window after UI merges, so top tier; not interruptible (soft line applies, same as Review).
+    name: "UX Review",
+    tier: "top",
+    providers: roleChain("ux-review"),
+    modes: {
+      claude: { modeId: "auto", effort: "medium" }, // UX Reviewer - Opus
+      "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Art Director - Gemini (writes its UX_REVIEW doc + shots)
     },
   },
   "pre-check": {

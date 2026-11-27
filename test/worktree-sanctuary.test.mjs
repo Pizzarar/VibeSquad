@@ -433,7 +433,9 @@ test("a .venv link that will not detach fails closed: removeTeamWorktrees keeps 
     assert.match(rp.reason, /dependency link not detached \(EPERM\)/);
     assert.ok(existsSync(wt.path));
     assert.ok(lstatSync(join(wt.path, ".venv")).isSymbolicLink(), "link left attached, worktree not removed");
-    assert.equal(runGit(["worktree", "list", "--porcelain"], repo).includes(wt.path), true);
+    // git prints worktree paths with forward slashes on win32 (C:/Users/...): compare resolved paths, not raw text
+    const listed = runGit(["worktree", "list", "--porcelain"], repo).split("\n").filter((l) => l.startsWith("worktree ")).map((l) => resolve(l.slice(9)));
+    assert.equal(listed.includes(resolve(wt.path)), true, `${wt.path} not in ${JSON.stringify(listed)}`);
     await assertMainVenvIntact(repo);
     // ENOENT (no link at all) still reads as nothing to detach.
     assert.deepEqual(detachDependencyLinks(join(root, "repo")), []);

@@ -6,6 +6,12 @@
 
 /** Top/mid-tier Gemini (leads, Buddies, reviewers, implementers, Tier A). Was gemini-4-argon until N1. */
 export const GEMINI_TOP_MODEL = "gemini-4-neon";
+/**
+ * X2 (@per PLAN_PER_CRUNCH_1127, idea-1118): Gemini Carbon, the third Implement arm (exp6-arm.mjs ARMS.carbon). Not a ladder
+ * rung: only a stakes=normal `Implement` pick of the carbon arm runs it. `agy models` (11-27) advertises
+ * gemini-4-carbon-{low,medium,high} (no xhigh); acp pickModel maps the bare id to the -medium variant.
+ */
+export const GEMINI_CARBON_MODEL = "gemini-4-carbon";
 /** Cheap-tier Gemini (scouts, pre-check, mechanical). Unchanged by N1. */
 export const GEMINI_CHEAP_MODEL = "gemini-3.8-flash";
 /** Top/mid-tier DeepSeek on opencode (Work Order - DSP, Senior Reasoning - DSP). */

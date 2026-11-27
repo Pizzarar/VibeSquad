@@ -1,5 +1,5 @@
 import { etClock, etDate } from "./etTime.ts";
-import { liveLineBucket, type SbProgress } from "./storybookProgress.ts";
+import { liveLineBucket, type SbProgress } from "./storybookProgressLogic.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 

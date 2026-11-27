@@ -551,7 +551,7 @@ test("spawn-route units: roleNameHit, roleProfileLabel, cappedFamilies", () => {
   assert.equal(roleNameHit("No Such Thing"), null);
 
   const labels = Object.keys(ROLE_TABLE).map((k) => roleProfileLabel(k));
-  assert.deepEqual(labels, ["lead", "brainstorm", "Planner", "Implement", "Work Order", "Review", "Pre-check", "Art Director", "Art Painter"]);
+  assert.deepEqual(labels, ["lead", "brainstorm", "Planner", "Implement", "Work Order", "Review", "UX Review", "Pre-check", "Art Director", "Art Painter"]);
   for (const [i, k] of Object.keys(ROLE_TABLE).entries()) assert.equal(roleNameHit(labels[i])?.key, k, `label ${labels[i]} reads back as ${k}`);
 
   assert.deepEqual(cappedFamilies([]), []);
@@ -1023,10 +1023,17 @@ test(
       // R8: vs.arm=flash routes a role-name Implement spawn onto the antigravity-cli cheap rung (gemini-3.8-flash).
       const f = await run({ "vs.arm": "flash", "vs.model": "gemini-3.8-flash" });
       assert.deepEqual([f.config.provider, f.config.model, f.labels.profile], [A, "gemini-3.8-flash", "Implement"]);
+      // X2: vs.arm=carbon runs gemini-4-carbon on antigravity-cli at normal; tierA keeps the top rung (never Carbon).
+      const cb = await run({ "vs.arm": "carbon", "vs.model": "gemini-4-carbon" });
+      assert.deepEqual([cb.config.provider, cb.config.model, cb.labels.profile], [A, "gemini-4-carbon", "Implement"]);
+      for (const stakes of ["tierA-invariant", "tierA-security"]) {
+        const ct = await run({ "vs.arm": "carbon", stakes });
+        assert.doesNotMatch(String(ct.config.model), /carbon/, stakes);
+      }
       // armtier-gate: a non-implementer role that merely carries vs.arm gets neither the arm's provider nor the cheap tier.
       const rv = (arm) => h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal", "vs.arm": arm }) });
       const base = await h.spawn({ provider: "claude" }, { labels: LABELS("Review", { stakes: "normal" }) });
-      for (const arm of ["flash", "neon"]) {
+      for (const arm of ["flash", "neon", "carbon"]) {
         const r = await rv(arm);
         assert.deepEqual([r.config.provider, r.config.model], [base.config.provider, base.config.model], `Review + vs.arm=${arm} routes like plain Review`);
       }
@@ -1040,6 +1047,8 @@ test(
       assert.deepEqual([c.config.provider, c.config.model], [A, "claude-sonnet-5-5-medium"], "a capped arm provider fails over along the role list");
       const cf = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "flash" }) });
       assert.deepEqual([cf.config.provider, cf.config.model], [A, "claude-sonnet-5-5-medium"], "a capped flash arm fails over to Claude mid rung");
+      const cc = await hc.spawn({ provider: "claude" }, { labels: LABELS("Implement", { stakes: "normal", "vs.arm": "carbon" }) });
+      assert.deepEqual([cc.config.provider, cc.config.model], [A, "claude-sonnet-5-5-medium"], "a capped carbon arm fails over like neon");
     } finally {
       hc.stop?.();
     }

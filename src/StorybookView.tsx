@@ -22,9 +22,9 @@ import { MarkBatch, MarkButtons, MarksBar, useMarks, type MarksApi } from "./Sto
 import { StorybookItems } from "./StorybookItems";
 import { StorybookGlossary } from "./StorybookGlossary";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
-import { applyLiveMarks, liveLineBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgress";
+import { applyLiveMarks, liveLineBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgressLogic";
 import { StorybookGuide } from "./StorybookGuide";
-import { setGuideDismissed, shouldAutoOpenGuide, type GuideStep } from "./storybookGuide";
+import { setGuideDismissed, shouldAutoOpenGuide, type GuideStep } from "./storybookGuideLogic";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
