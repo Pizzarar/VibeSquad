@@ -4,14 +4,16 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `405779e6` (master; re-frozen from `b219e906`) |
-| Release commits | `a95a4f53` (version bump, record, licenses), the merge of master `405779e6`, and a follow-up (lockfile version, credits format, record) on `release/vibesquad-0.4.0` |
+| Frozen commit | `d8881601` (re-frozen from `b219e906`, then `405779e6`) |
+| Release commits | `a95a4f53` (version bump, record, licenses), merge of master `405779e6`, `11a2ea14` (lockfile, credits format, record), then merges of `d8881601` on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
 | Release URL | _pending (P3)_ |
-| Range | `v0.3.0..405779e6`: 2202 commits, 763 merges |
+| Range | `v0.3.0..d8881601`: 2212 commits, 767 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only. No Android APK is built or attached.
+
+Excluded from this freeze: usa-70 (`83c2ed98`) was pushed to master after the route-protection merge and is not in this release.
 
 ## Tests
 _pending (P2/P3)_
@@ -87,6 +89,9 @@ Windows installer, updater-signed (minisign). Not Authenticode-signed yet, so Sm
 - Child ledger writes are single-writer and monotonic; digest no longer writes duplicate done entries.
 
 ### Windows and tooling
+- The route label (`vs.route`) can now only be set by the spawn hook: an agent patching its own metadata gets 403, and a caller-supplied value is dropped before the spawn hook runs.
+- `npm test` checks its temp directory first (probe write and 256 MB free) before taking the suite slot; `VS_TEST_TMPDIR` overrides it, and a path inside the VibeSquad home is refused.
+- The mesh TLS chain test is Windows-safe (OpenSSL client resolution, Godot `.cmd` shim, loopback probe), and the Normal-mode composer-order browser test waits for settled layout instead of flaking.
 - Windows-only test and guard failures fixed for this release: the git guard keeps bash backslashes inside double quotes and maps Git Bash `/c/` and `/cygdrive/c/` paths on Windows.
 - Storybook source modules were renamed internally (`*Marks/Guide/Progress.ts` to `*Logic.ts`) so Windows no longer resolves the Storybook components to the wrong file; a guard test blocks new case clashes.
 - The runner refuses to start an agent whose worktree was removed ("worktree removed: <path>") and keeps a resumable one parked, with no provider fault or failover.
