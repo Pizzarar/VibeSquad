@@ -229,54 +229,99 @@ export function topicOf(agentOrLabels) {
 }
 
 /**
- * Look up a lane in the teams.json registry by id, alias, or name (case-insensitive).
- * Returns { team, lane } or null.
+ * Look up a lane in the teams.json registry by id, alias, name, or lane code (case-insensitive).
+ * Returns { team, lane } or null (null too when several live lanes of the caller's Squad claim a code: fail closed).
+ * A removed lane (`vs pin remove`) never shadows a live lane's alias, name or code (idea-1215).
  */
 export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), preferTeamId = "") {
-  const raw = String(laneQuery ?? "").trim();
-  const hadAt = raw.startsWith("@");
-  const q = raw.replace(/^@+/, "").trim().toLowerCase();
+  const res = lookupLane(laneQuery, teams, preferTeamId);
+  return res && !res.ambiguous ? { team: res.team, lane: res.lane } : null;
+}
+
+/** A lane `vs pin remove` retired (state removed). It keeps its stored code, but never shadows a live lane's handle (idea-1215). */
+// Intentionally not state "done": a done lane may still have merges to push, so it keeps its code reserved like a live lane.
+export function isRemovedLane(lane) {
+  return String(lane?.state ?? "").toLowerCase() === "removed" || Boolean(lane?.removedAt);
+}
+
+/**
+ * findLaneInRegistry that says why it failed closed: { team, lane, stale? } | { ambiguous: [{ team, lane }] } | null.
+ * stale: the match is a removed lane (nothing live claims the query). ambiguous: several live lanes of one Squad claim
+ * the code. The push guard uses this to refuse a stale or ambiguous merge tag with a precise reason (idea-1215).
+ */
+export function resolveLaneQuery(laneQuery, teams = loadTeamsRegistry(), preferTeamId = "") {
+  const res = lookupLane(laneQuery, teams, preferTeamId);
+  if (!res || res.ambiguous) return res;
+  return isRemovedLane(res.lane) ? { team: res.team, lane: res.lane, stale: true } : { team: res.team, lane: res.lane };
+}
+
+function lookupLane(laneQuery, teams, preferTeamId) {
+  const q = String(laneQuery ?? "").trim().replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
   const pref = String(preferTeamId ?? "").trim().toLowerCase();
-  const orderedTeams = pref
-    ? [
-        ...teams.filter((t) => String(t.id ?? "").toLowerCase() === pref || String(t.name ?? "").toLowerCase() === pref),
-        ...teams.filter((t) => String(t.id ?? "").toLowerCase() !== pref && String(t.name ?? "").toLowerCase() !== pref),
-      ]
-    : teams;
-  for (const team of orderedTeams) {
-    for (const lane of team.lanes || []) {
-      if (String(lane.id ?? "").toLowerCase() === q) {
-        return { team, lane };
-      }
-      if (Array.isArray(lane.aliases) && lane.aliases.some((a) => String(a).toLowerCase() === q)) {
-        return { team, lane };
-      }
-    }
-  }
-  for (const team of orderedTeams) {
-    for (const lane of team.lanes || []) {
-      if (String(lane.name ?? "").toLowerCase() === q) {
-        return { team, lane };
-      }
-    }
-  }
-  // Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches.
-  // Several Squads can share a code (standing bug lanes): the caller's own team wins, then a non-hidden lane (the pre-backfill holder: bug-chaser is standing but visible, backfilled lanes are hidden), then array order.
-  const hits = [];
+  const isPref = (t) => Boolean(pref) && (String(t.id ?? "").toLowerCase() === pref || String(t.name ?? "").toLowerCase() === pref);
+  const orderedTeams = pref ? [...teams.filter(isPref), ...teams.filter((t) => !isPref(t))] : teams;
+  // First match in Squad order, but a live lane beats a removed one.
+  const firstLive = (match) => {
+    const hits = [];
+    for (const team of orderedTeams) for (const lane of team.lanes || []) if (match(lane)) hits.push({ team, lane });
+    return hits.find((h) => !isRemovedLane(h.lane)) ?? hits[0] ?? null;
+  };
+  const byId =
+    firstLive((lane) => String(lane.id ?? "").toLowerCase() === q || (Array.isArray(lane.aliases) && lane.aliases.some((a) => String(a).toLowerCase() === q))) ??
+    firstLive((lane) => String(lane.name ?? "").toLowerCase() === q);
+  return byId ?? resolveLaneCode(q, teams, isPref);
+}
+
+/**
+ * Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches (q lowercased, no `@`).
+ * Order (idea-1215: a removed lane must never shadow a live lane's handle):
+ *  1. the caller's Squad, live lanes only: a live code holder, else a live lane that was bumped past that code at
+ *     creation because a now-removed lane of that Squad holds it (Release Desk got Rele while Release 0.2.0 held Rel, so @rel is the
+ *     desk once 0.2.0 is removed). Two live claimants in one Squad -> { ambiguous }: fail closed, never guess.
+ *  2. every other Squad, the same two live passes (two live holders within one Squad -> { ambiguous }, even with no
+ *     caller Squad). Several Squads can share a code (standing bug lanes): a non-hidden
+ *     holder wins (the pre-backfill holder: bug-chaser is standing but visible, backfilled lanes are hidden), then
+ *     array order; bumped lanes only when exactly one exists.
+ *  3. a removed lane holding the code, the caller's Squad first, so `vs who --lane <old code>` still names it.
+ */
+function resolveLaneCode(q, teams, isPref) {
+  const holders = [];
+  const bumped = [];
   for (const team of teams) {
     const codes = laneCodesForTeam(team);
-    for (const lane of team.lanes || []) {
-      if (String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q) {
-        hits.push({ team, lane });
+    const holdsQ = (lane) => String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q;
+    const lanes = team.lanes || [];
+    const liveHolder = lanes.some((l) => !isRemovedLane(l) && holdsQ(l));
+    // Inherit only a code a removed lane of this Squad really holds: an unheld or typo prefix stays unknown.
+    const removedHolder = lanes.some((l) => isRemovedLane(l) && holdsQ(l));
+    for (const lane of lanes) {
+      if (holdsQ(lane)) {
+        holders.push({ team, lane });
+        continue;
       }
+      if (liveHolder || !removedHolder || isRemovedLane(lane)) continue;
+      // Bumped past q: q ranks before the lane's own code among its candidates, so it took a later one only because q was taken.
+      const cands = laneCodeCandidates(lane).map((c) => c.toLowerCase());
+      const at = cands.indexOf(q);
+      if (at >= 0 && cands.indexOf(String(codes[lane.id] ?? "").toLowerCase()) > at) bumped.push({ team, lane });
     }
   }
-  if (hits.length) {
-    const own = pref ? hits.find((h) => String(h.team.id ?? "").toLowerCase() === pref || String(h.team.name ?? "").toLowerCase() === pref) : null;
-    return own ?? hits.find((h) => !h.lane.hidden) ?? hits[0];
+  const live = holders.filter((h) => !isRemovedLane(h.lane));
+  const one = (list) => (list.length > 1 ? { ambiguous: list } : list[0] ?? null);
+  const own = one(live.filter((h) => isPref(h.team))) ?? one(bumped.filter((h) => isPref(h.team)));
+  if (own) return own;
+  const otherLive = live.filter((h) => !isPref(h.team));
+  // Two live holders inside any one Squad are ambiguous whoever asks (an empty preferTeamId included): fail closed.
+  for (const team of teams) {
+    const same = otherLive.filter((h) => h.team === team);
+    if (same.length > 1) return { ambiguous: same };
   }
-  return null;
+  if (otherLive.length) return otherLive.find((h) => !h.lane.hidden) ?? otherLive[0];
+  const otherBumped = one(bumped.filter((h) => !isPref(h.team)));
+  if (otherBumped) return otherBumped;
+  const stale = holders.filter((h) => isRemovedLane(h.lane));
+  return stale.find((h) => isPref(h.team)) ?? stale[0] ?? null;
 }
 
 /**

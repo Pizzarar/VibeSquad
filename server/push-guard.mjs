@@ -54,22 +54,28 @@ export function parseIncludes(...sources) {
   return out;
 }
 
-function laneIdOf(query, teams, preferTeamId, findLane) {
+/** { id, stale?, ambiguous? } for a lane query, or null. findLane may return { ambiguous: [...] } (resolveLaneQuery). */
+function laneOf(query, teams, preferTeamId, findLane) {
   const q = String(query ?? "").replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
   const found = findLane ? findLane(q, teams, preferTeamId) : null;
-  return found ? String(found.lane.id).toLowerCase() : null;
+  if (!found) return null;
+  if (found.ambiguous) return { id: null, ambiguous: found.ambiguous.map((h) => String(h.lane.id).toLowerCase()) };
+  return { id: String(found.lane.id).toLowerCase(), stale: Boolean(found.stale) };
 }
 
 /**
  * Decide one push. Pure: the caller supplies the merges and the lane lookup.
  * merges: [{ sha, subject }]; pusherLane: lane id/code/handle or ""; includes: sha prefixes;
- * findLane(query, teams, preferTeamId) -> { team, lane } | null (server/identity.mjs findLaneInRegistry).
- * Returns { ok, pusher, own: [], included: [], refused: [{ sha, subject, tag, lane, reason }] }.
+ * findLane(query, teams, preferTeamId) -> { team, lane, stale? } | { ambiguous: [{ team, lane }] } | null
+ * (server/identity.mjs resolveLaneQuery; findLaneInRegistry works too, without the stale/ambiguous reasons).
+ * A tag resolves in the pusher's Squad first; a removed lane never shadows a live one (idea-1215). A tag that names a
+ * removed lane, several live lanes, or no lane at all is refused unless it is the pusher's own lane id.
+ * Returns { ok, pusher, own: [], included: [], refused: [{ sha, subject, tag, lane, reason, ambiguous? }] }.
  */
 export function evaluatePush({ merges = [], pusherLane = "", pusherTeam = "", includes = [], teams = [], findLane = null } = {}) {
   const rawPusher = String(pusherLane ?? "").replace(/^@+/, "").trim().toLowerCase();
-  const pusher = rawPusher ? (laneIdOf(rawPusher, teams, pusherTeam, findLane) ?? rawPusher) : "";
+  const pusher = rawPusher ? (laneOf(rawPusher, teams, pusherTeam, findLane)?.id ?? rawPusher) : "";
   const inc = parseIncludes(includes);
   const own = [];
   const included = [];
@@ -77,16 +83,19 @@ export function evaluatePush({ merges = [], pusherLane = "", pusherTeam = "", in
   for (const m of merges) {
     const sha = String(m.sha).toLowerCase();
     const tag = parseLaneTag(m.subject);
-    const lane = tag ? (laneIdOf(tag, teams, pusherTeam, findLane) ?? tag) : null;
-    const entry = { sha, subject: m.subject, tag, lane };
+    const hit = tag ? laneOf(tag, teams, pusherTeam, findLane) : null;
+    const lane = tag ? (hit?.id ?? tag) : null;
+    const entry = { sha, subject: m.subject, tag, lane, ...(hit?.ambiguous ? { ambiguous: hit.ambiguous } : {}) };
     if (inc.some((p) => sha.startsWith(p))) {
       included.push(entry);
     } else if (!pusher) {
       refused.push({ ...entry, reason: "unknown-pusher" });
     } else if (!tag) {
       refused.push({ ...entry, reason: "untagged" });
+    } else if (hit?.ambiguous) {
+      refused.push({ ...entry, reason: "ambiguous-tag" });
     } else if (lane !== pusher) {
-      refused.push({ ...entry, reason: "other-lane" });
+      refused.push({ ...entry, reason: hit?.stale ? "stale-lane" : "other-lane" });
     } else {
       own.push(entry);
     }
@@ -105,9 +114,13 @@ export function formatRefusal(result, { ref = "refs/heads/master" } = {}) {
     const why =
       r.reason === "other-lane"
         ? `lane @${r.tag}: ask that lane's lead (vs who lead --lane ${r.lane}) to push it; never push it for them`
-        : r.reason === "untagged"
-          ? "no (@<lane> tag in the subject, so the guard cannot tell whose merge it is"
-          : "the pushing lane is unknown (VS_LANE unset)";
+        : r.reason === "stale-lane"
+          ? `lane @${r.tag} only names removed lane ${r.lane}: no live lane owns it, so the guard cannot vouch for it (tag merges with your lane's live code, e.g. (@<code> ...)`
+          : r.reason === "ambiguous-tag"
+            ? `lane @${r.tag} matches several live lanes (${(r.ambiguous ?? []).join(", ")}): retag the merge with the lane id, e.g. (@${(r.ambiguous ?? [])[0] ?? "<lane-id>"} ...`
+            : r.reason === "untagged"
+              ? "no (@<lane> tag in the subject, so the guard cannot tell whose merge it is"
+              : "the pushing lane is unknown (VS_LANE unset)";
     lines.push(`  ${short(r.sha)} ${String(r.subject).slice(0, 90)}`);
     lines.push(`           ${why}`);
   }
@@ -473,8 +486,8 @@ export async function logVerdictOverrides({ verdict, action, squads = [], env = 
 }
 
 async function defaultTeams() {
-  const { loadTeamsRegistry, findLaneInRegistry } = await import("./identity.mjs");
-  return { teams: loadTeamsRegistry(), findLane: findLaneInRegistry };
+  const { loadTeamsRegistry, resolveLaneQuery } = await import("./identity.mjs");
+  return { teams: loadTeamsRegistry(), findLane: resolveLaneQuery };
 }
 
 /**
