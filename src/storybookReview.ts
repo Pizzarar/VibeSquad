@@ -2,13 +2,15 @@
 // Turns the snapshot's text lines, contract templates and lore into ONE ordered list of rows the owner reads top to bottom:
 // story first, then flavor, then toasts/system/UI; grouped by speaker (people) or screen/file (system text). Read-only.
 import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic.ts";
+import { statusBucket, type ProgressTextBucket } from "./storybookProgress.ts";
 
-export type RowClass = "story" | "flavor" | "ui";
-export const ROW_CLASSES: RowClass[] = ["story", "flavor", "ui"];
-export const ROW_CLASS_LABEL: Record<RowClass, string> = { story: "Story", flavor: "Flavor & quips", ui: "Toasts, system & UI" };
+export type RowClass = "story" | "flavor" | "contracts" | "ui";
+export const ROW_CLASSES: RowClass[] = ["story", "flavor", "contracts", "ui"];
+export const ROW_CLASS_LABEL: Record<RowClass, string> = { story: "Story", flavor: "Flavor & quips", contracts: "Contracts", ui: "Toasts, system & UI" };
 export const ROW_CLASS_HELP: Record<RowClass, string> = {
   story: "Dialogue, bios, lore and quest text. Read these first.",
-  flavor: "Item, enemy and contract copy; trader quips and encouragement.",
+  flavor: "Item and enemy copy; trader quips and encouragement.",
+  contracts: "Contract titles and details as the player sees them.",
   ui: "Toasts, button labels and system text. Check length, not prose.",
 };
 
@@ -92,13 +94,13 @@ export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: L
       push({
         id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls, group, speaker, speakerRef: sref, text: cleanTodo(String(d.text ?? e.display)), title: null,
         file: e.source?.path ?? String(d.file ?? ""), keyPath: origin === "csv" ? String(d.data_path || (e.source?.line ? `line ${e.source.line}` : "")) : e.id, line: e.source?.line ?? null,
-        status: st, unreviewed: st != null && st.toUpperCase() !== "OWNER-OK", placeholder: e.production === "placeholder",
+        status: st, unreviewed: statusBucket(st, e.production) !== "ok", placeholder: e.production === "placeholder",
       });
     } else if (e.kind === "contract") {
       const r = d.rendered as { title?: string; detail?: string } | undefined;
       const trader = idx.get("trader", String(d.trader ?? ""))?.display ?? String(d.trader ?? "");
       push({
-        id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls: "flavor", group: `Contracts · ${trader || "no trader"}`, speaker: trader, speakerRef: idx.get("trader", String(d.trader ?? "")) ? { kind: "trader", id: String(d.trader) } : null,
+        id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls: "contracts", group: `Contracts · ${trader || "no trader"}`, speaker: trader, speakerRef: idx.get("trader", String(d.trader ?? "")) ? { kind: "trader", id: String(d.trader) } : null,
         text: r?.detail ?? "", title: r?.title ?? e.id, file: e.source?.path ?? "data/contracts.json", keyPath: e.id, line: e.source?.line ?? null,
         status: null, unreviewed: false, placeholder: false,
       });
@@ -116,8 +118,45 @@ export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: L
 export type ReviewGroup = { id: string; label: string; rows: ReviewRow[] };
 export type ReviewClassBlock = { cls: RowClass; label: string; n: number; groups: ReviewGroup[] };
 
-/** Story first. Groups: people (alphabetical) before screens/files, contracts last; rows keep source order. */
-export function groupRows(rows: ReviewRow[]): ReviewClassBlock[] {
+/** Put quest-step title rows immediately before their matching story rows (W3 friction 13). */
+export function orderStepTitlesFirst(rows: ReviewRow[]): ReviewRow[] {
+  const stepPart = (r: ReviewRow): { key: string; field: "title" | "story" } | null => {
+    const m1 = /^(.+,\s*)"(title|story)"(\s*\])$/.exec(r.keyPath);
+    if (m1) return { key: `${r.file}\u0000${m1[1]}${m1[3]}`, field: m1[2] as "title" | "story" };
+    const m2 = /^(.+)\.(title|story)$/.exec(r.keyPath);
+    if (m2) return { key: `${r.file}\u0000${m2[1]}`, field: m2[2] as "title" | "story" };
+    return null;
+  };
+  const titleByKey = new Map<string, ReviewRow>();
+  const seenStory = new Set<string>();
+  for (const r of rows) {
+    const p = stepPart(r);
+    if (p?.field === "title") titleByKey.set(p.key, r);
+    else if (p?.field === "story") seenStory.add(p.key);
+  }
+  const moved = new Set<ReviewRow>();
+  const out: ReviewRow[] = [];
+  for (const r of rows) {
+    if (moved.has(r)) continue;
+    const p = stepPart(r);
+    if (p?.field === "story") {
+      const t = titleByKey.get(p.key);
+      if (t && !moved.has(t)) { out.push(t); moved.add(t); }
+      out.push(r);
+      continue;
+    }
+    if (p?.field === "title" && seenStory.has(p.key)) {
+      if (!moved.has(r)) { out.push(r); moved.add(r); }
+      continue;
+    }
+    out.push(r);
+  }
+  return out;
+}
+
+/** Story first. Groups: exact search match first (when searching), then people (alphabetical) before screens/files, contracts last; title rows before story rows. */
+export function groupRows(rows: ReviewRow[], query = ""): ReviewClassBlock[] {
+  const q = query.trim().toLowerCase();
   const out: ReviewClassBlock[] = [];
   for (const cls of ROW_CLASSES) {
     const m = new Map<string, ReviewGroup>();
@@ -129,37 +168,112 @@ export function groupRows(rows: ReviewRow[]): ReviewClassBlock[] {
     }
     if (!n) continue;
     const rank = (g: ReviewGroup) => (g.label.startsWith("Contracts") ? 2 : /^(Screen|Data|System|Docs?|File):/.test(g.label) ? 1 : 0);
-    out.push({ cls, label: ROW_CLASS_LABEL[cls], n, groups: [...m.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label)) });
+    const matchRank = (g: ReviewGroup) => {
+      if (!q) return 0;
+      const l = g.label.toLowerCase();
+      if (l === q || l === `contracts · ${q}`) return 0;
+      if (l.startsWith(q)) return 1;
+      return 2;
+    };
+    const groups = [...m.values()]
+      .map((g) => ({ ...g, rows: orderStepTitlesFirst(g.rows) }))
+      .sort((a, b) => matchRank(a) - matchRank(b) || rank(a) - rank(b) || a.label.localeCompare(b.label));
+    out.push({ cls, label: ROW_CLASS_LABEL[cls], n, groups });
   }
   return out;
 }
 
-export type ReviewFilter = { query: string; classes: ReadonlySet<RowClass>; tooLong: boolean; unreviewed: boolean };
-export const NO_FILTER: ReviewFilter = { query: "", classes: new Set(), tooLong: false, unreviewed: false };
+export type ReviewFilter = { query: string; classes: ReadonlySet<RowClass>; tooLong: boolean; unreviewed: boolean; speakerKey?: string | null };
+export const NO_FILTER: ReviewFilter = { query: "", classes: new Set(), tooLong: false, unreviewed: false, speakerKey: null };
+
+/** Speaker filter key for an entity chip that can filter Review rows to one exact speaker (null for non-speakers). */
+export function speakerEntityKey(e: SbEntity): string | null {
+  if (e.kind === "trader" || e.kind === "squad" || e.kind === "enemy") return `${e.kind}:${e.id.toLowerCase()}`;
+  if (e.kind === "voice_card") return `${String(e.data?.speakerKind ?? "trader")}:${String(e.data?.speakerId ?? e.id).toLowerCase()}`;
+  return null;
+}
 
 /** One search box: every whitespace-separated word must appear in the row's text, title, speaker, key, file or group. */
 export function filterRows(rows: ReviewRow[], f: ReviewFilter): ReviewRow[] {
   const words = f.query.toLowerCase().split(/\s+/).filter(Boolean);
-  return rows.filter((r) => (f.classes.size === 0 || f.classes.has(r.cls)) && (!f.tooLong || r.tooLong != null) && (!f.unreviewed || r.unreviewed) && words.every((w) => r.haystack.includes(w)));
+  const sk = f.speakerKey ? f.speakerKey.toLowerCase() : null;
+  return rows.filter((r) =>
+    (f.classes.size === 0 || f.classes.has(r.cls))
+    && (!f.tooLong || r.tooLong != null)
+    && (!f.unreviewed || r.unreviewed)
+    && (!sk || (r.speakerRef != null && `${r.speakerRef.kind}:${r.speakerRef.id.toLowerCase()}` === sk))
+    && words.every((w) => r.haystack.includes(w)),
+  );
 }
 
 const SEARCH_KINDS = ["trader", "squad", "enemy", "location", "item", "room", "skill", "quest_step"];
-/** Entities (people, places, items, steps) whose name, id or alias matches the query: shown as chips next to the line results. */
+/** Entities (people, places, items, steps) whose name, id or alias matches the query: exact display matches rank first (W3 friction 9). */
 export function searchEntities(idx: EntityIndex, query: string, max = 12): SbEntity[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const q = query.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
   if (!words.length) return [];
-  const out: SbEntity[] = [];
-  for (const k of SEARCH_KINDS) for (const e of idx.byKind(k)) {
-    const h = [e.display, e.id, ...(e.aliases ?? [])].join(" ").toLowerCase();
-    if (words.every((w) => h.includes(w))) { out.push(e); if (out.length >= max) return out; }
+  const scored: { e: SbEntity; score: number; kindOrd: number }[] = [];
+  for (let ki = 0; ki < SEARCH_KINDS.length; ki++) {
+    for (const e of idx.byKind(SEARCH_KINDS[ki])) {
+      const disp = e.display.toLowerCase();
+      const id = e.id.toLowerCase();
+      const aliases = (e.aliases ?? []).map((a) => a.toLowerCase());
+      const h = [disp, id, ...aliases].join(" ");
+      if (!words.every((w) => h.includes(w))) continue;
+      const score =
+        disp === q ? 0 :
+        id === q || aliases.includes(q) ? 1 :
+        disp.startsWith(q) ? 2 :
+        disp.split(/\W+/).includes(q) ? 3 : 4;
+      scored.push({ e, score, kindOrd: ki });
+    }
   }
-  return out;
+  scored.sort((a, b) => a.score - b.score || a.kindOrd - b.kindOrd || a.e.display.localeCompare(b.e.display));
+  return scored.slice(0, max).map((s) => s.e);
 }
 
 export const rowSubtitle = (r: ReviewRow): string => [r.file && (r.line && r.kind !== "line" ? fmtSource({ path: r.file, line: r.line }) : r.file), r.keyPath].filter(Boolean).join(" · ");
 
+/** Apply live V6 marks to review rows' `unreviewed` flag so Review's Unreviewed chip & filter stay in lockstep with progress bars. */
+export function applyLiveUnreviewed(rows: ReviewRow[], rowStatusBucket?: ((row: ReviewRow) => ProgressTextBucket | null) | null): ReviewRow[] {
+  if (!rowStatusBucket) return rows;
+  let changed = false;
+  const out = rows.map((r) => {
+    if (r.kind !== "line") return r;
+    const b = rowStatusBucket(r);
+    const next = b != null ? b !== "ok" : r.unreviewed;
+    if (next === r.unreviewed) return r;
+    changed = true;
+    return { ...r, unreviewed: next };
+  });
+  return changed ? out : rows;
+}
+
 export const classCounts = (rows: ReviewRow[]): Record<RowClass, number> => {
-  const c: Record<RowClass, number> = { story: 0, flavor: 0, ui: 0 };
+  const c: Record<RowClass, number> = { story: 0, flavor: 0, contracts: 0, ui: 0 };
   for (const r of rows) c[r.cls]++;
   return c;
 };
+
+// V8: word-level old -> new diff for changed rows.
+export type DiffSeg = { t: string; k: "same" | "del" | "add" };
+/** Word-level old -> new diff (LCS over whitespace-split tokens). Pure; capped so a pathological pair stays cheap. */
+export function wordDiff(a: string, b: string, maxTokens = 400): DiffSeg[] {
+  const x = a.split(/(\s+)/).filter((s) => s !== ""), y = b.split(/(\s+)/).filter((s) => s !== "");
+  if (x.length > maxTokens || y.length > maxTokens) return [{ t: a, k: "del" }, { t: b, k: "add" }];
+  const n = x.length, m = y.length;
+  const L: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out: DiffSeg[] = [];
+  const push = (t: string, k: DiffSeg["k"]) => { const l = out[out.length - 1]; if (l && l.k === k) l.t += t; else out.push({ t, k }); };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { push(x[i], "same"); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) push(x[i++], "del");
+    else push(y[j++], "add");
+  }
+  while (i < n) push(x[i++], "del");
+  while (j < m) push(y[j++], "add");
+  return out;
+}
+

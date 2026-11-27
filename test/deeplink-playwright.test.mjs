@@ -1,7 +1,7 @@
 // R6-1 gate (docs/UX_REVIEW_R6.md): a ?agent= deep link lands on its agent in a real browser on the LIVE runner path
 // (not ?demo). The fake runner behaves like the real one on a big squad: the SSE stream opens first, and ~1s later one
 // roster snapshot of 520 agents arrives with the linked lead sorting LAST. Fresh browser context (no saved panes / pin).
-// After 5s the breadcrumb must end in that agent and the URL must still name it. Skips when no Playwright / browser.
+// Once settled (waits on the breadcrumb, then holds 3s for no bounce-back) the breadcrumb must end in that agent and the URL must still name it. Skips when no Playwright / browser.
 // Debug: R6_DEBUG=<png path> saves a screenshot and prints the page text.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -74,7 +74,7 @@ after(async () => {
   await new Promise((r) => (server ? server.close(r) : r()));
 });
 
-test("R6-1: ?agent= for a lead that sorts last in a 520-agent live snapshot opens that agent (fresh context, 5s)", async (t) => {
+test("R6-1: ?agent= for a lead that sorts last in a 520-agent live snapshot opens that agent (fresh context)", async (t) => {
   if (unavailable) return t.skip(unavailable);
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   // Normal mode, nothing else saved: a fresh profile following a shared link.
@@ -85,8 +85,15 @@ test("R6-1: ?agent= for a lead that sorts last in a 520-agent live snapshot open
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${baseUrl}/?agent=${LINKED}`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(5000);
-  const crumbs = await page.locator('[data-testid="boring-breadcrumb"] .boring-crumb-seg').allInnerTexts();
+  // Wait on the condition, not a clock: the breadcrumb reaches the linked lead (30s ceiling for a loaded host). The old
+  // bug bounced to Overview 1.5-2.3s after the snapshot, so then hold 3s more and assert the state stayed put.
+  const readCrumbs = () => page.locator('[data-testid="boring-breadcrumb"] .boring-crumb-seg').allInnerTexts();
+  await page.waitForFunction(() => {
+    const segs = [...document.querySelectorAll('[data-testid="boring-breadcrumb"] .boring-crumb-seg')];
+    return segs.at(-1)?.textContent?.replace(/^›\s*/, "").trim() === "Lead";
+  }, null, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(3000);
+  const crumbs = await readCrumbs();
   const search = await page.evaluate(() => location.search);
   if (process.env.R6_DEBUG) (await page.screenshot({ path: process.env.R6_DEBUG }), console.log((await page.locator("body").innerText()).slice(0, 600)));
   await context.close();

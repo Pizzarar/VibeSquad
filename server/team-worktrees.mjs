@@ -32,7 +32,7 @@ export function defaultGit(args, cwd, { env, input, buffer = false, timeoutMs } 
 
 // idea-249 L1: git's stderr quotes host paths ('C:\\...\\wt' contains modified files) and execFileSync's message is the
 // whole command line: the full text goes to the server log, the reason keeps git's first stderr line with paths masked.
-const QUOTED_HOST_PATH = /'(?:[A-Za-z]:[\\/]|\/|\\\\)[^']*'/g;
+export const QUOTED_HOST_PATH = /'(?:[A-Za-z]:[\\/]|\/|\\\\)[^']*'/g;
 const gitError = (e) => {
   const first = String(e?.stderr ?? "").trim().split(/\r?\n/)[0];
   console.warn(`[vibesquad] git failed: ${String(e?.stderr || e?.message || e).trim()}`);

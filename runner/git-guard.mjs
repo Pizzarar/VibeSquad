@@ -35,7 +35,7 @@
 // still covers Claude workers there). git's own children (hooks, `pull` -> merge, an external git-<x>) get git's exec-path
 // first on PATH, so they bypass the shim; only the outer command is judged.
 import { spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, constants as fsConstants, statSync, realpathSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants as fsConstants, openSync, readSync, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -718,14 +718,39 @@ function ensureExecutable(file) {
   try { chmodSync(file, 0o755); accessSync(file, fsConstants.X_OK); executableOk.add(file); } catch { /* missing or read-only: nothing to heal */ }
 }
 
+/** The marker line every copy of runner/git-shim/git carries in its header (since 77f30d4c, the shim's first commit). */
+export const GIT_SHIM_MARKER = 'VibeSquad worker git gate';
+
 /**
- * Put the git shim first on PATH for a worker, in place on `env` (runner.mjs agentEnv's copy). Every role first loses any
- * inherited shim entry (a runner started from a worker's shell must not gate its leads), so only workers carry it. win32:
- * no-op (the shim is a POSIX sh script; cmd/PowerShell would not run it). Returns `env`.
+ * Is PATH entry `dir` a VibeSquad git-shim dir, of ANY copy (this module's, the runtime's, an older checkout's)? Two tests,
+ * both required: the cheap path rule first (basename `git-shim`, the same rule the shim uses to skip shims when it looks
+ * for the real git), then the content rule (its `git` is a regular file whose first 512 bytes hold GIT_SHIM_MARKER). The
+ * path rule keeps the cost at zero I/O for ordinary entries; the content rule keeps a user's own `git-shim` dir that holds
+ * some other git (or none) on PATH. A dir like /usr/bin is never even opened. Unreadable or missing `git`: not a shim.
+ */
+export function isGitShimDir(dir) {
+  if (!dir || path.basename(path.resolve(dir)) !== 'git-shim') return false;
+  let fd;
+  try {
+    const file = path.join(dir, 'git');
+    if (!statSync(file).isFile()) return false;
+    fd = openSync(file, 'r');
+    const buf = Buffer.alloc(512);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return buf.toString('utf8', 0, n).includes(GIT_SHIM_MARKER);
+  } catch { return false; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* already closed */ } }
+}
+
+/**
+ * Put the git shim first on PATH for a worker, in place on `env` (runner.mjs agentEnv's copy). Every role first loses EVERY
+ * inherited git-shim entry, whichever copy it is (isGitShimDir; idea-1167): a runner or a test suite started from a worker's
+ * shell carries the runtime copy (~/.vibesquad/runtime/runner/git-shim), not this module's, and must not gate its leads.
+ * Workers then carry exactly one shim, their own `shimDir`, first. win32: no-op (the shim is a POSIX sh script; cmd/PowerShell
+ * would not run it). Returns `env`.
  */
 export function applyGitShim(env, { worker = false, platform = process.platform, execPath = process.execPath, shimDir = GIT_SHIM_DIR } = {}) {
   if (platform === 'win32' || !env) return env;
-  const rest = String(env.PATH ?? '').split(':').filter((d) => d && path.resolve(d) !== shimDir);
+  const rest = String(env.PATH ?? '').split(':').filter((d) => d && path.resolve(d) !== shimDir && !isGitShimDir(d));
   delete env[GIT_SHIM_NODE_ENV];
   if (worker) {
     ensureExecutable(path.join(shimDir, 'git'));

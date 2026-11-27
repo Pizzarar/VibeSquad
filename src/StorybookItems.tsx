@@ -6,14 +6,19 @@ import {
   type EntityIndex, type ItemFilter, type SbEntity, type SbFinding,
 } from "./storybookLogic";
 import { ItemSheet, type ChipRenderer } from "./StorybookSheet";
+import type { MarksApi } from "./StorybookMarks";
+import type { ProgressTextBucket, SbProgress } from "./storybookProgress";
 
-export function StorybookItems({ idx, findings, sel, setSel, renderChip, onReview }: {
+export function StorybookItems({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity, marks }: {
   idx: EntityIndex;
   findings: SbFinding[];
   sel: string | null;
   setSel: (id: string) => void;
   renderChip: ChipRenderer;
   onReview: (e: SbEntity) => void;
+  marks?: MarksApi;
+  progress?: SbProgress | null;
+  onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
   const [filter, setFilter] = useState<ItemFilter>("all");
   const [query, setQuery] = useState("");
@@ -94,7 +99,18 @@ export function StorybookItems({ idx, findings, sel, setSel, renderChip, onRevie
           )}
         </div>
         <div className="sb-items-detail">
-          {active && <ItemSheet item={active.item} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+          {active && (
+            <ItemSheet
+              item={active.item}
+              idx={idx}
+              findings={findings}
+              renderChip={renderChip}
+              onReview={onReview}
+              marks={marks}
+              progress={progress?.entities[`item:${active.item.id}`] ?? null}
+              onProgress={onProgressEntity ? (st) => onProgressEntity(`item:${active.item.id}`, active.item.display, st) : undefined}
+            />
+          )}
         </div>
       </div>
     </div>

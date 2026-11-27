@@ -1,7 +1,7 @@
 // Storybook V5 (docs/PLAN_STORYBOOK_V2.md): per-trader story column + one play-order list, inside the Quests tab.
 // Data is snap.arc from server/storybook/unlocks.mjs; this file only renders it. No Mermaid timeline (apostrophes, tall).
-import { useMemo } from "react";
-import { cleanTodo, type EntityIndex, type SbArc, type SbArcGate, type SbEntity, type SbPlayItem } from "./storybookLogic";
+import { useMemo, useRef } from "react";
+import { cleanTodo, partitionPlayOrder, playItemLabel, type EntityIndex, type SbArc, type SbArcGate, type SbEntity, type SbPlayItem } from "./storybookLogic";
 
 export type ArcProps = {
   arc: SbArc | undefined;
@@ -10,6 +10,10 @@ export type ArcProps = {
   chip: (e: SbEntity, label?: string) => React.ReactNode;
   /** Open a dialogue line's row in Review. */
   openLine: (e: SbEntity) => void;
+  /** V6: OK / Redo / Edit on a step title or story line. */
+  actions?: (e: SbEntity) => React.ReactNode;
+  /** V6: progress + batch marks on an arc card (its step + reaction lines). */
+  batch?: (lines: SbEntity[], label: string) => React.ReactNode;
 };
 
 const KIND_LABEL: Record<string, string> = { map: "Map", reveal: "Reveal", quest_step: "Quest", contract: "Contract" };
@@ -29,20 +33,49 @@ export function gateText(g: SbArcGate, idx: EntityIndex): string {
   }
 }
 
-function Gates({ gates, idx }: { gates: SbArcGate[]; idx: EntityIndex }) {
+function Gates({ gates, idx, chip }: { gates: SbArcGate[]; idx: EntityIndex; chip?: (e: SbEntity, label?: string) => React.ReactNode }) {
   const g = gates.filter((x) => x.type !== "map_order");
-  return g.length ? <span className="sb-arc-gates">{g.map((x) => gateText(x, idx)).join(" · ")}</span> : null;
+  if (!g.length) return null;
+  return (
+    <span className="sb-arc-gates">
+      {g.map((x, i) => {
+        const sep = i > 0 ? " · " : "";
+        if (chip && x.type === "map" && x.id) {
+          const loc = idx.get("location", x.id);
+          if (loc) return <span key={`g${i}`} className="sb-arc-gate">{sep}needs map {chip(loc)} (#{x.unlock_order})</span>;
+        }
+        return <span key={`g${i}`} className="sb-arc-gate">{sep}{gateText(x, idx)}</span>;
+      })}
+    </span>
+  );
 }
 
-function taskText(e: SbEntity | null): string {
+function StepTask({ e, idx, chip }: { e: SbEntity | null; idx: EntityIndex; chip: (e: SbEntity, label?: string) => React.ReactNode }) {
   const t = e?.data?.task;
-  if (!t) return "";
-  const parts = [t.type, t.qty ? `×${t.qty}` : "", t.item_id ?? t.enemy_id ?? t.location ?? t.room ?? t.skill ?? ""].filter((x) => x !== "" && x != null);
-  return parts.join(" ").replace(/_/g, " ");
+  if (!t) return null;
+  const item = t.item_id ? idx.get("item", String(t.item_id)) : null;
+  const enemy = t.enemy_id ? idx.get("enemy", String(t.enemy_id)) : null;
+  const loc = t.location ? idx.get("location", String(t.location)) : null;
+  const room = t.room ? idx.get("room", String(t.room)) : null;
+  const skill = t.skill ? idx.get("skill", String(t.skill)) : null;
+  const verb = [t.type, t.qty ? `×${t.qty}` : ""].filter(Boolean).join(" ").replace(/_/g, " ");
+  const hasPrimary = Boolean(t.item_id || t.enemy_id);
+  return (
+    <span className="sb-arc-task" data-testid="sb-arc-task">
+      {verb && <span>{verb}</span>}
+      {t.item_id && (item ? chip(item) : <span>{String(t.item_id).replace(/_/g, " ")}</span>)}
+      {t.enemy_id && (enemy ? chip(enemy) : <span>{String(t.enemy_id).replace(/_/g, " ")}</span>)}
+      {t.location && <>{hasPrimary ? " @ " : ""}{loc ? chip(loc) : <span>{String(t.location).replace(/_/g, " ")}</span>}</>}
+      {t.room && <>{room ? chip(room) : <span>{String(t.room).replace(/_/g, " ")}</span>}{t.level ? ` lvl ${t.level}` : ""}</>}
+      {t.skill && <>{skill ? chip(skill) : <span>{String(t.skill).replace(/_/g, " ")}</span>}{t.level ? ` lvl ${t.level}` : ""}</>}
+    </span>
+  );
 }
 
-export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mode: "arcs" | "order" }) {
+export function StorybookArc({ arc, idx, chip, openLine, mode, actions, batch }: ArcProps & { mode: "arcs" | "order" }) {
   const byTrader = useMemo(() => (arc?.arcs ?? []).filter((a) => a.steps.length || a.reactions.length), [arc]);
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  const playPart = useMemo(() => (arc ? partitionPlayOrder(arc, idx) : null), [arc, idx]);
   if (!arc) return <p className="sb-empty">No arc data in this snapshot.</p>;
   const lineRow = (id: string, field?: string) => {
     const l = idx.get("line", id);
@@ -53,42 +86,81 @@ export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mo
         {field && <span className="sb-arc-field">{field}</span>}
         <span className="sb-arc-text">{text}</span>
         <button type="button" className="sb-arc-open" onClick={() => openLine(l)} aria-label="Open this line in Review">Review row →</button>
+        {actions && <div className="sb-arc-actions">{actions(l)}</div>}
       </div>
     );
   };
+  const renderPlayRow = (p: SbPlayItem, showPos: boolean) => {
+    const e = p.kind === "reveal" ? idx.get("quest_step", p.ref ?? "") : idx.get(p.kind === "map" ? "location" : p.kind, p.id);
+    const lbl = playItemLabel(p, idx);
+    return (
+      <li key={p.id} className={`sb-order-item sb-order-${p.kind}`}>
+        {showPos && <span className="sb-order-pos">{p.pos}</span>}
+        <span className="sb-order-kind">{KIND_LABEL[p.kind]}</span>
+        {e ? chip(e, lbl) : <span>{lbl ?? p.label}</span>}
+        {p.trader && <span className="sb-order-who">{idx.get("trader", p.trader)?.display ?? p.trader}</span>}
+        <Gates gates={p.gates} idx={idx} />
+      </li>
+    );
+  };
   if (mode === "order") {
+    const { ordered, unordered, unorderedCount } = playPart!;
     let stage = -1;
     return (
       <div>
-        <p className="sb-arc-note" data-testid="sb-arc-order-note">{arc.playOrder.length} items in player order, derived from map unlock order, questline chains and contract rep gates. {arc.gaps.length} could not be fully ordered ({arc.gaps.length ? "see below" : "none"}).</p>
+        <p className="sb-arc-note" data-testid="sb-arc-order-note">
+          {ordered.length} items in player order, derived from map unlock order, questline chains and contract rep gates.{" "}
+          {unorderedCount > 0 ? `${unorderedCount} grouped below under "Unlock rule not in EFI data" (${unordered.length} traders).` : "All items ordered."}
+        </p>
         <ol className="sb-order" data-testid="sb-play-order">
-          {arc.playOrder.map((p: SbPlayItem) => {
+          {ordered.map((p: SbPlayItem) => {
             const head = p.stage !== stage ? (stage = p.stage, <li key={`s${p.stage}`} className="sb-order-stage" role="presentation">{p.stage === 0 ? "From the start" : `Stage ${p.stage}`}</li>) : null;
-            const e = p.kind === "reveal" ? idx.get("quest_step", p.ref ?? "") : idx.get(p.kind === "map" ? "location" : p.kind, p.id);
-            return [head, (
-              <li key={p.id} className={`sb-order-item sb-order-${p.kind}`}>
-                <span className="sb-order-pos">{p.pos}</span>
-                <span className="sb-order-kind">{KIND_LABEL[p.kind]}</span>
-                {e ? chip(e, p.kind === "reveal" ? p.label : p.kind === "contract" ? cleanTodo(p.id) : undefined) : <span>{p.label}</span>}
-                {p.trader && <span className="sb-order-who">{idx.get("trader", p.trader)?.display ?? p.trader}</span>}
-                <Gates gates={p.gates} idx={idx} />
-              </li>
-            )];
+            return [head, renderPlayRow(p, true)];
           })}
         </ol>
+        {unorderedCount > 0 && (
+          <section className="sb-order-unordered" data-testid="sb-play-order-unordered">
+            <h3 className="sb-h">Unlock rule not in EFI data <span className="sb-count">{unorderedCount}</span></h3>
+            {unordered.map((g) => (
+              <details key={g.trader || "_other"} className="sb-order-ugroup" data-testid={`sb-order-ugroup-${g.trader || "other"}`}>
+                <summary>{g.display} <span className="sb-count">{g.items.length}</span></summary>
+                <ul className="sb-order">
+                  {g.items.map((p) => renderPlayRow(p, false))}
+                </ul>
+              </details>
+            ))}
+          </section>
+        )}
         <GapList arc={arc} idx={idx} />
       </div>
     );
   }
+  const jumpToTrader = (tid: string) => {
+    const el = sectionRefs.current[tid];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.classList.add("sb-flash");
+    setTimeout(() => el.classList.remove("sb-flash"), 1400);
+  };
   return (
     <div>
       <p className="sb-arc-note">Each trader&apos;s quest steps in the order the player meets them, with the dialogue inline. {arc.arcs.length} traders, {byTrader.reduce((n, a) => n + a.steps.length, 0)} steps.</p>
+      {byTrader.length > 1 && (
+        <nav className="sb-arc-index" aria-label="Jump to trader arc" data-testid="sb-arc-index">
+          {byTrader.map((a) => (
+            <button key={a.trader} type="button" className="sb-seg-btn" data-testid={`sb-arc-jump-${a.trader}`} onClick={() => jumpToTrader(a.trader)}>
+              {a.display} <span className="sb-count">{a.steps.length}</span>
+            </button>
+          ))}
+        </nav>
+      )}
       <div className="sb-arcs" data-testid="sb-arcs">
         {byTrader.map((a) => {
           const t = idx.get("trader", a.trader);
           return (
-            <section key={a.trader} className="sb-arc" data-testid={`sb-arc-${a.trader}`}>
+            <section key={a.trader} ref={(el) => { sectionRefs.current[a.trader] = el; }} className="sb-arc" data-testid={`sb-arc-${a.trader}`}>
               <h3 className="sb-arc-h">{t ? chip(t, a.display) : a.display}<span className="sb-count">{a.steps.length} steps · rep {a.chain_rep}</span></h3>
+              {batch && batch([...a.steps.flatMap((s) => s.lines.map((l) => l.id)), ...a.reactions].map((id) => idx.get("line", id)).filter((x): x is SbEntity => Boolean(x)), a.display)}
               {!a.level_0 && <div className="sb-arc-gates">Not available at the start (unlock rule not in data).</div>}
               <ol className="sb-arc-steps">
                 {a.steps.map((s) => {
@@ -98,9 +170,9 @@ export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mo
                       <div className="sb-arc-stephead">
                         <span className="sb-order-pos">{s.index}</span>
                         {e ? chip(e, cleanTodo(e.display)) : s.id}
-                        <span className="sb-arc-task">{taskText(e)}</span>
+                        <StepTask e={e} idx={idx} chip={chip} />
                       </div>
-                      <Gates gates={s.gates} idx={idx} />
+                      <Gates gates={s.gates} idx={idx} chip={chip} />
                       {s.lines.map((l) => lineRow(l.id, l.field))}
                     </li>
                   );

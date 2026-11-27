@@ -493,7 +493,7 @@ function csvStructuralTwinKey(e, { locations, squadMembers }) {
  * Matches data-backed lines strictly by structural key (data_path -> native entity id) and raid_story 1-to-1 by normalized text.
  * Keeps the CSV row as canonical, merges links + native metadata, and keeps both sources in data.provenance; unmatched natives stay separate.
  */
-function dedupeLineTwins(ents, ctx) {
+function dedupeLineTwins(ents, ctx, droppedOut) {
   const csvByStructKey = new Map();
   const csvRaidByText = new Map();
   for (const e of ents) {
@@ -519,6 +519,7 @@ function dedupeLineTwins(ents, ctx) {
         claimedCsv.add(target);
         attachTwinProvenance(target, e);
         dropped.add(e);
+        droppedOut?.push({ kind: "line", id: e.id, origin: e.data.origin, reason: "twin" });
       }
       continue;
     }
@@ -533,6 +534,7 @@ function dedupeLineTwins(ents, ctx) {
     if (hits.length) {
       for (const csvEnt of hits) attachTwinProvenance(csvEnt, e);
       dropped.add(e);
+      droppedOut?.push({ kind: "line", id: e.id, origin: e.data.origin, reason: "twin" });
     }
   }
   return dropped.size ? ents.filter((e) => !dropped.has(e)) : ents;
@@ -580,6 +582,7 @@ async function load(reader, sha) {
   for (const [f, t] of [[P.scav, scavText], [P.raidStory, raidStoryText], [P.csv, csvText], [P.voice, voiceText], [P.vibes, vibesText], [P.breadth, breadthText], [P.audit, auditText]]) if (t == null) warnings.push(`missing ${f} at ${sha.slice(0, 8)}`);
 
   const ents = [];
+  const droppedLines = []; // V8: rows the adapter excluded (dev strings, entity/csv twins), so "gone" can say why
   const E = (o) => { ents.push(entity(o)); };
   const traders = tr.json?.traders ?? {};
   const relTraders = rel.json?.traders ?? {};
@@ -771,7 +774,7 @@ async function load(reader, sha) {
     const nameIndex = speakerNameIndex(traders, squadMembers);
     const seen = new Map();
     for (const { row, line } of records) {
-      if (isDevOnlyCsvRow(row, gdSourceCache)) continue;
+      if (isDevOnlyCsvRow(row, gdSourceCache)) { droppedLines.push({ kind: "line", id: null, origin: "csv", reason: "dev-string", file: row.file ?? "", data_path: row.data_path ?? "", text: row.current_text ?? "" }); continue; }
       const base = `csv:${row.file}:${row.line}:${row.data_path}`;
       const n = (seen.get(base) ?? 0) + 1; seen.set(base, n);
       const L = linker();
@@ -788,7 +791,7 @@ async function load(reader, sha) {
       });
     }
   }
-  const deduped = dedupeLineTwins(ents, { locations, squadMembers });
+  const deduped = dedupeLineTwins(ents, { locations, squadMembers }, droppedLines);
   if (deduped !== ents) { ents.length = 0; ents.push(...deduped); }
 
   // voice cards
@@ -852,7 +855,7 @@ async function load(reader, sha) {
   }
   attachRenderedContracts(ents, sk.json?.mastery?.families); // V9: player-facing contract title per template (additive; own function)
   await attachItemEconomy(reader, ents, locations);
-  return { entities: ents, warnings };
+  return { entities: ents, warnings, dropped: droppedLines };
 }
 
 /**

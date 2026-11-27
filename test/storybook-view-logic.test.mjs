@@ -37,24 +37,29 @@ describe("storybookLogic", () => {
     assert.equal(idx.get("squad", "doc").display, "Saint");
   });
 
-  test("list items: sample finding is Broken, non-OWNER-OK csv rows Unreviewed", () => {
+  test("list items: sample finding is Broken, non-OK text lines Unreviewed (matches progress bars)", () => {
     const items = L.buildListItems(snap);
     const broken = items.filter((i) => i.category === "broken");
     assert.equal(broken.length, 1);
     assert.deepEqual(broken[0].entityRef, { kind: "quest_step", id: "popper_2" });
     const unrev = items.filter((i) => i.category === "unreviewed");
-    const csvRows = snap.entities.filter((e) => e.kind === "line" && typeof e.data.status === "string");
-    assert.equal(unrev.length, csvRows.filter((e) => e.data.status.trim().toUpperCase() !== "OWNER-OK").length);
+    const lines = snap.entities.filter((e) => e.kind === "line");
+    assert.equal(unrev.length, lines.filter((e) => L.isUnreviewedLine(e)).length);
     assert.ok(unrev.length > 0);
     assert.ok(!unrev.some((i) => /^OWNER-OK/.test(i.msg)));
   });
 
-  test("OWNER-OK rows are not unreviewed; non-csv lines never are", () => {
-    const mk = (status) => ({ kind: "line", id: "x", display: "t", data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
+  test("OWNER-OK / final rows are not unreviewed; non-OK and non-csv lines are", () => {
+    const mk = (status, production = null) => ({ kind: "line", id: "x", display: "t", production, data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
     assert.equal(L.isUnreviewedLine(mk("OWNER-OK")), false);
     assert.equal(L.isUnreviewedLine(mk("owner-ok ")), false);
     assert.equal(L.isUnreviewedLine(mk("DRAFT")), true);
-    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), true);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined, "final"), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "ok"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "edit"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "redo"), true);
+    assert.equal(L.isUnreviewedLine(mk("OWNER-OK"), "redo"), true);
   });
 
   test("filter: empty = all, toggle adds/removes, counts", () => {
@@ -274,13 +279,13 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const canMarkChangesSeen = () => false; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }), state: { marks: [] } }); export const applyLiveMarks = (p) => p; export const statusBucket = () => "todo"; export const liveLineBucket = () => "todo"; export const StorybookGuide = () => null; export const setGuideDismissed = () => {}; export const shouldAutoOpenGuide = () => false;`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/import "\.\/storybook\.css";\n?/, "")
     .replace(/from "react"/g, `from "./react.mjs"`)
-    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookArc|\.\/StorybookSheet)"/g, `from "./stub.mjs"`);
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookGlossary|\.\/StorybookArc|\.\/StorybookSheet|\.\/StorybookMarks|\.\/storybookProgress|\.\/StorybookGuide|\.\/storybookGuide)"/g, `from "./stub.mjs"`);
   writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
 
   let mod;
@@ -508,16 +513,39 @@ describe("V2 Home + findings split", () => {
   const items = L.buildListItems(snap);
   test("scopes: problems exclude the text inventory; badge = problems", () => {
     const c = L.scopeCounts(items);
-    assert.equal(c.problems + c.text, items.length);
+    assert.equal(c.problems + c.coverage + c.other + c.text + c.toolong + c.dev, items.length);
     assert.equal(c.all, items.length);
     assert.equal(L.problemCount(items), c.problems);
     assert.ok(L.scopeItems(items, "problems").every((i) => i.category !== "unreviewed"));
     assert.ok(L.scopeItems(items, "text").every((i) => i.category === "unreviewed"));
   });
-  test("story issues = coherence checks only", () => {
+  test("story issues = coherence checks only (W4: #11 and #7 info moved to Other checks)", () => {
     const story = L.scopeItems(items, "story");
-    assert.ok(story.every((i) => ["#4", "#7", "#11", "#12"].includes(i.check)));
-    assert.equal(story.length, items.filter((i) => ["#4", "#7", "#11", "#12"].includes(i.check)).length);
+    const isStory = (i) => ["#4", "#7", "#12", "#19"].includes(i.check) && !(i.check === "#7" && i.severity === "info");
+    assert.ok(story.every(isStory));
+    assert.equal(story.length, items.filter(isStory).length);
+  });
+  test("W4 friction 2: Problems scope includes #5/#19/#7-warn and moves #11 and #7-info to Other checks", () => {
+    const mk = (check, severity, entityRef = { kind: "enemy", id: "e1" }) => ({
+      key: `${check}:${severity}`, category: L.findingCategory(check), check, severity, msg: check, entityRef, source: null, dev: L.isDevTodoFinding({ check, entityRef }),
+    });
+    const list = [
+      mk("#1", "error"), mk("#2", "warn"), mk("#5", "warn"), mk("#13", "warn"),
+      mk("#4", "warn"), mk("#7", "warn"), mk("#12", "warn"), mk("#19", "warn"),
+      mk("#7", "info"), mk("#11", "info"), mk("#3", "warn"), mk("#6", "warn"), mk("#9", "warn"), mk("#10", "warn"), mk("#14", "info"), mk("#16", "info"), mk("#17", "info"),
+      mk("#8", "info"), mk("#15", "info"),
+      mk("#18", "warn"),
+      mk("#8", "info", null),
+    ];
+    assert.deepEqual(L.scopeItems(list, "problems").map((i) => i.key), ["#1:error", "#2:warn", "#5:warn", "#13:warn", "#4:warn", "#7:warn", "#12:warn", "#19:warn"]);
+    assert.deepEqual(L.scopeItems(list, "other").map((i) => i.key), ["#7:info", "#11:info", "#3:warn", "#6:warn", "#9:warn", "#10:warn", "#14:info", "#16:info", "#17:info"]);
+    assert.deepEqual(L.scopeItems(list, "coverage").map((i) => i.key), ["#8:info", "#15:info"]);
+    assert.deepEqual(L.scopeItems(list, "toolong").map((i) => i.key), ["#18:warn"]);
+    assert.deepEqual(L.scopeItems(list, "dev").map((i) => i.key), ["#8:info"]);
+    const sc = L.scopeCounts(list);
+    assert.equal(sc.problems, 8);
+    assert.equal(sc.other, 9);
+    assert.equal(sc.problems + sc.coverage + sc.other + sc.text + sc.toolong + sc.dev, list.length);
   });
   test("kind counts, audit counts, kind→tab", () => {
     const k = L.kindCounts(snap.entities);
@@ -545,14 +573,14 @@ describe("V2 Home + findings split", () => {
     assert.deepEqual(L.entityNavTarget(mk("scav", "enemy")), { tab: "cast", sel: "enemy:scav" });
     assert.deepEqual(L.entityNavTarget(mk("casing", "item")), { tab: "items", sel: "casing" });
     assert.deepEqual(L.auditSignalTarget("integrity"), { tab: "problems", scope: "problems", category: "broken" });
-    assert.deepEqual(L.auditSignalTarget("cohesion"), { tab: "problems", scope: "problems", category: "inconsistent" });
-    assert.deepEqual(L.auditSignalTarget("coverage"), { tab: "problems", scope: "problems", category: "missing" });
+    assert.deepEqual(L.auditSignalTarget("cohesion"), { tab: "problems", scope: "all", category: "inconsistent" });
+    assert.deepEqual(L.auditSignalTarget("coverage"), { tab: "problems", scope: "coverage", category: null });
     assert.deepEqual(L.auditSignalTarget("signoff"), { tab: "review", scope: "text", category: null });
   });
   test("shell: fixed tab slots, Home default, unbuilt slots hidden", () => {
     const v = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
     const ids = [...v.matchAll(/\{ id: "(\w+)", label: "[^"]+", built: (true|false) \}/g)].map((m) => `${m[1]}:${m[2]}`);
-    assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:true", "problems:true", "glossary:false"]);
+    assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:true", "problems:true", "glossary:true"]);
     assert.match(v, /useState<Tab>\("home"\)/);
     // regression: Problems and Review keep separate filters (a shared Set made Review show "No findings match"); V3: Review's live inside StorybookText
     assert.match(v, /<StorybookText rows=\{reviewRows\}/);
@@ -562,5 +590,51 @@ describe("V2 Home + findings split", () => {
   });
   test("story copy matches STORY_CHECKS", () => {
     assert.ok(!/impossible|duplicate lines/.test(L.FINDING_SCOPE_HELP.story));
+  });
+  test("W3 rider 1: groupCharacterViews splits Traders / Squad / Screens and labels the 2 Squad chips", () => {
+    const mkChar = (id, kind, speaker, n) => ({ id, kind, speaker, card: null, entity: null, lines: Array(n).fill({}), inferred: 0 });
+    const g = L.groupCharacterViews([
+      mkChar("system:raids", "system", "Raids", 100),
+      mkChar("system:squad", "system", "Squad", 93),
+      mkChar("party:squad", "party", "Squad", 51),
+      mkChar("trader:doc", "trader", "Doc", 16),
+      mkChar("squad:doc", "squad", "Saint", 6),
+      mkChar("narrator:narrator", "narrator", "Narrator", 5),
+    ]);
+    assert.deepEqual(g.traders.map((c) => c.id), ["trader:doc"]);
+    assert.deepEqual(g.squad.map((c) => [c.id, c.speaker]), [["party:squad", "Squad (party)"], ["squad:doc", "Saint"]]);
+    assert.deepEqual(g.screens.map((c) => [c.id, c.speaker]), [["system:raids", "Raids"], ["system:squad", "Squad screen"], ["narrator:narrator", "Narrator"]]);
+  });
+  test("W3 rider 3: playItemLabel uses rendered title; partitionPlayOrder separates unordered entries per trader", () => {
+    const ents = [
+      { id: "popper", kind: "trader", display: "Popper", aliases: [], source: { path: "t.json", line: 1 }, links: [], production: null, data: { level_0: true } },
+      { id: "broker", kind: "trader", display: "The Broker", aliases: [], source: { path: "t.json", line: 2 }, links: [], production: null, data: { level_0: false } },
+      { id: "c1", kind: "contract", display: "c1", aliases: [], source: { path: "c.json", line: 1 }, links: [], production: null, data: { trader: "popper", rendered: { title: "Deliver 5 × Scrap for Popper" } } },
+      { id: "c2", kind: "contract", display: "c2", aliases: [], source: { path: "c.json", line: 2 }, links: [], production: null, data: { trader: "popper", rendered: { title: "High rep contract" } } },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const arc = {
+      arcs: [
+        { trader: "popper", display: "Popper", level_0: true, steps: [], chain_rep: 0.2, reactions: [] },
+        { trader: "broker", display: "The Broker", level_0: false, steps: [], chain_rep: 0.2, reactions: [] },
+      ],
+      playOrder: [
+        { pos: 1, kind: "contract", id: "c1", label: "c1", trader: "popper", stage: 0, gates: [], basis: [] },
+        { pos: 2, kind: "quest_step", id: "broker_1", label: "Fine Tolerances", trader: "broker", stage: 0, gates: [{ type: "trader_unlock", id: "broker" }], basis: [] },
+        { pos: 3, kind: "quest_step", id: "broker_2", label: "Step 2", trader: "broker", stage: 0, gates: [{ type: "prev_step", id: "broker_1" }], basis: [] },
+        { pos: 4, kind: "contract", id: "c2", label: "c2", trader: "popper", stage: 1, gates: [{ type: "rep", trader: "popper", rep: 0.9 }], basis: [] },
+      ],
+      gaps: [{ kind: "contract", id: "c2", why: "rep above chain" }, { kind: "trader", id: "broker", why: "level_0 false" }],
+      notDerivable: [],
+      tiedStages: [],
+    };
+    assert.equal(L.playItemLabel(arc.playOrder[0], localIdx), "Deliver 5 × Scrap for Popper");
+    const part = L.partitionPlayOrder(arc, localIdx);
+    assert.deepEqual(part.ordered.map((p) => [p.pos, p.id]), [[1, "c1"]]);
+    assert.equal(part.unorderedCount, 3);
+    assert.deepEqual(part.unordered.map((g) => [g.display, g.items.map((i) => i.id)]), [
+      ["Popper", ["c2"]],
+      ["The Broker", ["broker_1", "broker_2"]],
+    ]);
   });
 });

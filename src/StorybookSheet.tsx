@@ -1,11 +1,15 @@
 // Entity sheets (PLAN_STORYBOOK_V2 V4): one rich sheet per map (location), character (trader/squad/speaker),
 // enemy, and item. Shows text lines (linking into Review), navigable entity links, and findings.
-// No art slots or progress bars here (V12 owns those).
+// Line rows share the Review rows' live V6 mark state (useMarks via `marks`), clean chrome, and OK / Redo / Edit buttons.
 import { useMemo, type ReactNode } from "react";
 import {
-  checkLabel, cleanTodo, enemySheetData, entityFindings, fmtSource, fmtWindow, itemSheetData, locationView, plainText,
+  checkLabel, cleanTodo, contractTitle, lineChipLabel, enemySheetData, entityFindings, fmtSource, fmtWindow, formatNeverSays, itemSheetData, locationView, plainText,
   type CharacterView, type EntityIndex, type SbEntity, type SbFinding,
 } from "./storybookLogic";
+import { MarkButtons, type MarksApi } from "./StorybookMarks";
+import { PROGRESS_BUCKET_LABEL, liveLineBucket } from "./storybookProgress";
+import { ProgressBarRow, type ProgressOpenHandler } from "./StorybookProgress";
+import type { ProgressEntry } from "./storybookProgress";
 
 export type ChipRenderer = (e: SbEntity, label?: string) => ReactNode;
 
@@ -33,25 +37,34 @@ function SheetFindings({ findings }: { findings: SbFinding[] }) {
   );
 }
 
-function LineRow({ line, renderChip, onReview }: { line: SbEntity; renderChip: ChipRenderer; onReview: (e: SbEntity) => void }) {
-  const status = typeof line.data?.status === "string" && line.data.status ? line.data.status : null;
+const BUCKET_CLASS = { ok: "owner-ok", draft: "draft", rewrite: "needs-rewrite", todo: "story-todo" } as const;
+
+/** Chips for contracts read as the player sees them (V9 rendered title), never the raw id (x_fence_sealed_vault). */
+const titled = (renderChip: ChipRenderer): ChipRenderer => (e, label) => renderChip(e, label ?? (e.kind === "contract" ? contractTitle(e) : undefined));
+
+function LineRow({ line, renderChip, onReview, marks }: { line: SbEntity; renderChip: ChipRenderer; onReview: (e: SbEntity) => void; marks?: MarksApi }) {
+  const raw = typeof line.data?.status === "string" && line.data.status ? line.data.status : null;
+  const bucket = liveLineBucket(marks ? marks.stateOf(line).kind : "none", raw, line.production);
+  const text = cleanTodo(String(line.data?.text ?? line.display));
   return (
-    <li className="sb-sheet-line">
+    <li className="sb-sheet-line" data-testid="sb-sheet-line" data-status={bucket}>
       <div className="sb-sheet-line-top">
-        {renderChip(line, String(line.data?.origin ?? "line"))}
-        {line.data?.speakerSource === "inferred" && <span className="sb-mono" title="Speaker inferred from source file">inferred</span>}
-        {status && <span className={`sb-status sb-st-${status.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{status}</span>}
-        <button type="button" className="sb-link sb-review-jump" data-testid={`sb-line-review-${line.id}`} onClick={() => onReview(line)}>→ Review</button>
+        {renderChip(line, lineChipLabel(line))}
+        <span className={`sb-status sb-st-${BUCKET_CLASS[bucket]}`} data-testid="sb-sheet-line-status">{PROGRESS_BUCKET_LABEL[bucket]}</span>
+        {marks && <span className="sb-row-actions" data-slot="row-actions"><MarkButtons e={line} m={marks} /></span>}
+        <button type="button" className="sb-link sb-review-jump" data-testid={`sb-line-review-${line.id}`} onClick={() => onReview(line)}>Review row →</button>
       </div>
-      <p className="sb-quote">{String(line.data?.text ?? line.display)}</p>
+      <p className="sb-quote">{text}</p>
     </li>
   );
 }
 
 /** Map sheet (World tab): lore/vibe, roster, boss, containers, quests, contracts, lines, findings. */
-export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
+export function MapSheet({ loc, idx, findings, renderChip, onReview, progress, onProgress, marks }: {
   loc: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler; marks?: MarksApi;
 }) {
+  renderChip = titled(renderChip);
   const v = useMemo(() => locationView(loc, idx), [loc, idx]);
   const ownFindings = useMemo(() => entityFindings(loc, findings), [loc, findings]);
   const boss = v.enemies.find((e) => e.boss) ?? null;
@@ -70,6 +83,7 @@ export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(loc.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-location-${loc.id}`} />}
 
       <SheetSection title="Lore & vibe" n={v.lore.length} empty="No lore/vibe entry for this map.">
         {v.lore.map((l) => (
@@ -124,7 +138,7 @@ export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
       </SheetSection>
 
       <SheetSection title="Text lines" n={v.lines.length}>
-        {v.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} />)}
+        {v.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} marks={marks} />)}
       </SheetSection>
 
       <SheetFindings findings={ownFindings} />
@@ -133,10 +147,13 @@ export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
 }
 
 /** Character sheet (Cast tab): voice card, rivals, links, every line (linking to Review), findings. */
-export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
+export function CharacterSheet({ ch, idx, findings, renderChip, onReview, progress, onProgress, marks }: {
   ch: CharacterView; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler; marks?: MarksApi;
 }) {
+  renderChip = titled(renderChip);
   const d = ch.card?.data ?? {};
+  const neverSays = useMemo(() => formatNeverSays(d.neverSays), [d.neverSays]);
   const rivalIds: string[] = Array.isArray(d.rivals) ? d.rivals : Array.isArray(ch.entity?.data?.rivals) ? ch.entity.data.rivals : [];
   const ownFindings = useMemo(() => {
     const out: SbFinding[] = [];
@@ -157,6 +174,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
         <h3>{ch.speaker} <span className="sb-kind">{ch.kind}</span></h3>
         {ch.entity && <span className="sb-mono">{fmtSource(ch.entity.source)}</span>}
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-${ch.id}`} />}
 
       {ch.card ? (
         <section className="sb-voice" data-testid="sb-voice-card">
@@ -165,7 +183,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
             {d.who && <><dt>Who</dt><dd>{plainText(String(d.who))}</dd></>}
             {d.pronoun && <><dt>Pronoun</dt><dd>{String(d.pronoun)}</dd></>}
             {d.playerWord && <><dt>Calls player</dt><dd>{[d.playerWord, ...(d.callsPlayer ?? [])].join(", ")}</dd></>}
-            {Array.isArray(d.neverSays) && d.neverSays.length > 0 && <><dt>Never says</dt><dd>{d.neverSays.join(", ")}</dd></>}
+            {neverSays.length > 0 && <><dt>Never says</dt><dd>{neverSays.join(", ")}</dd></>}
             {Array.isArray(d.samples) && d.samples.length > 0 && <><dt>Samples</dt><dd>{d.samples.map((x: unknown) => plainText(String(x))).join(" / ")}</dd></>}
           </dl>
         </section>
@@ -192,7 +210,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
       )}
 
       <SheetSection title="Lines" n={ch.lines.length}>
-        {ch.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} />)}
+        {ch.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} marks={marks} />)}
       </SheetSection>
 
       <SheetFindings findings={ownFindings} />
@@ -201,9 +219,11 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
 }
 
 /** Enemy sheet (Cast tab): name + CONTENT_BREADTH look line, missing-description flag, spawns, drops, quests, findings. */
-export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
+export function EnemySheet({ enemy, idx, findings, renderChip, onReview, progress, onProgress, marks }: {
   enemy: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler; marks?: MarksApi;
 }) {
+  renderChip = titled(renderChip);
   const s = useMemo(() => enemySheetData(enemy, idx, findings), [enemy, idx, findings]);
   const d = enemy.data ?? {};
 
@@ -219,6 +239,7 @@ export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(enemy.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-enemy-${enemy.id}`} />}
 
       <section className="sb-section">
         <h4 className="sb-h">Description &amp; look</h4>
@@ -255,7 +276,7 @@ export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
 
       {s.lines.length > 0 && (
         <SheetSection title="Text lines" n={s.lines.length}>
-          {s.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} />)}
+          {s.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} marks={marks} />)}
         </SheetSection>
       )}
 
@@ -265,9 +286,11 @@ export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
 }
 
 /** Item sheet (Items tab): description y/n, sources (loot/trader/recipe/node), uses (quests/contracts/recipes/rooms), lines, findings. */
-export function ItemSheet({ item, idx, findings, renderChip, onReview }: {
+export function ItemSheet({ item, idx, findings, renderChip, onReview, progress, onProgress, marks }: {
   item: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler; marks?: MarksApi;
 }) {
+  renderChip = titled(renderChip);
   const s = useMemo(() => itemSheetData(item, idx, findings), [item, idx, findings]);
   const d = item.data ?? {};
 
@@ -288,6 +311,7 @@ export function ItemSheet({ item, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(item.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-item-${item.id}`} />}
 
       <section className="sb-section">
         <h4 className="sb-h">Description</h4>
@@ -314,7 +338,7 @@ export function ItemSheet({ item, idx, findings, renderChip, onReview }: {
 
       {s.lines.length > 0 && (
         <SheetSection title="Text lines" n={s.lines.length}>
-          {s.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} />)}
+          {s.lines.map((l) => <LineRow key={l.id} line={l} renderChip={renderChip} onReview={onReview} marks={marks} />)}
         </SheetSection>
       )}
 

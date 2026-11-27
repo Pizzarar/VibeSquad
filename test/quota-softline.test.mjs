@@ -736,3 +736,87 @@ test("C fu2 m1/m3/L1: shared soft formatter, short soft gloss, arm soft-skip lab
     assert.ok(t.endsWith("Runs on Gemini.") || t.endsWith("Runs on Claude."), `cause must precede result in: ${t}`);
   }
 });
+
+test("fu3: spawn_worker result.ab.provider reports the landed provider (soft hop, hard-cap failover, and non-soft unchanged)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-soft-fu3-"));
+  const vsHome = join(dir, ".vibesquad");
+  mkdirSync(vsHome, { recursive: true });
+  const TEAMS = [{ id: "vibesquad", name: "VibeSquad", paths: ["VibeSquad"], lanes: [{ id: "vibesquad", name: "Hub", hub: true, paths: ["VibeSquad"] }, { id: "feat", name: "Feat" }] }];
+  writeFileSync(join(vsHome, "teams.json"), JSON.stringify({ teams: TEAMS }));
+  writeFileSync(join(vsHome, "profiles.json"), JSON.stringify({ profiles: DEFAULT_PACK_PROFILES }));
+  const keys = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_PROFILES_PATH", "VIBESQUAD_CAPPED_PROVIDERS_PATH", "VS_DEFAULT_BACKEND", "VIBESQUAD_IGNORE_HOME_TEAMS", "VS_BACKEND"];
+  const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  Object.assign(process.env, { VIBESQUAD_HOME: vsHome, VIBESQUAD_TEAMS_FILE: join(vsHome, "teams.json"), VIBESQUAD_PROFILES_PATH: join(vsHome, "profiles.json"), VIBESQUAD_CAPPED_PROVIDERS_PATH: join(vsHome, "capped-providers.json"), VS_DEFAULT_BACKEND: "paseo", VIBESQUAD_IGNORE_HOME_TEAMS: "1" });
+  delete process.env.VS_BACKEND;
+  try {
+    const { callTool, createContext } = await import("../server/mcp/tools.mjs");
+    const { verifiedIdentity } = await import("./helpers/agent-token.mjs");
+    const runScenario = async ({ usageProviders = [], cappedProviders = {}, seedAgents = [] }) => {
+      const before = new Map();
+      const server = { before: (n, fn) => (before.set(n, fn), () => before.delete(n)), on: () => () => {} };
+      const stop = createPlugin({ startWatcher: false, setLabels: async () => {}, archiveAgent: async () => {}, applyAgentSettings: async () => {}, refuseAgent: async () => {}, cappedProviders, usageProviders })(server);
+      const agents = [...seedAgents];
+      const logs = [];
+      const backend = {
+        createAgent: async ({ config, labels, env }) => {
+          const req = { config: { ...config, cwd: "/projects/VibeSquad/.worktrees/soft-fu3" }, labels: { ...labels }, env: { ...env } };
+          const out = (await before.get("agent.create")({ request: req })) ?? req;
+          const agent = { id: `rn-fu3-${agents.length + 1}`, title: out.config.title, provider: out.config.provider, model: out.config.model, labels: out.labels };
+          agents.push(agent);
+          return agent;
+        },
+        sendAgentPrompt: async () => {},
+        fetchAgents: async () => ({ entries: agents.map((agent) => ({ agent })) }),
+      };
+      const ctx = createContext({
+        env: { VIBESQUAD_HOME: vsHome },
+        ...verifiedIdentity({ agentId: "rn-bud1", team: "vibesquad", lane: "feat", role: "brainstorm" }, { backend, teams: TEAMS }),
+        cwd: "/projects/VibeSquad/.worktrees/soft-fu3",
+        teams: TEAMS,
+        loadProfiles: async () => DEFAULT_PACK_PROFILES,
+        readCaps: async () => ({}),
+        withBackend: async (_t, fn) => fn(backend),
+        findLiveLeads: async () => [],
+        writeLog: async (e) => { logs.push(e); },
+      });
+      try {
+        const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement", stakes: "normal" });
+        return { res, agent: agents[agents.length - 1], logs };
+      } finally {
+        stop?.();
+      }
+    };
+
+    // 1. Soft-capped agy-claude: sonnet arm lands on claude direct -> ab.provider === "claude".
+    const soft = await runScenario({ usageProviders: [row(AGY_CLAUDE_FAMILY, 83), row("claude", 20), row("antigravity-cli", 20)] });
+    assert.equal(soft.agent.provider, "claude");
+    assert.equal(soft.res.ab.arm, "sonnet");
+    assert.equal(soft.res.ab.provider, "claude");
+    assert.equal(soft.res.ab.model, "claude-sonnet-5-5");
+    assert.equal(soft.res.spawned, "Implement · claude-sonnet-5-5 · soft");
+    assert.equal(soft.res.soft, "Claude (AGY) pool at 83%, soft line 70%");
+    assert.match(soft.logs[0].text, /Implement@claude\b/);
+
+    // 2. Hard-cap failover in hook: neon arm lands on claude direct -> ab.provider === "claude" and route shows -> claude.
+    const hard = await runScenario({
+      cappedProviders: { "antigravity-cli": { capped: true }, [AGY_CLAUDE_FAMILY]: { capped: true } },
+      seedAgents: [{ createdAt: "2026-11-27T00:00:00Z", labels: { team: "vibesquad", lane: "feat", role: "worker", "vs.arm": "sonnet" } }],
+    });
+    assert.equal(hard.agent.provider, "claude");
+    assert.equal(hard.res.ab.arm, "neon");
+    assert.equal(hard.res.ab.provider, "claude");
+    assert.match(hard.res.route, /\(Implement -> claude\)$/);
+    assert.match(hard.logs[0].text, /Implement@claude\b/);
+
+    // 3. Non-soft plain alternation: sonnet arm lands on agy-claude (antigravity-cli) -> unchanged.
+    const plain = await runScenario({ usageProviders: [row(AGY_CLAUDE_FAMILY, 20), row("claude", 20), row("antigravity-cli", 20)] });
+    assert.equal(plain.agent.provider, "antigravity-cli");
+    assert.equal(plain.res.ab.arm, "sonnet");
+    assert.equal(plain.res.ab.provider, "antigravity-cli");
+    assert.equal(plain.res.ab.model, "claude-sonnet-5-5-medium");
+    assert.equal(plain.res.spawned, "Implement · claude-sonnet-5-5-medium · arm");
+  } finally {
+    for (const [k, v] of Object.entries(prev)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

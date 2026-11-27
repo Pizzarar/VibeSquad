@@ -600,6 +600,8 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   // pick: after the hook, no model means the provider's own default runs, so the pre-hook `model` would name one that doesn't.
   const hookWhy = routeWhy(agent?.labels?.["vs.route"]);
   const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || (hookWhy ? "" : model) || "";
+  // C fu3: the provider the spawn actually landed on after the spawn hook ran (soft hop, hard-cap failover, or plain route).
+  const actualProvider = clean(agent?.provider) || provider || "";
   let reasonShown =
     hookWhy ||
     shownSpawnReason({
@@ -624,16 +626,16 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
     const shown = labels.profile ?? profileName;
     result.ab = {
       arm: ab.arm, reason: ab.reason, model: actualModel || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
-      ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: provider || null } : {}), ...(ab.capped ? { capped: true } : {}), ...(ab.soft ? { soft: true } : {}),
+      ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: actualProvider || null } : {}), ...(ab.capped ? { capped: true } : {}), ...(ab.soft ? { soft: true } : {}),
     };
     // One line a lead can read without digging: `arm=neon reason=alternation model=gemini-4-neon (Implement - Sonnet -> ...)`.
     // A role spawn keeps its name, so a swap shows the provider it moved to: `(Implement -> antigravity-cli)`.
-    const moved = ab.role ? provider : shown;
+    const moved = ab.role ? actualProvider : shown;
     result.route = `arm=${ab.arm ?? "none"} reason=${ab.reason} model=${actualModel || "?"}${ab.swapped ? ` (${profileName} -> ${moved})` : ""}`;
     const counts = ab.counts ? ` counts=${Object.entries(ab.counts).map(([k, v]) => `${k}:${v}`).join(",")}` : "";
     // idea-962: opt-outs (pin / wf / override) log too, so @per can count them; they never carry vs.arm, so they still
     // are not alternation data (countArms reads vs.arm only). refs = the new agent, so the metric joins its outcome.
-    const metric = `implementer-arm: ${profileName} -> ${ab.role ? `${shown}@${provider}` : shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${actualModel || "?"} lane=${labels.lane ?? ""}${counts}`;
+    const metric = `implementer-arm: ${profileName} -> ${ab.role ? `${shown}@${actualProvider}` : shown} arm=${ab.arm ?? "none"} reason=${ab.reason} model=${actualModel || "?"} lane=${labels.lane ?? ""}${counts}`;
     try { await ctx.writeLog({ type: "metric", text: metric, ...(result.id ? { refs: [result.id] } : {}) }); } catch { /* metrics are best effort: never fail the spawn */ }
   }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff

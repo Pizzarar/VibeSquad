@@ -1,5 +1,5 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { handleStorybookRoute } from "./storybook/api.mjs";
+import { handleStorybookMarksRoute, handleStorybookRoute } from "./storybook/api.mjs";
 import { loopLagStats } from "../runner/loop-lag.mjs";
 import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, stampTesterText, testerTeamRecords } from "./runner-api.mjs";
 import { appendTesterThreadLine, isTesterCard, testerThreadLines } from "./tester-thread.mjs";
@@ -2757,6 +2757,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams") return handleTeams(req, res, rootDir, opts);
     if (path === "/api/profiles") return handleProfiles(req, res);
+    if (path.startsWith("/api/storybook/") && handleStorybookMarksRoute(req, res, { rootDir, ...opts.storybook })) return; // V6 owner marks (POST = owner write, same guard)
     if (path.startsWith("/api/storybook/") && handleStorybookRoute(req, res, { rootDir, ...opts.storybook })) return; // SB4; behind the same guard as /api/teams (POST refresh = owner write)
     if (path === "/__vibesquad/local-image") return handleLocalImage(req, res);
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {

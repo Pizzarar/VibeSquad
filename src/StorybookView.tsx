@@ -7,18 +7,24 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
-  FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  entityKey, indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
+  FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, effectiveScope, problemCount, scopeCounts, scopeItems, type FindingScope,
+  entityKey, indexEntities, auditCounts, buildTextChanges, canMarkChangesSeen, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import type { TextChanges, TextPreset } from "./StorybookText";
 import { StorybookText, type TextFocus } from "./StorybookText";
 import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
+import { MarkBatch, MarkButtons, MarksBar, useMarks, type MarksApi } from "./StorybookMarks";
 import { StorybookItems } from "./StorybookItems";
+import { StorybookGlossary } from "./StorybookGlossary";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
+import { applyLiveMarks, liveLineBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgress";
+import { StorybookGuide } from "./StorybookGuide";
+import { setGuideDismissed, shouldAutoOpenGuide, type GuideStep } from "./storybookGuide";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
@@ -305,7 +311,7 @@ const TABS: { id: Tab; label: string; built: boolean }[] = [
   { id: "cast", label: "Cast", built: true }, // characters + enemies
   { id: "items", label: "Items", built: true }, // V4
   { id: "problems", label: "Problems", built: true },
-  { id: "glossary", label: "Glossary", built: false }, // V10
+  { id: "glossary", label: "Glossary", built: true }, // V10
 ];
 const NO_SEL: Record<Tab, string | null> = { home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null };
 
@@ -349,21 +355,25 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
 
 type QuestMode = "web" | "arcs" | "order";
 const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
-function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer }) {
+function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks, modeReq, onMarkSeen, seenBusy, canMarkSeen }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi; modeReq?: { mode: QuestMode; n: number } | null; onMarkSeen?: () => void; seenBusy?: boolean; canMarkSeen?: boolean }) {
   const [mode, setMode] = useState<QuestMode>("arcs");
+  useEffect(() => { if (modeReq) setMode(modeReq.mode); }, [modeReq]);
   const chip = renderChip;
   return (
     <div>
       <div className="sb-seg" role="tablist" aria-label="Quest views">
         {QUEST_MODES.map(([m, l]) => <button key={m} type="button" role="tab" aria-selected={mode === m} className="sb-seg-btn" onClick={() => setMode(m)}>{l}</button>)}
       </div>
-      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
+      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode}
+        actions={marks ? (l) => <MarkButtons e={l} m={marks} /> : undefined} batch={marks ? (ls, label) => <MarkBatch entities={ls} label={label} m={marks} /> : undefined} />}
+      {marks && mode === "arcs" && <MarksBar m={marks} onMarkSeen={onMarkSeen} seenBusy={seenBusy} canMarkSeen={canMarkSeen} />}
     </div>
   );
 }
 
-function Locations({ idx, findings, sel, setSel, renderChip, onReview }: {
+function Locations({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity, marks }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  marks?: MarksApi; progress?: SbProgress | null; onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
   const locs = useMemo(() => idx.byKind("location"), [idx]);
   const loc = locs.find((l) => l.id === sel) ?? locs[0];
@@ -373,25 +383,50 @@ function Locations({ idx, findings, sel, setSel, renderChip, onReview }: {
       <div className="sb-seg" role="tablist" aria-label="Locations">
         {locs.map((l) => <button key={l.id} type="button" role="tab" aria-selected={l.id === loc.id} className="sb-seg-btn" onClick={() => setSel(l.id)}>{l.display}</button>)}
       </div>
-      <MapSheet loc={loc} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />
+      <MapSheet loc={loc} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} marks={marks}
+        progress={progress?.entities[`location:${loc.id}`] ?? null}
+        onProgress={onProgressEntity ? (st) => onProgressEntity(`location:${loc.id}`, loc.display, st) : undefined} />
     </div>
   );
 }
 
-function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
+function Characters({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity, marks }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  marks?: MarksApi; progress?: SbProgress | null; onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
   const chars = useMemo(() => characterViews(idx), [idx]);
+  const grouped = useMemo(() => groupCharacterViews(chars), [chars]);
+  const ordered = useMemo(() => [...grouped.traders, ...grouped.squad, ...grouped.screens], [grouped]);
   const enemies = useMemo(() => idx.byKind("enemy").sort((a, b) => a.display.localeCompare(b.display)), [idx]);
   const isEnemySel = Boolean(sel && sel.startsWith("enemy:"));
   const [group, setGroup] = useState<"characters" | "enemies">(isEnemySel ? "enemies" : "characters");
+  const [screensOpen, setScreensOpen] = useState(false);
+  const [scrollTick, setScrollTick] = useState(0);
+  const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (sel?.startsWith("enemy:")) setGroup("enemies");
     else if (sel) setGroup("characters");
   }, [sel]);
   const enemy = isEnemySel ? enemies.find((e) => `enemy:${e.id.toLowerCase()}` === sel) ?? enemies[0] : enemies[0];
-  const ch = !isEnemySel ? chars.find((c) => c.id === sel) ?? chars[0] : chars[0];
+  const ch = !isEnemySel ? ordered.find((c) => c.id === sel) ?? ordered[0] : ordered[0];
+  const chInScreens = Boolean(ch && grouped.screens.some((s) => s.id === ch.id));
+  useEffect(() => {
+    if (chInScreens) setScreensOpen(true);
+  }, [chInScreens]);
+  useEffect(() => {
+    if (!scrollTick) return;
+    const el = sheetRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.top > window.innerHeight * 0.6) el.scrollIntoView({ block: "start" });
+  }, [scrollTick]);
+  const pickCast = (id: string) => { setSel(id); setScrollTick((n) => n + 1); };
   if (!chars.length && !enemies.length) return <p className="sb-empty">No characters or enemies in this snapshot.</p>;
+  const chipBtn = (c: typeof chars[number]) => (
+    <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => pickCast(c.id)}>
+      {c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}
+    </button>
+  );
   return (
     <div>
       <div className="sb-seg" role="group" aria-label="Cast group" data-testid="sb-cast-group">
@@ -408,19 +443,42 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
             <div className="sb-seg" role="tablist" aria-label="Enemies">
               {enemies.map((e) => {
                 const key = `enemy:${e.id.toLowerCase()}`;
-                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => setSel(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
+                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => pickCast(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
               })}
             </div>
-            {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} marks={marks}
+                progress={progress?.entities[`enemy:${enemy.id.toLowerCase()}`] ?? null}
+                onProgress={onProgressEntity ? (st) => onProgressEntity(`enemy:${enemy.id.toLowerCase()}`, enemy.display, st) : undefined} />}
+            </div>
           </>
         )
       ) : (
         chars.length === 0 ? <p className="sb-empty">No speakers in this snapshot.</p> : (
           <>
-            <div className="sb-seg" role="tablist" aria-label="Characters">
-              {chars.map((c) => <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => setSel(c.id)}>{c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}</button>)}
+            {grouped.traders.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-traders">
+                <h4 className="sb-cast-lbl">Traders <span className="sb-count">{grouped.traders.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Traders">{grouped.traders.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.squad.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-squad">
+                <h4 className="sb-cast-lbl">Squad <span className="sb-count">{grouped.squad.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Squad">{grouped.squad.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.screens.length > 0 && (
+              <details className="sb-cast-screens" data-testid="sb-cast-screens" open={screensOpen} onToggle={(ev) => setScreensOpen(ev.currentTarget.open)}>
+                <summary className="sb-cast-lbl">Screens &amp; system <span className="sb-count">{grouped.screens.length}</span></summary>
+                <div className="sb-seg" role="tablist" aria-label="Screens and system">{grouped.screens.map(chipBtn)}</div>
+              </details>
+            )}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} marks={marks}
+                progress={progress?.entities[ch.id] ?? null}
+                onProgress={onProgressEntity ? (st) => onProgressEntity(ch.id, ch.speaker, st) : undefined} />}
             </div>
-            {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
           </>
         )
       )}
@@ -430,8 +488,10 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
 
 const PAGE = 200; // the text inventory is thousands of rows; render a page at a time
 
-function Findings({ items, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo }: { items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
-  const scoped = useMemo(() => scopeItems(items, scope), [items, scope]);
+function Findings({ items: allItems, idx, card, active, setActive, scope: scopeIn, setScope, scopes: allowed, goTo, checks = null, clearChecks }: { checks?: ReadonlySet<string> | null; clearChecks?: () => void; items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
+  const scope = effectiveScope(scopeIn, checks);
+  const items = allItems;
+  const scoped = useMemo(() => scopeItems(items, scope).filter((it) => !checks || (it.check != null && checks.has(it.check))), [items, scope, checks]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const counts = useMemo(() => countByCategory(scoped), [scoped]);
   const filtered = useMemo(() => filterItems(scoped, active), [scoped, active]);
@@ -443,7 +503,7 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
     <div>
       {allowed.length > 1 && <div className="sb-seg" role="group" aria-label="Findings scope" data-testid="sb-scope">
         {allowed.filter((s) => s === "problems" || s === "story" || scopes[s] > 0 || scope === s).map((s) => (
-          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); }}>
+          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); clearChecks?.(); }}>
             {FINDING_SCOPE_LABEL[s]} <span className="sb-count">{scopes[s]}</span>
           </button>
         ))}
@@ -455,7 +515,8 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
-        {active.size > 0 && <button type="button" className="sb-fbtn sb-fclear" onClick={() => setActive(new Set())}>Clear</button>}
+        {checks && <button type="button" className="sb-fbtn" aria-pressed="true" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card (click to clear)" onClick={() => clearChecks?.()}>Checks {[...checks].join(" ")} <span className="sb-count">{scoped.length}</span></button>}
+        {(active.size > 0 || checks) && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setActive(new Set()); clearChecks?.(); }}>Clear</button>}
       </div>
       <dl className="sb-legend" data-testid="sb-legend">
         {cats.map((c) => <div key={c}><dt>{SB_CATEGORY_LABEL[c]}</dt><dd>{SB_CATEGORY_HELP[c]}</dd></div>)}
@@ -502,6 +563,14 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
   const clearTextFocus = useCallback(() => setTextFocus(null), []);
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
+  const [checks, setChecks] = useState<ReadonlySet<string> | null>(null); // Home signal card -> Problems filtered to that signal's checks
+  const [changes, setChanges] = useState<SbChanges | null>(null); // V8
+  const [seenBusy, setSeenBusy] = useState(false);
+  const [seenError, setSeenError] = useState<string | null>(null);
+  const [preset, setPreset] = useState<TextPreset>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [questModeReq, setQuestModeReq] = useState<{ mode: QuestMode; n: number } | null>(null);
+  const guideCheckedFor = useRef<string | null>(null);
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
   // change (or unmount) invalidates everything in flight.
@@ -519,13 +588,60 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [projectId, initial]);
 
   const snap = state.kind === "ok" ? state.snap : null;
+  const changesSeq = useRef(0);
+  useEffect(() => {
+    changesSeq.current++;
+    setChanges(null);
+    setSeenError(null);
+    return () => { changesSeq.current++; };
+  }, [projectId, initial]);
+  const loadChanges = useCallback(async () => {
+    if (initial) return;
+    const my = ++changesSeq.current;
+    try {
+      const r = await call(`${api(projectId)}/changes`);
+      if (changesSeq.current !== my) return;
+      setChanges(r.status === 200 && r.body && typeof r.body === "object" && r.body.counts ? (r.body as SbChanges) : null);
+    } catch { if (changesSeq.current === my) setChanges(null); }
+  }, [projectId, initial]);
+  const snapSha = snap?.sha;
+  useEffect(() => { if (snapSha) void loadChanges(); }, [snapSha, loadChanges]);
+  // Explicit only: "I've seen up to sha X". Loading Home never marks anything seen.
+  const markSeen = useCallback(async () => {
+    if (!snapSha) return;
+    setSeenBusy(true); setSeenError(null);
+    try {
+      const r = await call(`${api(projectId)}/changes/seen`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sha: snapSha }) });
+      if (r.status !== 200) setSeenError(String(r.body?.error ?? `Could not save (HTTP ${r.status})`));
+      else await loadChanges();
+    } catch (e) { setSeenError(e instanceof Error ? e.message : String(e)); }
+    finally { setSeenBusy(false); }
+  }, [projectId, snapSha, loadChanges]);
+  const textChanges = useMemo<TextChanges>(() => buildTextChanges(changes), [changes]);
   const idx = useMemo(() => indexEntities(snap?.entities ?? []), [snap]);
-  const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
+  const marks = useMarks(projectId, idx); // V6 owner marks
+  const items = useMemo(() => (snap ? buildListItems(snap, (e) => marks.stateOf(e).kind) : []), [snap, marks.stateOf]);
   const problems = useMemo(() => problemCount(items), [items]);
   const pick = useCallback((t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s })), []);
   const goToRef = useRef<(e: SbEntity) => void>(() => {});
   const card = useCard(idx, (e) => goToRef.current(e));
   const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
+  const liveProgress = useMemo(() => applyLiveMarks(snap?.progress, marks.state.marks), [snap, marks.state.marks]); // V12 progress with live V6 marks
+  const rowEntity = useCallback((r: { kind: string; entityId: string }) => idx.get(r.kind, r.entityId), [idx]);
+  const mineTest = useCallback((r: { kind: string; entityId: string }) => r.kind === "line" && marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);
+  const rowStatusBucket = useCallback((r: { kind: string; entityId: string; status: string | null }): ProgressTextBucket | null => {
+    if (r.kind !== "line") return null;
+    const e = rowEntity(r);
+    return liveLineBucket(marks.stateOf(e).kind, r.status, e?.production);
+  }, [marks, rowEntity]);
+  const openProgressArea = useCallback((area: ProgressAreaId, status?: ProgressTextBucket | null) => {
+    setPreset({ area, status: status ?? null, n: Date.now() });
+    setTab("review");
+  }, []);
+  const openProgressEntity = useCallback((ek: string, label: string, status?: ProgressTextBucket | null) => {
+    setPreset({ entityKey: ek, entityLabel: label, status: status ?? null, n: Date.now() });
+    setTab("review");
+  }, []);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -582,18 +698,57 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [card, pick]);
   goToRef.current = goTo;
 
+  const clearTextPreset = useCallback(() => setPreset(null), []);
   const onSignal = useCallback((signal: string) => {
-    const nav = auditSignalTarget(signal);
+    const nav = signalCard(signal, items, null).target;
     if (nav.tab === "review") {
+      setPreset({ only: "unreviewed", n: Date.now() });
       setTab("review");
       return;
     }
     setScope(nav.scope ?? "problems");
-    setActiveProblems(nav.category ? new Set([nav.category]) : new Set());
+    setActiveProblems(new Set());
+    setChecks(nav.checks ? new Set(nav.checks) : null);
     setTab("problems");
-  }, []);
+  }, [items]);
 
   const renderChip: ChipRenderer = useCallback((e, label) => <Chip e={e} card={card} onGo={goTo} label={label} />, [card, goTo]);
+
+  useEffect(() => {
+    if (!snap || guideCheckedFor.current === projectId) return;
+    guideCheckedFor.current = projectId;
+    if (shouldAutoOpenGuide(projectId)) setGuideOpen(true);
+  }, [snap, projectId]);
+  const closeGuide = useCallback(() => {
+    setGuideOpen(false);
+    setGuideDismissed(projectId);
+  }, [projectId]);
+  const [guideFlash, setGuideFlash] = useState<{ testId: string; fallback?: string; highlight?: boolean; n: number } | null>(null);
+  const onGuideShowMe = useCallback((step: GuideStep) => {
+    const t = step.target;
+    if (t.tab === "review") setPreset({ only: t.presetOnly ?? null, n: Date.now() });
+    if (t.findingScope) { setScope(t.findingScope); setActiveProblems(new Set()); setChecks(null); }
+    if (t.questMode) setQuestModeReq({ mode: t.questMode, n: Date.now() });
+    setTab(t.tab);
+    closeGuide();
+    if (t.scrollTestId) setGuideFlash({ testId: t.scrollTestId, fallback: t.fallbackScrollTestId, highlight: t.highlight, n: Date.now() });
+  }, [closeGuide]);
+
+  useEffect(() => {
+    if (!guideFlash) return;
+    const { testId, fallback, highlight } = guideFlash;
+    setGuideFlash(null);
+    const el = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)
+      ?? (fallback ? document.querySelector<HTMLElement>(`[data-testid="${fallback}"]`) : null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    if (highlight) {
+      el.classList.remove("sb-flash");
+      void el.offsetWidth;
+      el.classList.add("sb-flash");
+      setTimeout(() => el.classList.remove("sb-flash"), 1800);
+    }
+  }, [guideFlash, tab]);
 
   // Esc = Back (UX R19 M3). Capture phase + preventDefault so App's Esc → Squads Home handler skips it; an open card takes Esc first.
   const cardOpen = card.node != null;
@@ -632,9 +787,15 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
-          {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
+          {needsYou > 0 && onNeedsYou && (
+            <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} aria-label={`${needsYou} need${needsYou === 1 ? "s" : ""} you`} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">
+              <span className="sb-needs-n">{needsYou}</span>
+              <span className="sb-needs-txt"> need{needsYou === 1 ? "s" : ""} you</span>
+            </button>
+          )}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
           {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
+          {snap && <button type="button" className="sb-btn sb-guide-btn" data-testid="sb-guide-btn" aria-label="How to use Storybook" title="How to use Storybook" onClick={() => setGuideOpen(true)}>?</button>}
           <button type="button" className={`sb-btn sb-refresh${busy ? " sb-busy" : ""}`} data-testid="sb-refresh" aria-label="Refresh" aria-busy={busy} title="Re-snapshot Storybook" onClick={() => void refresh()} disabled={busy || state.kind === "loading"}><span className="sb-refresh-icon" aria-hidden="true">↻</span><span className="sb-refresh-text" aria-hidden="true">{busy ? "Refreshing…" : "Refresh"}</span></button>
         </div>
       </header>
@@ -649,21 +810,26 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <nav className="sb-tabs" role="tablist" aria-label="Storybook views">
             {TABS.filter((t) => t.built).map(({ id: t, label }) => (
               <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => setTab(t)}>
-                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review, code TODOs under Dev TODOs">{problems}</span>}
+                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Broken references and story issues only; text is under Review, writing gaps under Coverage, drift under Other checks">{problems}</span>}
               </button>
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
-            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} />}
-            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} hasReviewSession={marks.state.exists || Boolean(marks.lastCommit)} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} onOpenGuide={() => setGuideOpen(true)} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
+              progress={liveProgress} rowStatusBucket={rowStatusBucket}
+              header={<MarksBar m={marks} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
+              renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} modeReq={questModeReq} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />}
+            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
+            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
+            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => { setChecks(null); setScope((sc) => effectiveScope(sc, null)); }} />}
+            {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>
         </>
       )}
+      <StorybookGuide open={guideOpen} onClose={closeGuide} onShowMe={onGuideShowMe} />
       {card.node}
     </div>
   );

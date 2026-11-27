@@ -1,4 +1,5 @@
-import { etClock } from "./etTime.ts";
+import { etClock, etDate } from "./etTime.ts";
+import { liveLineBucket, type SbProgress } from "./storybookProgress.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 
@@ -32,6 +33,36 @@ export type SbSnapshot = {
   warnings: string[];
   audit?: { signal: string; severity: string; msg?: string }[];
   arc?: SbArc; // server/storybook/unlocks.mjs (V5)
+  glossary?: SbGlossary; // server/storybook/glossary.mjs (V10)
+  progress?: SbProgress; // server/storybook/progress.mjs (V12)
+};
+
+export type SbGlossaryCanonical = {
+  id: string;
+  term: string;
+  variants: string[];
+  note: string;
+  source?: SbSource | null;
+};
+export type SbGlossaryBanned = {
+  id: string;
+  term: string;
+  display?: string;
+  note: string;
+  source?: SbSource | null;
+};
+export type SbGlossaryRule = {
+  id: string;
+  title: string;
+  description: string;
+  source?: SbSource | null;
+};
+export type SbGlossary = {
+  source: { path: string; seeded: boolean };
+  playerWord: string;
+  canonical: SbGlossaryCanonical[];
+  banned: SbGlossaryBanned[];
+  nameStyleRules: SbGlossaryRule[];
 };
 
 export type SbArcGate = { type: string; id?: string | null; level?: number | null; unlock_order?: number; trader?: string; rep?: number };
@@ -68,12 +99,12 @@ export function indexEntities(entities: SbEntity[]): EntityIndex {
   return { get: (kind, id) => byKey.get(entityKey(kind, id)) ?? null, all: [...byKey.values()], byKind: (kind) => [...(kinds.get(kind) ?? [])] };
 }
 
-/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
+/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14/#16/#17/#19 Inconsistent; #8/#15 Missing. */
 export function findingCategory(check: string): SbCategory | null {
   switch (check) {
     case "#1": case "#2": case "#5": case "#13":
       return "broken";
-    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14":
+    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14": case "#16": case "#17": case "#19":
       return "inconsistent";
     case "#8": case "#15":
       return "missing";
@@ -84,12 +115,10 @@ export function findingCategory(check: string): SbCategory | null {
   }
 }
 
-/** A text row is Unreviewed when it came from text_review.csv (has a `status`) and that status is not OWNER-OK. */
-export function isUnreviewedLine(e: SbEntity): boolean {
+/** A text line is Unreviewed when its live bucket is not "ok" (same rule as V12 progress bars: OWNER-OK / Edit = ok; Redo / draft / todo / non-CSV line = unreviewed). */
+export function isUnreviewedLine(e: SbEntity, markKind: "ok" | "redo" | "edit" | "none" = "none"): boolean {
   if (e.kind !== "line") return false;
-  const st = e.data?.status;
-  if (typeof st !== "string") return false;
-  return st.trim().toUpperCase() !== "OWNER-OK";
+  return liveLineBucket(markKind, e.data?.status, e.production) !== "ok";
 }
 
 export type ListItem = {
@@ -104,8 +133,8 @@ export type ListItem = {
   dev?: boolean;
 };
 
-/** Checker findings plus one Unreviewed item per non-OWNER-OK csv text row. Unmapped checks are dropped. */
-export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">): ListItem[] {
+/** Checker findings plus one Unreviewed item per non-OK text line (using live V6 marks when `markKindOf` is supplied). Unmapped checks are dropped. */
+export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">, markKindOf?: (e: SbEntity) => "ok" | "redo" | "edit" | "none"): ListItem[] {
   const out: ListItem[] = [];
   snap.findings.forEach((f, i) => {
     const category = findingCategory(f.check);
@@ -113,14 +142,15 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
     out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source, ...(isDevTodoFinding(f) ? { dev: true } : {}) });
   });
   for (const e of snap.entities) {
-    if (!isUnreviewedLine(e)) continue;
-    const st = String(e.data.status || "(no status)");
+    const mk = markKindOf ? markKindOf(e) : "none";
+    if (!isUnreviewedLine(e, mk)) continue;
+    const st = String(e.data?.status || (mk === "redo" ? "NEEDS-REWRITE" : "(no status)"));
     out.push({
       key: `u${entityKey(e.kind, e.id)}`,
       category: "unreviewed",
       check: null,
       severity: "info",
-      msg: `${st}: ${truncate(String(e.data.text ?? e.display), 90)}`,
+      msg: `${st}: ${truncate(String(e.data?.text ?? e.display), 90)}`,
       entityRef: { kind: e.kind, id: e.id },
       source: e.source,
     });
@@ -227,7 +257,60 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
   return { code: [chain.steps.length > LONG_CHAIN ? "flowchart TD" : "flowchart LR", ...decl, ...edges].join("\n"), nodes, empty: chain.steps.length === 0 };
 }
 
+/** Player-facing title of a contract (V9 rendered template), falling back to its raw id only when nothing is rendered. */
+export const contractTitle = (c: SbEntity): string => {
+  const t = c.data?.rendered?.title;
+  return typeof t === "string" && t.trim() ? t.trim() : c.display;
+};
+/** Chip label of a text line on a sheet: its group / speaker, never the raw `csv` origin. */
+export const lineChipLabel = (l: SbEntity): string => {
+  const d = l.data ?? {};
+  const g = typeof d.group === "string" ? d.group.trim() : "";
+  const origin = String(d.origin ?? "");
+  return g || (origin && origin !== "csv" ? titleCase(origin.replace(/_/g, " ")) : "") || (typeof d.speaker === "string" && d.speaker ? d.speaker : "Text line");
+};
 export const cleanTodo = (s: string): string => s.replace(/^\s*STORY-TODO:\s*/i, "");
+
+/** Display-clean Voice card "Never says" list: strip raw `re:` regex syntax and dedupe stems covered by plain words. */
+export function formatNeverSays(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const plain: string[] = [];
+  const regexes: string[] = [];
+  for (const raw of list) {
+    const s = String(raw ?? "").trim();
+    if (!s) continue;
+    if (s.startsWith("re:")) regexes.push(s.slice(3));
+    else plain.push(s);
+  }
+  const seen = new Set(plain.map((p) => p.toLowerCase()));
+  const out = [...plain];
+  const pushWord = (w: string, stem = false) => {
+    const clean = w.trim();
+    if (!clean) return;
+    const lo = clean.toLowerCase();
+    if (seen.has(lo) || (lo.length >= 4 && [...seen].some((p) => p.startsWith(lo) || lo.startsWith(p)))) return;
+    seen.add(lo);
+    out.push(stem ? `${clean}…` : clean);
+  };
+  for (const src of regexes) {
+    if (/\\w\+n't/.test(src)) { pushWord("contractions"); continue; }
+    const hasTailStem = /\\w[*+]$/.test(src.trim());
+    let s = src
+      .replace(/\\b/g, "")
+      .replace(/\[- \]/g, " ")
+      .replace(/\\w[*+]/g, "")
+      .replace(/\\s[*+]/g, " ")
+      .trim();
+    const topAlt = /^\(\?:([^()]+)\)$/.exec(s);
+    if (topAlt) {
+      for (const part of topAlt[1].split("|")) pushWord(part, hasTailStem);
+      continue;
+    }
+    s = s.replace(/\(\?:([^()]+)\)/g, (_, g: string) => g.split("|").map((x) => x.trim()).join("/"));
+    pushWord(s, hasTailStem);
+  }
+  return out;
+}
 
 export type LocationView = {
   location: SbEntity;
@@ -320,6 +403,24 @@ export function characterViews(idx: EntityIndex): CharacterView[] {
       return { id: key, kind, speaker: entity?.display ?? card?.display ?? FIXED_SPEAKER_NAMES[key] ?? (kind === "system" ? titleCase(sid.replace(/_/g, " ")) : titleCase(sid)), card, entity, lines, inferred };
     })
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
+}
+
+export type CastGroups = { traders: CharacterView[]; squad: CharacterView[]; screens: CharacterView[] };
+
+/** W3 rider (friction 4): group Cast speakers into Traders / Squad / Screens and disambiguate party:squad vs system:squad. */
+export function groupCharacterViews(chars: CharacterView[]): CastGroups {
+  const traders: CharacterView[] = [];
+  const squad: CharacterView[] = [];
+  const screens: CharacterView[] = [];
+  for (const c of chars) {
+    if (c.kind === "trader") traders.push(c);
+    else if (c.kind === "squad") squad.push(c);
+    else if (c.id === "party:squad") squad.push({ ...c, speaker: "Squad (party)" });
+    else if (c.id === "system:squad") screens.push({ ...c, speaker: "Squad screen" });
+    else if (c.kind === "party") squad.push(c);
+    else screens.push(c);
+  }
+  return { traders, squad, screens };
 }
 
 // ── Cards ───────────────────────────────────────────────────────────────────────
@@ -432,7 +533,7 @@ export const SB_CATEGORY_HELP: Record<SbCategory, string> = {
   broken: "A reference points at something that does not exist, or a required link is missing.",
   inconsistent: "Two places disagree: order, ownership, values or wording do not line up.",
   missing: "Something that should exist is not there yet.",
-  unreviewed: "A text row from text_review.csv that the owner has not marked OWNER-OK.",
+  unreviewed: "A text line that has not been marked OWNER-OK yet.",
   toolong: "Player-facing text longer than its screen budget (check #18): it will not fit.",
 };
 
@@ -441,6 +542,7 @@ export const CHECK_NAME: Record<string, string> = {
   "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
   "#8": "missing piece", "#12": "lore contradiction", "#18": "too long",
   "#13": "unobtainable item", "#14": "orphan item", "#15": "item has no story",
+  "#16": "term consistency", "#17": "naming / id drift", "#19": "lore vs roster",
 };
 export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
 
@@ -453,32 +555,42 @@ export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, 
 // ── Overview + Findings split (V2) ──────────────────────────────────────────────
 
 /** Findings scopes: Problems = real checker findings; Text to review = the unreviewed text inventory; Story issues = coherence checks (J4-2). */
-export type FindingScope = "problems" | "story" | "text" | "toolong" | "dev" | "all";
-export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "toolong", "dev", "all"];
-export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
+export type FindingScope = "problems" | "story" | "coverage" | "other" | "text" | "toolong" | "dev" | "all";
+export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "coverage", "other", "text", "toolong", "dev", "all"];
+export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", coverage: "Coverage", other: "Other checks", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
 export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
-  problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
-  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
-  text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
+  problems: "Broken references plus story issues. Story still to write is under Coverage; doc drift and orphan items under Other checks.",
+  coverage: "Story not written yet: items with no story line (#15) and STORY-TODO placeholders on entities (#8). Writing work, not breakage.",
+  other: "Checks worth a look that are not story breakage: doc vs data drift (#3), repeated templates (#6), low-confidence name-word overlaps (#7 info) and lexical title checks (#11), pronoun and tone notes (#9, #10), orphan items (#14).",
+  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or same-kind names, and lore contradictions.",
+  text: "The text inventory: lines not yet marked OWNER-OK. Not problems, just lines to read.",
   toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
   dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
   all: "Everything above, together.",
 };
-/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
-export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
+/** The Problems tab has no "All" pill: scope "all" is only valid while a signal card's checks filter is active, else it falls back to Problems (no unreviewed-text leak). */
+export const effectiveScope = (scope: FindingScope, checks: ReadonlySet<string> | null | undefined): FindingScope => (scope === "all" && !checks ? "problems" : scope);
+/** Story-coherence checks (J4-2, W4): #4 speaker/voice rules, #7 warn/error id/display collisions (#7 info word-subset/cross-kind noise lives in Other checks), #12 lore contradictions, #19 lore vs roster. #11 (lexical title-vs-task, low confidence) lives in Other checks. */
+export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#12", "#19"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
-/** A real problem: not a text-inventory row, not a Too-long fit note, not a dev code comment. */
-export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev;
+/** V6: story not written yet (#8 entity STORY-TODO, #15 item with no story): Coverage, not a problem. */
+export const isCoverage = (it: ListItem): boolean => it.category === "missing" && !it.dev;
+/** V6 (lead decision): Problems = broken + story issues ONLY. Text rows, Too long, Dev TODOs and Coverage never count. */
+export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && (it.category === "broken" || isStoryIssue(it));
+/** V6: checker findings that are neither a Problem nor Coverage / Too long / Dev (doc drift #3, orphan #14, #6/#9/#10, #11, #7 info). */
+export const isOtherCheck = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && !isProblem(it);
 export const isTooLong = (it: ListItem): boolean => it.category === "toolong";
 export const isDevTodo = (it: ListItem): boolean => it.dev === true;
 /** #8 findings with no entity are the `# STORY-TODO` comments in .gd source (V3). */
 export const isDevTodoFinding = (f: Pick<SbFinding, "check" | "entityRef">): boolean => f.check === "#8" && !f.entityRef;
-export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check);
+export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check) && !(it.check === "#7" && it.severity === "info");
 
 export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
   switch (scope) {
     case "problems": return items.filter(isProblem);
     case "story": return items.filter(isStoryIssue);
+    case "coverage": return items.filter(isCoverage);
+    case "other": return items.filter(isOtherCheck);
     case "text": return items.filter(isTextToReview);
     case "toolong": return items.filter(isTooLong);
     case "dev": return items.filter(isDevTodo);
@@ -487,8 +599,8 @@ export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
 }
 
 export function scopeCounts(items: ListItem[]): Record<FindingScope, number> {
-  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, toolong: 0, dev: 0, all: items.length };
-  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else c.problems++; if (isStoryIssue(it)) c.story++; }
+  const c: Record<FindingScope, number> = { problems: 0, story: 0, coverage: 0, other: 0, text: 0, toolong: 0, dev: 0, all: items.length };
+  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else if (isCoverage(it)) c.coverage++; else if (isProblem(it)) c.problems++; else c.other++; if (isStoryIssue(it)) c.story++; }
   return c;
 }
 
@@ -575,7 +687,6 @@ export function entityNavTarget(e: SbEntity): NavTarget | null {
     return { tab: "world" };
   }
   if (e.kind === "room") return { tab: "world" };
-  if (e.kind === "skill") return { tab: "quests" };
   return null;
 }
 
@@ -583,8 +694,8 @@ export function entityNavTarget(e: SbEntity): NavTarget | null {
 export function auditSignalTarget(signal: string): NavTarget {
   switch (signal) {
     case "integrity": return { tab: "problems", scope: "problems", category: "broken" };
-    case "cohesion": return { tab: "problems", scope: "problems", category: "inconsistent" };
-    case "coverage": return { tab: "problems", scope: "problems", category: "missing" };
+    case "cohesion": return { tab: "problems", scope: "all", category: "inconsistent" }; // V6: #3/#6/#9/#10 live in Other checks, not Problems
+    case "coverage": return { tab: "problems", scope: "coverage", category: null };
     case "signoff": return { tab: "review", scope: "text", category: null };
     default: return { tab: "problems", scope: "problems", category: null };
   }
@@ -644,7 +755,7 @@ export function itemSheetData(item: SbEntity, idx: EntityIndex, findings: SbFind
   const hasDescription = typeof item.data?.description === "string" && item.data.description.trim().length > 0;
   const isUnobtainable = ownFindings.some((f) => f.check === "#13") || (required && sources.length === 0);
   const isOrphan = ownFindings.some((f) => f.check === "#14") || (sources.length === 0 && uses.length === 0);
-  const isNoStory = ownFindings.some((f) => f.check === "#15") || (!hasDescription && !ownFindings.length && lines.length === 0 && !uses.some((u) => u.kind === "quest_step"));
+  const isNoStory = ownFindings.some((f) => f.check === "#15"); // the engine's #15 only: a client fallback rule made the tab count (240) disagree with Problems/Coverage (232)
   return { item, hasDescription, sources, uses, lines, findings: ownFindings, isOrphan, isNoStory, isUnobtainable };
 }
 
@@ -675,4 +786,174 @@ export function enemySheetData(enemy: SbEntity, idx: EntityIndex, findings: SbFi
   const contracts = idx.byKind("contract").filter((c) => c.links.some((l) => l.kind === "enemy" && l.id === enemy.id));
   const lines = idx.byKind("line").filter((l) => l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id));
   return { enemy, look, missingDescription, spawns, drops, quests, contracts, lines, findings: entityFindings(enemy, findings) };
+}
+
+// ── V8: what changed since the owner's last session (server/storybook/changes.mjs) + Home signal/tile routing ──────────
+
+export type SbChangeRow = { id?: string; key: string; text?: string; old?: string; new?: string; file?: string; reason?: string; why?: string };
+export type SbChanges = {
+  first: boolean;
+  from: { sha: string; at: string; total: number } | null;
+  to: { sha: string; ref?: string | null; generatedAt?: string | null; total: number };
+  sameSha?: boolean;
+  counts: { new: number; changed: number; gone: number; goneBy?: Record<string, number> };
+  newIds?: string[]; changedIds?: string[];
+  new: SbChangeRow[]; changed: SbChangeRow[]; gone: SbChangeRow[];
+  capped?: number | null;
+};
+
+/** One-line "since <date, sha>" label for the Home card (ET). */
+export function changesSince(ch: SbChanges): string {
+  if (!ch.from) return "";
+  return `${etClock(ch.from.at) ? `${etDate(ch.from.at)} ${etClock(ch.from.at)}` : ""}${ch.from.sha ? `, ${shortSha(ch.from.sha)}` : ""}`.replace(/^, /, "");
+}
+export const changesTotal = (ch: SbChanges): number => ch.counts.new + ch.counts.changed + ch.counts.gone;
+
+/** V7 minor 3: Home changes-card copy when no seen baseline exists yet (distinguish truly first visit vs after a review session). */
+export function firstSessionCopy(hasReviewSession: boolean, total: number, sha: string): { title: string; sub: string } {
+  const s = shortSha(sha);
+  if (hasReviewSession) {
+    return { title: "No seen baseline yet", sub: `${total} text rows at ${s}. Mark seen to track what changes in EFI after this commit.` };
+  }
+  return { title: "First session: everything is new", sub: `${total} text rows at ${s}. Nothing is marked seen yet.` };
+}
+
+/** Whether "Mark seen" is useful for the current V8 changes state (no baseline yet, non-zero diff, or moved sha). */
+export function canMarkChangesSeen(ch: SbChanges | null | undefined): boolean {
+  if (!ch) return false;
+  return ch.first || changesTotal(ch) > 0 || ch.from?.sha !== ch.to.sha;
+}
+
+/** V8: Review-tab changed/added row lookup. `changed` holds old text for the capped sample; `changedIds` holds every changed row id. */
+export type TextChanges = { changed: Record<string, string>; changedIds: ReadonlySet<string>; added: ReadonlySet<string> } | null;
+
+/** Build the Review-tab TextChanges lookup from /changes. Uses all changedIds/newIds so Changed filter + count match Home past the 500-row sample cap. */
+export function buildTextChanges(changes: SbChanges | null | undefined): TextChanges {
+  if (!changes || changes.first) return null;
+  const changed: Record<string, string> = {};
+  const changedIds = new Set<string>();
+  for (const id of changes.changedIds ?? []) if (id) changedIds.add(entityKey("line", id));
+  for (const c of changes.changed) {
+    if (!c.id) continue;
+    const k = entityKey("line", c.id);
+    changed[k] = c.old ?? "";
+    changedIds.add(k);
+  }
+  const added = new Set((changes.newIds ?? []).map((id) => entityKey("line", id)));
+  return changedIds.size || added.size ? { changed, changedIds, added } : null;
+}
+
+export function isRowChanged(rowId: string, changes: TextChanges): boolean {
+  return changes != null && (changes.changedIds.has(rowId) || Object.hasOwn(changes.changed, rowId) || changes.added.has(rowId));
+}
+/** "181 hidden dev strings, 108 merged duplicates, 0 removed in EFI": the answer to "why did my line count drop?". */
+export function goneBreakdown(ch: SbChanges): string {
+  const g = ch.counts.goneBy;
+  if (!g) return "";
+  const parts: string[] = [];
+  if (g["dev-string"]) parts.push(`${g["dev-string"]} dev/validation string${g["dev-string"] === 1 ? "" : "s"} Storybook now hides`);
+  if (g.twin) parts.push(`${g.twin} duplicate${g.twin === 1 ? "" : "s"} merged into their text_review row`);
+  if (g.efi) parts.push(`${g.efi} removed or rewritten in EFI`);
+  return parts.join(", ");
+}
+
+/** The audit signal each check feeds (mirror of server/registry/audit.mjs CHECK_SIGNALS; #18 is shown under Too long). */
+export const SIGNAL_CHECKS: Record<string, string[]> = {
+  integrity: ["#1", "#2", "#5", "#7", "#13", "#14"],
+  cohesion: ["#3", "#4", "#6", "#9", "#10", "#11", "#12"],
+  coverage: ["#15"],
+};
+export type SignalCard = { n: number; rest: number; note: string; target: NavTarget & { checks?: string[] } };
+/** Findings scope a signal card opens (V6): integrity/cohesion checks span Problems + Other checks, coverage (#15) lives in Coverage. */
+const SIGNAL_SCOPE: Record<string, FindingScope> = { integrity: "all", cohesion: "all", coverage: "coverage" };
+const SIGNAL_REST: Record<string, string> = {
+  coverage: "more are text/lore slots or art not made yet (asset lists, not Problems rows)",
+  integrity: "more are asset-level references not shown as rows",
+  signoff: "more are placeholder or AI-draft entities (art, items), not text rows",
+};
+const COHESION_EXTRA: readonly [string, string][] = [
+  ["#18", "Too long"],
+  ["#16", "term drift"],
+  ["#17", "naming style"],
+  ["#19", "lore vs roster"],
+];
+function cohesionRestNote(items: ListItem[], rest: number): string {
+  if (!rest) return "";
+  const parts: string[] = [];
+  let accounted = 0;
+  for (const [chk, label] of COHESION_EXTRA) {
+    const k = items.filter((it) => it.check === chk).length;
+    if (k > 0) {
+      parts.push(`${k} ${label}`);
+      accounted += k;
+    }
+  }
+  const rem = Math.max(0, rest - accounted);
+  if (rem > 0) parts.push(`${rem} other`);
+  return parts.length ? `+${rest} more: ${parts.join(", ")}` : `+${rest} more not shown here`;
+}
+/**
+ * Home signal card: the number is the count of rows the click OPENS, so the card and the list agree. Anything the audit counts
+ * that is not a row in that list is shown as "+N …" with the reason, not hidden (W1/W2 friction 7: 232 vs 322, 13 vs 2, 30 vs 39, 4216 vs 3327).
+ */
+export function signalCard(signal: string, items: ListItem[], audit: Record<string, number> | null): SignalCard {
+  const total = audit?.[signal] ?? 0;
+  if (signal === "signoff") {
+    const n = items.filter(isTextToReview).length;
+    const rest = Math.max(0, total - n);
+    return { n, rest, note: rest ? `+${rest} ${SIGNAL_REST.signoff}` : "", target: { tab: "review", scope: "text", category: null } };
+  }
+  const checks = SIGNAL_CHECKS[signal] ?? [];
+  const set = new Set(checks);
+  // V6 scopes: Problems = broken + story only, so a signal's checks span scopes (#14 orphans and #3/#6/#9/#10 sit in Other checks,
+  // #15 in Coverage). Open the scope that holds them all, filtered to the signal's checks; count exactly those rows.
+  const scope = SIGNAL_SCOPE[signal] ?? "problems";
+  const n = scopeItems(items, scope).filter((it) => it.check != null && set.has(it.check)).length;
+  const rest = Math.max(0, total - n);
+  const note = signal === "cohesion" ? cohesionRestNote(items, rest) : (rest ? `+${rest} ${SIGNAL_REST[signal] ?? "not shown as rows"}` : "");
+  return { n, rest, note, target: { tab: "problems", scope, category: null, checks } };
+}
+
+// ── W3 riders: Play order titles & unordered grouping (friction 7) ──────────────
+
+export function playItemLabel(p: SbPlayItem, idx: EntityIndex): string | undefined {
+  if (p.kind === "reveal") return p.label;
+  if (p.kind === "contract") {
+    const rendered = idx.get("contract", p.id)?.data?.rendered?.title;
+    return typeof rendered === "string" && rendered.trim() ? rendered : cleanTodo(p.label || p.id);
+  }
+  return undefined;
+}
+
+export type UnorderedPlayGroup = { trader: string; display: string; items: SbPlayItem[] };
+export type PlayOrderPartition = { ordered: SbPlayItem[]; unordered: UnorderedPlayGroup[]; unorderedCount: number };
+
+/** Split playOrder into genuinely ordered items vs entries whose unlock rule is not in EFI data (grouped per trader). */
+export function partitionPlayOrder(arc: SbArc, idx: EntityIndex): PlayOrderPartition {
+  const gapKeys = new Set(arc.gaps.map((g) => `${g.kind}:${g.id}`));
+  const lockedTraders = new Set(arc.arcs.filter((a) => !a.level_0).map((a) => a.trader));
+  const ordered: SbPlayItem[] = [];
+  const byTrader = new Map<string, SbPlayItem[]>();
+  let unorderedCount = 0;
+  for (const p of arc.playOrder) {
+    const isUnordered =
+      gapKeys.has(`${p.kind}:${p.id}`) ||
+      p.gates.some((g) => g.type === "trader_unlock") ||
+      (p.stage === 0 && p.trader != null && lockedTraders.has(p.trader));
+    if (isUnordered) {
+      const tid = p.trader ?? "";
+      (byTrader.get(tid) ?? byTrader.set(tid, []).get(tid)!).push(p);
+      unorderedCount++;
+    } else {
+      ordered.push({ ...p, pos: ordered.length + 1 });
+    }
+  }
+  const unordered: UnorderedPlayGroup[] = [...byTrader.entries()]
+    .map(([trader, items]) => ({
+      trader,
+      display: trader ? cleanTodo(idx.get("trader", trader)?.display ?? trader) : "Other",
+      items,
+    }))
+    .sort((a, b) => a.display.localeCompare(b.display));
+  return { ordered, unordered, unorderedCount };
 }
