@@ -10,6 +10,7 @@ import {
   SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, effectiveScope, problemCount, scopeCounts, scopeItems, type FindingScope,
   entityKey, indexEntities, auditCounts, buildTextChanges, canMarkChangesSeen, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  EMPTY_SB_SEL, initialSbNav, isSameSbNav, nextSbNav, readSbNav, sbCloseSteps, sheetBackLabel, type SbNavState, type SbQuestMode, type SbTab,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
@@ -43,6 +44,7 @@ const withSb = (projectId: string | null): string => {
 let pushed = false;
 let popped = false; // U2: the open Storybook is a ?sb= entry Back/Forward landed on (not openStorybook's push, not a cold link)
 let replaceUntil = 0;
+let stripOnPop = false; // cold close: the popstate that lands on the first Storybook entry strips ?sb= in place instead of reopening
 let backUntil = 0; // U1 r2: a close's history.back() is in flight until its popstate (bounded, in case it never arrives)
 /** After a forward-nav close ("replace"), the next URL sync should replaceState (the stripped entry is reused, so history has no duplicate). */
 export function takeStorybookReplace(): boolean {
@@ -55,6 +57,7 @@ export function openStorybook(projectId: string, name?: string): void {
   history.pushState({ sb: projectId }, "", withSb(projectId));
   pushed = true;
   popped = false;
+  stripOnPop = false;
   emit();
 }
 /**
@@ -67,12 +70,21 @@ export function closeStorybook(mode?: unknown): void {
   if (!target) return;
   const replace = mode === "replace"; // anything else (a click event handed in as a handler, undefined) means user Back
   const mine = Boolean(urlProject()) && ((pushed && history.state?.sb === target.projectId) || popped);
+  const depth = readSbNav(history.state)?.depth ?? 0;
   target = null;
   pushed = false;
   popped = false;
   if (replace) replaceUntil = Date.now() + 1000;
-  if (mine && !replace) { backUntil = Date.now() + 1000; history.back(); } // popstate finds no ?sb= and target already null: nothing more to do
-  else if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
+  const steps = sbCloseSteps(mine, depth, replace);
+  const strip = () => { if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null)); };
+  if (steps.go !== 0) {
+    backUntil = Date.now() + 1000;
+    // cold link / reload: rewind to the first Storybook entry, then strip it in place (popstate handler) so Back can't reopen a leftover ?sb= entry
+    stripOnPop = steps.strip;
+    // Single-step rewind uses history.back() directly (Desk nav-history R33 M1 / idea-971 contract); deeper rewinds jump with history.go().
+    if (steps.go === -1) history.back();
+    else history.go(steps.go); // popstate finds no ?sb= and target already null: nothing more to do
+  } else if (steps.strip) strip();
   emit();
 }
 if (typeof window !== "undefined") {
@@ -80,12 +92,16 @@ if (typeof window !== "undefined") {
   target = id0 ? { projectId: id0, name: id0 } : null; // reload / shared link
   window.addEventListener("popstate", () => {
     backUntil = 0;
+    if (stripOnPop) {
+      stripOnPop = false;
+      if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
+      return;
+    }
     const id = urlProject();
     if (!id) { if (target) { target = null; pushed = false; popped = false; emit(); } return; }
     // U2 (idea-971): a ?sb= entry reached by Back/Forward is one of this session's entries, so Esc / Close on it goes Back, as right after
     // opening. Stripping ?sb= in place (the cold-link close) could leave two identical entries side by side: a dead Back press.
-    popped = true;
-    if (target?.projectId !== id) { target = { projectId: id, name: id }; emit(); }
+    if (target?.projectId !== id) { popped = true; target = { projectId: id, name: id }; emit(); }
   });
 }
 /** Live value (module state) for effects that run in the commit that opened / closed the takeover (App's URL sync). */
@@ -302,7 +318,7 @@ function Chip({ e, card, onGo, label }: { e: SbEntity; card: CardApi; onGo?: (e:
 // ── tabs ─────────────────────────────────────────────────────────────────────────
 // Tab registry: fixed slots in nav order. A slot with `built: false` is hidden, so V3/V6 (Review), V4 (Items) and V10 (Glossary) each
 // flip one entry and add one render case instead of re-editing the nav.
-type Tab = "home" | "review" | "quests" | "world" | "cast" | "items" | "problems" | "glossary";
+type Tab = SbTab;
 const TABS: { id: Tab; label: string; built: boolean }[] = [
   { id: "home", label: "Home", built: true },
   { id: "review", label: "Review", built: true }, // hosts "Text to review" until V3/V6 fill it
@@ -313,7 +329,7 @@ const TABS: { id: Tab; label: string; built: boolean }[] = [
   { id: "problems", label: "Problems", built: true },
   { id: "glossary", label: "Glossary", built: true }, // V10
 ];
-const NO_SEL: Record<Tab, string | null> = { home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null };
+const NO_SEL: Record<Tab, string | null> = EMPTY_SB_SEL;
 
 function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void }) {
   const chains = useMemo(() => questChains(idx), [idx]);
@@ -353,11 +369,9 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
   );
 }
 
-type QuestMode = "web" | "arcs" | "order";
+type QuestMode = SbQuestMode;
 const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
-function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks, modeReq, onMarkSeen, seenBusy, canMarkSeen }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi; modeReq?: { mode: QuestMode; n: number } | null; onMarkSeen?: () => void; seenBusy?: boolean; canMarkSeen?: boolean }) {
-  const [mode, setMode] = useState<QuestMode>("arcs");
-  useEffect(() => { if (modeReq) setMode(modeReq.mode); }, [modeReq]);
+function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks, mode, setMode, onMarkSeen, seenBusy, canMarkSeen }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi; mode: QuestMode; setMode: (m: QuestMode) => void; onMarkSeen?: () => void; seenBusy?: boolean; canMarkSeen?: boolean }) {
   const chip = renderChip;
   return (
     <div>
@@ -558,6 +572,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [sel, setSelAll] = useState<Record<Tab, string | null>>(NO_SEL);
+  const [questMode, setQuestMode] = useState<QuestMode>("arcs");
+  const [navView, setNavView] = useState<SbNavState>(initialSbNav());
   // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
   const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
@@ -569,8 +585,92 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [seenError, setSeenError] = useState<string | null>(null);
   const [preset, setPreset] = useState<TextPreset>(null);
   const [guideOpen, setGuideOpen] = useState(false);
-  const [questModeReq, setQuestModeReq] = useState<{ mode: QuestMode; n: number } | null>(null);
   const guideCheckedFor = useRef<string | null>(null);
+
+  // V7 minor 2 (idea-1172): real history entries for in-Storybook tab/sheet navigation + scroll restoration.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<SbNavState>(initialSbNav());
+  const tabScrollRef = useRef<Partial<Record<Tab, number>>>({});
+  const pendingScrollRef = useRef<number | null>(null);
+  const [scrollTick, setScrollTick] = useState(0);
+
+  const applyNav = useCallback((next: SbNavState, restoreScroll: number | null) => {
+    navRef.current = next;
+    setTab(next.tab);
+    setSelAll(next.sel);
+    setQuestMode(next.questMode);
+    setScope(next.scope);
+    setChecks(next.checks ? new Set(next.checks) : null);
+    setNavView(next);
+    if (restoreScroll !== null) {
+      pendingScrollRef.current = restoreScroll;
+      setScrollTick((n) => n + 1);
+    }
+  }, []);
+
+  const pushNav = useCallback((
+    patch: { tab?: Tab; sel?: Partial<Record<Tab, string | null>>; questMode?: QuestMode; scope?: FindingScope; checks?: string[] | null },
+    opts?: { restoreTabScroll?: boolean; skipScroll?: boolean },
+  ) => {
+    const cur = navRef.current;
+    const curScroll = rootRef.current?.scrollTop ?? 0;
+    tabScrollRef.current[cur.tab] = curScroll;
+    const destTab = patch.tab ?? cur.tab;
+    const destScroll = opts?.restoreTabScroll ? (tabScrollRef.current[destTab] ?? 0) : 0;
+    const next = nextSbNav(cur, { ...patch, scrollTop: destScroll });
+    if (isSameSbNav(cur, next)) return;
+    if (typeof history !== "undefined") {
+      const curState = history.state && typeof history.state === "object" ? history.state : {};
+      history.replaceState({ ...curState, sb: projectId, sbNav: { ...cur, scrollTop: curScroll } }, "", withSb(projectId));
+      history.pushState({ sb: projectId, sbNav: next }, "", withSb(projectId));
+    }
+    applyNav(next, opts?.skipScroll ? null : destScroll);
+  }, [projectId, applyNav]);
+
+  useEffect(() => {
+    if (typeof history === "undefined") return;
+    const st = history.state as { sb?: unknown } | null;
+    const saved = st?.sb === projectId ? readSbNav(history.state) : null; // another project's entry must not seed this one
+    if (saved) applyNav(saved, saved.scrollTop);
+  }, [projectId, applyNav]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPop = () => {
+      if (urlProject() !== projectId) return;
+      const st = history.state as { sb?: unknown } | null;
+      const restored = (st?.sb === projectId ? readSbNav(history.state) : null) ?? initialSbNav();
+      applyNav(restored, restored.scrollTop);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [projectId, applyNav]);
+
+  // Restore the pending scroll only once the snapshot content is rendered, and retry for a few frames while the page is still too short
+  // (a sheet reaching full height, a reload before the snapshot loads), then give up so a stale target never hijacks later scrolling.
+  const navReady = state.kind === "ok";
+  useLayoutEffect(() => {
+    if (pendingScrollRef.current === null || !navReady) return;
+    const target = pendingScrollRef.current;
+    let frames = 0;
+    let raf = 0;
+    const apply = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) <= 1 || target === 0 || ++frames > 30) { if (pendingScrollRef.current === target) pendingScrollRef.current = null; return; }
+      raf = requestAnimationFrame(apply);
+    };
+    apply();
+    return () => cancelAnimationFrame(raf);
+  }, [scrollTick, tab, questMode, navReady]);
+
+  const goBackFromSheet = useCallback(() => {
+    if (navRef.current.depth > 0 && typeof history !== "undefined") {
+      history.back();
+      return;
+    }
+  }, []);
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
   // change (or unmount) invalidates everything in flight.
@@ -622,7 +722,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const marks = useMarks(projectId, idx); // V6 owner marks
   const items = useMemo(() => (snap ? buildListItems(snap, (e) => marks.stateOf(e).kind) : []), [snap, marks.stateOf]);
   const problems = useMemo(() => problemCount(items), [items]);
-  const pick = useCallback((t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s })), []);
+  const pick = useCallback((t: Tab) => (s: string) => pushNav({ tab: t, sel: { [t]: s } }), [pushNav]);
+  const changeQuestMode = useCallback((m: QuestMode) => pushNav({ tab: "quests", questMode: m }), [pushNav]);
   const goToRef = useRef<(e: SbEntity) => void>(() => {});
   const card = useCard(idx, (e) => goToRef.current(e));
   const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
@@ -636,12 +737,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [marks, rowEntity]);
   const openProgressArea = useCallback((area: ProgressAreaId, status?: ProgressTextBucket | null) => {
     setPreset({ area, status: status ?? null, n: Date.now() });
-    setTab("review");
-  }, []);
+    pushNav({ tab: "review" });
+  }, [pushNav]);
   const openProgressEntity = useCallback((ek: string, label: string, status?: ProgressTextBucket | null) => {
     setPreset({ entityKey: ek, entityLabel: label, status: status ?? null, n: Date.now() });
-    setTab("review");
-  }, []);
+    pushNav({ tab: "review" });
+  }, [pushNav]);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -674,8 +775,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     card.quiet();
     card.hide();
     setTextFocus({ id: entityKey(e.kind, e.id), n: Date.now() });
-    setTab("review");
-  }, [card]);
+    pushNav({ tab: "review" }, { skipScroll: true });
+  }, [card, pushNav]);
 
   // Entity chip / popover / finding -> its sheet in the right tab (or Review row for lines).
   const goTo = useCallback((e: SbEntity) => {
@@ -685,17 +786,16 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     if (nav) {
       if (nav.tab === "review") {
         setTextFocus({ id: entityKey(e.kind, e.id), n: Date.now() });
-        setTab("review");
+        pushNav({ tab: "review" }, { skipScroll: true });
         return;
       }
-      if (nav.sel) pick(nav.tab)(nav.sel);
-      setTab(nav.tab);
+      pushNav({ tab: nav.tab, ...(nav.sel ? { sel: { [nav.tab]: nav.sel } } : {}) }, { skipScroll: Boolean(nav.jump) });
       if (nav.jump) setJump(nav.jump);
       return;
     }
     const el = [...document.querySelectorAll("[data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === `${e.kind}\u0000${e.id}`);
     if (el) card.show(e, el);
-  }, [card, pick]);
+  }, [card, pushNav]);
   goToRef.current = goTo;
 
   const clearTextPreset = useCallback(() => setPreset(null), []);
@@ -703,14 +803,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     const nav = signalCard(signal, items, null).target;
     if (nav.tab === "review") {
       setPreset({ only: "unreviewed", n: Date.now() });
-      setTab("review");
+      pushNav({ tab: "review" });
       return;
     }
-    setScope(nav.scope ?? "problems");
     setActiveProblems(new Set());
-    setChecks(nav.checks ? new Set(nav.checks) : null);
-    setTab("problems");
-  }, [items]);
+    pushNav({ tab: "problems", scope: nav.scope ?? "problems", checks: nav.checks ? [...nav.checks] : null });
+  }, [items, pushNav]);
 
   const renderChip: ChipRenderer = useCallback((e, label) => <Chip e={e} card={card} onGo={goTo} label={label} />, [card, goTo]);
 
@@ -727,12 +825,15 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const onGuideShowMe = useCallback((step: GuideStep) => {
     const t = step.target;
     if (t.tab === "review") setPreset({ only: t.presetOnly ?? null, n: Date.now() });
-    if (t.findingScope) { setScope(t.findingScope); setActiveProblems(new Set()); setChecks(null); }
-    if (t.questMode) setQuestModeReq({ mode: t.questMode, n: Date.now() });
-    setTab(t.tab);
+    if (t.findingScope) setActiveProblems(new Set());
+    pushNav({
+      tab: t.tab,
+      ...(t.findingScope ? { scope: t.findingScope, checks: null } : {}),
+      ...(t.questMode ? { questMode: t.questMode } : {}),
+    }, { skipScroll: Boolean(t.scrollTestId) });
     closeGuide();
     if (t.scrollTestId) setGuideFlash({ testId: t.scrollTestId, fallback: t.fallbackScrollTestId, highlight: t.highlight, n: Date.now() });
-  }, [closeGuide]);
+  }, [closeGuide, pushNav]);
 
   useEffect(() => {
     if (!guideFlash) return;
@@ -777,8 +878,14 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     setTimeout(() => el.classList.remove("sb-flash"), 1800);
   }, [jump, tab, sel.quests]);
 
+  const backLabel = sheetBackLabel({ tab, fromTab: navView.fromTab, fromSel: navView.fromSel, depth: navView.depth }, (t, id) => {
+    const kinds = t === "world" ? ["location"] : t === "cast" ? ["character", "enemy", "trader"] : ["item"];
+    for (const k of kinds) { const e = idx.get(k, id); if (e?.display) return e.display; }
+    return null;
+  });
+
   return (
-    <div className="sb-root" data-testid="storybook-view">
+    <div ref={rootRef} className="sb-root" data-testid="storybook-view">
       <header className="sb-head">
         <button type="button" className="sb-btn sb-back" data-testid="sb-back" aria-label="Back" onClick={() => onClose()}><span className="sb-back-arrow" aria-hidden="true">←</span><span className="sb-back-text" aria-hidden="true"> Back</span></button>
         <div className="sb-title">
@@ -809,22 +916,27 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           {snap.warnings.length > 0 && <details className="sb-warn"><summary>{snap.warnings.length} adapter warning{snap.warnings.length === 1 ? "" : "s"}</summary><ul>{snap.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
           <nav className="sb-tabs" role="tablist" aria-label="Storybook views">
             {TABS.filter((t) => t.built).map(({ id: t, label }) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => setTab(t)}>
+              <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => pushNav({ tab: t }, { restoreTabScroll: true })}>
                 {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Broken references and story issues only; text is under Review, writing gaps under Coverage, drift under Other checks">{problems}</span>}
               </button>
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} hasReviewSession={marks.state.exists || Boolean(marks.lastCommit)} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} onOpenGuide={() => setGuideOpen(true)} />}
+            {backLabel && (
+              <div className="sb-sheet-crumb" data-testid="sb-sheet-crumb">
+                <button type="button" className="sb-crumb-btn" data-testid="sb-sheet-back" onClick={goBackFromSheet}>{backLabel}</button>
+              </div>
+            )}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => pushNav({ tab: t as Tab }, { restoreTabScroll: true })} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); pushNav({ tab: "review" }); } else { setActiveProblems(new Set()); pushNav({ tab: "problems", scope: sc, checks: null }); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); pushNav({ tab: "review" }); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} hasReviewSession={marks.state.exists || Boolean(marks.lastCommit)} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); pushNav({ tab: "review" }); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} onOpenGuide={() => setGuideOpen(true)} />}
             {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
               progress={liveProgress} rowStatusBucket={rowStatusBucket}
               header={<MarksBar m={marks} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
               renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
-            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} modeReq={questModeReq} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} mode={questMode} setMode={changeQuestMode} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => { setChecks(null); setScope((sc) => effectiveScope(sc, null)); }} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={(s) => pushNav({ tab: "problems", scope: s, checks: null })} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => { const cur = navRef.current; pushNav({ tab: "problems", scope: effectiveScope(cur.scope, null), checks: null }); }} />}
             {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>
         </>

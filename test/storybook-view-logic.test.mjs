@@ -279,7 +279,7 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const canMarkChangesSeen = () => false; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }), state: { marks: [] } }); export const applyLiveMarks = (p) => p; export const statusBucket = () => "todo"; export const liveLineBucket = () => "todo"; export const StorybookGuide = () => null; export const setGuideDismissed = () => {}; export const shouldAutoOpenGuide = () => false;`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const canMarkChangesSeen = () => false; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }), state: { marks: [] } }); export const applyLiveMarks = (p) => p; export const statusBucket = () => "todo"; export const liveLineBucket = () => "todo"; export const StorybookGuide = () => null; export const setGuideDismissed = () => {}; export const shouldAutoOpenGuide = () => false; export const EMPTY_SB_SEL = { home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null }; export const initialSbNav = () => ({ tab: "home", sel: EMPTY_SB_SEL, questMode: "arcs", scope: "problems", checks: null, scrollTop: 0, depth: 0, fromTab: null }); export const isSameSbNav = () => false; export const nextSbNav = (c) => c; export const readSbNav = () => null; export const sheetBackLabel = () => null; export const sbCloseSteps = () => ({ go: 0, strip: true });`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
@@ -636,5 +636,130 @@ describe("V2 Home + findings split", () => {
       ["Popper", ["c2"]],
       ["The Broker", ["broker_1", "broker_2"]],
     ]);
+  });
+
+  test("V7 minor 2 (idea-1172): in-Storybook nav history state, sheet breadcrumb, and scroll round-trip", () => {
+    const s0 = L.initialSbNav();
+    assert.equal(s0.tab, "home");
+    assert.equal(s0.depth, 0);
+    assert.equal(L.sheetBackLabel(s0), null);
+
+    // Home -> Quests (Play order, trader selected)
+    const s1 = L.nextSbNav(s0, { tab: "quests", questMode: "order", sel: { quests: "fence" } });
+    assert.equal(s1.tab, "quests");
+    assert.equal(s1.questMode, "order");
+    assert.equal(s1.sel.quests, "fence");
+    assert.equal(s1.depth, 1);
+    assert.equal(s1.fromTab, "home");
+    assert.equal(L.sheetBackLabel(s1), null, "Quests is not a sheet tab, so no sheet breadcrumb");
+
+    // Quests -> World sheet (Harbor District)
+    const s2 = L.nextSbNav(s1, { tab: "world", sel: { world: "harbor_district" } });
+    assert.equal(s2.tab, "world");
+    assert.equal(s2.sel.world, "harbor_district");
+    assert.equal(s2.sel.quests, "fence", "previous tab selection preserved");
+    assert.equal(s2.depth, 2);
+    assert.equal(s2.fromTab, "quests");
+    assert.equal(L.sheetBackLabel(s2), "← Quests");
+
+    // Same-tab sheet switch (World: Harbor District -> Sealed Vault): the crumb names what Back returns to (the previous sheet)
+    const s3 = L.nextSbNav(s2, { tab: "world", sel: { world: "sealed_vault" } });
+    assert.equal(s3.depth, 3);
+    assert.equal(s3.fromTab, "world");
+    assert.equal(s3.fromSel, "harbor_district");
+    assert.equal(L.sheetBackLabel(s3), "← harbor_district");
+    assert.equal(L.sheetBackLabel(s3, (t, id) => (id === "harbor_district" ? "Harbor District" : null)), "← Harbor District");
+    assert.equal(L.sheetBackLabel({ ...s3, depth: 0 }), null, "no crumb when the previous entry is outside Storybook");
+
+    // World -> Items sheet sets ← World breadcrumb
+    const s4 = L.nextSbNav(s3, { tab: "items", sel: { items: "scrap_metal" } });
+    assert.equal(L.sheetBackLabel(s4), "← World");
+
+    // Same-state navigation is detected as no-op
+    assert.equal(L.isSameSbNav(s4, L.nextSbNav(s4, { tab: "items", sel: { items: "scrap_metal" } })), true);
+    assert.equal(L.isSameSbNav(s4, L.nextSbNav(s4, { tab: "items", sel: { items: "iron_bar" } })), false);
+
+    // history.state round-trip preserves scrollTop, depth, questMode, sel, fromTab
+    const saved = L.readSbNav({ sb: "efi", sbNav: { ...s2, scrollTop: 1420 } });
+    assert.deepEqual(saved, { ...s2, scrollTop: 1420 });
+    assert.equal(L.readSbNav(null), null);
+    assert.equal(L.readSbNav({ sb: "efi" }), null);
+
+    // Structural check: StorybookView pushes history entries, restores scrollTop on popstate, and renders the sheet breadcrumb
+    const v = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
+    assert.ok(v.includes("history.pushState({ sb: projectId, sbNav: next }"), "pushes real history entries for in-Storybook nav");
+    assert.ok(v.includes('data-testid="sb-sheet-crumb"') && v.includes('data-testid="sb-sheet-back"'), "renders sheet breadcrumb");
+    assert.ok(v.includes("sbCloseSteps(mine, depth, replace)") && v.includes("if (steps.go === -1) history.back();") && v.includes("history.go(steps.go)"), "closeStorybook uses history.back() for 1-step rewind and history.go() for nested depth");
+  });
+
+  test("V7 review fix: closeStorybook history math (pushed open, cold link, reload, replace mode)", () => {
+    // pushed open: one jump past every Storybook entry (depth nav entries + the open entry) to the app's entry
+    assert.deepEqual(L.sbCloseSteps(true, 0, false), { go: -1, strip: false });
+    assert.deepEqual(L.sbCloseSteps(true, 1, false), { go: -2, strip: false });
+    assert.deepEqual(L.sbCloseSteps(true, 3, false), { go: -4, strip: false });
+    // cold deep link: no app entry beneath; rewind depth steps to the first Storybook entry, then strip it
+    assert.deepEqual(L.sbCloseSteps(false, 0, false), { go: 0, strip: true });
+    assert.deepEqual(L.sbCloseSteps(false, 1, false), { go: -1, strip: true });
+    assert.deepEqual(L.sbCloseSteps(false, 3, false), { go: -3, strip: true });
+    // reload mid-session is the same shape as a cold link (module state lost, depth from history.state)
+    assert.deepEqual(L.sbCloseSteps(false, 2, false), { go: -2, strip: true });
+    // replace mode: synchronous strip only, never an async go() that would undo the navigation pushed next
+    assert.deepEqual(L.sbCloseSteps(true, 2, true), { go: 0, strip: true });
+    assert.deepEqual(L.sbCloseSteps(false, 2, true), { go: 0, strip: true });
+  });
+
+  test("V7 minor 4 (idea-1173): Home audit tile legends reconcile Problems / Other checks / Coverage / Text to review", () => {
+    const mk = (check, severity, category, entityRef = { kind: "item", id: "x" }) => ({
+      key: `${check}:${severity}:${Math.random()}`, category, check, severity, msg: "", entityRef, source: null, dev: false,
+    });
+    const list = [
+      // Integrity: 2 in Problems (#5 broken) + 3 in Other checks (#7 info x1, #14 orphan x2)
+      mk("#5", "warn", "broken"), mk("#5", "warn", "broken"),
+      mk("#7", "info", "inconsistent"), mk("#14", "info", "inconsistent"), mk("#14", "info", "inconsistent"),
+      // Cohesion: 1 in Problems (#4 story) + 2 in Other checks (#3 drift, #11 lexical)
+      mk("#4", "warn", "inconsistent"), mk("#3", "warn", "inconsistent"), mk("#11", "info", "inconsistent"),
+      // Coverage: 2 #15 + 1 #8 = 3 total Coverage
+      mk("#15", "info", "missing"), mk("#15", "info", "missing"), mk("#8", "info", "missing"),
+      // Text to review / Sign-off: 2 unreviewed lines
+      mk(null, "info", "unreviewed", { kind: "line", id: "l1" }),
+      mk(null, "info", "unreviewed", { kind: "line", id: "l2" }),
+    ];
+    const audit = { coverage: 5, integrity: 5, cohesion: 3, signoff: 6 };
+
+    const cov = L.signalCard("coverage", list, audit);
+    assert.equal(cov.n, 2);
+    assert.equal(cov.legend, "Counts 2 of 3 Coverage rows (#15 items without story).");
+    assert.match(cov.action, /Problems → Coverage/);
+
+    const integ = L.signalCard("integrity", list, audit);
+    assert.equal(integ.n, 5);
+    assert.equal(integ.legend, "Counts 2 in Problems + 3 in Other checks.");
+    const legendSum = (c) => [...c.legend.matchAll(/(\d+) (?:in )?[A-Z]/g)].reduce((a, m) => a + Number(m[1]), 0);
+    assert.equal(legendSum(integ), integ.n, "legend parts sum to the tile number");
+    // extra buckets (Too long) are named so the parts still sum to n
+    const withLong = [...list, { ...mk("#11", "info", "toolong"), key: "tl1" }, { ...mk("#3", "info", "toolong"), key: "tl2" }];
+    const cohLong = L.signalCard("cohesion", withLong, { ...audit, cohesion: 5 });
+    assert.equal(legendSum(cohLong), cohLong.n);
+    assert.match(cohLong.legend, /\+ 2 Too long/);
+    assert.match(integ.action, /Problems \(Integrity filter\)/);
+
+    const coh = L.signalCard("cohesion", list, audit);
+    assert.equal(coh.n, 3);
+    assert.equal(coh.legend, "Counts 1 in Problems + 2 in Other checks.");
+    assert.match(coh.action, /Problems \(Cohesion filter\)/);
+
+    const sign = L.signalCard("signoff", list, audit);
+    assert.equal(sign.n, 2);
+    assert.equal(sign.rest, 4);
+    assert.equal(sign.legend, "Same 2 lines as Text to review above (+4 non-text assets).");
+    assert.match(sign.action, /Review → Unreviewed/);
+
+    const signNoRest = L.signalCard("signoff", list, { ...audit, signoff: 2 });
+    assert.equal(signNoRest.legend, "Same 2 lines as Text to review above.");
+
+    // Structural check: StorybookHome renders both the legend and action cue on every signal tile
+    const home = readFileSync(new URL("../src/StorybookHome.tsx", import.meta.url), "utf8");
+    assert.ok(home.includes('data-testid={`sb-signal-legend-${s}`}'), "Home renders signal legend");
+    assert.ok(home.includes('data-testid={`sb-signal-act-${s}`}'), "Home renders signal action cue");
   });
 });

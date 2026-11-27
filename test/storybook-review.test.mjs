@@ -212,13 +212,13 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
 
   test("V5 Quests 'Review row →' and V4 sheets '→ Review' open the V3 Review row via openReviewRow (setTextFocus + tab review)", () => {
     const viewSrc = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
-    assert.match(viewSrc, /const openReviewRow = useCallback\(\(e: SbEntity\) => \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?setTab\("review"\);/);
+    assert.match(viewSrc, /const openReviewRow = useCallback\(\(e: SbEntity\) => \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?(?:setTab\("review"\)|pushNav\(\{ tab: "review")/);
     assert.match(viewSrc, /<QuestsTab[^>]*onGo=\{goTo\}[^>]*openLine=\{openReviewRow\}/);
     assert.match(viewSrc, /<Locations[^>]*onReview=\{openReviewRow\}/);
     assert.match(viewSrc, /<Characters[^>]*onReview=\{openReviewRow\}/);
     assert.match(viewSrc, /<StorybookItems[^>]*onReview=\{openReviewRow\}/);
     // goTo for a line entity also focuses the V3 Review row
-    assert.match(viewSrc, /if \(nav\.tab === "review"\) \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?setTab\("review"\);/);
+    assert.match(viewSrc, /if \(nav\.tab === "review"\) \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?(?:setTab\("review"\)|pushNav\(\{ tab: "review")/);
   });
 
   test("V1.1 polish: system:<screen> speakers display title-cased in entityCard, characterViews, and Review group headers", () => {

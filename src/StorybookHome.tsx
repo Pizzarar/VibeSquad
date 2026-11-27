@@ -118,7 +118,9 @@ export function StorybookHome({ snap, items, onTab, onFindings, onSignal, change
                   <span className="sb-signal-name">{AUDIT_LABEL[s]}</span>
                   <span className="sb-signal-n">{c.n}</span>
                   <span className="sb-signal-help">{AUDIT_HELP[s]}</span>
+                  <span className="sb-signal-legend" data-testid={`sb-signal-legend-${s}`}>{c.legend}</span>
                   {c.note && <span className="sb-signal-rest" data-testid={`sb-signal-rest-${s}`}>{c.note}</span>}
+                  <span className="sb-signal-act" data-testid={`sb-signal-act-${s}`}>{c.action}</span>
                 </button>
               );
             })}

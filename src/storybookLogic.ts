@@ -863,7 +863,7 @@ export const SIGNAL_CHECKS: Record<string, string[]> = {
   cohesion: ["#3", "#4", "#6", "#9", "#10", "#11", "#12"],
   coverage: ["#15"],
 };
-export type SignalCard = { n: number; rest: number; note: string; target: NavTarget & { checks?: string[] } };
+export type SignalCard = { n: number; rest: number; note: string; legend: string; action: string; target: NavTarget & { checks?: string[] } };
 /** Findings scope a signal card opens (V6): integrity/cohesion checks span Problems + Other checks, coverage (#15) lives in Coverage. */
 const SIGNAL_SCOPE: Record<string, FindingScope> = { integrity: "all", cohesion: "all", coverage: "coverage" };
 const SIGNAL_REST: Record<string, string> = {
@@ -895,23 +895,145 @@ function cohesionRestNote(items: ListItem[], rest: number): string {
 /**
  * Home signal card: the number is the count of rows the click OPENS, so the card and the list agree. Anything the audit counts
  * that is not a row in that list is shown as "+N …" with the reason, not hidden (W1/W2 friction 7: 232 vs 322, 13 vs 2, 30 vs 39, 4216 vs 3327).
+ * V7 minor 4 (idea-1173): `legend` reconciles each tile with Problems / Other checks / Coverage / Text to review; `action` names the filter it opens.
  */
 export function signalCard(signal: string, items: ListItem[], audit: Record<string, number> | null): SignalCard {
   const total = audit?.[signal] ?? 0;
   if (signal === "signoff") {
     const n = items.filter(isTextToReview).length;
     const rest = Math.max(0, total - n);
-    return { n, rest, note: rest ? `+${rest} ${SIGNAL_REST.signoff}` : "", target: { tab: "review", scope: "text", category: null } };
+    const legend = rest > 0
+      ? `Same ${n} lines as Text to review above (+${rest} non-text assets).`
+      : `Same ${n} lines as Text to review above.`;
+    return {
+      n, rest,
+      note: rest ? `+${rest} ${SIGNAL_REST.signoff}` : "",
+      legend,
+      action: "Act in Review → Unreviewed →",
+      target: { tab: "review", scope: "text", category: null },
+    };
   }
   const checks = SIGNAL_CHECKS[signal] ?? [];
   const set = new Set(checks);
   // V6 scopes: Problems = broken + story only, so a signal's checks span scopes (#14 orphans and #3/#6/#9/#10 sit in Other checks,
   // #15 in Coverage). Open the scope that holds them all, filtered to the signal's checks; count exactly those rows.
   const scope = SIGNAL_SCOPE[signal] ?? "problems";
-  const n = scopeItems(items, scope).filter((it) => it.check != null && set.has(it.check)).length;
+  const matched = scopeItems(items, scope).filter((it) => it.check != null && set.has(it.check));
+  const n = matched.length;
   const rest = Math.max(0, total - n);
   const note = signal === "cohesion" ? cohesionRestNote(items, rest) : (rest ? `+${rest} ${SIGNAL_REST[signal] ?? "not shown as rows"}` : "");
-  return { n, rest, note, target: { tab: "problems", scope, category: null, checks } };
+  let legend = "";
+  let action = "Act in Problems filter →";
+  if (signal === "coverage") {
+    const covTotal = items.filter(isCoverage).length;
+    legend = covTotal > n
+      ? `Counts ${n} of ${covTotal} Coverage rows (#15 items without story).`
+      : `Counts ${n} Coverage ${n === 1 ? "row" : "rows"} (#15 items without story).`;
+    action = "Act in Problems → Coverage →";
+  } else {
+    const inProb = matched.filter(isProblem).length;
+    const inOther = matched.filter(isOtherCheck).length;
+    const extras: string[] = [];
+    for (const [label, f] of [["Text to review", isTextToReview], ["Too long", isTooLong], ["Dev TODO", isDevTodo], ["Coverage", isCoverage]] as const) {
+      const c = matched.filter(f).length;
+      if (c > 0) extras.push(`${c} ${label}`);
+    }
+    legend = `Counts ${inProb} in Problems + ${inOther} in Other checks${extras.map((e) => ` + ${e}`).join("")}.`;
+    action = signal === "integrity" ? "Act in Problems (Integrity filter) →" : "Act in Problems (Cohesion filter) →";
+  }
+  return { n, rest, note, legend, action, target: { tab: "problems", scope, category: null, checks } };
+}
+
+// ── V7 minor 2 (idea-1172): in-Storybook history state + sheet back-nav breadcrumb ──────────
+
+export type SbTab = "home" | "review" | "quests" | "world" | "cast" | "items" | "problems" | "glossary";
+export type SbQuestMode = "web" | "arcs" | "order";
+export const SB_TAB_LABEL: Record<SbTab, string> = {
+  home: "Home",
+  review: "Review",
+  quests: "Quests",
+  world: "World",
+  cast: "Cast",
+  items: "Items",
+  problems: "Problems",
+  glossary: "Glossary",
+};
+export const SB_SHEET_TABS: ReadonlySet<SbTab> = new Set(["world", "cast", "items"]);
+export const EMPTY_SB_SEL: Record<SbTab, string | null> = {
+  home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null,
+};
+export type SbNavState = {
+  tab: SbTab;
+  sel: Record<SbTab, string | null>;
+  questMode: SbQuestMode;
+  scope: FindingScope;
+  checks: string[] | null;
+  scrollTop: number;
+  depth: number;
+  fromTab: SbTab | null; // tab of the previous nav entry (what Back returns to), null at depth 0
+  fromSel: string | null; // that entry's selection in its tab (an entity id) when it is a sheet
+};
+
+export function initialSbNav(): SbNavState {
+  return { tab: "home", sel: { ...EMPTY_SB_SEL }, questMode: "arcs", scope: "problems", checks: null, scrollTop: 0, depth: 0, fromTab: null, fromSel: null };
+}
+
+export function isSameSbNav(a: SbNavState, b: SbNavState): boolean {
+  if (a.tab !== b.tab || a.questMode !== b.questMode || a.scope !== b.scope) return false;
+  if (a.sel[a.tab] !== b.sel[b.tab]) return false;
+  return (a.checks?.join(",") ?? "") === (b.checks?.join(",") ?? "");
+}
+
+export function nextSbNav(
+  cur: SbNavState,
+  patch: { tab?: SbTab; sel?: Partial<Record<SbTab, string | null>>; questMode?: SbQuestMode; scope?: FindingScope; checks?: string[] | null; scrollTop?: number },
+): SbNavState {
+  const tab = patch.tab ?? cur.tab;
+  const sel = patch.sel ? { ...cur.sel, ...patch.sel } : { ...cur.sel };
+  const questMode = patch.questMode ?? cur.questMode;
+  const scope = patch.scope ?? cur.scope;
+  const checks = patch.checks !== undefined ? patch.checks : cur.checks;
+  return { tab, sel, questMode, scope, checks, scrollTop: patch.scrollTop ?? 0, depth: cur.depth + 1, fromTab: cur.tab, fromSel: cur.sel[cur.tab] };
+}
+
+export function readSbNav(state: unknown): SbNavState | null {
+  if (!state || typeof state !== "object") return null;
+  const raw = (state as { sbNav?: unknown }).sbNav;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const tab = typeof r.tab === "string" && Object.hasOwn(SB_TAB_LABEL, r.tab) ? (r.tab as SbTab) : "home";
+  const rawSel = r.sel && typeof r.sel === "object" ? (r.sel as Record<string, unknown>) : {};
+  const sel = { ...EMPTY_SB_SEL };
+  for (const k of Object.keys(EMPTY_SB_SEL) as SbTab[]) {
+    if (typeof rawSel[k] === "string") sel[k] = rawSel[k] as string;
+  }
+  const questMode: SbQuestMode = r.questMode === "web" || r.questMode === "order" ? r.questMode : "arcs";
+  const scope: FindingScope = typeof r.scope === "string" && FINDING_SCOPES.includes(r.scope as FindingScope) ? (r.scope as FindingScope) : "problems";
+  const checks = Array.isArray(r.checks) ? r.checks.filter((x): x is string => typeof x === "string") : null;
+  const scrollTop = typeof r.scrollTop === "number" && Number.isFinite(r.scrollTop) && r.scrollTop >= 0 ? r.scrollTop : 0;
+  const depth = typeof r.depth === "number" && Number.isFinite(r.depth) && r.depth >= 0 ? r.depth : 0;
+  const fromTab = typeof r.fromTab === "string" && Object.hasOwn(SB_TAB_LABEL, r.fromTab) ? (r.fromTab as SbTab) : null;
+  const fromSel = typeof r.fromSel === "string" ? r.fromSel : null;
+  return { tab, sel, questMode, scope, checks, scrollTop, depth, fromTab, fromSel };
+}
+
+/** Crumb label = what history.back() really returns to: the previous nav entry (its tab name, or its sheet's name on a same-tab hop).
+ * Only inside Storybook (depth > 0 means the previous entry is ours). nameOf resolves a sheet id to its display name. */
+export function sheetBackLabel(nav: Pick<SbNavState, "tab" | "fromTab" | "depth"> & { fromSel?: string | null }, nameOf?: (tab: SbTab, id: string) => string | null | undefined): string | null {
+  if (!SB_SHEET_TABS.has(nav.tab) || !nav.fromTab || nav.depth <= 0) return null;
+  if (nav.fromTab === nav.tab && nav.fromSel) return `← ${nameOf?.(nav.tab, nav.fromSel) ?? nav.fromSel}`;
+  return `← ${SB_TAB_LABEL[nav.fromTab]}`;
+}
+
+/** Close math for closeStorybook: history steps to go and whether to strip ?sb= in place afterwards.
+ * - pushed/popped open (mine) + user Back: the entry under the first Storybook entry is the app's, so go -(depth+1) in one jump.
+ * - cold link / reload (not mine) + user Back: no app entry beneath; rewind -depth to the first Storybook entry, then strip it in place, so Back
+ *   after closing cannot land on a leftover ?sb= entry and reopen Storybook.
+ * - replace mode (forward navigation pushes its own entry next): synchronous strip only; an async go() would land after and undo that navigation. */
+export function sbCloseSteps(mine: boolean, depth: number, replace: boolean): { go: number; strip: boolean } {
+  if (replace) return { go: 0, strip: true };
+  if (mine) return { go: -(depth + 1), strip: false };
+  return { go: depth > 0 ? -depth : 0, strip: true };
 }
 
 // ── W3 riders: Play order titles & unordered grouping (friction 7) ──────────────
