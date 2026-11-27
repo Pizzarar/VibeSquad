@@ -99,3 +99,17 @@ test("routes: GET first session, POST seen (explicit), GET again = nothing new; 
   assert.equal(g2.body.first, false); assert.equal(g2.body.sameSha, true);
   assert.equal((await call("PUT", "/api/storybook/efi/changes", null, deps)).status, 405);
 });
+
+test("view logic: wordDiff, goneBreakdown, signalCard counts equal what the click opens", async () => {
+  const L = await import("../src/storybookLogic.ts");
+  const R = await import("../src/storybookReview.ts");
+  assert.deepEqual(R.wordDiff("a b c", "a x c").map((g) => [g.k, g.t.trim()]), [["same", "a"], ["del", "b"], ["add", "x"], ["same", "c"]]);
+  assert.match(L.goneBreakdown({ counts: { goneBy: { "dev-string": 181, twin: 108, efi: 0 } } }), /181 dev.*108 duplicates merged|181 dev.*108 duplicate/);
+  const it = (check, category) => ({ key: check + Math.random(), category, check, severity: "warn", msg: "", entityRef: null, source: null });
+  const items = [it("#1", "broken"), it("#7", "inconsistent"), it("#14", "inconsistent"), it("#4", "inconsistent"), it("#15", "missing"), { ...it(null, "unreviewed") }];
+  const audit = { coverage: 5, integrity: 4, cohesion: 3, signoff: 9 };
+  const c = Object.fromEntries(["integrity", "cohesion", "coverage", "signoff"].map((s) => [s, L.signalCard(s, items, audit)]));
+  assert.equal(c.integrity.n, 3); assert.equal(c.integrity.rest, 1); assert.deepEqual(c.integrity.target.checks, L.SIGNAL_CHECKS.integrity);
+  assert.equal(c.cohesion.n, 1); assert.equal(c.coverage.n, 1); assert.equal(c.coverage.rest, 4);
+  assert.equal(c.signoff.n, 1); assert.equal(c.signoff.target.tab, "review");
+});

@@ -163,3 +163,26 @@ export const classCounts = (rows: ReviewRow[]): Record<RowClass, number> => {
   for (const r of rows) c[r.cls]++;
   return c;
 };
+
+// V8: word-level old -> new diff for changed rows.
+export type DiffSeg = { t: string; k: "same" | "del" | "add" };
+/** Word-level old -> new diff (LCS over whitespace-split tokens). Pure; capped so a pathological pair stays cheap. */
+export function wordDiff(a: string, b: string, maxTokens = 400): DiffSeg[] {
+  const x = a.split(/(\s+)/).filter((s) => s !== ""), y = b.split(/(\s+)/).filter((s) => s !== "");
+  if (x.length > maxTokens || y.length > maxTokens) return [{ t: a, k: "del" }, { t: b, k: "add" }];
+  const n = x.length, m = y.length;
+  const L: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out: DiffSeg[] = [];
+  const push = (t: string, k: DiffSeg["k"]) => { const l = out[out.length - 1]; if (l && l.k === k) l.t += t; else out.push({ t, k }); };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { push(x[i], "same"); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) push(x[i++], "del");
+    else push(y[j++], "add");
+  }
+  while (i < n) push(x[i++], "del");
+  while (j < m) push(y[j++], "add");
+  return out;
+}
+

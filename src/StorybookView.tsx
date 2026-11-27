@@ -7,13 +7,14 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
+  SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  entityKey, indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, auditCounts, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import type { TextChanges, TextPreset } from "./StorybookText";
 import { StorybookText, type TextFocus } from "./StorybookText";
 import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
@@ -430,8 +431,9 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
 
 const PAGE = 200; // the text inventory is thousands of rows; render a page at a time
 
-function Findings({ items, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo }: { items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
-  const scoped = useMemo(() => scopeItems(items, scope), [items, scope]);
+function Findings({ items: allItems, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo, checks = null, clearChecks }: { checks?: ReadonlySet<string> | null; clearChecks?: () => void; items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
+  const items = allItems;
+  const scoped = useMemo(() => scopeItems(items, scope).filter((it) => !checks || (it.check != null && checks.has(it.check))), [items, scope, checks]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const counts = useMemo(() => countByCategory(scoped), [scoped]);
   const filtered = useMemo(() => filterItems(scoped, active), [scoped, active]);
@@ -443,7 +445,7 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
     <div>
       {allowed.length > 1 && <div className="sb-seg" role="group" aria-label="Findings scope" data-testid="sb-scope">
         {allowed.filter((s) => s === "problems" || s === "story" || scopes[s] > 0 || scope === s).map((s) => (
-          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); }}>
+          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); clearChecks?.(); }}>
             {FINDING_SCOPE_LABEL[s]} <span className="sb-count">{scopes[s]}</span>
           </button>
         ))}
@@ -455,7 +457,8 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
-        {active.size > 0 && <button type="button" className="sb-fbtn sb-fclear" onClick={() => setActive(new Set())}>Clear</button>}
+        {checks && <span className="sb-fbtn" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card">Checks {[...checks].join(" ")}</span>}
+        {(active.size > 0 || checks) && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setActive(new Set()); clearChecks?.(); }}>Clear</button>}
       </div>
       <dl className="sb-legend" data-testid="sb-legend">
         {cats.map((c) => <div key={c}><dt>{SB_CATEGORY_LABEL[c]}</dt><dd>{SB_CATEGORY_HELP[c]}</dd></div>)}
@@ -502,6 +505,11 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
   const clearTextFocus = useCallback(() => setTextFocus(null), []);
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
+  const [checks, setChecks] = useState<ReadonlySet<string> | null>(null); // Home signal card -> Problems filtered to that signal's checks
+  const [changes, setChanges] = useState<SbChanges | null>(null); // V8
+  const [seenBusy, setSeenBusy] = useState(false);
+  const [seenError, setSeenError] = useState<string | null>(null);
+  const [preset, setPreset] = useState<TextPreset>(null);
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
   // change (or unmount) invalidates everything in flight.
@@ -519,6 +527,34 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [projectId, initial]);
 
   const snap = state.kind === "ok" ? state.snap : null;
+  const loadChanges = useCallback(async () => {
+    if (initial) return;
+    try {
+      const r = await call(`${api(projectId)}/changes`);
+      setChanges(r.status === 200 && r.body && typeof r.body === "object" && r.body.counts ? (r.body as SbChanges) : null);
+    } catch { setChanges(null); }
+  }, [projectId, initial]);
+  const snapSha = snap?.sha;
+  useEffect(() => { if (snapSha) void loadChanges(); }, [snapSha, loadChanges]);
+  // Explicit only: "I've seen up to sha X". Loading Home never marks anything seen.
+  const markSeen = useCallback(async () => {
+    if (!snapSha) return;
+    setSeenBusy(true); setSeenError(null);
+    try {
+      const r = await call(`${api(projectId)}/changes/seen`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sha: snapSha }) });
+      if (r.status !== 200) setSeenError(String(r.body?.error ?? `Could not save (HTTP ${r.status})`));
+      else await loadChanges();
+    } catch (e) { setSeenError(e instanceof Error ? e.message : String(e)); }
+    finally { setSeenBusy(false); }
+  }, [projectId, snapSha, loadChanges]);
+  const textChanges = useMemo<TextChanges>(() => {
+    if (!changes || changes.first) return null;
+    const changed: Record<string, string> = {};
+    const idsOf = new Set(changes.changedIds ?? []);
+    for (const c of changes.changed) if (c.id) changed[entityKey("line", c.id)] = c.old ?? "";
+    const added = new Set((changes.newIds ?? []).map((id) => entityKey("line", id)));
+    return idsOf.size || added.size ? { changed, added } : null;
+  }, [changes]);
   const idx = useMemo(() => indexEntities(snap?.entities ?? []), [snap]);
   const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
   const problems = useMemo(() => problemCount(items), [items]);
@@ -583,15 +619,17 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   goToRef.current = goTo;
 
   const onSignal = useCallback((signal: string) => {
-    const nav = auditSignalTarget(signal);
+    const nav = signalCard(signal, items, null).target;
     if (nav.tab === "review") {
+      setPreset(null);
       setTab("review");
       return;
     }
     setScope(nav.scope ?? "problems");
-    setActiveProblems(nav.category ? new Set([nav.category]) : new Set());
+    setActiveProblems(new Set());
+    setChecks(nav.checks ? new Set(nav.checks) : null);
     setTab("problems");
-  }, []);
+  }, [items]);
 
   const renderChip: ChipRenderer = useCallback((e, label) => <Chip e={e} card={card} onGo={goTo} label={label} />, [card, goTo]);
 
@@ -654,13 +692,13 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
             {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => setChecks(null)} />}
           </main>
         </>
       )}
