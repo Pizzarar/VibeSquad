@@ -81,15 +81,7 @@ const byRef = (a, b) => cmpStr(`${a.kind}:${a.id}`, `${b.kind}:${b.id}`);
 function collisions({ registry }) {
   const out = [];
   for (const d of registry.duplicates) out.push(F("#7", "warn", d, `duplicate ${d.kind} id "${d.id}" (a second row reuses it; the first wins)`));
-  // same id in two registries (recipe/item share ids by design: a recipe is keyed by what it makes)
-  const ids = new Map();
-  for (const e of registry.all()) if (ID_KINDS.includes(e.kind)) (ids.get(e.id) ?? ids.set(e.id, []).get(e.id)).push(e);
-  for (const [id, es] of ids) {
-    const kinds = [...new Set(es.map((e) => e.kind))];
-    if (kinds.length < 2 || kinds.every((k) => k === "recipe" || k === "item")) continue;
-    es.sort(byRef);
-    out.push(F("#7", "warn", es[0], `id "${id}" is used by ${es.map((e) => e.kind).join(" + ")} (${es.map((e) => e.display).join(" / ")})`));
-  }
+  // Cross-kind id collisions (e.g. squad:doc "Saint" vs trader:doc "Doc") moved to #17 (terms.mjs) in V10 (DOGFOOD_W2 friction 11).
   // display collisions: identical names (alias-aware), or a one-word character name that is a whole word of another
   // character's name. The word-subset clause is character-only so same-kind item chains (Coffee/Coffee Beans),
   // item-vs-room aliases (Barrel/Barrel Fire) and character-vs-item theme overlap (Scav/Scav Boots) stay quiet.

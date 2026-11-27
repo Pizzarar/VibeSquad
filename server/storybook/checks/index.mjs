@@ -9,8 +9,9 @@ import * as text from "./text.mjs";
 import * as lore from "./lore.mjs";
 import * as length from "./length.mjs";
 import * as items from "./items.mjs";
+import * as terms from "./terms.mjs";
 
-export const CHECK_MODULES = [structural, text, lore, length, items];
+export const CHECK_MODULES = [structural, text, lore, length, items, terms];
 
 /** The lane that emits Storybook's audit findings (the 4-signal F2 contract). */
 export const STORYBOOK_LANE = "storybook";

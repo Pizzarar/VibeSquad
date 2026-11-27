@@ -12,6 +12,7 @@ import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs
 import { makeSnapshot } from "./schema.mjs";
 import { SIGNALS } from "../registry/audit.mjs";
 import { buildArc } from "./unlocks.mjs";
+import { buildGlossary } from "./glossary.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -105,6 +106,7 @@ async function buildOnce(project, { refresh, deps }) {
   const reader = makeReader(repoPath, sha);
   const { entities, warnings } = await adapter.load(reader, sha);
   const snap = makeSnapshot({ project: adapter.id, ref, sha, entities, warnings: [...warnings] });
+  try { snap.glossary = await buildGlossary(snap.entities, reader); } catch (e) { snap.warnings.push(`glossary failed: ${String(e?.message ?? e).slice(0, 200)}`); }
   const { runChecks, runAudit, warning } = await loadRunChecks(deps.runChecks);
   if (warning) snap.warnings.push(warning);
   if (runChecks) {

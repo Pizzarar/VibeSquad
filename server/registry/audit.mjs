@@ -27,7 +27,7 @@ const SIGNAL_ORDER = new Map(SIGNALS.map((s, i) => [s, i]));
 /** Storybook check id -> signal (the first consumer's mapping). */
 export const CHECK_SIGNALS = Object.freeze({
   "#1": "integrity", "#2": "integrity", "#5": "integrity", "#7": "integrity", "#13": "integrity", "#14": "integrity",
-  "#3": "cohesion", "#4": "cohesion", "#6": "cohesion", "#9": "cohesion", "#10": "cohesion", "#11": "cohesion", "#12": "cohesion", "#18": "cohesion",
+  "#3": "cohesion", "#4": "cohesion", "#6": "cohesion", "#9": "cohesion", "#10": "cohesion", "#11": "cohesion", "#12": "cohesion", "#16": "cohesion", "#17": "cohesion", "#18": "cohesion", "#19": "cohesion",
   "#8": "signoff",
   "#15": "coverage",
 });
