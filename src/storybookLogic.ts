@@ -351,6 +351,24 @@ export function characterViews(idx: EntityIndex): CharacterView[] {
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
 }
 
+export type CastGroups = { traders: CharacterView[]; squad: CharacterView[]; screens: CharacterView[] };
+
+/** W3 rider (friction 4): group Cast speakers into Traders / Squad / Screens and disambiguate party:squad vs system:squad. */
+export function groupCharacterViews(chars: CharacterView[]): CastGroups {
+  const traders: CharacterView[] = [];
+  const squad: CharacterView[] = [];
+  const screens: CharacterView[] = [];
+  for (const c of chars) {
+    if (c.kind === "trader") traders.push(c);
+    else if (c.kind === "squad") squad.push(c);
+    else if (c.id === "party:squad") squad.push({ ...c, speaker: "Squad (party)" });
+    else if (c.id === "system:squad") screens.push({ ...c, speaker: "Squad screen" });
+    else if (c.kind === "party") squad.push(c);
+    else screens.push(c);
+  }
+  return { traders, squad, screens };
+}
+
 // ── Cards ───────────────────────────────────────────────────────────────────────
 
 export type EntityCard = {
@@ -705,4 +723,48 @@ export function enemySheetData(enemy: SbEntity, idx: EntityIndex, findings: SbFi
   const contracts = idx.byKind("contract").filter((c) => c.links.some((l) => l.kind === "enemy" && l.id === enemy.id));
   const lines = idx.byKind("line").filter((l) => l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id));
   return { enemy, look, missingDescription, spawns, drops, quests, contracts, lines, findings: entityFindings(enemy, findings) };
+}
+
+// ── W3 riders: Play order titles & unordered grouping (friction 7) ──────────────
+
+export function playItemLabel(p: SbPlayItem, idx: EntityIndex): string | undefined {
+  if (p.kind === "reveal") return p.label;
+  if (p.kind === "contract") {
+    const rendered = idx.get("contract", p.id)?.data?.rendered?.title;
+    return typeof rendered === "string" && rendered.trim() ? rendered : cleanTodo(p.label || p.id);
+  }
+  return undefined;
+}
+
+export type UnorderedPlayGroup = { trader: string; display: string; items: SbPlayItem[] };
+export type PlayOrderPartition = { ordered: SbPlayItem[]; unordered: UnorderedPlayGroup[]; unorderedCount: number };
+
+/** Split playOrder into genuinely ordered items vs entries whose unlock rule is not in EFI data (grouped per trader). */
+export function partitionPlayOrder(arc: SbArc, idx: EntityIndex): PlayOrderPartition {
+  const gapKeys = new Set(arc.gaps.map((g) => `${g.kind}:${g.id}`));
+  const lockedTraders = new Set(arc.arcs.filter((a) => !a.level_0).map((a) => a.trader));
+  const ordered: SbPlayItem[] = [];
+  const byTrader = new Map<string, SbPlayItem[]>();
+  let unorderedCount = 0;
+  for (const p of arc.playOrder) {
+    const isUnordered =
+      gapKeys.has(`${p.kind}:${p.id}`) ||
+      p.gates.some((g) => g.type === "trader_unlock") ||
+      (p.stage === 0 && p.trader != null && lockedTraders.has(p.trader));
+    if (isUnordered) {
+      const tid = p.trader ?? "";
+      (byTrader.get(tid) ?? byTrader.set(tid, []).get(tid)!).push(p);
+      unorderedCount++;
+    } else {
+      ordered.push({ ...p, pos: ordered.length + 1 });
+    }
+  }
+  const unordered: UnorderedPlayGroup[] = [...byTrader.entries()]
+    .map(([trader, items]) => ({
+      trader,
+      display: trader ? cleanTodo(idx.get("trader", trader)?.display ?? trader) : "Other",
+      items,
+    }))
+    .sort((a, b) => a.display.localeCompare(b.display));
+  return { ordered, unordered, unorderedCount };
 }

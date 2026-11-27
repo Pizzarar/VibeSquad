@@ -7,7 +7,7 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
+  SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
   entityKey, indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
@@ -383,16 +383,38 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
 }) {
   const chars = useMemo(() => characterViews(idx), [idx]);
+  const grouped = useMemo(() => groupCharacterViews(chars), [chars]);
+  const ordered = useMemo(() => [...grouped.traders, ...grouped.squad, ...grouped.screens], [grouped]);
   const enemies = useMemo(() => idx.byKind("enemy").sort((a, b) => a.display.localeCompare(b.display)), [idx]);
   const isEnemySel = Boolean(sel && sel.startsWith("enemy:"));
   const [group, setGroup] = useState<"characters" | "enemies">(isEnemySel ? "enemies" : "characters");
+  const [screensOpen, setScreensOpen] = useState(false);
+  const [scrollTick, setScrollTick] = useState(0);
+  const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (sel?.startsWith("enemy:")) setGroup("enemies");
     else if (sel) setGroup("characters");
   }, [sel]);
   const enemy = isEnemySel ? enemies.find((e) => `enemy:${e.id.toLowerCase()}` === sel) ?? enemies[0] : enemies[0];
-  const ch = !isEnemySel ? chars.find((c) => c.id === sel) ?? chars[0] : chars[0];
+  const ch = !isEnemySel ? ordered.find((c) => c.id === sel) ?? ordered[0] : ordered[0];
+  const chInScreens = Boolean(ch && grouped.screens.some((s) => s.id === ch.id));
+  useEffect(() => {
+    if (chInScreens) setScreensOpen(true);
+  }, [chInScreens]);
+  useEffect(() => {
+    if (!scrollTick) return;
+    const el = sheetRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.top > window.innerHeight * 0.6) el.scrollIntoView({ block: "start" });
+  }, [scrollTick]);
+  const pickCast = (id: string) => { setSel(id); setScrollTick((n) => n + 1); };
   if (!chars.length && !enemies.length) return <p className="sb-empty">No characters or enemies in this snapshot.</p>;
+  const chipBtn = (c: typeof chars[number]) => (
+    <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => pickCast(c.id)}>
+      {c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}
+    </button>
+  );
   return (
     <div>
       <div className="sb-seg" role="group" aria-label="Cast group" data-testid="sb-cast-group">
@@ -409,19 +431,38 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
             <div className="sb-seg" role="tablist" aria-label="Enemies">
               {enemies.map((e) => {
                 const key = `enemy:${e.id.toLowerCase()}`;
-                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => setSel(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
+                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => pickCast(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
               })}
             </div>
-            {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+            </div>
           </>
         )
       ) : (
         chars.length === 0 ? <p className="sb-empty">No speakers in this snapshot.</p> : (
           <>
-            <div className="sb-seg" role="tablist" aria-label="Characters">
-              {chars.map((c) => <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => setSel(c.id)}>{c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}</button>)}
+            {grouped.traders.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-traders">
+                <h4 className="sb-cast-lbl">Traders <span className="sb-count">{grouped.traders.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Traders">{grouped.traders.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.squad.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-squad">
+                <h4 className="sb-cast-lbl">Squad <span className="sb-count">{grouped.squad.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Squad">{grouped.squad.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.screens.length > 0 && (
+              <details className="sb-cast-screens" data-testid="sb-cast-screens" open={screensOpen} onToggle={(ev) => setScreensOpen(ev.currentTarget.open)}>
+                <summary className="sb-cast-lbl">Screens &amp; system <span className="sb-count">{grouped.screens.length}</span></summary>
+                <div className="sb-seg" role="tablist" aria-label="Screens and system">{grouped.screens.map(chipBtn)}</div>
+              </details>
+            )}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
             </div>
-            {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
           </>
         )
       )}
