@@ -2,6 +2,7 @@
 // Turns the snapshot's text lines, contract templates and lore into ONE ordered list of rows the owner reads top to bottom:
 // story first, then flavor, then toasts/system/UI; grouped by speaker (people) or screen/file (system text). Read-only.
 import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic.ts";
+import { statusBucket, type ProgressTextBucket } from "./storybookProgress.ts";
 
 export type RowClass = "story" | "flavor" | "contracts" | "ui";
 export const ROW_CLASSES: RowClass[] = ["story", "flavor", "contracts", "ui"];
@@ -93,7 +94,7 @@ export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: L
       push({
         id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls, group, speaker, speakerRef: sref, text: cleanTodo(String(d.text ?? e.display)), title: null,
         file: e.source?.path ?? String(d.file ?? ""), keyPath: origin === "csv" ? String(d.data_path || (e.source?.line ? `line ${e.source.line}` : "")) : e.id, line: e.source?.line ?? null,
-        status: st, unreviewed: st != null && st.toUpperCase() !== "OWNER-OK", placeholder: e.production === "placeholder",
+        status: st, unreviewed: statusBucket(st, e.production) !== "ok", placeholder: e.production === "placeholder",
       });
     } else if (e.kind === "contract") {
       const r = d.rendered as { title?: string; detail?: string } | undefined;
@@ -232,6 +233,21 @@ export function searchEntities(idx: EntityIndex, query: string, max = 12): SbEnt
 }
 
 export const rowSubtitle = (r: ReviewRow): string => [r.file && (r.line && r.kind !== "line" ? fmtSource({ path: r.file, line: r.line }) : r.file), r.keyPath].filter(Boolean).join(" · ");
+
+/** Apply live V6 marks to review rows' `unreviewed` flag so Review's Unreviewed chip & filter stay in lockstep with progress bars. */
+export function applyLiveUnreviewed(rows: ReviewRow[], rowStatusBucket?: ((row: ReviewRow) => ProgressTextBucket | null) | null): ReviewRow[] {
+  if (!rowStatusBucket) return rows;
+  let changed = false;
+  const out = rows.map((r) => {
+    if (r.kind !== "line") return r;
+    const b = rowStatusBucket(r);
+    const next = b != null ? b !== "ok" : r.unreviewed;
+    if (next === r.unreviewed) return r;
+    changed = true;
+    return { ...r, unreviewed: next };
+  });
+  return changed ? out : rows;
+}
 
 export const classCounts = (rows: ReviewRow[]): Record<RowClass, number> => {
   const c: Record<RowClass, number> = { story: 0, flavor: 0, contracts: 0, ui: 0 };

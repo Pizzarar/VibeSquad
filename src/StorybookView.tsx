@@ -619,13 +619,13 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [projectId, snapSha, loadChanges]);
   const textChanges = useMemo<TextChanges>(() => buildTextChanges(changes), [changes]);
   const idx = useMemo(() => indexEntities(snap?.entities ?? []), [snap]);
-  const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
+  const marks = useMarks(projectId, idx); // V6 owner marks
+  const items = useMemo(() => (snap ? buildListItems(snap, (e) => marks.stateOf(e).kind) : []), [snap, marks.stateOf]);
   const problems = useMemo(() => problemCount(items), [items]);
   const pick = useCallback((t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s })), []);
   const goToRef = useRef<(e: SbEntity) => void>(() => {});
   const card = useCard(idx, (e) => goToRef.current(e));
   const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
-  const marks = useMarks(projectId, idx); // V6 owner marks
   const liveProgress = useMemo(() => applyLiveMarks(snap?.progress, marks.state.marks), [snap, marks.state.marks]); // V12 progress with live V6 marks
   const rowEntity = useCallback((r: { kind: string; entityId: string }) => idx.get(r.kind, r.entityId), [idx]);
   const mineTest = useCallback((r: { kind: string; entityId: string }) => r.kind === "line" && marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);

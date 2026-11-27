@@ -2,7 +2,7 @@
 // toasts/system/UI; grouped by speaker or screen; full line text (never truncated); one search box over lines and entities.
 // Row hook for V6: every row carries data-sb-row=<row.id> and an action slot (`renderActions`) for OK / Redo / Edit; nothing writes here.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { wordDiff, groupRows, filterRows, type ReviewGroup, searchEntities, speakerEntityKey, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
+import { applyLiveUnreviewed, wordDiff, groupRows, filterRows, type ReviewGroup, searchEntities, speakerEntityKey, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
 import { lineSpeakerKey, type EntityIndex, type SbEntity, type TextChanges } from "./storybookLogic";
 import { PROGRESS_AREA_LABEL, PROGRESS_BUCKET_LABEL, statusBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgress";
 
@@ -59,33 +59,34 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
+  const liveRows = useMemo(() => applyLiveUnreviewed(rows, rowStatusBucket), [rows, rowStatusBucket]);
   const isChanged = (r: ReviewRow) => changes != null && (changes.changedIds.has(r.id) || Object.hasOwn(changes.changed, r.id) || changes.added.has(r.id));
-  const nChanged = useMemo(() => (changes ? rows.filter(isChanged).length : 0), [rows, changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nChanged = useMemo(() => (changes ? liveRows.filter(isChanged).length : 0), [liveRows, changes]); // eslint-disable-line react-hooks/exhaustive-deps
   const base = useMemo(() => {
-    let list = only === "changed" ? rows.filter(isChanged) : only === "contracts" ? rows.filter((r) => r.kind === "contract") : rows;
+    let list = only === "changed" ? liveRows.filter(isChanged) : only === "contracts" ? liveRows.filter((r) => r.kind === "contract") : liveRows;
     if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
     if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key, progress));
     if (statusFilter) list = list.filter((r) => r.kind === "line" && (rowStatusBucket ? rowStatusBucket(r) : statusBucket(r.status)) === statusFilter);
     return list;
-  }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [liveRows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket]); // eslint-disable-line react-hooks/exhaustive-deps
   // A bar/area/status filter counts text lines only (contracts have no bar), so its denominator is the line total, not all rows.
   const lineFiltered = areaFilter != null || entityFilter != null || statusFilter != null;
-  const nLines = useMemo(() => rows.filter((r) => r.kind === "line").length, [rows]);
-  const denom = lineFiltered ? nLines : rows.length;
+  const nLines = useMemo(() => liveRows.filter((r) => r.kind === "line").length, [liveRows]);
+  const denom = lineFiltered ? nLines : liveRows.length;
   const denomLabel = lineFiltered ? "lines" : "rows";
   const speakerKey = speakerFilter?.key ?? null;
   const searched = useMemo(() => filterRows(base, { query, speakerKey, classes: new Set(), tooLong: false, unreviewed: false }), [base, query, speakerKey]);
   const filter = useMemo(() => ({ query: "", classes, tooLong, unreviewed }), [classes, tooLong, unreviewed]);
   const filtered = useMemo(() => { const f = filterRows(searched, filter); return mine && mineTest ? f.filter(mineTest) : f; }, [searched, filter, mine, mineTest]);
   const nContracts = useMemo(() => {
-    let list = only === "changed" ? rows.filter(isChanged) : rows;
+    let list = only === "changed" ? liveRows.filter(isChanged) : liveRows;
     if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
     if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key, progress));
     if (statusFilter) list = list.filter((r) => r.kind === "line" && (rowStatusBucket ? rowStatusBucket(r) : statusBucket(r.status)) === statusFilter);
     const f = filterRows(list, { query, speakerKey, classes, tooLong, unreviewed });
     return (mine && mineTest ? f.filter(mineTest) : f).filter((r) => r.kind === "contract").length;
-  }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket, query, speakerKey, classes, tooLong, unreviewed, mine, mineTest]); // eslint-disable-line react-hooks/exhaustive-deps
-  const nMine = useMemo(() => (mineTest ? rows.filter(mineTest).length : 0), [rows, mineTest]);
+  }, [liveRows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket, query, speakerKey, classes, tooLong, unreviewed, mine, mineTest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nMine = useMemo(() => (mineTest ? liveRows.filter(mineTest).length : 0), [liveRows, mineTest]);
   useEffect(() => {
     if (!preset) return;
     onPresetConsumed?.();
@@ -199,7 +200,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
           {ROW_CLASSES.filter((c) => c !== "contracts" && (counts[c] > 0 || classes.has(c))).map((c) => (
             <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
           ))}
-          {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
+          {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
           {(nTooLong > 0 || tooLong) && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
         </span>
         {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setSpeakerFilter(null); setAreaFilter(null); setEntityFilter(null); setStatusFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setMine(false); setOnly(null); }}>Clear</button>}

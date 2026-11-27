@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildProgress, lineAreaId, lineMarkKey, PROGRESS_AREAS, statusToBucket } from "../server/storybook/progress.mjs";
-import { markState } from "../src/storybookMarks.ts";
-import { applyLiveMarks, formatArtSummary, formatProgressSummary } from "../src/storybookProgress.ts";
+import { markState, marksByKey } from "../src/storybookMarks.ts";
+import { applyLiveMarks, formatArtSummary, formatProgressSummary, liveLineBucket } from "../src/storybookProgress.ts";
+import { buildListItems, indexEntities, isUnreviewedLine, scopeCounts, signalCard } from "../src/storybookLogic.ts";
+import { applyLiveUnreviewed, buildReviewRows, filterRows, NO_FILTER } from "../src/storybookReview.ts";
 
 function makeLine({ id, file = "data/quests.json", data_path = `["${id}"]`, status = "STORY-TODO", origin = "csv", speakerKind = "trader", speakerId = "popper", links = [], production = "placeholder" }) {
   return {
@@ -278,5 +280,75 @@ describe("V12 progress rollup (server/storybook/progress.mjs)", () => {
     check(applyLiveMarks(base, redo), redo);
     assert.deepEqual(buildProgress(snap, { marks: redo }).areas, applyLiveMarks(base, redo).areas);
     assert.deepEqual(buildProgress(snap, { marks: redo }).entities, applyLiveMarks(base, redo).entities);
+  });
+
+  it("V7 friction 1: Home Text to review, Sign-off, Review Unreviewed chip and progress bars move together on marks (including non-CSV lines)", () => {
+    const lines = [
+      makeLine({ id: "l1", status: "STORY-TODO", speakerKind: "trader", speakerId: "popper" }),
+      makeLine({ id: "l2", status: "DRAFT", speakerKind: "trader", speakerId: "popper" }),
+      makeLine({ id: "l3", status: "STORY-TODO", speakerKind: "squad", speakerId: "saint" }),
+      makeLine({ id: "l4", status: "OWNER-OK", production: "final", speakerKind: "trader", speakerId: "popper" }),
+      // Non-CSV line (mirrors EFI raid_story:15 "%s %s (+%d)." which has no text_review.csv row)
+      {
+        id: "raid_story:15", kind: "line", display: "%s %s (+%d).", aliases: [],
+        source: { path: "scenes/raids/corridor/raid_story.gd", line: 224 }, links: [], production: null,
+        data: { origin: "raid_story", text: "%s %s (+%d).", speakerKind: "party", speakerId: "squad", rowClass: "story" },
+      },
+    ];
+    const snap = {
+      entities: [makeEntity("trader", "popper", "Popper"), makeEntity("squad", "saint", "Saint"), ...lines],
+      findings: [],
+    };
+    const idx = indexEntities(snap.entities);
+    const baseProg = buildProgress(snap);
+    const baseAudit = { coverage: 0, integrity: 0, cohesion: 0, signoff: 10 }; // 4 unreviewed lines + 6 non-text entities
+    const baseUnrev = snap.entities.filter((e) => isUnreviewedLine(e)).length;
+    assert.equal(baseUnrev, 4, "3 non-OK CSV lines + 1 non-CSV line = 4");
+
+    const checkAllAgree = (serverMarks, exists, expectedOk, expectedUnrev) => {
+      const byKey = marksByKey(serverMarks);
+      const stateOf = (e) => markState(e, lines, byKey, exists);
+      const liveProg = applyLiveMarks(baseProg, serverMarks);
+      const progTotal = liveProg.areas.reduce((a, x) => ({ ok: a.ok + x.text.ok, total: a.total + x.text.total }), { ok: 0, total: 0 });
+      const items = buildListItems(snap, (e) => stateOf(e).kind);
+      const homeTextToReview = scopeCounts(items).text;
+      const delta = baseUnrev - homeTextToReview;
+      const liveAudit = { ...baseAudit, signoff: Math.max(0, baseAudit.signoff - delta) };
+      const homeSignoff = signalCard("signoff", items, liveAudit);
+      const baseRows = buildReviewRows(snap.entities, idx, items);
+      const liveRows = applyLiveUnreviewed(baseRows, (r) => {
+        if (r.kind !== "line") return null;
+        const e = idx.get(r.kind, r.entityId);
+        return liveLineBucket(stateOf(e).kind, r.status, e?.production);
+      });
+      const reviewUnrevChip = filterRows(liveRows, { ...NO_FILTER, unreviewed: true }).length;
+
+      assert.equal(progTotal.total, 5, "total text lines stays 5");
+      assert.equal(progTotal.ok, expectedOk, "progress bar OK count");
+      assert.equal(progTotal.total - progTotal.ok, expectedUnrev, "progress bar non-OK count");
+      assert.equal(homeTextToReview, expectedUnrev, "Home Text to review tile");
+      assert.equal(homeSignoff.n, expectedUnrev, "Home Sign-off tile");
+      assert.equal(homeSignoff.rest, 6, "Home Sign-off non-text remainder stays constant");
+      assert.equal(reviewUnrevChip, expectedUnrev, "Review Unreviewed chip");
+    };
+
+    // Baseline: 1 already OWNER-OK, 4 unreviewed (3 CSV + 1 raid_story)
+    checkAllAgree([], false, 1, 4);
+
+    // Mark l1 OK, l2 Edit (OWNER-OK + rewrite), l3 Redo (NEEDS-REWRITE)
+    const mk = (line, status, rewrite = "") => ({
+      key: lineMarkKey(line), file: line.data.file, line: "1", data_path: line.data.data_path, where_seen: "",
+      status, note: status === "NEEDS-REWRITE" ? "fix" : "", contracts: {}, rewrite, text: line.data.text, hashOk: true,
+    });
+    const m1 = [mk(lines[0], "OWNER-OK"), mk(lines[1], "OWNER-OK", "Rewritten"), mk(lines[2], "NEEDS-REWRITE")];
+    checkAllAgree(m1, true, 3, 2);
+
+    // Also mark l3 OK -> 4 OK, 1 unreviewed (the non-CSV raid_story line)
+    const m2 = [mk(lines[0], "OWNER-OK"), mk(lines[1], "OWNER-OK", "Rewritten"), mk(lines[2], "OWNER-OK")];
+    checkAllAgree(m2, true, 4, 1);
+
+    // Mark previously OWNER-OK l4 as Redo -> drops back to 3 OK, 2 unreviewed
+    const m3 = [...m2, mk(lines[3], "NEEDS-REWRITE")];
+    checkAllAgree(m3, true, 3, 2);
   });
 });

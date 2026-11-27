@@ -2,7 +2,7 @@
 // (Problems, Story issues, Text to review) that each open the matching Findings view. Pure derivation from the snapshot; read-only.
 import { useMemo } from "react";
 import {
-  AUDIT_HELP, AUDIT_LABEL, AUDIT_SIGNALS, FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, auditCounts, changesSince, changesTotal, goneBreakdown, kindCounts, kindTab, scopeCounts, shortSha, signalCard,
+  AUDIT_HELP, AUDIT_LABEL, AUDIT_SIGNALS, FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, auditCounts, changesSince, changesTotal, goneBreakdown, isUnreviewedLine, kindCounts, kindTab, scopeCounts, shortSha, signalCard,
   type FindingScope, type ListItem, type SbChanges, type SbEntity, type SbSnapshot,
 } from "./storybookLogic";
 import { ProgressBarRow } from "./StorybookProgress";
@@ -63,7 +63,13 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
 export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip, progress, onProgressArea, onOpenGuide }: HomeProps) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
-  const audit = useMemo(() => auditCounts(snap.audit), [snap]);
+  const baseAudit = useMemo(() => auditCounts(snap.audit), [snap]);
+  const baseUnreviewed = useMemo(() => snap.entities.filter((e) => isUnreviewedLine(e)).length, [snap]);
+  const audit = useMemo(() => {
+    if (!baseAudit) return null;
+    const delta = baseUnreviewed - scopes.text;
+    return delta === 0 ? baseAudit : { ...baseAudit, signoff: Math.max(0, baseAudit.signoff - delta) };
+  }, [baseAudit, baseUnreviewed, scopes.text]);
   const progTotal = useMemo(() => (progress ? progress.areas.reduce((acc, a) => ({ ok: acc.ok + a.text.ok, total: acc.total + a.text.total }), { ok: 0, total: 0 }) : null), [progress]);
   return (
     <div className="sb-home" data-testid="sb-overview">

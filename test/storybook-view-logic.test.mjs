@@ -37,24 +37,29 @@ describe("storybookLogic", () => {
     assert.equal(idx.get("squad", "doc").display, "Saint");
   });
 
-  test("list items: sample finding is Broken, non-OWNER-OK csv rows Unreviewed", () => {
+  test("list items: sample finding is Broken, non-OK text lines Unreviewed (matches progress bars)", () => {
     const items = L.buildListItems(snap);
     const broken = items.filter((i) => i.category === "broken");
     assert.equal(broken.length, 1);
     assert.deepEqual(broken[0].entityRef, { kind: "quest_step", id: "popper_2" });
     const unrev = items.filter((i) => i.category === "unreviewed");
-    const csvRows = snap.entities.filter((e) => e.kind === "line" && typeof e.data.status === "string");
-    assert.equal(unrev.length, csvRows.filter((e) => e.data.status.trim().toUpperCase() !== "OWNER-OK").length);
+    const lines = snap.entities.filter((e) => e.kind === "line");
+    assert.equal(unrev.length, lines.filter((e) => L.isUnreviewedLine(e)).length);
     assert.ok(unrev.length > 0);
     assert.ok(!unrev.some((i) => /^OWNER-OK/.test(i.msg)));
   });
 
-  test("OWNER-OK rows are not unreviewed; non-csv lines never are", () => {
-    const mk = (status) => ({ kind: "line", id: "x", display: "t", data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
+  test("OWNER-OK / final rows are not unreviewed; non-OK and non-csv lines are", () => {
+    const mk = (status, production = null) => ({ kind: "line", id: "x", display: "t", production, data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
     assert.equal(L.isUnreviewedLine(mk("OWNER-OK")), false);
     assert.equal(L.isUnreviewedLine(mk("owner-ok ")), false);
     assert.equal(L.isUnreviewedLine(mk("DRAFT")), true);
-    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), true);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined, "final"), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "ok"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "edit"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "redo"), true);
+    assert.equal(L.isUnreviewedLine(mk("OWNER-OK"), "redo"), true);
   });
 
   test("filter: empty = all, toggle adds/removes, counts", () => {
