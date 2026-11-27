@@ -14,7 +14,22 @@ const proj = resolve(import.meta.dirname, '..', 'godot');
 // ~/.local/bin/godot-4.* (newest first, versions with export templates preferred).
 const shell = process.platform === 'win32'; // .cmd/.bat shims need a shell on Windows; POSIX stays shell-free
 const probe = (bin) => !!bin && spawnSync(bin, ['--version'], { encoding: 'utf8', shell }).status === 0;
-const verKey = (n) => n.replace(/^godot-/, '').split(/[.-]/).map((p) => (/^\d+$/.test(p) ? p.padStart(4, '0') : '~' + p)).join('.');
+// Version order: numeric parts compare as numbers (4.10 > 4.9; 4.8 == 4.8.0); within one version a stable
+// release beats any pre-release (dev < alpha < beta < rc < stable); pre-release numbers compare numerically (dev10 > dev7).
+const CHANNEL = { dev: 0, alpha: 1, beta: 2, rc: 3, stable: 4 };
+const parseVer = (name) => {
+  const m = /^godot-(\d+(?:\.\d+)*)(?:[-.]([a-z]+)(\d*))?/i.exec(name);
+  if (!m) return { nums: [0], ch: 'stable', rank: -1, n: 0 };
+  const ch = m[2] ? m[2].toLowerCase() : 'stable';
+  return { nums: m[1].split('.').map(Number), ch, rank: CHANNEL[ch] ?? -1, n: m[3] ? Number(m[3]) : 0 };
+};
+const verCmp = (a, b) => {
+  const x = parseVer(a), y = parseVer(b);
+  for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) { const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0); if (d) return d; }
+  return (x.rank - y.rank) || (x.n - y.n);
+};
+// Godot's template dir names: 4.8.stable, 4.8.dev7, 4.8.rc1, 4.8.beta1, 4.8.alpha1, 4.8.1.stable
+const tplDir = (name) => { const p = parseVer(name); return `${p.nums.join('.')}.${p.ch}${p.ch === 'stable' ? '' : p.n}`; };
 const verDirs = () => { try { return readdirSync(join(homedir(), '.local', 'share', 'godot', 'export_templates')); } catch { return []; } };
 function resolveGodotBin() {
   for (const name of ['GODOT_BIN', 'GODOT_PATH']) {
@@ -24,8 +39,8 @@ function resolveGodotBin() {
   let versioned = [];
   try { versioned = readdirSync(dir).filter((n) => /^godot-4\./.test(n)); } catch { /* none */ }
   const tpl = verDirs();
-  const hasTpl = (n) => tpl.some((t) => t.replace(/\.stable$/, '') === n.replace(/^godot-/, '').replace(/-(dev\d+)$/, '.$1').replace(/-stable$/, ''));
-  versioned.sort((x, y) => (hasTpl(y) - hasTpl(x)) || (verKey(y) < verKey(x) ? -1 : verKey(y) > verKey(x) ? 1 : 0));
+  const hasTpl = (n) => tpl.includes(tplDir(n));
+  versioned.sort((x, y) => (hasTpl(y) - hasTpl(x)) || verCmp(y, x));
   const candidates = [['PATH godot', 'godot'], ['GODOT_4_8', process.env.GODOT_4_8], ['GODOT_4_7', process.env.GODOT_4_7], ...versioned.map((n) => [`~/.local/bin/${n}`, join(dir, n)])];
   const hit = candidates.find(([, b]) => probe(b));
   return hit ? { name: hit[0], bin: hit[1] } : { searched: ['GODOT_BIN', 'GODOT_PATH', ...candidates.map(([n]) => n)] };
@@ -34,6 +49,23 @@ const resolved = resolveGodotBin();
 const godot = resolved.bin;
 const run = (args, cwd) => spawnSync(godot, ['--headless', ...args], { cwd, encoding: 'utf8', timeout: 180000, shell });
 const skip = !godot && `no Godot found; searched: ${resolved.searched.join(', ')}`;
+
+test('godot candidate order: numeric versions, stable over pre-release, dev < alpha < beta < rc, template dirs', () => {
+  const names = ['godot-4.8-dev7', 'godot-4.8', 'godot-4.10', 'godot-4.8.1', 'godot-4.8-dev10', 'godot-4.9',
+    'godot-4.8-rc1', 'godot-4.8-alpha1', 'godot-4.8-beta2', 'godot-4.8.0'];
+  const desc = [...names].sort((x, y) => verCmp(y, x));
+  assert.deepEqual(desc.slice(0, 6), ['godot-4.10', 'godot-4.9', 'godot-4.8.1', 'godot-4.8', 'godot-4.8.0', 'godot-4.8-rc1']);
+  assert.deepEqual(desc.slice(6), ['godot-4.8-beta2', 'godot-4.8-alpha1', 'godot-4.8-dev10', 'godot-4.8-dev7']);
+  assert.equal(verCmp('godot-4.8', 'godot-4.8.0'), 0);
+  assert.equal(verCmp('godot-4.8-stable', 'godot-4.8'), 0);
+  assert.ok(verCmp('godot-4.8-dev7', 'godot-4.8') < 0);
+  assert.equal(tplDir('godot-4.8-dev7'), '4.8.dev7');
+  assert.equal(tplDir('godot-4.8-rc1'), '4.8.rc1');
+  assert.equal(tplDir('godot-4.8-beta1'), '4.8.beta1');
+  assert.equal(tplDir('godot-4.8-alpha1'), '4.8.alpha1');
+  assert.equal(tplDir('godot-4.8'), '4.8.stable');
+  assert.equal(tplDir('godot-4.8.1'), '4.8.1.stable');
+});
 
 function exportPack(out, preset) {
   const pck = join(out, `${preset}.pck`);
