@@ -110,6 +110,8 @@ export type AnswerResultItem = {
   error?: string;
   already?: boolean;
   summary?: string;
+  /** L3 idea-1159: uncapped option/reply text for the Sent list (the log line keeps `summary`'s caps). */
+  summaryFull?: string;
 };
 
 export type SentAnswerSummary = {
@@ -215,7 +217,7 @@ export function hasSourceDisclosure(item: Partial<Pick<DecisionItem, "ask" | "in
   return true;
 }
 
-const quoteShortClient = (s: string | undefined, max = 60): string => {
+const quoteShortClientBase = (s: string | undefined, max = 60): string => {
   const full = String(s ?? "")
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
@@ -230,7 +232,9 @@ const quoteShortClient = (s: string | undefined, max = 60): string => {
 export function formatSentChoiceSummary(
   item: Pick<DecisionItem, "lean" | "alts">,
   ans: Pick<AnswerPayloadItem, "choice" | "text">,
+  max = 60,
 ): string {
+  const quoteShortClient = (s: string | undefined) => quoteShortClientBase(s, max);
   const text = typeof ans.text === "string" ? ans.text.trim() : "";
   let base: string;
   if (ans.choice === "lean") {
@@ -757,8 +761,10 @@ export function BoringDecisionDesk({
   const [logRev, setLogRev] = useState(0);
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sending, setSending] = useState(false);
-  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string; details?: SentAnswerSummary[] } | null>(null);
+  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [bannerOpen, setBannerOpen] = useState(false);
+  // L3 idea-1160: sent details outlive the banner text; kept until the next Send replaces them.
+  const [lastSent, setLastSent] = useState<SentAnswerSummary[] | null>(null);
   const wide = useWideRail();
   const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
   const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
@@ -822,8 +828,13 @@ export function BoringDecisionDesk({
   const stripGroups = useMemo(() => orderStripLikeFeed(statusGroups, squadFeed), [statusGroups, squadFeed]);
   const batch = useMemo(() => buildAnswerBatch(visibleItems, staged), [visibleItems, staged]);
   const hiddenStagedCount = useMemo(() => countHiddenStaged(store.items, visibleIds, staged), [store.items, visibleIds, staged]);
+  // L3 idea-1161: only sendable leans are batch-staged; bare letters no option defines are skipped (card button still works by hand).
   const unstagedLeanIds = useMemo(
-    () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !staged[i.id]).map((i) => i.id),
+    () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !isUnresolvedBareLean(i) && !staged[i.id]).map((i) => i.id),
+    [feedItems, staged],
+  );
+  const needLookCount = useMemo(
+    () => feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && isUnresolvedBareLean(i) && !staged[i.id]).length,
     [feedItems, staged],
   );
 
@@ -831,7 +842,7 @@ export function BoringDecisionDesk({
   const autoLeaned = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (DECISION_LEANS_OPT_IN) return;
-    const fresh = feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !autoLeaned.current.has(i.id));
+    const fresh = feedItems.filter((i) => classifyDecisionRow(i) === "yesno" && Boolean(i.lean) && !isUnresolvedBareLean(i) && !autoLeaned.current.has(i.id));
     if (fresh.length === 0) return;
     for (const i of fresh) autoLeaned.current.add(i.id);
     setStaged((cur) => {
@@ -850,18 +861,21 @@ export function BoringDecisionDesk({
   const toggleChoice = (id: string, next: StagedChoice) => {
     if (pending || sending) return;
     setBanner(null);
+    setBannerOpen(false);
     setStaged((cur) => applyChoiceToggle(cur, id, next));
   };
 
   const setReplyText = (id: string, text: string) => {
     if (pending || sending) return;
     setBanner(null);
+    setBannerOpen(false);
     setStaged((cur) => applyReplyText(cur, id, text));
   };
 
   const stageAllLeans = () => {
     if (pending || sending || unstagedLeanIds.length === 0) return;
     setBanner(null);
+    setBannerOpen(false);
     setStaged((cur) => {
       const next = { ...cur };
       for (const id of unstagedLeanIds) {
@@ -877,6 +891,7 @@ export function BoringDecisionDesk({
     setSending(true);
     setBanner(null);
     setBannerOpen(false);
+    setLastSent(null); // a send that errors must never expose the previous batch's details
     const itemsById = new Map(store.items.map((i) => [i.id, i]));
     const payloadById = new Map(toSend.map((b) => [b.id, b]));
     try {
@@ -894,7 +909,7 @@ export function BoringDecisionDesk({
         if (r.status === "delivered" || r.status === "dismissed") {
           const it = itemsById.get(r.id);
           const pay = payloadById.get(r.id);
-          const summary = r.summary || (it && pay ? formatSentChoiceSummary(it, pay) : r.choice);
+          const summary = r.summaryFull || (it && pay ? formatSentChoiceSummary(it, pay, Infinity) : r.summary || r.choice);
           sentDetails.push({
             id: r.id,
             lane: it?.lane ? `@${it.lane.replace(/^@/, "")}` : "Desk",
@@ -911,8 +926,9 @@ export function BoringDecisionDesk({
       });
       const okCount = sentDetails.length;
       const failCount = Object.keys(nextErrs).length;
-      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).`, ...(okCount > 0 ? { details: sentDetails } : {}) });
-      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.`, ...(okCount > 0 ? { details: sentDetails } : {}) });
+      setLastSent(okCount > 0 ? sentDetails : null);
+      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).` });
+      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.` });
       await refreshDecisions();
       setLogRev((n) => n + 1);
     } finally {
@@ -1387,33 +1403,43 @@ export function BoringDecisionDesk({
             <span className="boring-decision-undo-msg" data-testid="boring-decision-undo-msg">
               {`Sending ${pending.batch.length} ${pending.batch.length === 1 ? "answer" : "answers"} in ${pending.remainingSec}s…`}
             </span>
-          ) : banner ? (
+          ) : (
             <div className="boring-decision-banner-wrap">
               <div className="boring-decision-banner-head">
-                <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
-                  {banner.text}
-                </span>
-                {banner.details && banner.details.length > 0 && (
+                {banner ? (
+                  <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
+                    {banner.text}
+                  </span>
+                ) : (
+                  <span className="boring-decision-bar-hint">
+                    {batch.length > 0
+                      ? `${batch.length} ready to send${unstagedLeanIds.length > 0 ? ` · ${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included` : ""}`
+                      : unstagedLeanIds.length > 0
+                        ? `${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included. Tap a lean, pick an option, or type an answer.`
+                        : "Pick an option or type an answer to queue a batch."}
+                  </span>
+                )}
+                {lastSent && lastSent.length > 0 && (
                   <button
                     type="button"
-                    className="boring-decision-banner-toggle"
+                    className={`boring-decision-banner-toggle${banner ? "" : " is-quiet"}`}
                     data-testid="boring-decision-banner-toggle"
                     aria-expanded={bannerOpen}
                     aria-controls={bannerOpen ? "boring-decision-banner-details" : undefined}
                     onClick={() => setBannerOpen((v) => !v)}
                   >
-                    {bannerOpen ? "Hide details ▴" : "Details ▾"}
+                    {banner ? (bannerOpen ? "Hide details ▴" : "Details ▾") : `Last sent · ${lastSent.length} ${bannerOpen ? "▾" : "▸"}`}
                   </button>
                 )}
               </div>
-              {bannerOpen && banner.details && banner.details.length > 0 && (
+              {bannerOpen && lastSent && lastSent.length > 0 && (
                 <ul
                   id="boring-decision-banner-details"
+                  aria-label="Sent answers"
                   className="boring-decision-banner-list"
                   data-testid="boring-decision-banner-details"
-                  aria-label="Sent answers"
                 >
-                  {banner.details.map((d) => (
+                  {lastSent.map((d) => (
                     <li key={d.id} className="boring-decision-banner-item" data-testid={`boring-decision-banner-item-${d.id}`}>
                       <span className="boring-decision-banner-lane">{d.lane}</span>
                       <span className="boring-decision-banner-summary">{d.summary}</span>
@@ -1423,14 +1449,6 @@ export function BoringDecisionDesk({
                 </ul>
               )}
             </div>
-          ) : (
-            <span className="boring-decision-bar-hint">
-              {batch.length > 0
-                ? `${batch.length} ready to send${unstagedLeanIds.length > 0 ? ` · ${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included` : ""}`
-                : unstagedLeanIds.length > 0
-                  ? `${unstagedLeanIds.length} ${unstagedLeanIds.length === 1 ? "lean" : "leans"} not included. Tap a lean, pick an option, or type an answer.`
-                  : "Pick an option or type an answer to queue a batch."}
-            </span>
           )}
         </div>
         <div className="boring-decision-bar-actions">
@@ -1445,6 +1463,9 @@ export function BoringDecisionDesk({
             </>
           ) : (
             <>
+              {needLookCount > 0 && (
+                <span className="boring-decision-need-look" data-testid="boring-decision-need-look">{`${needLookCount} need a look`}</span>
+              )}
               {unstagedLeanIds.length > 0 && (
                 <button type="button" className="boring-decision-leans-btn" data-testid="boring-decision-stage-leans" disabled={sending} onClick={stageAllLeans}>
                   {`Use all leans (${unstagedLeanIds.length})`}

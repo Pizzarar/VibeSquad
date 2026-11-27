@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { resolvePlaywright, PLAYWRIGHT_INSTALL_CMD } from "../scripts/ui-overlap/env.mjs";
+import { resolvePlaywright, findBrowser, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
@@ -22,8 +22,8 @@ test("B18e static: Back to split pill, clearRightPane, Shift+click dormant Desk/
 });
 
 const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
-const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
+const exe = findBrowser();
+const skip = browserSkipReason({ pw: chromium, exe });
 
 const init = (theme) => `try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"boring","app.theme":"${theme}"}));}catch{}`;
 
