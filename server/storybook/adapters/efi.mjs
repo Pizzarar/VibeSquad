@@ -850,8 +850,50 @@ async function load(reader, sha) {
       warnings.push(`${P.art}: no slots object, no art slots imported`);
     }
   }
+  attachRenderedContracts(ents, sk.json?.mastery?.families); // V9: player-facing contract title per template (additive; own function)
   await attachItemEconomy(reader, ents, locations);
   return { entities: ents, warnings };
+}
+
+/**
+ * V9: the player-facing title of every contracts.json template, filled with the real trader / item / enemy / location names.
+ * Mirrors ContractSystem.contract_title (systems/ContractSystem.gd); qty is a roll between qty_min and qty_max, so it renders as a range.
+ * Pure: reads only the entity list (and optional mastery.families map from data/skills.json). Returns Map<templateId, {title, detail, key, parts}>.
+ */
+export function renderTemplates(entities, masteryFamilies = null) {
+  const name = (kind, id) => (id == null ? null : entities.find((e) => e.kind === kind && e.id === id)?.display ?? String(id));
+  const range = (c) => (c.qty_min != null && c.qty_max != null && c.qty_min !== c.qty_max ? `${c.qty_min}–${c.qty_max}` : String(c.qty_min ?? c.qty_max ?? "?"));
+  const out = new Map();
+  for (const e of entities) {
+    if (e.kind !== "contract") continue;
+    const c = e.data ?? {};
+    const trader = name("trader", c.trader) ?? "a trader";
+    const q = range(c);
+    const item = name("item", c.item), enemy = name("enemy", c.enemy), location = name("location", c.location);
+    const rawFam = c.family ? String(c.family) : null;
+    const fam = rawFam
+      ? (masteryFamilies && Object.hasOwn(masteryFamilies, rawFam) && typeof masteryFamilies[rawFam] === "string" && masteryFamilies[rawFam]
+        ? masteryFamilies[rawFam]
+        : rawFam.replace(/_/g, " ").replace(/^./, (m) => m.toUpperCase()))
+      : null;
+    let title, pay;
+    switch (c.type) {
+      case "deliver": title = `Deliver ${q} × ${item} for ${trader}`; pay = c.unit_reward_c != null ? `${c.unit_reward_c} c each` : null; break;
+      case "kill": title = `Eliminate ${q} × ${enemy} for ${trader}`; pay = c.reward_per_kill != null ? `${c.reward_per_kill} c per kill` : null; break;
+      case "pack": title = `Wipe ${q} × ${enemy} packs for ${trader}`; pay = c.reward_per_pack != null ? `${c.reward_per_pack} c per pack` : null; break;
+      case "mastery": title = `${fam ?? "Weapon"} practice for ${trader}`; pay = c.reward_per_1000_xp != null ? `${c.reward_per_1000_xp} c per 1000 xp` : null; break;
+      default: title = `Extract from ${location} ${q} times for ${trader}`; pay = c.reward_per_extract != null ? `${c.reward_per_extract} c per extract` : null;
+    }
+    const req = [];
+    if (c.rep_req) req.push(`rep ${c.rep_req}`);
+    for (const r of c.requires ? (Array.isArray(c.requires) ? c.requires : [c.requires]) : []) if (r?.skill) req.push(`${name("skill", r.skill)} ${r.level ?? 1}`);
+    out.set(e.id, { title, detail: [pay, req.length ? `needs ${req.join(", ")}` : null, c.kit ? "rush order kit" : null].filter(Boolean).join(" · "), key: e.id, parts: { trader: c.trader ?? null, item: c.item ?? null, enemy: c.enemy ?? null, location: c.location ?? null, qty: q } });
+  }
+  return out;
+}
+function attachRenderedContracts(ents, masteryFamilies) {
+  const r = renderTemplates(ents, masteryFamilies);
+  for (const e of ents) if (e.kind === "contract" && r.has(e.id)) e.data.rendered = r.get(e.id);
 }
 
 /**

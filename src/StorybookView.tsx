@@ -9,11 +9,13 @@ import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
   SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import { StorybookText, type TextFocus } from "./StorybookText";
+import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
 import { StorybookItems } from "./StorybookItems";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
@@ -347,7 +349,7 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
 
 type QuestMode = "web" | "arcs" | "order";
 const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
-function QuestsTab({ snap, idx, card, sel, setSel, openLine, renderChip }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer }) {
+function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer }) {
   const [mode, setMode] = useState<QuestMode>("arcs");
   const chip = renderChip;
   return (
@@ -355,7 +357,7 @@ function QuestsTab({ snap, idx, card, sel, setSel, openLine, renderChip }: { sna
       <div className="sb-seg" role="tablist" aria-label="Quest views">
         {QUEST_MODES.map(([m, l]) => <button key={m} type="button" role="tab" aria-selected={mode === m} className="sb-seg-btn" onClick={() => setMode(m)}>{l}</button>)}
       </div>
-      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={openLine} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
+      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
     </div>
   );
 }
@@ -440,7 +442,7 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
   return (
     <div>
       {allowed.length > 1 && <div className="sb-seg" role="group" aria-label="Findings scope" data-testid="sb-scope">
-        {allowed.map((s) => (
+        {allowed.filter((s) => s === "problems" || s === "story" || scopes[s] > 0 || scope === s).map((s) => (
           <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); }}>
             {FINDING_SCOPE_LABEL[s]} <span className="sb-count">{scopes[s]}</span>
           </button>
@@ -497,7 +499,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [sel, setSelAll] = useState<Record<Tab, string | null>>(NO_SEL);
   // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
   const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
-  const [activeReview, setActiveReview] = useState<Set<SbCategory>>(new Set());
+  const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
+  const clearTextFocus = useCallback(() => setTextFocus(null), []);
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
@@ -522,6 +525,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const pick = useCallback((t: Tab) => (s: string) => setSelAll((o) => ({ ...o, [t]: s })), []);
   const goToRef = useRef<(e: SbEntity) => void>(() => {});
   const card = useCard(idx, (e) => goToRef.current(e));
+  const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -549,12 +553,25 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     }
   };
 
-  // Entity chip / popover / finding -> its sheet in the right tab.
+  // Open a line/contract's Review queue row directly (V3 "→ line", V5 "Review row →", V4 sheet "→ Review").
+  const openReviewRow = useCallback((e: SbEntity) => {
+    card.quiet();
+    card.hide();
+    setTextFocus({ id: entityKey(e.kind, e.id), n: Date.now() });
+    setTab("review");
+  }, [card]);
+
+  // Entity chip / popover / finding -> its sheet in the right tab (or Review row for lines).
   const goTo = useCallback((e: SbEntity) => {
     card.quiet();
     card.hide();
     const nav = entityNavTarget(e);
     if (nav) {
+      if (nav.tab === "review") {
+        setTextFocus({ id: entityKey(e.kind, e.id), n: Date.now() });
+        setTab("review");
+        return;
+      }
       if (nav.sel) pick(nav.tab)(nav.sel);
       setTab(nav.tab);
       if (nav.jump) setJump(nav.jump);
@@ -569,7 +586,6 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     const nav = auditSignalTarget(signal);
     if (nav.tab === "review") {
       setTab("review");
-      setActiveReview(new Set());
       return;
     }
     setScope(nav.scope ?? "problems");
@@ -633,18 +649,18 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <nav className="sb-tabs" role="tablist" aria-label="Storybook views">
             {TABS.filter((t) => t.built).map(({ id: t, label }) => (
               <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => setTab(t)}>
-                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review">{problems}</span>}
+                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review, code TODOs under Dev TODOs">{problems}</span>}
               </button>
             ))}
           </nav>
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
-            {tab === "review" && <Findings items={items} idx={idx} card={card} active={activeReview} setActive={setActiveReview} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
-            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} openLine={goTo} renderChip={renderChip} />}
-            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={goTo} />}
-            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={goTo} />}
-            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={goTo} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope === "story" ? "story" : "problems"} setScope={setScope} scopes={["problems", "story"]} goTo={goTo} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} />}
+            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
+            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
+            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} />}
           </main>
         </>
       )}

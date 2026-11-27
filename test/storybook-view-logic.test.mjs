@@ -151,7 +151,7 @@ describe("storybookLogic", () => {
     const ln = (kind, id) => snap.entities.find((e) => e.kind === "line" && e.data.speakerKind === kind && e.data.speakerId === id);
     assert.equal(L.entityCard(ln("squad", "doc"), idx).speaker, "Saint");
     assert.equal(L.entityCard(ln("trader", "doc"), idx).speaker, "Doc");
-    assert.equal(L.entityCard(ln("system", "armory"), idx).speaker, "armory");
+    assert.equal(L.entityCard(ln("system", "armory"), idx).speaker, "Armory");
   });
 
   test("entity card: text, speaker, area, status, owner_note, source file:line", () => {
@@ -274,13 +274,13 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookItems = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/import "\.\/storybook\.css";\n?/, "")
     .replace(/from "react"/g, `from "./react.mjs"`)
-    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookItems|\.\/StorybookArc|\.\/StorybookSheet)"/g, `from "./stub.mjs"`);
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookArc|\.\/StorybookSheet)"/g, `from "./stub.mjs"`);
   writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
 
   let mod;
@@ -554,8 +554,9 @@ describe("V2 Home + findings split", () => {
     const ids = [...v.matchAll(/\{ id: "(\w+)", label: "[^"]+", built: (true|false) \}/g)].map((m) => `${m[1]}:${m[2]}`);
     assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:true", "problems:true", "glossary:false"]);
     assert.match(v, /useState<Tab>\("home"\)/);
-    // regression: Problems and Review keep separate category filters (a shared Set made Review show "No findings match")
-    assert.match(v, /active=\{activeReview\} setActive=\{setActiveReview\} scope="text"/);
+    // regression: Problems and Review keep separate filters (a shared Set made Review show "No findings match"); V3: Review's live inside StorybookText
+    assert.match(v, /<StorybookText rows=\{reviewRows\}/);
+    assert.ok(!/activeReview/.test(v), "Review has no findings category Set");
     assert.match(v, /active=\{activeProblems\} setActive=\{setActiveProblems\}/);
     assert.ok(!/active=\{active\}/.test(v), "no shared active Set");
   });

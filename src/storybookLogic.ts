@@ -40,13 +40,14 @@ export type SbArcTrader = { trader: string; display: string; level_0: boolean; s
 export type SbPlayItem = { pos: number; kind: "map" | "reveal" | "quest_step" | "contract"; id: string; ref?: string; label: string; trader: string | null; stage: number; gates: SbArcGate[]; basis: string[] };
 export type SbArc = { arcs: SbArcTrader[]; playOrder: SbPlayItem[]; gaps: { kind: string; id: string; why: string }[]; notDerivable: string[]; tiedStages: number[] };
 
-export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed";
-export const SB_CATEGORIES: SbCategory[] = ["missing", "broken", "inconsistent", "unreviewed"];
+export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed" | "toolong";
+export const SB_CATEGORIES: SbCategory[] = ["missing", "broken", "inconsistent", "unreviewed", "toolong"];
 export const SB_CATEGORY_LABEL: Record<SbCategory, string> = {
   missing: "Missing",
   broken: "Broken",
   inconsistent: "Inconsistent",
   unreviewed: "Unreviewed",
+  toolong: "Too long",
 };
 
 export type EntityIndex = { get(kind: string, id: string): SbEntity | null; all: SbEntity[]; byKind(kind: string): SbEntity[] };
@@ -67,7 +68,7 @@ export function indexEntities(entities: SbEntity[]): EntityIndex {
   return { get: (kind, id) => byKey.get(entityKey(kind, id)) ?? null, all: [...byKey.values()], byKind: (kind) => [...(kinds.get(kind) ?? [])] };
 }
 
-/** Owner mapping: #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
+/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
 export function findingCategory(check: string): SbCategory | null {
   switch (check) {
     case "#1": case "#2": case "#5": case "#13":
@@ -76,6 +77,8 @@ export function findingCategory(check: string): SbCategory | null {
       return "inconsistent";
     case "#8": case "#15":
       return "missing";
+    case "#18":
+      return "toolong";
     default:
       return null;
   }
@@ -97,6 +100,8 @@ export type ListItem = {
   msg: string;
   entityRef: { kind: string; id: string } | null;
   source: SbSource | null;
+  /** V3: a #8 STORY-TODO code comment (no entity). Lives in the Dev TODOs bucket, never in the Problems count. */
+  dev?: boolean;
 };
 
 /** Checker findings plus one Unreviewed item per non-OWNER-OK csv text row. Unmapped checks are dropped. */
@@ -105,7 +110,7 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
   snap.findings.forEach((f, i) => {
     const category = findingCategory(f.check);
     if (!category) return;
-    out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source });
+    out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source, ...(isDevTodoFinding(f) ? { dev: true } : {}) });
   });
   for (const e of snap.entities) {
     if (!isUnreviewedLine(e)) continue;
@@ -124,7 +129,7 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
 }
 
 export function countByCategory(items: ListItem[]): Record<SbCategory, number> {
-  const c: Record<SbCategory, number> = { missing: 0, broken: 0, inconsistent: 0, unreviewed: 0 };
+  const c: Record<SbCategory, number> = { missing: 0, broken: 0, inconsistent: 0, unreviewed: 0, toolong: 0 };
   for (const it of items) c[it.category]++;
   return c;
 }
@@ -312,7 +317,7 @@ export function characterViews(idx: EntityIndex): CharacterView[] {
       const card = cards.get(key) ?? null;
       const entity = kind === "trader" || kind === "squad" || kind === "enemy" ? idx.byKind(kind).find((x) => x.id.toLowerCase() === sid) ?? null : null;
       const inferred = lines.filter((l) => l.data?.speakerSource === "inferred").length;
-      return { id: key, kind, speaker: entity?.display ?? card?.display ?? FIXED_SPEAKER_NAMES[key] ?? titleCase(sid), card, entity, lines, inferred };
+      return { id: key, kind, speaker: entity?.display ?? card?.display ?? FIXED_SPEAKER_NAMES[key] ?? (kind === "system" ? titleCase(sid.replace(/_/g, " ")) : titleCase(sid)), card, entity, lines, inferred };
     })
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
 }
@@ -340,7 +345,7 @@ export function entityCard(e: SbEntity, idx: EntityIndex): EntityCard {
   const speakerRaw = e.kind === "line" ? lineSpeakerKey(e) : e.kind === "quest_step" ? `trader:${String(d.trader ?? "")}` : "";
   const [spKind, ...spRest] = speakerRaw.split(":");
   const spId = spRest.join(":");
-  const speaker = spId ? (spKind === "trader" || spKind === "squad" ? idx.get(spKind, spId)?.display : null) ?? FIXED_SPEAKER_NAMES[speakerRaw] ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : spId) : null;
+  const speaker = spId ? (spKind === "trader" || spKind === "squad" ? idx.get(spKind, spId)?.display : null) ?? FIXED_SPEAKER_NAMES[speakerRaw] ?? (spKind === "system" ? titleCase(spId.replace(/_/g, " ")) : null) ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : titleCase(spId)) : null;
   const text =
     e.kind === "quest_step" ? [cleanTodo(String(d.story ?? "")), taskText(d.task)].filter(Boolean).join("\n") :
     e.kind === "line" || e.kind === "lore" ? String(d.text ?? e.display) :
@@ -428,12 +433,13 @@ export const SB_CATEGORY_HELP: Record<SbCategory, string> = {
   inconsistent: "Two places disagree: order, ownership, values or wording do not line up.",
   missing: "Something that should exist is not there yet.",
   unreviewed: "A text row from text_review.csv that the owner has not marked OWNER-OK.",
+  toolong: "Player-facing text longer than its screen budget (check #18): it will not fit.",
 };
 
 export const CHECK_NAME: Record<string, string> = {
   "#1": "dangling reference", "#2": "dangling reference", "#5": "dangling reference",
   "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
-  "#8": "missing piece", "#12": "lore contradiction",
+  "#8": "missing piece", "#12": "lore contradiction", "#18": "too long",
   "#13": "unobtainable item", "#14": "orphan item", "#15": "item has no story",
 };
 export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
@@ -447,19 +453,26 @@ export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, 
 // ── Overview + Findings split (V2) ──────────────────────────────────────────────
 
 /** Findings scopes: Problems = real checker findings; Text to review = the unreviewed text inventory; Story issues = coherence checks (J4-2). */
-export type FindingScope = "problems" | "story" | "text" | "all";
-export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "all"];
-export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", all: "All" };
+export type FindingScope = "problems" | "story" | "text" | "toolong" | "dev" | "all";
+export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "toolong", "dev", "all"];
+export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
 export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
   story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
   text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
+  toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
+  dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
   all: "Everything above, together.",
 };
 /** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
 export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
-export const isProblem = (it: ListItem): boolean => !isTextToReview(it);
+/** A real problem: not a text-inventory row, not a Too-long fit note, not a dev code comment. */
+export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev;
+export const isTooLong = (it: ListItem): boolean => it.category === "toolong";
+export const isDevTodo = (it: ListItem): boolean => it.dev === true;
+/** #8 findings with no entity are the `# STORY-TODO` comments in .gd source (V3). */
+export const isDevTodoFinding = (f: Pick<SbFinding, "check" | "entityRef">): boolean => f.check === "#8" && !f.entityRef;
 export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check);
 
 export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
@@ -467,13 +480,15 @@ export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
     case "problems": return items.filter(isProblem);
     case "story": return items.filter(isStoryIssue);
     case "text": return items.filter(isTextToReview);
+    case "toolong": return items.filter(isTooLong);
+    case "dev": return items.filter(isDevTodo);
     default: return items;
   }
 }
 
 export function scopeCounts(items: ListItem[]): Record<FindingScope, number> {
-  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, all: items.length };
-  for (const it of items) { if (isTextToReview(it)) c.text++; else c.problems++; if (isStoryIssue(it)) c.story++; }
+  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, toolong: 0, dev: 0, all: items.length };
+  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else c.problems++; if (isStoryIssue(it)) c.story++; }
   return c;
 }
 

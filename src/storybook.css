@@ -109,9 +109,10 @@ html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill.on { c
   .sb-mono, .sb-win, .sb-rel-name, .sb-card-meta, .sb-tag, .sb-legend { font-size: 14px; }
 }
 @media (max-width: 600px) {
-  .sb-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 8px 28px 0 10px; /* right pad + fade: the clipped last tab reads as "scrolls" */ -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
-  .sb-tabs::-webkit-scrollbar { display: none; }
-  .sb-tab { flex: 0 0 auto; padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); }
+  .sb-tabs { position: static; flex-wrap: wrap; overflow: visible; padding: 8px 10px; gap: 6px; } /* V3: wrap, never clip; not sticky on phone so 2-3 tab rows don't eat the screen */
+  .sb-tab { flex: 1 1 auto; padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); justify-content: center; }
+  .sb-search-input { width: 100%; }
+  .sb-row-foot { flex-direction: column; align-items: flex-start; }
   .sb-head { flex-wrap: nowrap; gap: 6px; padding: 8px 10px; }
   .sb-head:has(.sb-needs) { flex-wrap: wrap; } /* needs-you present: it gets a slim second row instead of squeezing the title */
   .sb-back { order: 0; flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -174,6 +175,32 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-more { margin: 12px 0; }
 .sb-home { display: flex; flex-direction: column; gap: 4px; }
 
+/* ── Review queue (V3): StorybookText ─────────────────────────────────────────────── */
+.sb-text { display: flex; flex-direction: column; gap: 8px; }
+.sb-class { margin: 0; }
+.sb-text .sb-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; position: sticky; top: 55px; z-index: 4; background: var(--sb-bg); padding: 4px 0; }
+@media (max-width: 600px) { .sb-text .sb-search { position: static; } }
+.sb-search-input { flex: 1 1 280px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
+.sb-search-input:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
+.sb-search-n { font-size: 12px; color: var(--sb-text2); }
+.sb-ents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.sb-ents-lbl { font-size: 12px; color: var(--sb-text2); }
+.sb-ent { display: inline-flex; align-items: center; gap: 4px; }
+.sb-tgroup { margin: 0 0 6px; }
+.sb-tgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 12px; font: inherit; font-weight: 600; text-align: left; cursor: pointer; color: var(--sb-text); background: var(--sb-panel2); border: 1px solid var(--sb-line); border-radius: 8px; }
+.sb-tgroup-head:hover { border-color: var(--sb-accent); }
+.sb-tgroup-caret { width: 1em; color: var(--sb-text2); }
+.sb-rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sb-row { padding: 8px 12px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
+.sb-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sb-row-speaker { font-weight: 600; }
+.sb-row-title { font-weight: 600; overflow-wrap: anywhere; }
+.sb-row-text { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--sb-accent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sb-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.sb-row-sub { font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
+.sb-row-actions:empty { display: none; } /* V6 slot: OK / Redo / Edit buttons mount here */
+.sb-cat-toolong { border-color: var(--sb-warn); }
+
 /* V5 arcs + play order (StorybookArc.tsx). Mobile-first: one column; wide screens get a grid of trader columns. */
 .sb-arc-note { margin: 0 0 10px; color: var(--sb-text2); font-size: 13px; line-height: 1.45; }
 .sb-arcs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; align-items: start; }
@@ -218,8 +245,8 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-items { min-width: 0; }
 .sb-items-detail { min-width: 0; }
 .sb-items-bar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.sb-search { width: 100%; max-width: 420px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
-.sb-search:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
+.sb-items-bar .sb-search { width: 100%; max-width: 420px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
+.sb-items-bar .sb-search:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
 .sb-items-layout { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); gap: 14px; align-items: start; }
 .sb-items-list { display: flex; flex-direction: column; gap: 6px; max-height: 68dvh; overflow-y: auto; padding-right: 4px; }
 .sb-item-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 6px 10px; font: inherit; text-align: left; cursor: pointer; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
@@ -231,5 +258,5 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 @media (max-width: 600px) {
   .sb-items-layout { grid-template-columns: 1fr; }
   .sb-items-list { max-height: 240px; }
-  .sb-search { max-width: none; }
+  .sb-items-bar .sb-search { max-width: none; }
 }
