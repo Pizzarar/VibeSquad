@@ -264,6 +264,22 @@ test("idea-1059: defaultGit honors timeoutMs; a removal past its deadline remove
     assert.ok(existsSync(join(wt, "dist", "deep", "x.js")) && existsSync(join(wt, "README.md")));
   }));
 
+test("idea-1210: a defaultGit timeout kills git's whole process tree, not just git (POSIX)", { skip: process.platform === "win32" && "taskkill /T cannot reach a tree whose parent the sync timeout already killed" }, () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    initRepo(repo);
+    const pidFile = join(root, "grandchild.pid");
+    const alias = `!sh -c 'sleep 60 & echo $! > "${pidFile}"; wait'`;
+    assert.throws(() => defaultGit(["-c", `alias.slp=${alias}`, "slp"], repo, { timeoutMs: 1500 }), (e) => e.code === "ETIMEDOUT");
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    assert.ok(pid > 1, "the alias spawned a grandchild");
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const end = Date.now() + 3000;
+    while (alive() && Date.now() < end) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    if (alive()) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    assert.equal(alive(), false, "grandchild gone after the timeout");
+  }));
+
 test("idea-1059: `vs worktree sweep` prints progress on stderr (stdout stays JSON); --quiet silences it", () =>
   withTmp((root) => {
     const repo = join(root, "repo");

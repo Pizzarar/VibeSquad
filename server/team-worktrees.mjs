@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, linkSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isForbiddenRealHome } from "./test-guard.mjs";
+import { killTree } from "./proc-tree.mjs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const PROTECTED_BRANCHES = new Set(["main", "master"]);
@@ -17,8 +18,17 @@ const PROTECTED_BRANCHES = new Set(["main", "master"]);
  */
 export function defaultGit(args, cwd, { env, input, buffer = false, timeoutMs } = {}) {
   const base = buffer || input !== undefined ? 300_000 : 30_000;
-  const out = execFileSync("git", args, {
+  // idea-1210: execFileSync's timeout kills only git, so a hook / `!` alias / filter child outlives it (on Windows it then holds the
+  // worktree dir open and a later removal fails EPERM). A sync API cannot kill a tree mid-run, so off win32 git leads its own
+  // session/process group (`detached`), and once the timeout fired we SIGKILL that group via proc-tree (the group id survives
+  // git's death while any member lives). win32 limit: `detached` there opens a new console and taskkill /T needs the parent
+  // alive, which the sync timeout has already killed, so the tree is not reachable there; only git itself is killed.
+  const detached = process.platform !== "win32";
+  let out;
+  try {
+    out = execFileSync("git", args, {
     cwd,
+    ...(detached ? { detached: true } : {}),
     ...(buffer ? {} : { encoding: "utf8" }), // no encoding = Buffer out; "buffer" would also be used to encode a string `input` (ERR_UNKNOWN_ENCODING)
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     ...(input === undefined ? {} : { input }),
@@ -26,7 +36,11 @@ export function defaultGit(args, cwd, { env, input, buffer = false, timeoutMs } 
     windowsHide: true,
     timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.min(base, Math.ceil(timeoutMs))) : base,
     maxBuffer: buffer ? 2 ** 31 : 64 << 20, // not `2 << 30`: that overflows int32 to a negative (ERR_OUT_OF_RANGE)
-  });
+    });
+  } catch (e) {
+    if (detached && e?.code === "ETIMEDOUT" && Number.isInteger(e.pid)) killTree(e.pid, { sync: true });
+    throw e;
+  }
   return buffer ? out : out.trim();
 }
 
