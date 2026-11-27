@@ -24,13 +24,13 @@ test("#18 maps to toolong; #8 code comments are Dev TODOs, not Problems", () => 
   assert.deepEqual(L.scopeItems(items, "coverage").map((i) => i.check), ["#8"]);
   const i15 = L.buildListItems({ entities: [], findings: [mk("#15", { kind: "item", id: "z" }), mk("#4", null)] });
   assert.deepEqual([L.scopeCounts(i15).coverage, L.problemCount(i15), L.scopeCounts(i15).story], [1, 1, 1]);
-  // V6 lead decision: Problems = broken + story ONLY. #3 doc drift / #14 orphan / #6 #9 #10 go to Other checks, never the badge.
+  // W4: Problems = broken + story ONLY. #11 (lexical title-vs-task), #7 info, #3 doc drift / #14 orphan / #6 #9 #10 go to Other checks, never the badge.
   const mixed = L.buildListItems({ entities: [], findings: [mk("#1", null), mk("#13", null), mk("#4", null), mk("#11", null), mk("#3", null), mk("#14", { kind: "item", id: "o" }), mk("#6", null), mk("#9", null), mk("#10", null), mk("#8", null), mk("#18", null), mk("#15", { kind: "item", id: "q" })] });
   const mc = L.scopeCounts(mixed);
-  assert.deepEqual([mc.problems, mc.story, mc.other, mc.coverage, mc.dev, mc.toolong], [4, 2, 5, 1, 1, 1]);
-  assert.equal(L.problemCount(mixed), 4);
-  assert.deepEqual(L.scopeItems(mixed, "problems").map((i) => i.check), ["#1", "#13", "#4", "#11"]);
-  assert.deepEqual(L.scopeItems(mixed, "other").map((i) => i.check), ["#3", "#14", "#6", "#9", "#10"]);
+  assert.deepEqual([mc.problems, mc.story, mc.other, mc.coverage, mc.dev, mc.toolong], [3, 1, 6, 1, 1, 1]);
+  assert.equal(L.problemCount(mixed), 3);
+  assert.deepEqual(L.scopeItems(mixed, "problems").map((i) => i.check), ["#1", "#13", "#4"]);
+  assert.deepEqual(L.scopeItems(mixed, "other").map((i) => i.check), ["#11", "#3", "#14", "#6", "#9", "#10"]);
 });
 
 test("rows: story first, full text (never truncated), contracts rendered with real names", () => {

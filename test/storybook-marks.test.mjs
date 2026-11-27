@@ -425,11 +425,12 @@ test("m2: one lock per repo however spelled; auto-commit after midnight commits 
 }));
 
 test("W4 friction 7: OK on a DRAFT row counts as OK (not edit) in commit summary; Edit replacing the draft counts as edit", async () => withGitEnv(async () => {
-  const fake = makeFakeRepo((files) => {
-    files[SHEET] = files[SHEET].replace(
+  const fake = makeFakeRepo({
+    ...FILES,
+    [SHEET]: FILES[SHEET].replace(
       /A former paramedic\.,squad,,,verify,,,STORY-TODO,,,/,
       "A former paramedic.,squad,,,verify,,,DRAFT,,Ex-medic who still packs a tourniquet.,",
-    );
+    ),
   });
   try {
     const wtRoot = path.join(fake.root, "wt");
