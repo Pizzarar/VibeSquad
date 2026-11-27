@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "project": "efi",
   "ref": "origin/main",
-  "sha": "e08f04ad50dd6491854719b81637bcbc6f09fb83",
+  "sha": "9d17aaf6ed225a06ef84b58fd6f4343711f94b3a",
   "generatedAt": "2026-01-01T00:00:00.000Z",
   "entities": [
     {
@@ -123,6 +123,11 @@
           "rel": "drops",
           "kind": "item",
           "id": "scrap_metal"
+        },
+        {
+          "rel": "spawns_at",
+          "kind": "location",
+          "id": "harbor_district"
         }
       ],
       "production": null,
@@ -153,6 +158,11 @@
           "rel": "drops",
           "kind": "item",
           "id": "scrap_metal"
+        },
+        {
+          "rel": "spawns_at",
+          "kind": "location",
+          "id": "harbor_district"
         }
       ],
       "production": null,
@@ -178,7 +188,13 @@
         "path": "data/enemies.json",
         "line": 24
       },
-      "links": [],
+      "links": [
+        {
+          "rel": "spawns_at",
+          "kind": "location",
+          "id": "sealed_vault"
+        }
+      ],
       "production": null,
       "data": {
         "boss": false,
@@ -203,6 +219,11 @@
       "links": [
         {
           "rel": "boss_of",
+          "kind": "location",
+          "id": "harbor_district"
+        },
+        {
+          "rel": "spawns_at",
           "kind": "location",
           "id": "harbor_district"
         }
@@ -248,6 +269,11 @@
           "rel": "first_clear_unique",
           "kind": "item",
           "id": "pistol_9mm"
+        },
+        {
+          "rel": "container_loot",
+          "kind": "item",
+          "id": "scrap_metal"
         },
         {
           "rel": "long_haul_loot",
@@ -324,7 +350,7 @@
       "aliases": [],
       "source": {
         "path": "data/locations.json",
-        "line": 41
+        "line": 53
       },
       "links": [
         {
@@ -617,6 +643,16 @@
           "rel": "spoken_by",
           "kind": "trader",
           "id": "popper"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "scav"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
         },
         {
           "rel": "trader",
@@ -917,34 +953,6 @@
       }
     },
     {
-      "id": "rel:doc:wary",
-      "kind": "line",
-      "display": "Doc frowns.",
-      "aliases": [],
-      "source": {
-        "path": "data/trader_relations.json",
-        "line": 32
-      },
-      "links": [
-        {
-          "rel": "spoken_by",
-          "kind": "trader",
-          "id": "doc"
-        }
-      ],
-      "production": null,
-      "data": {
-        "text": "Doc frowns.",
-        "origin": "trader_relations",
-        "speaker": "doc",
-        "speakerKind": "trader",
-        "speakerId": "doc",
-        "speakerSource": "explicit",
-        "rowClass": "story",
-        "band": "wary"
-      }
-    },
-    {
       "id": "rel:doc:word",
       "kind": "line",
       "display": "Word gets around: Doc heard about that.",
@@ -998,34 +1006,6 @@
         "speakerSource": "explicit",
         "rowClass": "story",
         "field": "name"
-      }
-    },
-    {
-      "id": "squad:doc:bio",
-      "kind": "line",
-      "display": "A former paramedic.",
-      "aliases": [],
-      "source": {
-        "path": "data/squad.json",
-        "line": 6
-      },
-      "links": [
-        {
-          "rel": "spoken_by",
-          "kind": "squad",
-          "id": "doc"
-        }
-      ],
-      "production": "placeholder",
-      "data": {
-        "text": "STORY-TODO: A former paramedic.",
-        "origin": "squad",
-        "speaker": "doc",
-        "speakerKind": "squad",
-        "speakerId": "doc",
-        "speakerSource": "explicit",
-        "rowClass": "story",
-        "field": "bio"
       }
     },
     {
@@ -1098,6 +1078,11 @@
           "rel": "spoken_by",
           "kind": "squad",
           "id": "doc"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "sealed_vault"
         }
       ],
       "production": null,
@@ -1110,27 +1095,6 @@
         "speakerSource": "explicit",
         "rowClass": "ui",
         "field": "synergy"
-      }
-    },
-    {
-      "id": "raid_story:1",
-      "kind": "line",
-      "display": "%s slip into %s.",
-      "aliases": [],
-      "source": {
-        "path": "scenes/raids/corridor/raid_story.gd",
-        "line": 4
-      },
-      "links": [],
-      "production": null,
-      "data": {
-        "text": "%s slip into %s.",
-        "origin": "raid_story",
-        "speaker": "squad",
-        "speakerKind": "party",
-        "speakerId": "squad",
-        "speakerSource": "inferred",
-        "rowClass": "story"
       }
     },
     {
@@ -1229,7 +1193,7 @@
         "origin": "csv",
         "csv_line": 2,
         "speakerKind": "system",
-        "speakerId": "system",
+        "speakerId": "armory",
         "speakerSource": "inferred",
         "screen": "Screen: Armory",
         "rowClass": "ui"
@@ -1254,6 +1218,11 @@
           "rel": "said_at",
           "kind": "location",
           "id": "harbor_district"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "scav"
         }
       ],
       "production": "ai-draft",
@@ -1327,7 +1296,27 @@
         "speakerId": "doc",
         "speakerSource": "explicit",
         "screen": "Trader relations",
-        "rowClass": "story"
+        "rowClass": "story",
+        "provenance": [
+          {
+            "origin": "csv",
+            "id": "csv:data/trader_relations.json:5:[\"traders\", \"doc\", \"lines\", \"wary\"]",
+            "source": {
+              "path": "docs/review/text_review.csv",
+              "line": 5
+            }
+          },
+          {
+            "origin": "trader_relations",
+            "id": "rel:doc:wary",
+            "source": {
+              "path": "data/trader_relations.json",
+              "line": 32
+            }
+          }
+        ],
+        "band": "wary",
+        "native_speaker": "doc"
       }
     },
     {
@@ -1349,6 +1338,11 @@
           "rel": "said_at",
           "kind": "location",
           "id": "harbor_district"
+        },
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "scav"
         }
       ],
       "production": "ai-draft",
@@ -1422,7 +1416,28 @@
         "speakerId": "doc",
         "speakerSource": "inferred",
         "screen": "Data: squad",
-        "rowClass": "story"
+        "rowClass": "story",
+        "provenance": [
+          {
+            "origin": "csv",
+            "id": "csv:data/squad.json:3:[\"members\", 0, \"bio\"]",
+            "source": {
+              "path": "docs/review/text_review.csv",
+              "line": 7
+            }
+          },
+          {
+            "origin": "squad",
+            "id": "squad:doc:bio",
+            "source": {
+              "path": "data/squad.json",
+              "line": 6
+            },
+            "text": "STORY-TODO: A former paramedic."
+          }
+        ],
+        "field": "bio",
+        "native_speaker": "doc"
       }
     },
     {
@@ -1506,7 +1521,121 @@
         "speakerId": "squad",
         "speakerSource": "inferred",
         "screen": "Screen: Raids",
-        "rowClass": "story"
+        "rowClass": "story",
+        "provenance": [
+          {
+            "origin": "csv",
+            "id": "csv:scenes/raids/corridor/raid_story.gd:30:",
+            "source": {
+              "path": "docs/review/text_review.csv",
+              "line": 9
+            }
+          },
+          {
+            "origin": "raid_story",
+            "id": "raid_story:1",
+            "source": {
+              "path": "scenes/raids/corridor/raid_story.gd",
+              "line": 4
+            }
+          }
+        ],
+        "native_speaker": "squad"
+      }
+    },
+    {
+      "id": "csv:data/locations.json:10:[0, \"containers\", 0, \"name\"]",
+      "kind": "line",
+      "display": "Cargo crate",
+      "aliases": [],
+      "source": {
+        "path": "data/locations.json",
+        "line": 10
+      },
+      "links": [
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Data: locations",
+        "source": "data",
+        "file": "data/locations.json",
+        "line": "10",
+        "data_path": "[0, \"containers\", 0, \"name\"]",
+        "id": "",
+        "current_text": "Cargo crate",
+        "where_seen": "raids page",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "Cargo crate",
+        "origin": "csv",
+        "csv_line": 10,
+        "speakerKind": "system",
+        "speakerId": "locations",
+        "speakerSource": "inferred",
+        "screen": "Data: locations",
+        "rowClass": "ui"
+      }
+    },
+    {
+      "id": "csv:data/enemies.json:4:[\"enemies\", \"scav\", \"name\"]",
+      "kind": "line",
+      "display": "Scav",
+      "aliases": [],
+      "source": {
+        "path": "data/enemies.json",
+        "line": 4
+      },
+      "links": [
+        {
+          "rel": "mentions",
+          "kind": "enemy",
+          "id": "scav"
+        },
+        {
+          "rel": "said_at",
+          "kind": "location",
+          "id": "harbor_district"
+        }
+      ],
+      "production": "ai-draft",
+      "data": {
+        "group": "Data: enemies",
+        "source": "data",
+        "file": "data/enemies.json",
+        "line": "4",
+        "data_path": "[\"enemies\", \"scav\", \"name\"]",
+        "id": "",
+        "current_text": "Scav",
+        "where_seen": "raids page",
+        "length_budget": "",
+        "tags": "",
+        "confidence": "verify",
+        "appendix": "",
+        "owner_rewrite": "",
+        "status": "DRAFT",
+        "speaker": "",
+        "owner_note": "",
+        "reviewed_hash": "",
+        "text": "Scav",
+        "origin": "csv",
+        "csv_line": 11,
+        "speakerKind": "system",
+        "speakerId": "enemies",
+        "speakerSource": "inferred",
+        "screen": "Data: enemies",
+        "rowClass": "flavor"
       }
     },
     {
