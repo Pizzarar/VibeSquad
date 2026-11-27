@@ -10,6 +10,16 @@ import { fileURLToPath } from "node:url";
 const require2 = createRequire(import.meta.url);
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// Screenshot output for e2e tests: a fresh temp dir by default, the tracked docs/shots/<name> only with UPDATE_SHOTS=1.
+// Call cleanupShotsDir(dir) in after(); it is a no-op for the tracked dir.
+export function shotsDir(name) {
+  if (process.env.UPDATE_SHOTS === "1") return path.join(REPO_ROOT, "docs", "shots", name);
+  return fs.mkdtempSync(path.join(os.tmpdir(), `vs-shots-${name}-`));
+}
+export function cleanupShotsDir(dir) {
+  if (dir && !dir.startsWith(path.join(REPO_ROOT, "docs"))) fs.rmSync(dir, { recursive: true, force: true });
+}
+
 export const TEAMS_REGISTRY = {
   revision: "ui-overlap-guard",
   teams: [
