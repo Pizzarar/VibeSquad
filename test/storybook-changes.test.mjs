@@ -107,6 +107,7 @@ test("view logic: wordDiff, goneBreakdown, signalCard counts equal what the clic
   assert.match(L.goneBreakdown({ counts: { goneBy: { "dev-string": 181, twin: 108, efi: 0 } } }), /181 dev.*108 duplicates merged|181 dev.*108 duplicate/);
   const it = (check, category) => ({ key: check + Math.random(), category, check, severity: "warn", msg: "", entityRef: null, source: null });
   const items = [it("#1", "broken"), it("#7", "inconsistent"), it("#14", "inconsistent"), it("#4", "inconsistent"), it("#15", "missing"), { ...it(null, "unreviewed") }];
+  const isUnrev = (x) => x.category === "unreviewed";
   const audit = { coverage: 5, integrity: 4, cohesion: 3, signoff: 9 };
   const c = Object.fromEntries(["integrity", "cohesion", "coverage", "signoff"].map((s) => [s, L.signalCard(s, items, audit)]));
   assert.equal(c.integrity.n, 3); assert.equal(c.integrity.rest, 1); assert.deepEqual(c.integrity.target.checks, L.SIGNAL_CHECKS.integrity);
@@ -119,6 +120,9 @@ test("view logic: wordDiff, goneBreakdown, signalCard counts equal what the clic
     const opened = L.scopeItems(items, t.scope).filter((x) => x.check != null && t.checks.includes(x.check));
     assert.equal(c[s].n, opened.length, `${s} card count = rows it opens`);
   }
+  // Scope "all" has no pill on Problems: it is only valid with the checks filter; clearing it falls back to Problems (no text-inventory leak).
+  assert.equal(L.effectiveScope("all", null), "problems"); assert.equal(L.effectiveScope("all", new Set(["#1"])), "all"); assert.equal(L.effectiveScope("other", null), "other");
+  assert.equal(L.scopeItems(items, L.effectiveScope("all", null)).filter(isUnrev).length, 0);
   // Home Problems bucket = tab badge = broken + story (#1 broken, #7 and #4 story); #14 orphan -> Other, #15 -> Coverage.
   const sc = L.scopeCounts(items);
   assert.equal(sc.problems, 3); assert.equal(L.problemCount(items), sc.problems); assert.equal(sc.other, 1); assert.equal(sc.coverage, 1); assert.equal(sc.text, 1);

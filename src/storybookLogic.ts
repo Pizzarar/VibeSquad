@@ -514,6 +514,8 @@ export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
   all: "Everything above, together.",
 };
+/** The Problems tab has no "All" pill: scope "all" is only valid while a signal card's checks filter is active, else it falls back to Problems (no unreviewed-text leak). */
+export const effectiveScope = (scope: FindingScope, checks: ReadonlySet<string> | null | undefined): FindingScope => (scope === "all" && !checks ? "problems" : scope);
 /** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions, #19 lore vs roster. */
 export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12", "#19"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";

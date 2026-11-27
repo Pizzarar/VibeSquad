@@ -8,7 +8,7 @@ import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
   SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
-  FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
+  FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, effectiveScope, problemCount, scopeCounts, scopeItems, type FindingScope,
   entityKey, indexEntities, auditCounts, buildTextChanges, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
@@ -476,7 +476,8 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
 
 const PAGE = 200; // the text inventory is thousands of rows; render a page at a time
 
-function Findings({ items: allItems, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo, checks = null, clearChecks }: { checks?: ReadonlySet<string> | null; clearChecks?: () => void; items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
+function Findings({ items: allItems, idx, card, active, setActive, scope: scopeIn, setScope, scopes: allowed, goTo, checks = null, clearChecks }: { checks?: ReadonlySet<string> | null; clearChecks?: () => void; items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
+  const scope = effectiveScope(scopeIn, checks);
   const items = allItems;
   const scoped = useMemo(() => scopeItems(items, scope).filter((it) => !checks || (it.check != null && checks.has(it.check))), [items, scope, checks]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
@@ -751,7 +752,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => setChecks(null)} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => { setChecks(null); setScope((sc) => effectiveScope(sc, null)); }} />}
             {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>
         </>
