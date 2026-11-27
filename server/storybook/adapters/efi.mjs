@@ -612,16 +612,16 @@ async function load(reader, sha) {
       warnings.push(`${P.art}: no slots object, no art slots imported`);
     }
   }
-  attachRenderedContracts(ents); // V9: player-facing contract title per template (additive; own function)
+  attachRenderedContracts(ents, sk.json?.mastery?.families); // V9: player-facing contract title per template (additive; own function)
   return { entities: ents, warnings };
 }
 
 /**
  * V9: the player-facing title of every contracts.json template, filled with the real trader / item / enemy / location names.
  * Mirrors ContractSystem.contract_title (systems/ContractSystem.gd); qty is a roll between qty_min and qty_max, so it renders as a range.
- * Pure: reads only the entity list. Returns Map<templateId, {title, detail, key, parts}>.
+ * Pure: reads only the entity list (and optional mastery.families map from data/skills.json). Returns Map<templateId, {title, detail, key, parts}>.
  */
-export function renderTemplates(entities) {
+export function renderTemplates(entities, masteryFamilies = null) {
   const name = (kind, id) => (id == null ? null : entities.find((e) => e.kind === kind && e.id === id)?.display ?? String(id));
   const range = (c) => (c.qty_min != null && c.qty_max != null && c.qty_min !== c.qty_max ? `${c.qty_min}–${c.qty_max}` : String(c.qty_min ?? c.qty_max ?? "?"));
   const out = new Map();
@@ -631,7 +631,12 @@ export function renderTemplates(entities) {
     const trader = name("trader", c.trader) ?? "a trader";
     const q = range(c);
     const item = name("item", c.item), enemy = name("enemy", c.enemy), location = name("location", c.location);
-    const fam = c.family ? String(c.family).replace(/_/g, " ").replace(/^./, (m) => m.toUpperCase()) : null;
+    const rawFam = c.family ? String(c.family) : null;
+    const fam = rawFam
+      ? (masteryFamilies && Object.hasOwn(masteryFamilies, rawFam) && typeof masteryFamilies[rawFam] === "string" && masteryFamilies[rawFam]
+        ? masteryFamilies[rawFam]
+        : rawFam.replace(/_/g, " ").replace(/^./, (m) => m.toUpperCase()))
+      : null;
     let title, pay;
     switch (c.type) {
       case "deliver": title = `Deliver ${q} × ${item} for ${trader}`; pay = c.unit_reward_c != null ? `${c.unit_reward_c} c each` : null; break;
@@ -647,8 +652,8 @@ export function renderTemplates(entities) {
   }
   return out;
 }
-function attachRenderedContracts(ents) {
-  const r = renderTemplates(ents);
+function attachRenderedContracts(ents, masteryFamilies) {
+  const r = renderTemplates(ents, masteryFamilies);
   for (const e of ents) if (e.kind === "contract" && r.has(e.id)) e.data.rendered = r.get(e.id);
 }
 

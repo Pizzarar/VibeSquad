@@ -9,15 +9,14 @@ const GROUP_PAGE = 60; // rows shown per group before "show more" (a screen has 
 
 export type TextFocus = { id: string; n: number } | null;
 
-export function StorybookText({ rows, idx, renderChip, focus, renderActions }: {
-  rows: ReviewRow[]; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; focus: TextFocus; renderActions?: (row: ReviewRow) => React.ReactNode;
+export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions }: {
+  rows: ReviewRow[]; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; focus: TextFocus; onFocusConsumed?: () => void; renderActions?: (row: ReviewRow) => React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [classes, setClasses] = useState<ReadonlySet<RowClass>>(new Set());
   const [tooLong, setTooLong] = useState(false);
   const [unreviewed, setUnreviewed] = useState(false);
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set()); // group ids the owner opened (story groups start open)
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set()); // story groups the owner collapsed
+  const [toggled, setToggled] = useState<Record<string, boolean>>({}); // explicit user open/collapse overrides (always win over defaults/search)
   const [more, setMore] = useState<Record<string, number>>({});
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -30,25 +29,24 @@ export function StorybookText({ rows, idx, renderChip, focus, renderActions }: {
   const nUnrev = useMemo(() => rows.filter((r) => r.unreviewed).length, [rows]);
   const ents = useMemo(() => searchEntities(idx, query), [idx, query]);
   const searching = query.trim() !== "" || tooLong || unreviewed;
-  const isOpen = (cls: RowClass, gid: string): boolean => (searching ? true : cls === "story" ? !closed.has(gid) : open.has(gid));
+  const isOpen = (cls: RowClass, gid: string): boolean => (Object.hasOwn(toggled, gid) ? toggled[gid] : searching || cls === "story");
   const toggle = (cls: RowClass, gid: string) => {
     const was = isOpen(cls, gid);
-    if (cls === "story") setClosed((s) => { const n = new Set(s); if (was) n.add(gid); else n.delete(gid); return n; });
-    else setOpen((s) => { const n = new Set(s); if (was) n.delete(gid); else n.add(gid); return n; });
+    setToggled((m) => ({ ...m, [gid]: !was }));
   };
 
   // "→ line": clear filters, open + page the row's group, then scroll to it and flash it.
   useEffect(() => {
     if (!focus) return;
+    onFocusConsumed?.();
     const row = rows.find((r) => r.id === focus.id);
     if (!row) return;
     setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false);
-    setClosed((s) => { const n = new Set(s); n.delete(row.groupId); return n; });
-    setOpen((s) => new Set(s).add(row.groupId));
+    setToggled((m) => ({ ...m, [row.groupId]: true }));
     const pos = (groupRows(rows).find((b) => b.cls === row.cls)?.groups.find((g) => g.id === row.groupId)?.rows.findIndex((r) => r.id === row.id) ?? 0) + 1;
     setMore((m) => ({ ...m, [row.groupId]: Math.max(m[row.groupId] ?? 0, pos) }));
     setFlash({ id: row.id, n: focus.n });
-  }, [focus, rows]);
+  }, [focus, rows, onFocusConsumed]);
   useEffect(() => {
     if (!flash) return;
     const el = [...(root.current?.querySelectorAll<HTMLElement>("[data-sb-row]") ?? [])].find((n) => n.getAttribute("data-sb-row") === flash.id);

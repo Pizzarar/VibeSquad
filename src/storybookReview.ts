@@ -50,15 +50,22 @@ export function speakerName(e: SbEntity, idx: EntityIndex): string {
   return ent?.display ?? (typeof e.data?.speaker === "string" && e.data.speaker ? e.data.speaker : titleCase(id));
 }
 
-const tooLongReason = (msg: string): string => {
-  const m = /text is (\d+) chars \(([^)]*)\)/.exec(msg);
-  return m ? `${m[1]} chars, ${m[2]}` : "too long";
+export const tooLongReason = (msg: string): string => {
+  const m = /\b(text|owner_rewrite) is (\d+) (chars|sentences) \(([^)]*)\)/.exec(msg);
+  if (m) return `${m[1] === "owner_rewrite" ? "rewrite " : ""}${m[2]} ${m[3]}, ${m[4]}`;
+  const stripped = msg.replace(/^too long:\s*/i, "").replace(/:\s*"[^"]*"$/, "").trim();
+  return stripped && stripped.toLowerCase() !== "too long" ? stripped : "over budget";
 };
 
 /** All reviewable rows: text lines, every contract template (rendered), lore entries (not the whole-doc bodies). Entity order is kept inside a group. */
 export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: ListItem[]): ReviewRow[] {
   const long = new Map<string, string>();
-  for (const it of items) if (it.category === "toolong" && it.entityRef) long.set(entityKey(it.entityRef.kind, it.entityRef.id), tooLongReason(it.msg));
+  for (const it of items) if (it.category === "toolong" && it.entityRef) {
+    const k = entityKey(it.entityRef.kind, it.entityRef.id);
+    const r = tooLongReason(it.msg);
+    const prev = long.get(k);
+    long.set(k, prev && !prev.includes(r) ? `${prev}; ${r}` : r);
+  }
   const rows: ReviewRow[] = [];
   const push = (r: Omit<ReviewRow, "haystack" | "groupId" | "tooLong">) => {
     const tooLong = long.get(r.id) ?? null;

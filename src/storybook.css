@@ -109,7 +109,7 @@ html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill.on { c
   .sb-mono, .sb-win, .sb-rel-name, .sb-card-meta, .sb-tag, .sb-legend { font-size: 14px; }
 }
 @media (max-width: 600px) {
-  .sb-tabs { flex-wrap: wrap; overflow: visible; padding: 8px 10px; gap: 6px; } /* V3: wrap, never clip: with Problems last the old scroll+fade strip hid it at 390px */
+  .sb-tabs { position: static; flex-wrap: wrap; overflow: visible; padding: 8px 10px; gap: 6px; } /* V3: wrap, never clip; not sticky on phone so 2-3 tab rows don't eat the screen */
   .sb-tab { flex: 1 1 auto; padding: 0 10px; border-radius: 8px; border-bottom: 1px solid var(--sb-line); justify-content: center; }
   .sb-search-input { width: 100%; }
   .sb-row-foot { flex-direction: column; align-items: flex-start; }
@@ -177,7 +177,8 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 
 /* ── Review queue (V3): StorybookText ─────────────────────────────────────────────── */
 .sb-text { display: flex; flex-direction: column; gap: 8px; }
-.sb-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; position: sticky; top: 0; z-index: 4; background: var(--sb-bg); padding: 4px 0; }
+.sb-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; position: sticky; top: 55px; z-index: 4; background: var(--sb-bg); padding: 4px 0; }
+@media (max-width: 600px) { .sb-search { position: static; } }
 .sb-search-input { flex: 1 1 280px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
 .sb-search-input:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
 .sb-search-n { font-size: 12px; color: var(--sb-text2); }

@@ -482,6 +482,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
   const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
+  const clearTextFocus = useCallback(() => setTextFocus(null), []);
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
@@ -607,7 +608,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           </nav>
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} renderChip={(e, label) => <Chip e={e} card={card} label={label} />} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={(e, label) => <Chip e={e} card={card} label={label} />} />}
             {tab === "quests" && <QuestWeb idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} />}
             {tab === "world" && <Locations idx={idx} card={card} sel={sel.world} setSel={pick("world")} />}
             {tab === "cast" && <Characters idx={idx} card={card} sel={sel.cast} setSel={pick("cast")} />}
