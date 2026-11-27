@@ -326,6 +326,75 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
     const chipsInRows = renderedRows.flatMap((r) => findAll(r, (n) => n.type === "chip"));
     assert.equal(chipsInRows.length, 0, "speaker chip not repeated inside Doc group");
   });
+
+  test("V7 friction 2 & 6: Contracts chip count follows active search/filter and contracts render under Contracts heading", async () => {
+    const { StorybookText } = await loadMod();
+    const ents = [
+      { id: "doc", kind: "trader", display: "Doc", aliases: [], source: { path: "t.json", line: 1 }, links: [], production: null, data: {} },
+      { id: "popper", kind: "trader", display: "Popper", aliases: [], source: { path: "t.json", line: 2 }, links: [], production: null, data: {} },
+      { id: "c_doc_1", kind: "contract", display: "c_doc_1", aliases: [], source: { path: "data/contracts.json", line: 1 }, links: [], production: null, data: { trader: "doc", type: "kill", rendered: { title: "Eliminate 5 Scavs for Doc", detail: "Kill 5." } } },
+      { id: "c_pop_1", kind: "contract", display: "c_pop_1", aliases: [], source: { path: "data/contracts.json", line: 2 }, links: [], production: null, data: { trader: "popper", type: "deliver", rendered: { title: "Deliver 10 Scrap for Popper", detail: "Bring 10." } } },
+      { id: "c_pop_2", kind: "contract", display: "c_pop_2", aliases: [], source: { path: "data/contracts.json", line: 3 }, links: [], production: null, data: { trader: "popper", type: "extract", rendered: { title: "Extract from Harbor for Popper", detail: "Extract." } } },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const rows = R.buildReviewRows(ents, localIdx, []);
+    const blocks = R.groupRows(rows);
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].cls, "contracts");
+    assert.equal(blocks[0].label, "Contracts");
+    assert.equal(blocks[0].n, 3);
+
+    const m = mount(StorybookText);
+    const props = { rows, idx: localIdx, focus: null, renderChip: (e, label) => label ?? e.display };
+    let tree = m.render(props);
+    assert.equal(findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-class-contracts").length, 0, "no duplicate class chip for contracts");
+    const chipCount = (t) => {
+      const btn = findAll(t, (n) => n.props?.["data-testid"] === "sb-text-contracts")[0];
+      return btn ? findAll(btn, (n) => n.props?.className === "sb-count")[0]?.children[0] : null;
+    };
+    assert.equal(chipCount(tree), 3, "unfiltered shows all 3 contracts");
+
+    const search = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-search")[0];
+    search.props.onChange({ target: { value: "Doc" } });
+    tree = m.render(props);
+    assert.equal(chipCount(tree), 1, "Contracts chip count follows active search (1, not 3)");
+    const contractBlock = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-block-contracts")[0];
+    assert.ok(contractBlock, "contracts rendered in sb-text-block-contracts");
+  });
+
+  test("V7 friction 5: My marks stays outside the phone Filters toggle, and needs-you compacts to a badge on <=600px", async () => {
+    const { StorybookText } = await loadMod();
+    const rows = R.buildReviewRows(snap.entities, idx, []);
+    const m = mount(StorybookText);
+    const tree = m.render({ rows, idx, focus: null, mineTest: () => false, renderChip: (e, label) => label ?? e.display });
+    const more = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-filter-more")[0];
+    assert.equal(findAll(more, (n) => n.props?.["data-testid"] === "sb-text-mine").length, 0, "My marks must NOT be inside sb-text-filter-more");
+    assert.equal(findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-mine").length, 1, "My marks rendered outside Filters toggle");
+    const css = readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+    assert.match(css, /\.sb-needs-txt\s*\{\s*display:\s*none;\s*\}/, "needs-you text hidden on <=600px");
+    assert.doesNotMatch(css, /\.sb-head:has\(\.sb-needs\)/, "needs-you no longer forces a second header row on phone");
+  });
+
+  test("V7 rn-e56176218a8a m4: Contracts chip count follows the active class filter too", async () => {
+    const { StorybookText } = await loadMod();
+    const ents = [
+      { id: "c_doc_1", kind: "contract", display: "c_doc_1", aliases: [], source: { path: "data/contracts.json", line: 1 }, links: [], production: null, data: { trader: "doc", type: "kill", rendered: { title: "Eliminate 5 Scavs for Doc", detail: "Kill 5." } } },
+      { id: "c_doc_2", kind: "contract", display: "c_doc_2", aliases: [], source: { path: "data/contracts.json", line: 2 }, links: [], production: null, data: { trader: "doc", type: "deliver", rendered: { title: "Deliver 10 Scrap for Doc", detail: "Bring 10." } } },
+      { id: "story_1", kind: "line", display: "s", aliases: [], source: { path: "data/questlines.json", line: 9 }, links: [], production: null, data: { text: "Bring thirty casings.", rowClass: "story", speakerKind: "narrator", speakerId: "narrator" } },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const rows = R.buildReviewRows(ents, localIdx, []);
+    const m = mount(StorybookText);
+    const props = { rows, idx: localIdx, focus: null, renderChip: (e, label) => label ?? e.display };
+    let tree = m.render(props);
+    const byId = (t, id) => findAll(t, (n) => n.props?.["data-testid"] === id)[0];
+    const chipCount = (t) => { const btn = byId(t, "sb-text-contracts"); return btn ? findAll(btn, (n) => n.props?.className === "sb-count")[0]?.children[0] : null; };
+    assert.equal(chipCount(tree), 2);
+    byId(tree, "sb-text-class-story").props.onClick();
+    tree = m.render(props);
+    assert.equal(byId(tree, "sb-text-class-story").props["aria-pressed"], true);
+    assert.equal(byId(tree, "sb-text-contracts"), undefined, "with only Story lines shown, no contract matches: the chip hides (count 0), like the other counts");
+  });
 });
 
 test("real EFI (if /tmp snapshot present): counts", { skip: !existsSync("/tmp/sbv3_snap.json") }, () => {

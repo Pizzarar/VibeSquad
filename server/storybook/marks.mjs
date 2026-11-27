@@ -125,9 +125,11 @@ const clean = (s) => String(s ?? "").replace(/\r\n?/g, "\n").trim().slice(0, MAX
 /**
  * Apply one mark to a row object (csv cells, already csv_safe'd as stored). Returns the new row object.
  *   ok    -> OWNER-OK, reviewed_hash = text_hash(current_text). A typed/drafted owner_rewrite stays (OK approves it).
+ *            ok / edit on a NEEDS-REWRITE row with open contract:<id> notes keep NEEDS-REWRITE (no reviewed_hash).
  *   redo  -> NEEDS-REWRITE + note (row note replaced; contract:<id> segments kept). With contract: only that segment.
  *   edit  -> owner_rewrite = text, OWNER-OK, reviewed_hash. Text equal to the current text keeps the current text: any
  *            drafted/earlier owner_rewrite is cleared, so `review_pack --apply` cannot write a rewrite the owner discarded.
+ *            Refused with a contract: a contract preview never writes the shared template's owner_rewrite.
  *   clear -> the row's mark columns as they stand in `base` (the sheet before this review chain), else defaults.
  */
 export function markRow(row, { action, note, text, contract, base } = {}) {
@@ -139,14 +141,29 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
     return r;
   }
   if (action === "ok" || action === "edit") {
+    // A contract row is a rendered preview of this ONE shared template row: an owner_rewrite here would replace the
+    // template for every contract of that type. Per-contract wording goes in a contract:<id> note (action redo).
+    if (action === "edit" && contract) throw new MarkError("edit on a contract preview would rewrite the shared template for every contract; send a contract note (redo) instead");
     if (action === "edit") {
       const t = clean(text);
       if (!t) throw new MarkError("edit needs text");
       r.owner_rewrite = t === cur ? "" : csvSafe(t);
     }
+    const parsed = parseNote(csvUnsafe(r.owner_note));
+    if (action === "ok" && contract) {
+      const n = clean(note);
+      if (n) parsed.contracts.set(String(contract), n.replace(/\s*\|\s*/g, "; "));
+      else parsed.contracts.delete(String(contract));
+      r.owner_note = csvSafe(joinNote(parsed));
+    }
+    // Never clobber NEEDS-REWRITE to OWNER-OK while a contract on this shared template still has an open note: not from
+    // another contract's OK, and not from OK / Edit on the template row itself (an Edit's owner_rewrite is still stored).
+    if (r.status === "NEEDS-REWRITE" && parsed.contracts.size > 0) {
+      r.reviewed_hash = "";
+      return r;
+    }
     r.status = "OWNER-OK";
     r.reviewed_hash = textHash(cur);
-    if (action === "ok" && contract && clean(note)) r.owner_note = csvSafe(withContractNote(csvUnsafe(r.owner_note), contract, clean(note)));
     return r;
   }
   if (action === "redo") {
@@ -160,11 +177,6 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
     return r;
   }
   throw new MarkError(`unknown action ${action}`);
-}
-function withContractNote(note, contract, n) {
-  const p = parseNote(note);
-  p.contracts.set(String(contract), n.replace(/\s*\|\s*/g, "; "));
-  return joinNote(p);
 }
 
 export class MarkError extends Error { constructor(m, status = 400) { super(m); this.name = "MarkError"; this.status = status; } }
@@ -412,8 +424,11 @@ async function commitIn(wt, branch, { reason = "" } = {}) {
   for (const m of after) {
     const p = prev.get(m.key);
     if (p && p.status === m.status && p.note === m.note && p.rewrite === m.rewrite && JSON.stringify(p.contracts) === JSON.stringify(m.contracts)) continue;
-    if (m.status !== "OWNER-OK") n.redo++;
-    else if (m.rewrite && m.rewrite !== (prevRewrite.get(m.key) ?? "")) n.edit++;
+    const isEdit = Boolean(m.rewrite && m.rewrite !== (prevRewrite.get(m.key) ?? ""));
+    const contractsChanged = JSON.stringify(p?.contracts ?? {}) !== JSON.stringify(m.contracts);
+    const hasContractNote = Object.keys(m.contracts ?? {}).length > 0;
+    if (m.status !== "OWNER-OK" || (contractsChanged && hasContractNote && !isEdit)) n.redo++;
+    else if (isEdit) n.edit++;
     else n.ok++;
   }
   const afterKeys = new Set(after.map((m) => m.key));

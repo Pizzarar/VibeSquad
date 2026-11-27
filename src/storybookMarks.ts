@@ -11,7 +11,7 @@ export type MarksState = { exists: boolean; branch: string | null; pending: numb
  * What a row shows: ok / redo / edit (OWNER-OK with the owner's own rewrite), or none. `draft`: an OK that approved the
  * drafted rewrite (owner_rewrite equals the draft the row carried before review), shown as "OK (draft)", not "Edited".
  */
-export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean };
+export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean; openContracts?: number };
 
 /** The label a mark state reads as. */
 export function markLabel(st: MarkState): string {
@@ -75,11 +75,13 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
     // a contract shows its own note; the shared template's OK/Redo shows only when the note is absent
     // and the template itself was marked (not merely set to NEEDS-REWRITE by another contract's note).
     const cn = m?.contracts?.[hit.contract] ?? "";
-    if (cn) return { kind: m?.status === "OWNER-OK" ? "ok" : "redo", note: "", rewrite: "", contractNote: cn };
+    if (cn) return { kind: "redo", note: "", rewrite: "", contractNote: cn };
     if (m && m.status !== "OWNER-OK" && !m.note && Object.keys(m.contracts ?? {}).length > 0) return none;
   }
   if (m) {
-    if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "" };
+    // the template row itself: OK / Edit keep NEEDS-REWRITE while contract notes are open (the server never flips it)
+    const open = hit.contract ? 0 : Object.keys(m.contracts ?? {}).length;
+    if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "", ...(open ? { openContracts: open } : {}) };
     if (!m.rewrite) return { kind: "ok", note: m.note, rewrite: "", contractNote: "" };
     const drafted = draftRewrite(hit.template ?? e);
     return drafted && csvUnsafe(m.rewrite) === drafted ? { kind: "ok", note: m.note, rewrite: m.rewrite, contractNote: "", draft: true } : { kind: "edit", note: m.note, rewrite: m.rewrite, contractNote: "" };
@@ -137,4 +139,30 @@ export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[]
   return markState(e, lines, byKey, exists).kind !== "none";
 }
 
+/** "2 contract notes still open" on a template row whose OK / Edit stays NEEDS-REWRITE until they are resolved. */
+export function openContractsHint(st: MarkState): string {
+  const n = st.openContracts ?? 0;
+  return n ? `${n} contract note${n === 1 ? "" : "s"} still open: stays Redo until each contract is OK'd` : "";
+}
+
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");
+
+/**
+ * The mark a row's Redo / Edit / Note form saves. A contract preview never sends "edit" (it would set owner_rewrite on the
+ * shared template for every contract of that type): its form always saves a contract:<id> note (redo, NEEDS-REWRITE).
+ */
+export function formMark(form: "redo" | "edit" | "note", draft: string, contract?: string): Pick<Mark, "action" | "note" | "text"> {
+  return form === "edit" && !contract ? { action: "edit", text: draft } : { action: "redo", note: draft };
+}
+
+/**
+ * The session bar's error. `session`: the review session itself is broken (the worktree/branch, git, review_pack --write,
+ * the baseline, End session), so marking waits until it is resolved. Otherwise a transient refusal of this request (a
+ * stale row, a bad mark, a dropped connection): dismissible, and the next successful action clears it.
+ */
+export type MarksError = { msg: string; session: boolean };
+/** A whole mark POST that failed with this HTTP status: 409 (worktree/branch/review_pack) or 5xx (git) is a session error. */
+export const isSessionStatus = (status: number): boolean => status === 404 || status === 409 || status >= 500;
+/** Mark buttons disable only on a real session error (V7 friction 8), never on a per-mark refusal such as a stale row. */
+export const hasSessionError = (error: MarksError | null | undefined, state: Pick<MarksState, "autoCommitError"> | null | undefined): boolean =>
+  Boolean(error?.session || state?.autoCommitError);

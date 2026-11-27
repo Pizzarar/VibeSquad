@@ -723,6 +723,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     setGuideOpen(false);
     setGuideDismissed(projectId);
   }, [projectId]);
+  const [guideFlash, setGuideFlash] = useState<{ testId: string; fallback?: string; highlight?: boolean; n: number } | null>(null);
   const onGuideShowMe = useCallback((step: GuideStep) => {
     const t = step.target;
     if (t.tab === "review") setPreset({ only: t.presetOnly ?? null, n: Date.now() });
@@ -730,12 +731,24 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     if (t.questMode) setQuestModeReq({ mode: t.questMode, n: Date.now() });
     setTab(t.tab);
     closeGuide();
-    if (t.scrollTestId) {
-      requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>(`[data-testid="${t.scrollTestId}"]`)?.scrollIntoView({ block: "center" });
-      });
-    }
+    if (t.scrollTestId) setGuideFlash({ testId: t.scrollTestId, fallback: t.fallbackScrollTestId, highlight: t.highlight, n: Date.now() });
   }, [closeGuide]);
+
+  useEffect(() => {
+    if (!guideFlash) return;
+    const { testId, fallback, highlight } = guideFlash;
+    setGuideFlash(null);
+    const el = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)
+      ?? (fallback ? document.querySelector<HTMLElement>(`[data-testid="${fallback}"]`) : null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    if (highlight) {
+      el.classList.remove("sb-flash");
+      void el.offsetWidth;
+      el.classList.add("sb-flash");
+      setTimeout(() => el.classList.remove("sb-flash"), 1800);
+    }
+  }, [guideFlash, tab]);
 
   // Esc = Back (UX R19 M3). Capture phase + preventDefault so App's Esc → Squads Home handler skips it; an open card takes Esc first.
   const cardOpen = card.node != null;
@@ -774,7 +787,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
-          {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
+          {needsYou > 0 && onNeedsYou && (
+            <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} aria-label={`${needsYou} need${needsYou === 1 ? "s" : ""} you`} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">
+              <span className="sb-needs-n">{needsYou}</span>
+              <span className="sb-needs-txt"> need{needsYou === 1 ? "s" : ""} you</span>
+            </button>
+          )}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
           {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
           {snap && <button type="button" className="sb-btn sb-guide-btn" data-testid="sb-guide-btn" aria-label="How to use Storybook" title="How to use Storybook" onClick={() => setGuideOpen(true)}>?</button>}

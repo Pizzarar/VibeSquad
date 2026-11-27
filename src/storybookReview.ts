@@ -3,12 +3,13 @@
 // story first, then flavor, then toasts/system/UI; grouped by speaker (people) or screen/file (system text). Read-only.
 import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic.ts";
 
-export type RowClass = "story" | "flavor" | "ui";
-export const ROW_CLASSES: RowClass[] = ["story", "flavor", "ui"];
-export const ROW_CLASS_LABEL: Record<RowClass, string> = { story: "Story", flavor: "Flavor & quips", ui: "Toasts, system & UI" };
+export type RowClass = "story" | "flavor" | "contracts" | "ui";
+export const ROW_CLASSES: RowClass[] = ["story", "flavor", "contracts", "ui"];
+export const ROW_CLASS_LABEL: Record<RowClass, string> = { story: "Story", flavor: "Flavor & quips", contracts: "Contracts", ui: "Toasts, system & UI" };
 export const ROW_CLASS_HELP: Record<RowClass, string> = {
   story: "Dialogue, bios, lore and quest text. Read these first.",
-  flavor: "Item, enemy and contract copy; trader quips and encouragement.",
+  flavor: "Item and enemy copy; trader quips and encouragement.",
+  contracts: "Contract titles and details as the player sees them.",
   ui: "Toasts, button labels and system text. Check length, not prose.",
 };
 
@@ -98,7 +99,7 @@ export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: L
       const r = d.rendered as { title?: string; detail?: string } | undefined;
       const trader = idx.get("trader", String(d.trader ?? ""))?.display ?? String(d.trader ?? "");
       push({
-        id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls: "flavor", group: `Contracts · ${trader || "no trader"}`, speaker: trader, speakerRef: idx.get("trader", String(d.trader ?? "")) ? { kind: "trader", id: String(d.trader) } : null,
+        id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls: "contracts", group: `Contracts · ${trader || "no trader"}`, speaker: trader, speakerRef: idx.get("trader", String(d.trader ?? "")) ? { kind: "trader", id: String(d.trader) } : null,
         text: r?.detail ?? "", title: r?.title ?? e.id, file: e.source?.path ?? "data/contracts.json", keyPath: e.id, line: e.source?.line ?? null,
         status: null, unreviewed: false, placeholder: false,
       });
@@ -233,7 +234,7 @@ export function searchEntities(idx: EntityIndex, query: string, max = 12): SbEnt
 export const rowSubtitle = (r: ReviewRow): string => [r.file && (r.line && r.kind !== "line" ? fmtSource({ path: r.file, line: r.line }) : r.file), r.keyPath].filter(Boolean).join(" · ");
 
 export const classCounts = (rows: ReviewRow[]): Record<RowClass, number> => {
-  const c: Record<RowClass, number> = { story: 0, flavor: 0, ui: 0 };
+  const c: Record<RowClass, number> = { story: 0, flavor: 0, contracts: 0, ui: 0 };
   for (const r of rows) c[r.cls]++;
   return c;
 };

@@ -114,7 +114,6 @@ html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill.on { c
   .sb-search-input { width: 100%; }
   .sb-row-foot { flex-direction: column; align-items: stretch; }
   .sb-head { flex-wrap: nowrap; gap: 6px; padding: 8px 10px; }
-  .sb-head:has(.sb-needs) { flex-wrap: wrap; } /* needs-you present: it gets a slim second row instead of squeezing the title */
   .sb-back { order: 0; flex: 0 0 auto; width: 44px; height: 44px; min-height: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
   .sb-back-text { display: none; }
   .sb-title { order: 1; flex: 1 1 0; gap: 6px; }
@@ -122,10 +121,11 @@ html:not([data-vibe="boring"]) .sb-head .project-tabs .boring-switch-pill.on { c
   .sb-root .sb-head .project-tabs .boring-switch-pill { min-height: 40px; padding-left: 8px; padding-right: 8px; } /* (0,4,0) beats boring.css min-height 28 */
   .sb-word, .sb-sep { display: none; } /* UX R22 m2 / R23 m2: the pill already says Storybook; no orphan '·' before the name */
   .sb-title h2 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } /* ellipsize before the Code/Storybook pill clips */
-  .sb-head-right { order: 3; flex: 0 0 auto; width: auto; flex-wrap: nowrap; margin-left: 0; gap: 8px; }
-  .sb-head:has(.sb-needs) .sb-head-right { width: 100%; }
+  .sb-head-right { order: 3; flex: 0 0 auto; width: auto; flex-wrap: nowrap; margin-left: 0; gap: 6px; }
   .sb-head-right > .sb-sha, .sb-head-right > .sb-checked { display: none; } /* sha stays desktop-only; the checked note shows as .sb-checked-row under the head */
-  .sb-head-right .sb-needs { flex: 1 1 auto; min-height: 44px; }
+  .sb-head-right .sb-needs { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; }
+  .sb-needs-n { font-weight: 700; }
+  .sb-needs-txt { display: none; }
   .sb-refresh { flex: 0 0 auto; width: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 20px; }
   .sb-refresh-text { display: none; }
   .sb-refresh-icon { display: inline-block; }
@@ -304,6 +304,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-marksbar-short { display: none; }
 .sb-root .sb-marksbar-ok { color: #6be3a8; font-size: 12px; }
 .sb-root .sb-marksbar-err { color: var(--sb-bad); font-size: 12px; flex-basis: 100%; }
+.sb-root .sb-marksbar-dismiss { margin-left: 8px; padding: 0 6px; font-size: 12px; }
 @media (max-width: 600px) {
   .sb-root .sb-marksbar { flex-wrap: nowrap; padding: 4px 8px; gap: 6px; margin: 0 0 4px; }
   .sb-root .sb-marksbar:has(.sb-marksbar-ok, .sb-marksbar-err) { flex-wrap: wrap; }

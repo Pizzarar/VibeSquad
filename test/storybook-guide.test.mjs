@@ -74,7 +74,16 @@ describe("storybookGuide data and navigation targets", () => {
       if (s.target.scrollTestId) {
         assert.ok(allSrc.includes(`data-testid="${s.target.scrollTestId}"`), `step ${s.id} scrollTestId "${s.target.scrollTestId}" not found in source`);
       }
+      if (s.target.fallbackScrollTestId) {
+        assert.ok(allSrc.includes(`data-testid="${s.target.fallbackScrollTestId}"`), `step ${s.id} fallbackScrollTestId "${s.target.fallbackScrollTestId}" not found in source`);
+      }
     }
+    // V7 friction 3: step 4 (session) targets End session button (falling back to session bar) and highlights it.
+    const sessionStep = G.GUIDE_STEPS.find((s) => s.id === "session");
+    assert.equal(sessionStep.target.scrollTestId, "sb-end-session");
+    assert.equal(sessionStep.target.fallbackScrollTestId, "sb-marksbar");
+    assert.equal(sessionStep.target.highlight, true);
+    assert.match(viewSrc, /el\.classList\.add\("sb-flash"\)/);
   });
 
   test("first-visit auto-open and per-project dismissal in localStorage", () => {

@@ -84,6 +84,10 @@ test("W4 friction 1: per-contract note keeps note on its preview, does not mark 
   const byKey2 = M.marksByKey([m2]);
   assert.equal(M.markState(c2, lines, byKey2, true).contractNote, "too low payout");
   assert.equal(rows.filter((e) => M.isMarkedCsvRow(e, lines, byKey2, true)).length, 1);
+
+  // V7 friction 6: a contract with a contractNote always renders as redo, never OK
+  const mOkWithNote = server(tpl, { status: "OWNER-OK", note: "", contracts: { k_doc_pmc_squad: "too many kills" } });
+  assert.equal(M.markState(c1, lines, M.marksByKey([mOkWithNote]), true).kind, "redo");
 });
 
 test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft rows", () => {
@@ -91,4 +95,62 @@ test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft row
   assert.match(css, /\.sb-row-actions \{ margin-left: auto; \}/);
   assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \{ flex: 1 1 100%; \}/);
   assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \.sb-mark \{ width: 100%; \}/);
+});
+
+test("V7 friction 8: mark buttons disable while the session bar shows a session error", () => {
+  assert.equal(M.hasSessionError(null, { autoCommitError: undefined }), false);
+  assert.equal(M.hasSessionError({ msg: "review worktree folder already exists but is not on storybook/review-2026-11-27", session: true }, { autoCommitError: undefined }), true);
+  assert.equal(M.hasSessionError(null, { autoCommitError: "review_pack --write failed" }), true);
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /const errBlocked = hasSessionError\(m\.error, m\.state\);/);
+  assert.match(tsx, /data-mark-key="1"[^>]*disabled=\{disabled\}/);
+  assert.match(tsx, /data-mark-key="2"[^>]*disabled=\{disabled\}/);
+  assert.match(tsx, /data-mark-key="3"[^>]*disabled=\{disabled\}/);
+});
+
+test("V7 rn-e56176218a8a M1: a contract preview's third button is Note (a contract note), never an owner_rewrite", () => {
+  assert.deepEqual(M.formMark("note", "Bring {qty}", "d_a"), { action: "redo", note: "Bring {qty}" });
+  assert.deepEqual(M.formMark("edit", "Bring {qty}", "d_a"), { action: "redo", note: "Bring {qty}" }, "even a stray edit form on a contract saves a note");
+  assert.deepEqual(M.formMark("edit", "New text."), { action: "edit", text: "New text." });
+  assert.deepEqual(M.formMark("redo", "colder"), { action: "redo", note: "colder" });
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /hit\.contract\s*\? <button[^>]*data-mark-key="3"[^>]*onClick=\{\(\) => start\("note"\)\}>Note<\/button>/);
+  assert.match(tsx, /k === "note" \? ""/, "Note starts empty, not pre-filled with the template");
+  assert.match(tsx, /void send\(formMark\(open, draft, hit\.contract\)\)/);
+});
+
+test("V7 rn-e56176218a8a M2: a per-mark refusal (stale row, mark failed) never locks marking; only session errors do", () => {
+  // transient: per-mark results and 4xx request refusals stay clickable
+  assert.equal(M.hasSessionError({ msg: "1 of 1 not saved: stale: the row's text changed since you saw it (Refresh to see the current text)", session: false }, {}), false);
+  assert.equal(M.hasSessionError({ msg: "mark failed (400)", session: M.isSessionStatus(400) }, {}), false);
+  assert.equal(M.hasSessionError({ msg: "payload too large", session: M.isSessionStatus(413) }, {}), false);
+  // session: the worktree/branch 409, git 5xx
+  assert.equal(M.isSessionStatus(409), true);
+  assert.equal(M.isSessionStatus(500), true);
+  assert.equal(M.hasSessionError({ msg: "review worktree folder already exists", session: M.isSessionStatus(409) }, {}), true);
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  // the per-mark failure line is recorded as transient (no session flag); the whole-request one goes through isSessionStatus
+  assert.match(tsx, /if \(bad\.length\) setError\(`[^`]*`\);/);
+  assert.match(tsx, /setError\(b\?\.error \?\? `mark failed \(\$\{r\.status\}\)`, isSessionStatus\(r\.status\)\)/);
+  // mark() clears the error before each request, and the bar offers dismiss (transient) / Retry (session)
+  assert.match(tsx, /setBusy\(true\); setError\(null\);\s*try \{\s*const r = await fetch\(url, \{ method: "POST"/);
+  assert.match(tsx, /data-testid="sb-marks-error-dismiss"[^>]*onClick=\{m\.dismissError\}/);
+});
+
+test("V7 rn-e56176218a8a m3 client: the template row shows how many contract notes are still open", () => {
+  const tpl = {
+    kind: "line", id: "tpl_kill", name: "tpl_kill",
+    data: { origin: "csv", file: "scripts/systems/ContractSystem.gd", id: "contract_title", data_path: "", where_seen: "contracts", line: "42", current_text: "Eliminate %d-%d x %s for %s", status: "STORY-TODO", owner_rewrite: "" },
+  };
+  const c1 = { kind: "contract", id: "k_a", name: "k_a", data: { type: "kill" } };
+  const m = server(tpl, { status: "NEEDS-REWRITE", rewrite: "Kill %d-%d %s for %s", contracts: { k_a: "too many", k_b: "low pay" } });
+  const st = M.markState(tpl, [tpl], M.marksByKey([m]), true);
+  assert.equal(st.kind, "redo");
+  assert.equal(st.openContracts, 2);
+  assert.equal(st.rewrite, "Kill %d-%d %s for %s", "the stored rewrite still shows");
+  assert.match(M.openContractsHint(st), /^2 contract notes still open/);
+  assert.equal(M.openContractsHint(M.markState(c1, [tpl], M.marksByKey([m]), true)), "", "a contract preview shows its own note, not the count");
+  assert.equal(M.openContractsHint(M.markState(tpl, [tpl], M.marksByKey([server(tpl)]), true)), "");
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /data-testid="sb-open-contracts">\{openContractsHint\(st\)\}/);
 });

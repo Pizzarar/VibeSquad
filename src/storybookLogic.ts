@@ -272,6 +272,47 @@ export const lineChipLabel = (l: SbEntity): string => {
 };
 export const cleanTodo = (s: string): string => s.replace(/^\s*STORY-TODO:\s*/i, "");
 
+/** Display-clean Voice card "Never says" list: strip raw `re:` regex syntax and dedupe stems covered by plain words. */
+export function formatNeverSays(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const plain: string[] = [];
+  const regexes: string[] = [];
+  for (const raw of list) {
+    const s = String(raw ?? "").trim();
+    if (!s) continue;
+    if (s.startsWith("re:")) regexes.push(s.slice(3));
+    else plain.push(s);
+  }
+  const seen = new Set(plain.map((p) => p.toLowerCase()));
+  const out = [...plain];
+  const pushWord = (w: string, stem = false) => {
+    const clean = w.trim();
+    if (!clean) return;
+    const lo = clean.toLowerCase();
+    if (seen.has(lo) || (lo.length >= 4 && [...seen].some((p) => p.startsWith(lo) || lo.startsWith(p)))) return;
+    seen.add(lo);
+    out.push(stem ? `${clean}…` : clean);
+  };
+  for (const src of regexes) {
+    if (/\\w\+n't/.test(src)) { pushWord("contractions"); continue; }
+    const hasTailStem = /\\w[*+]$/.test(src.trim());
+    let s = src
+      .replace(/\\b/g, "")
+      .replace(/\[- \]/g, " ")
+      .replace(/\\w[*+]/g, "")
+      .replace(/\\s[*+]/g, " ")
+      .trim();
+    const topAlt = /^\(\?:([^()]+)\)$/.exec(s);
+    if (topAlt) {
+      for (const part of topAlt[1].split("|")) pushWord(part, hasTailStem);
+      continue;
+    }
+    s = s.replace(/\(\?:([^()]+)\)/g, (_, g: string) => g.split("|").map((x) => x.trim()).join("/"));
+    pushWord(s, hasTailStem);
+  }
+  return out;
+}
+
 export type LocationView = {
   location: SbEntity;
   quests: SbEntity[];
@@ -814,9 +855,29 @@ const SIGNAL_SCOPE: Record<string, FindingScope> = { integrity: "all", cohesion:
 const SIGNAL_REST: Record<string, string> = {
   coverage: "more are text/lore slots or art not made yet (asset lists, not Problems rows)",
   integrity: "more are asset-level references not shown as rows",
-  cohesion: "more are Too long notes (their own list under Problems)",
   signoff: "more are placeholder or AI-draft entities (art, items), not text rows",
 };
+const COHESION_EXTRA: readonly [string, string][] = [
+  ["#18", "Too long"],
+  ["#16", "term drift"],
+  ["#17", "naming style"],
+  ["#19", "lore vs roster"],
+];
+function cohesionRestNote(items: ListItem[], rest: number): string {
+  if (!rest) return "";
+  const parts: string[] = [];
+  let accounted = 0;
+  for (const [chk, label] of COHESION_EXTRA) {
+    const k = items.filter((it) => it.check === chk).length;
+    if (k > 0) {
+      parts.push(`${k} ${label}`);
+      accounted += k;
+    }
+  }
+  const rem = Math.max(0, rest - accounted);
+  if (rem > 0) parts.push(`${rem} other`);
+  return parts.length ? `+${rest} more: ${parts.join(", ")}` : `+${rest} more not shown here`;
+}
 /**
  * Home signal card: the number is the count of rows the click OPENS, so the card and the list agree. Anything the audit counts
  * that is not a row in that list is shown as "+N …" with the reason, not hidden (W1/W2 friction 7: 232 vs 322, 13 vs 2, 30 vs 39, 4216 vs 3327).
@@ -835,7 +896,8 @@ export function signalCard(signal: string, items: ListItem[], audit: Record<stri
   const scope = SIGNAL_SCOPE[signal] ?? "problems";
   const n = scopeItems(items, scope).filter((it) => it.check != null && set.has(it.check)).length;
   const rest = Math.max(0, total - n);
-  return { n, rest, note: rest ? `+${rest} ${SIGNAL_REST[signal] ?? "not shown as rows"}` : "", target: { tab: "problems", scope, category: null, checks } };
+  const note = signal === "cohesion" ? cohesionRestNote(items, rest) : (rest ? `+${rest} ${SIGNAL_REST[signal] ?? "not shown as rows"}` : "");
+  return { n, rest, note, target: { tab: "problems", scope, category: null, checks } };
 }
 
 // ── W3 riders: Play order titles & unordered grouping (friction 7) ──────────────

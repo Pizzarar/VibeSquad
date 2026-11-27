@@ -126,6 +126,12 @@ test("view logic: wordDiff, goneBreakdown, signalCard counts equal what the clic
   // Home Problems bucket = tab badge = broken + story (#1 broken, #7 and #4 story); #14 orphan -> Other, #15 -> Coverage.
   const sc = L.scopeCounts(items);
   assert.equal(sc.problems, 3); assert.equal(L.problemCount(items), sc.problems); assert.equal(sc.other, 1); assert.equal(sc.coverage, 1); assert.equal(sc.text, 1);
+  // V7 friction 1: Home Cohesion footnote splits by real kind instead of lumping everything as "Too long".
+  const cohItems = [it("#4", "inconsistent"), it("#18", "toolong"), it("#18", "toolong"), it("#16", "inconsistent"), it("#17", "inconsistent"), it("#19", "inconsistent")];
+  const cohCard = L.signalCard("cohesion", cohItems, { cohesion: 7 });
+  assert.equal(cohCard.n, 1);
+  assert.equal(cohCard.rest, 6);
+  assert.equal(cohCard.note, "+6 more: 2 Too long, 1 term drift, 1 naming style, 1 lore vs roster, 1 other");
 });
 
 test("buildSnapshot keeps adapter dropped list non-enumerable (server-only, not in JSON)", async () => {
