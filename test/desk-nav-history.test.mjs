@@ -623,7 +623,7 @@ test("idea-1099: pickRole on a lane with no member (sidebar click on a dormant l
     assert.ok(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget, "the right card is shown");
     const title = walk(byId(t, "boring-conv-solo"), (n) => n.props?.className === "boring-conv-title")[0];
     title.props.onClick(); // openLane -> pickRole(pin, "solo", "brainstorm"), no member
-    assert.ok(globalThis.__calls.some((c) => c[0] === "onOpenPin" && c[1] === "solo"), "the dormant lane still goes through onOpenPin");
+    assert.equal(globalThis.__calls.some((c) => c[0] === "onOpenPin"), false, "idea-1104: dormant lane enters its empty card in place without calling onOpenPin");
     t = render(props(view, { navGen: 1 }));
     assert.equal(byId(t, "boring-chat-split"), null, "the split yields to the lane card");
     assert.equal(headOf(t), "Lane solo · no Lead or Brainstorm running");
@@ -670,4 +670,57 @@ test("P3 R43 m2: ?slot=bugs&role=lead without a Bugs pin: landing, reload and po
   assert.equal(globalThis.__screenKeys.role, null);
   assert.doesNotMatch(crumb(t), /Lead/);
   assert.match(crumb(t), /Brainstorm/);
+});
+
+// ── S1 (idea-1096 + idea-1104): empty Lead cell / pill enters the Lead empty card in place without onOpenPin or folding split ──
+test("idea-1096: Overview Lead cell on a lane with no Lead opens the Lead empty card, never Brainstorm via onOpenPin", () => {
+  reset();
+  const view = p3Squad();
+  globalThis.__agents.set("per-bs", { id: "per-bs" });
+  globalThis.location = { search: "?team=vs" };
+  let t = render(props(view));
+  const row = byId(t, "boring-lane-row-per");
+  assert.ok(row, "Overview has lane row for per");
+  // td:nth-child(3) button is the Lead cell
+  const cells = walk(row, (n) => n.props?.className === "boring-lane-cell");
+  assert.ok(cells.length >= 3, "row has lane, Brainstorm, Lead cells");
+  cells[2].props.onClick();
+  t = render(props(view));
+  assert.equal(globalThis.__calls.some((c) => c[0] === "onOpenPin"), false, "never calls onOpenPin (which opens Brainstorm)");
+  assert.equal(globalThis.__calls.some((c) => c[0] === "openAgent" || c[0] === "openAgentInTab"), false, "never opens Brainstorm agent");
+  assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+  assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+});
+
+test("idea-1104: topbar empty Lead pill with split open shows the Lead empty card, clears rightCard, and never folds the split", () => {
+  reset();
+  const view = p3Squad();
+  globalThis.__agents.set("per-bs", { id: "per-bs" });
+  try {
+    globalThis.__panes = { split: true, activePane: "right", leftActiveId: "per-bs", rightActiveId: null };
+    globalThis.location = { search: "?team=vs&agent=per-bs" };
+    render(props(view));
+    render(props(view, { navGen: 1 }));
+    let t = render(props(view, { navGen: 1 }));
+    walk(t, (n) => n.props && typeof n.props.onEmptyTarget === "function")[0].props.onEmptyTarget({ key: "_overlord", pill: "open" });
+    t = render(props(view, { navGen: 1 }));
+    assert.ok(byId(t, "boring-chat-split"), "split is open before clicking Lead pill");
+    const leadPill = byId(t, "boring-top-lead");
+    assert.ok(leadPill, "topbar Lead pill is present");
+    leadPill.props.onClick();
+    t = render(props(view, { navGen: 1 }));
+    assert.equal(globalThis.__calls.some((c) => c[0] === "onOpenPin"), false, "never calls onOpenPin/focusPin");
+    assert.equal(globalThis.__calls.some((c) => c[0] === "toggleSplit" || c[0] === "collapseSplit"), false, "never folds the split");
+    assert.equal(globalThis.__panes.split, true, "split stays true");
+    assert.equal(headOf(t), "Lane per · Brainstorm ready · no Lead");
+    assert.deepEqual(globalThis.__screenKeys, { team: "vs", slot: null, lane: "per", role: "lead", tab: null });
+    // returning to an agent brings the split back with rightCard cleared
+    globalThis.location = { search: "?team=vs&agent=per-bs" };
+    render(props(view, { navGen: 2 }));
+    t = render(props(view, { navGen: 2 }));
+    assert.ok(byId(t, "boring-chat-split"), "split returns intact");
+    assert.equal(walk(t, (n) => n.props && "onEmptyTarget" in n.props)[0]?.props.emptyTarget ?? null, null, "rightCard was cleared");
+  } finally {
+    globalThis.__panes = undefined;
+  }
 });

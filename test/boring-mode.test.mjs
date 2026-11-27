@@ -307,14 +307,14 @@ test("Lead pill: no lead running shows the empty card; running lead renders Agen
   assert.deepEqual(globalThis.__calls.at(-1), ["runCheckin", "ade", "function", "function"]);
 });
 
-test("Brainstorm pill opens the agent; with no session it starts one via onOpenPin", () => {
+test("Brainstorm pill opens the agent; with no session it shows the empty card in place (CTA starts via spinUpPin)", () => {
   reset();
   pickTab(squad(), "ade", "brainstorm");
   assert.deepEqual(globalThis.__calls, [["openAgent", "ade-bs"], ["openAgent", "ade-bs"]]);
   reset();
   const v2 = squad({ pins: [lanePin("ade", { brainstorm: null })] });
   pickTab(v2, "ade", "brainstorm");
-  assert.deepEqual(globalThis.__calls, [["onOpenPin", "ade"], ["onOpenPin", "ade"]]);
+  assert.deepEqual(globalThis.__calls, [], "empty role enters its empty card in place without onOpenPin/focusPin");
   const t = render(props(v2));
   assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
   globalThis.__spinUpPin = (p) => { globalThis.__calls.push(["spinUpPin", p.lane.id]); return Promise.resolve("a"); };
@@ -2440,7 +2440,7 @@ test("idea-1075 r3 (UX M1): the split picker only grabs focus on mount when the 
   const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
   assert.match(pp, /if \(focusOnMount\) filterRef\.current\?\.focus\(\)/);
   assert.match(ade, /focusOnMount=\{panes\.activePane === "right"\}/);
-  // one entry for every slot-lane screen: sidebar pick, popstate landing, cold-load ?slot=
-  assert.equal((ade.match(/enterSlotLane\(/g) ?? []).length, 4); // pickCore + pickBugs + landing + cold load
+  // one entry for every slot-lane / empty-role screen: pickRole, pickCore, pickBugs, popstate landing, cold-load ?slot=/?lane=
+  assert.equal((ade.match(/enterSlotLane\(/g) ?? []).length, 5); // pickRole + pickCore + pickBugs + landing + cold load
   assert.match(ade, /const enterSlotLane = \(laneId: string\) => \{\n    setRightCard\(null\);/);
 });

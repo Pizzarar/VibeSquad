@@ -595,16 +595,19 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     pickRole(pin, laneId, role);
   };
   const pickRole = (pin: Pin, laneId: string, role: Role) => {
-    setSelectedLaneId(laneId);
-    setSelectedRole(role);
-    setSelectedWorkerId(null);
-    setMode("chat");
     const m = role === "lead" ? pin.lead : pin.brainstorm;
     // Lead and Brainstorm both open through openHere: openPinMember would fold an open split (and Shift+click could never target the right pane).
-    if (m) openHere(m.agent.id);
-    else {
-      setRightCard(null); // idea-1099: an empty card enters like a slot (enterSlotLane), so B17's right card never outlives ?lane= / ?slot=bugs
-      void onOpenPin(pin);
+    if (isLive(m)) {
+      setSelectedLaneId(laneId);
+      setSelectedRole(role);
+      setSelectedWorkerId(null);
+      setMode("chat");
+      openHere(m.agent.id);
+    } else {
+      // idea-1096 / idea-1104: an empty role enters its own empty card in place (like enterSlotLane),
+      // never through onOpenPin/focusPin (which opens a sibling Brainstorm and folds any open split).
+      enterSlotLane(laneId);
+      setSelectedRole(role);
     }
   };
   /** Open every parent of a jumped-to agent (project, lane): an explicit collapse never hides the selected row. */
