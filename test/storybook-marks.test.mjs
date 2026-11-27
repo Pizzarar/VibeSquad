@@ -121,6 +121,23 @@ test("contract notes merge into the template row without clobbering other notes"
   assert.match(ok.owner_note, /^template reads stiff/);
 });
 
+test("V7 rn-e56176218a8a M1: edit with a contract is refused, never rewrites the shared template", () => {
+  const row = { ...rowsOf(SHEET_TEXT)[3], status: "NEEDS-REWRITE", owner_note: "contract:d_a: wrong verb" };
+  assert.throws(() => markRow(row, { action: "edit", text: "Bring {qty} {item}", contract: "k_b" }), /shared template/);
+  // via applyMarks: the mark fails, the sheet is byte-identical (owner_rewrite, status and d_a's note untouched)
+  const res = applyMarks(SHEET_TEXT, [{ target: T.contract, action: "edit", text: "Bring {qty} {item}", contract: "k_b" }]);
+  assert.equal(res.changed, 0);
+  assert.equal(res.text, SHEET_TEXT);
+  assert.equal(res.results[0].ok, false);
+  assert.match(res.results[0].error, /contract note/);
+  // the contract's note path (what the client's "Note" button sends) writes only its owner_note segment
+  const noted = applyMarks(SHEET_TEXT, [{ target: T.contract, action: "redo", note: "Bring {qty} {item}", contract: "k_b" }]);
+  const r = rowsOf(noted.text)[3];
+  assert.deepEqual([r.status, r.owner_note, r.owner_rewrite, r.reviewed_hash], ["NEEDS-REWRITE", "contract:k_b: Bring {qty} {item}", "", ""]);
+  // edit on the template row itself (no contract) still writes owner_rewrite
+  assert.equal(markRow(rowsOf(SHEET_TEXT)[3], { action: "edit", text: "Bring {qty} {item}" }).owner_rewrite, "Bring {qty} {item}");
+});
+
 test("applyMarks rewrites only the marked rows, refuses stale ones, listMarks reads them back", () => {
   const res = applyMarks(SHEET_TEXT, [
     { target: T.armory, action: "ok" },

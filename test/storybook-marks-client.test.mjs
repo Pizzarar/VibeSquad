@@ -107,3 +107,14 @@ test("V7 friction 8: mark buttons disable while the session bar shows a session 
   assert.match(tsx, /data-mark-key="2"[^>]*disabled=\{disabled\}/);
   assert.match(tsx, /data-mark-key="3"[^>]*disabled=\{disabled\}/);
 });
+
+test("V7 rn-e56176218a8a M1: a contract preview's third button is Note (a contract note), never an owner_rewrite", () => {
+  assert.deepEqual(M.formMark("note", "Bring {qty}", "d_a"), { action: "redo", note: "Bring {qty}" });
+  assert.deepEqual(M.formMark("edit", "Bring {qty}", "d_a"), { action: "redo", note: "Bring {qty}" }, "even a stray edit form on a contract saves a note");
+  assert.deepEqual(M.formMark("edit", "New text."), { action: "edit", text: "New text." });
+  assert.deepEqual(M.formMark("redo", "colder"), { action: "redo", note: "colder" });
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /hit\.contract\s*\? <button[^>]*data-mark-key="3"[^>]*onClick=\{\(\) => start\("note"\)\}>Note<\/button>/);
+  assert.match(tsx, /k === "note" \? ""/, "Note starts empty, not pre-filled with the template");
+  assert.match(tsx, /void send\(formMark\(open, draft, hit\.contract\)\)/);
+});

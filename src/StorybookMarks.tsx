@@ -2,7 +2,7 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, hasSessionError, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -77,9 +77,13 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
 }
 
 
-/** OK / Redo / Edit on one entity (a csv line or a contract). data-mark-key 1/2/3 lets the row's keyboard handler press them. */
+/**
+ * OK / Redo / Edit on one entity (a csv line or a contract). data-mark-key 1/2/3 lets the row's keyboard handler press them.
+ * A contract row is a preview of one shared template row, so its third button is "Note" (a contract:<id> note, NEEDS-REWRITE),
+ * never an owner_rewrite: template rewrites come only from the template row itself.
+ */
 export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: MarksApi }) {
-  const [open, setOpen] = useState<"redo" | "edit" | null>(null);
+  const [open, setOpen] = useState<"redo" | "edit" | "note" | null>(null);
   const [draft, setDraft] = useState("");
   const hit = entityTarget(e, m.lines);
   if (!e || !hit) return null;
@@ -89,7 +93,7 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
   const disabled = m.busy || errBlocked;
   const errTip = "Resolve the review session error in the session bar first";
   const send = async (mk: Omit<Mark, "target">) => { if (await m.mark([{ target: hit.target, ...(hit.contract ? { contract: hit.contract } : {}), ...mk }])) setOpen(null); };
-  const start = (k: "redo" | "edit") => { setDraft(k === "redo" ? (st.contractNote || st.note) : (st.rewrite || drafted || hit.target.seen.replace(/^'(?=[+\-=@])/, ""))); setOpen(open === k ? null : k); };
+  const start = (k: "redo" | "edit" | "note") => { setDraft(k === "redo" ? (st.contractNote || st.note) : k === "note" ? "" : (st.rewrite || drafted || hit.target.seen.replace(/^'(?=[+\-=@])/, ""))); setOpen(open === k ? null : k); };
   return (
     <span className="sb-mark" data-testid="sb-mark" data-mark={st.kind}>
       {st.kind === "none" && drafted && <span className="sb-mark-draft" title="Drafted rewrite: OK approves it">Draft: {drafted}</span>}
@@ -103,16 +107,18 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
       <span className="sb-mark-btns">
         <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
         <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={disabled} title={errBlocked ? errTip : "Redo with a note (key 2)"} onClick={() => start("redo")}>Redo</button>
-        <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "Edit the shared template (every contract of this type) (key 3)" : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>
+        {hit.contract
+          ? <button type="button" className="sb-mbtn sb-mbtn-edit sb-mbtn-note" data-mark-key="3" aria-pressed={false} aria-expanded={open === "note"} disabled={disabled} title={errBlocked ? errTip : "Note for this contract only: how it should read (the shared template is not changed) (key 3)"} onClick={() => start("note")}>Note</button>
+          : <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={disabled} title={errBlocked ? errTip : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>}
         {st.kind !== "none" && !hit.contract && <button type="button" className="sb-mbtn sb-mbtn-clear" disabled={disabled} title={errBlocked ? errTip : "Undo your mark"} aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
       </span>
       {open && (
-        <form className="sb-mark-form" data-testid="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void send(open === "redo" ? { action: "redo", note: draft } : { action: "edit", text: draft }); }}>
-          {open === "edit" && hit.contract && <span className="sb-mark-hint">Shared template: changes every {String(e.data?.type ?? "")} contract title.</span>}
-          <textarea className="sb-mark-input" aria-label={open === "redo" ? "What should change" : "New text"} placeholder={open === "redo" ? "What should change?" : ""} rows={open === "edit" ? 3 : 2} value={draft} autoFocus
+        <form className="sb-mark-form" data-testid="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void send(formMark(open, draft, hit.contract)); }}>
+          {open === "note" && <span className="sb-mark-hint">Note for this contract only: the shared {String(e.data?.type ?? "")} title template is not changed.</span>}
+          <textarea className="sb-mark-input" aria-label={open === "redo" ? "What should change" : open === "note" ? "Note for this contract" : "New text"} placeholder={open === "redo" ? "What should change?" : open === "note" ? "How should this contract read?" : ""} rows={open === "edit" ? 3 : 2} value={draft} autoFocus
             onChange={(ev) => setDraft(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Escape") setOpen(null); if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) (ev.currentTarget.form as HTMLFormElement | null)?.requestSubmit(); ev.stopPropagation(); }} />
           <span className="sb-mark-formbtns">
-            <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !draft.trim()}>{open === "redo" ? "Save note" : "Save edit"}</button>
+            <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !draft.trim()}>{open === "edit" ? "Save edit" : "Save note"}</button>
             <button type="button" className="sb-mbtn" onClick={() => setOpen(null)}>Cancel</button>
           </span>
         </form>

@@ -128,6 +128,7 @@ const clean = (s) => String(s ?? "").replace(/\r\n?/g, "\n").trim().slice(0, MAX
  *   redo  -> NEEDS-REWRITE + note (row note replaced; contract:<id> segments kept). With contract: only that segment.
  *   edit  -> owner_rewrite = text, OWNER-OK, reviewed_hash. Text equal to the current text keeps the current text: any
  *            drafted/earlier owner_rewrite is cleared, so `review_pack --apply` cannot write a rewrite the owner discarded.
+ *            Refused with a contract: a contract preview never writes the shared template's owner_rewrite.
  *   clear -> the row's mark columns as they stand in `base` (the sheet before this review chain), else defaults.
  */
 export function markRow(row, { action, note, text, contract, base } = {}) {
@@ -139,6 +140,9 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
     return r;
   }
   if (action === "ok" || action === "edit") {
+    // A contract row is a rendered preview of this ONE shared template row: an owner_rewrite here would replace the
+    // template for every contract of that type. Per-contract wording goes in a contract:<id> note (action redo).
+    if (action === "edit" && contract) throw new MarkError("edit on a contract preview would rewrite the shared template for every contract; send a contract note (redo) instead");
     if (action === "edit") {
       const t = clean(text);
       if (!t) throw new MarkError("edit needs text");

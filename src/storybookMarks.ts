@@ -139,6 +139,14 @@ export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[]
 
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");
 
+/**
+ * The mark a row's Redo / Edit / Note form saves. A contract preview never sends "edit" (it would set owner_rewrite on the
+ * shared template for every contract of that type): its form always saves a contract:<id> note (redo, NEEDS-REWRITE).
+ */
+export function formMark(form: "redo" | "edit" | "note", draft: string, contract?: string): Pick<Mark, "action" | "note" | "text"> {
+  return form === "edit" && !contract ? { action: "edit", text: draft } : { action: "redo", note: draft };
+}
+
 /** True while a mark request is in flight or the session bar is showing a session error (V7 friction 8). */
 export const hasSessionError = (error: string | null | undefined, state: Pick<MarksState, "autoCommitError"> | null | undefined): boolean =>
   Boolean(error || state?.autoCommitError);
