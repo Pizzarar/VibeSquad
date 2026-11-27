@@ -274,13 +274,13 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }) });`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/import "\.\/storybook\.css";\n?/, "")
     .replace(/from "react"/g, `from "./react.mjs"`)
-    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookGlossary|\.\/StorybookArc|\.\/StorybookSheet)"/g, `from "./stub.mjs"`);
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookGlossary|\.\/StorybookArc|\.\/StorybookSheet|\.\/StorybookMarks)"/g, `from "./stub.mjs"`);
   writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
 
   let mod;
@@ -508,7 +508,7 @@ describe("V2 Home + findings split", () => {
   const items = L.buildListItems(snap);
   test("scopes: problems exclude the text inventory; badge = problems", () => {
     const c = L.scopeCounts(items);
-    assert.equal(c.problems + c.text, items.length);
+    assert.equal(c.problems + c.coverage + c.other + c.text + c.toolong + c.dev, items.length);
     assert.equal(c.all, items.length);
     assert.equal(L.problemCount(items), c.problems);
     assert.ok(L.scopeItems(items, "problems").every((i) => i.category !== "unreviewed"));
@@ -545,8 +545,8 @@ describe("V2 Home + findings split", () => {
     assert.deepEqual(L.entityNavTarget(mk("scav", "enemy")), { tab: "cast", sel: "enemy:scav" });
     assert.deepEqual(L.entityNavTarget(mk("casing", "item")), { tab: "items", sel: "casing" });
     assert.deepEqual(L.auditSignalTarget("integrity"), { tab: "problems", scope: "problems", category: "broken" });
-    assert.deepEqual(L.auditSignalTarget("cohesion"), { tab: "problems", scope: "problems", category: "inconsistent" });
-    assert.deepEqual(L.auditSignalTarget("coverage"), { tab: "problems", scope: "problems", category: "missing" });
+    assert.deepEqual(L.auditSignalTarget("cohesion"), { tab: "problems", scope: "all", category: "inconsistent" });
+    assert.deepEqual(L.auditSignalTarget("coverage"), { tab: "problems", scope: "coverage", category: null });
     assert.deepEqual(L.auditSignalTarget("signoff"), { tab: "review", scope: "text", category: null });
   });
   test("shell: fixed tab slots, Home default, unbuilt slots hidden", () => {
