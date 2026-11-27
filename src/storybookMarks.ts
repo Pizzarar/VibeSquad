@@ -147,6 +147,14 @@ export function formMark(form: "redo" | "edit" | "note", draft: string, contract
   return form === "edit" && !contract ? { action: "edit", text: draft } : { action: "redo", note: draft };
 }
 
-/** True while a mark request is in flight or the session bar is showing a session error (V7 friction 8). */
-export const hasSessionError = (error: string | null | undefined, state: Pick<MarksState, "autoCommitError"> | null | undefined): boolean =>
-  Boolean(error || state?.autoCommitError);
+/**
+ * The session bar's error. `session`: the review session itself is broken (the worktree/branch, git, review_pack --write,
+ * the baseline, End session), so marking waits until it is resolved. Otherwise a transient refusal of this request (a
+ * stale row, a bad mark, a dropped connection): dismissible, and the next successful action clears it.
+ */
+export type MarksError = { msg: string; session: boolean };
+/** A whole mark POST that failed with this HTTP status: 409 (worktree/branch/review_pack) or 5xx (git) is a session error. */
+export const isSessionStatus = (status: number): boolean => status === 404 || status === 409 || status >= 500;
+/** Mark buttons disable only on a real session error (V7 friction 8), never on a per-mark refusal such as a stale row. */
+export const hasSessionError = (error: MarksError | null | undefined, state: Pick<MarksState, "autoCommitError"> | null | undefined): boolean =>
+  Boolean(error?.session || state?.autoCommitError);

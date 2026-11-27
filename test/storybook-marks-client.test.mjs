@@ -99,7 +99,7 @@ test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft row
 
 test("V7 friction 8: mark buttons disable while the session bar shows a session error", () => {
   assert.equal(M.hasSessionError(null, { autoCommitError: undefined }), false);
-  assert.equal(M.hasSessionError("review worktree folder already exists", { autoCommitError: undefined }), true);
+  assert.equal(M.hasSessionError({ msg: "review worktree folder already exists but is not on storybook/review-2026-11-27", session: true }, { autoCommitError: undefined }), true);
   assert.equal(M.hasSessionError(null, { autoCommitError: "review_pack --write failed" }), true);
   const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
   assert.match(tsx, /const errBlocked = hasSessionError\(m\.error, m\.state\);/);
@@ -117,4 +117,22 @@ test("V7 rn-e56176218a8a M1: a contract preview's third button is Note (a contra
   assert.match(tsx, /hit\.contract\s*\? <button[^>]*data-mark-key="3"[^>]*onClick=\{\(\) => start\("note"\)\}>Note<\/button>/);
   assert.match(tsx, /k === "note" \? ""/, "Note starts empty, not pre-filled with the template");
   assert.match(tsx, /void send\(formMark\(open, draft, hit\.contract\)\)/);
+});
+
+test("V7 rn-e56176218a8a M2: a per-mark refusal (stale row, mark failed) never locks marking; only session errors do", () => {
+  // transient: per-mark results and 4xx request refusals stay clickable
+  assert.equal(M.hasSessionError({ msg: "1 of 1 not saved: stale: the row's text changed since you saw it (Refresh to see the current text)", session: false }, {}), false);
+  assert.equal(M.hasSessionError({ msg: "mark failed (400)", session: M.isSessionStatus(400) }, {}), false);
+  assert.equal(M.hasSessionError({ msg: "payload too large", session: M.isSessionStatus(413) }, {}), false);
+  // session: the worktree/branch 409, git 5xx
+  assert.equal(M.isSessionStatus(409), true);
+  assert.equal(M.isSessionStatus(500), true);
+  assert.equal(M.hasSessionError({ msg: "review worktree folder already exists", session: M.isSessionStatus(409) }, {}), true);
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  // the per-mark failure line is recorded as transient (no session flag); the whole-request one goes through isSessionStatus
+  assert.match(tsx, /if \(bad\.length\) setError\(`[^`]*`\);/);
+  assert.match(tsx, /setError\(b\?\.error \?\? `mark failed \(\$\{r\.status\}\)`, isSessionStatus\(r\.status\)\)/);
+  // mark() clears the error before each request, and the bar offers dismiss (transient) / Retry (session)
+  assert.match(tsx, /setBusy\(true\); setError\(null\);\s*try \{\s*const r = await fetch\(url, \{ method: "POST"/);
+  assert.match(tsx, /data-testid="sb-marks-error-dismiss"[^>]*onClick=\{m\.dismissError\}/);
 });

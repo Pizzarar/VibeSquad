@@ -2,12 +2,15 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
   busy: boolean;
-  error: string | null;
+  /** The session bar's error; `session` errors block marking, transient ones are dismissible (see MarksError). */
+  error: MarksError | null;
+  /** Clear the error (transient: dismiss; session: retry, re-reading the session from the server). */
+  dismissError: () => void;
   lines: SbEntity[];
   byKey: Map<string, ServerMark>;
   stateOf: (e: SbEntity | null | undefined) => MarkState;
@@ -22,7 +25,8 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const url = `/api/storybook/${encodeURIComponent(projectId)}/marks`;
   const [state, setState] = useState<MarksState>(EMPTY);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<MarksError | null>(null);
+  const setError = useCallback((msg: string | null, session = false) => setErrorState(msg ? { msg, session } : null), []);
   const [lastCommit, setLastCommit] = useState<string | null>(null);
   // The project this hook is bound to right now: a response for a project the owner has since switched away from is dropped.
   const cur = useRef(url);
@@ -34,7 +38,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       const b = await r.json().catch(() => null);
       if (cur.current !== forUrl) return;
       if (r.ok && b && Array.isArray(b.marks)) setState(b);
-      else if (!r.ok && b?.error) setError(b.error);
+      else if (!r.ok && b?.error) setError(b.error, true);
     } catch { /* marks are optional: no session yet */ }
   }, []);
   useEffect(() => {
@@ -52,11 +56,11 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ marks }) });
       const b = await r.json().catch(() => null);
       if (cur.current !== url) return false;
-      if (!r.ok) { setError(b?.error ?? `mark failed (${r.status})`); return false; }
+      if (!r.ok) { setError(b?.error ?? `mark failed (${r.status})`, isSessionStatus(r.status)); return false; }
       setState((s) => ({ ...s, exists: true, branch: b.branch, pending: b.pending, marks: b.marks, autoCommitError: undefined }));
       const bad = (b.results as { ok: boolean; error?: string }[]).filter((x) => !x.ok);
       if (bad.length) setError(`${bad.length} of ${marks.length} not saved: ${bad[0].error}${bad[0].error?.startsWith("stale") ? " (Refresh to see the current text)" : ""}`);
-      else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`);
+      else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`, true);
       return bad.length === 0;
     } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); return false; } finally { if (cur.current === url) setBusy(false); }
   }, [url]);
@@ -66,14 +70,19 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       const r = await fetch(`${url}/commit`, { method: "POST" });
       const b = await r.json().catch(() => null);
       if (cur.current !== url) return;
-      if (!r.ok) { setError(b?.error ?? `commit failed (${r.status})`); await reload(url); return; }
+      if (!r.ok) { setError(b?.error ?? `commit failed (${r.status})`, true); await reload(url); return; }
       setLastCommit(commitSummary(b));
-      if (b?.write === "missing") setError("review_pack --write did not run: run python tools/review_pack.py --write in the review worktree before --check.");
+      if (b?.write === "missing") setError("review_pack --write did not run: run python tools/review_pack.py --write in the review worktree before --check.", true);
       // the server's sheet is the truth after --write (marks it dropped, the branch after a midnight rollover)
       await reload(url);
     } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); } finally { if (cur.current === url) setBusy(false); }
   }, [url, reload]);
-  return { state, busy, error, lines, byKey, stateOf, mark, commit, lastCommit };
+  const dismissError = useCallback(() => {
+    const wasSession = error?.session;
+    setError(null);
+    if (wasSession) void reload(url);
+  }, [error, url, reload, setError]);
+  return { state, busy, error, dismissError, lines, byKey, stateOf, mark, commit, lastCommit };
 }
 
 
@@ -108,7 +117,7 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
         <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
         <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={disabled} title={errBlocked ? errTip : "Redo with a note (key 2)"} onClick={() => start("redo")}>Redo</button>
         {hit.contract
-          ? <button type="button" className="sb-mbtn sb-mbtn-edit sb-mbtn-note" data-mark-key="3" aria-pressed={false} aria-expanded={open === "note"} disabled={disabled} title={errBlocked ? errTip : "Note for this contract only: how it should read (the shared template is not changed) (key 3)"} onClick={() => start("note")}>Note</button>
+          ? <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={false} aria-expanded={open === "note"} disabled={disabled} title={errBlocked ? errTip : "Note for this contract only: how it should read (the shared template is not changed) (key 3)"} onClick={() => start("note")}>Note</button>
           : <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={disabled} title={errBlocked ? errTip : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>}
         {st.kind !== "none" && !hit.contract && <button type="button" className="sb-mbtn sb-mbtn-clear" disabled={disabled} title={errBlocked ? errTip : "Undo your mark"} aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
       </span>
@@ -172,7 +181,14 @@ export function MarksBar({ m }: { m: MarksApi }) {
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
       {m.state.autoCommitError && <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">Auto-commit failed: {m.state.autoCommitError}</span>}
-      {m.error && <span className="sb-marksbar-err" role="alert" data-testid="sb-marks-error">{m.error}</span>}
+      {m.error && (
+        <span className="sb-marksbar-err" role="alert" data-testid="sb-marks-error" data-session={m.error.session ? "1" : "0"}>
+          {m.error.msg}
+          <button type="button" className="sb-mbtn sb-marksbar-dismiss" data-testid="sb-marks-error-dismiss" disabled={m.busy}
+            title={m.error.session ? "Retry: re-read the review session (marking unlocks; a persisting problem shows again on the next mark)" : "Dismiss"}
+            aria-label={m.error.session ? "Retry review session" : "Dismiss error"} onClick={m.dismissError}>{m.error.session ? "Retry" : "×"}</button>
+        </span>
+      )}
     </div>
   );
 }

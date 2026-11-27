@@ -304,6 +304,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-marksbar-short { display: none; }
 .sb-root .sb-marksbar-ok { color: #6be3a8; font-size: 12px; }
 .sb-root .sb-marksbar-err { color: var(--sb-bad); font-size: 12px; flex-basis: 100%; }
+.sb-root .sb-marksbar-dismiss { margin-left: 8px; padding: 0 6px; font-size: 12px; }
 @media (max-width: 600px) {
   .sb-root .sb-marksbar { flex-wrap: nowrap; padding: 4px 8px; gap: 6px; margin: 0 0 4px; }
   .sb-root .sb-marksbar:has(.sb-marksbar-ok, .sb-marksbar-err) { flex-wrap: wrap; }
