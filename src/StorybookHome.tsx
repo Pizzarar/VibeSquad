@@ -16,6 +16,7 @@ type HomeProps = {
   changes?: SbChanges | null; onChanges?: () => void; onMarkSeen?: () => void; seenBusy?: boolean; seenError?: string | null;
   onContracts?: () => void; renderChip?: (e: SbEntity, label?: string) => React.ReactNode;
   progress?: SbProgress | null; onProgressArea?: (area: ProgressAreaId, status?: ProgressTextBucket | null) => void;
+  onOpenGuide?: () => void;
 };
 
 /** V8: first Needs-attention card. New / changed / gone since the owner's last marked-seen session. */
@@ -59,7 +60,7 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
   );
 }
 
-export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip, progress, onProgressArea }: HomeProps) {
+export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip, progress, onProgressArea, onOpenGuide }: HomeProps) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const audit = useMemo(() => auditCounts(snap.audit), [snap]);
@@ -67,7 +68,10 @@ export function StorybookHome({ snap, items, onTab, onFindings, onSignal, change
   return (
     <div className="sb-home" data-testid="sb-overview">
       <section className="sb-section">
-        <h3 className="sb-h">Needs attention</h3>
+        <div className="sb-home-top">
+          <h3 className="sb-h">Needs attention</h3>
+          {onOpenGuide && <button type="button" className="sb-btn sb-home-guide" data-testid="sb-home-guide" onClick={onOpenGuide}>How to use</button>}
+        </div>
         {changes && <ChangesCard ch={changes} onOpen={onChanges} onMarkSeen={onMarkSeen} busy={seenBusy} error={seenError} />}
         <div className="sb-buckets">
           {BUCKETS.map((b) => (
