@@ -128,8 +128,10 @@ describe("storybookLogic", () => {
     assert.equal(chars.filter((c) => c.card?.id === "squad-saint").length, 1, "no duplicate squad-saint chip");
     assert.ok(!chars.some((c) => c.id.includes("squad-")));
     const sys = chars.find((c) => c.id === "system:system");
-    assert.ok(sys.lines.length >= 1 && sys.inferred >= 1);
     assert.equal(sys.speaker, "System");
+    const armory = chars.find((c) => c.id === "system:armory");
+    assert.ok(armory.lines.length >= 1 && armory.inferred >= 1);
+    assert.equal(armory.speaker, "Armory");
     const bare = { id: "x", kind: "line", display: "x", aliases: [], source: null, links: [], production: null, data: { text: "t" } };
     assert.equal(L.lineSpeakerKey(bare), "system:system");
     assert.equal(L.lineSpeakerKey({ ...bare, data: { speaker: "Popper" } }), "legacy:popper");
@@ -145,11 +147,11 @@ describe("storybookLogic", () => {
     assert.equal(L.speakerKeyOf(idx.get("location", "harbor_district")), null);
   });
 
-  test("V1 entityCard names Saint / Doc / System by (kind,id)", () => {
+  test("V1 entityCard names Saint / Doc / System screen by (kind,id)", () => {
     const ln = (kind, id) => snap.entities.find((e) => e.kind === "line" && e.data.speakerKind === kind && e.data.speakerId === id);
     assert.equal(L.entityCard(ln("squad", "doc"), idx).speaker, "Saint");
     assert.equal(L.entityCard(ln("trader", "doc"), idx).speaker, "Doc");
-    assert.equal(L.entityCard(ln("system", "system"), idx).speaker, "System");
+    assert.equal(L.entityCard(ln("system", "armory"), idx).speaker, "armory");
   });
 
   test("entity card: text, speaker, area, status, owner_note, source file:line", () => {

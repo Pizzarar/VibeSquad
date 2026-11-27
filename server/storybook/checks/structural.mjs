@@ -126,7 +126,12 @@ async function storyTodo({ registry, hooks, reader }) {
     for (const f of ["title", "story"]) if (isTodoText(s.data[f])) out.push(F("#8", "info", s, `${s.id}.${f} still carries STORY-TODO: ${JSON.stringify(s.data[f].slice(11).trim().slice(0, 50))}`));
   }
   for (const l of registry.byKind("line")) {
-    if (l.data.origin === "csv" || l.data.origin === "raid_story") continue; // csv rows mirror the same strings (status column); raid_story is code
+    if (l.data.origin === "raid_story") continue;
+    if (l.data.origin === "csv") {
+      const nat = Array.isArray(l.data.provenance) ? l.data.provenance.find((p) => p.origin !== "csv" && p.origin !== "raid_story" && isTodoText(p.text ?? l.data.text)) : null;
+      if (nat) out.push(F("#8", "info", l, `${nat.id} still carries STORY-TODO: ${JSON.stringify((nat.text ?? l.data.text).slice(11).trim().slice(0, 50))}`));
+      continue;
+    }
     if (isTodoText(l.data.text)) out.push(F("#8", "info", l, `${l.id} still carries STORY-TODO: ${JSON.stringify(l.data.text.slice(11).trim().slice(0, 50))}`));
   }
   if (reader && typeof hooks.sourceTodoComments === "function") {
