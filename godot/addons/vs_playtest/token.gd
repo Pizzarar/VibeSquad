@@ -411,10 +411,117 @@ static func pem_single_cert_der(pem: String) -> PackedByteArray:
 	var der := Marshalls.base64_to_raw(b64)
 	if der.is_empty() or Marshalls.raw_to_base64(der) != b64:
 		return PackedByteArray()
-	var cert := X509Certificate.new()
-	if cert.load_from_string(der_to_pem(der)) != OK:
+	if load_ca(der) == null:
 		return PackedByteArray()
 	return der
+
+
+## The CA as an mbedtls X509Certificate, or null. Godot's mbedtls refuses any certificate with a CRITICAL
+## nameConstraints extension (X509Certificate.load: -9570 on 4.7, -98 on 4.8) and never enforces nameConstraints
+## when they are non-critical, yet every VS CA marks them critical (server/auth.mjs ensureTls, RFC 5280 4.2.1.10;
+## openssl/Node enforce them for the other clients). So mbedtls gets a copy without that one extension
+## (der_without_name_constraints). The pin is unchanged: the fingerprint, the saved file and the confirm step use the
+## original DER, the anchor's key and subject are the same, and mbedtls never checks a trust anchor's own signature,
+## only the leaf's signature by the anchor's key. Any other unsupported critical extension still fails to load.
+static func load_ca(der: PackedByteArray) -> X509Certificate:
+	var d := der_without_name_constraints(der)
+	if d.is_empty():
+		return null
+	var cert := X509Certificate.new()
+	return cert if cert.load_from_string(der_to_pem(d)) == OK else null
+
+
+const _NAME_CONSTRAINTS_OID := [0x06, 0x03, 0x55, 0x1d, 0x1e] # OID 2.5.29.30, DER-encoded
+
+
+## `der` with its nameConstraints extension removed from tbsCertificate (lengths re-encoded, everything else byte for
+## byte). `der` itself when there is no such extension; [] when the DER is not a well-formed certificate envelope.
+static func der_without_name_constraints(der: PackedByteArray) -> PackedByteArray:
+	var cert := _der_tlv(der, 0, der.size())
+	if cert.is_empty() or cert[0] != 0x30 or int(cert[1]) + int(cert[2]) != der.size():
+		return PackedByteArray()
+	var tbs_at: int = cert[1]
+	var tbs := _der_tlv(der, tbs_at, der.size())
+	if tbs.is_empty() or tbs[0] != 0x30:
+		return PackedByteArray()
+	var p: int = tbs_at + int(tbs[1])
+	var tbs_end: int = p + int(tbs[2])
+	var body := PackedByteArray()
+	var dropped := false
+	while p < tbs_end:
+		var field := _der_tlv(der, p, tbs_end)
+		if field.is_empty():
+			return PackedByteArray()
+		var field_end: int = p + int(field[1]) + int(field[2])
+		if field[0] != 0xa3: # not [3] extensions: copied as is
+			body.append_array(der.slice(p, field_end))
+			p = field_end
+			continue
+		var seq_at: int = p + int(field[1])
+		var seq := _der_tlv(der, seq_at, field_end)
+		if seq.is_empty() or seq[0] != 0x30 or seq_at + int(seq[1]) + int(seq[2]) != field_end:
+			return PackedByteArray()
+		var exts := PackedByteArray()
+		var q: int = seq_at + int(seq[1])
+		while q < field_end:
+			var ext := _der_tlv(der, q, field_end)
+			if ext.is_empty() or ext[0] != 0x30:
+				return PackedByteArray()
+			var ext_end: int = q + int(ext[1]) + int(ext[2])
+			var oid_at: int = q + int(ext[1])
+			var oid := _der_tlv(der, oid_at, ext_end)
+			if oid.is_empty() or oid[0] != 0x06:
+				return PackedByteArray()
+			if der.slice(oid_at, oid_at + int(oid[1]) + int(oid[2])) == PackedByteArray(_NAME_CONSTRAINTS_OID):
+				dropped = true
+			else:
+				exts.append_array(der.slice(q, ext_end))
+			q = ext_end
+		if not exts.is_empty():
+			body.append_array(_der_wrap(0xa3, _der_wrap(0x30, exts)))
+		p = field_end
+	if not dropped:
+		return der
+	var out := _der_wrap(0x30, body)
+	out.append_array(der.slice(tbs_end, der.size())) # signatureAlgorithm + signature, unchanged
+	return _der_wrap(0x30, out)
+
+
+## [tag, header length, content length] of the DER TLV at `at` that must end by `end`, else [] (truncated, indefinite
+## or over-long length).
+static func _der_tlv(b: PackedByteArray, at: int, end: int) -> Array:
+	if at < 0 or at + 2 > end:
+		return []
+	var tag: int = b[at]
+	var n: int = b[at + 1]
+	var head := 2
+	if n >= 0x80:
+		var k := n & 0x7f
+		if k == 0 or k > 3 or at + 2 + k > end:
+			return []
+		n = 0
+		for i in k:
+			n = (n << 8) | b[at + 2 + i]
+		head += k
+	if at + head + n > end:
+		return []
+	return [tag, head, n]
+
+
+static func _der_wrap(tag: int, content: PackedByteArray) -> PackedByteArray:
+	var out := PackedByteArray([tag])
+	var n := content.size()
+	if n < 0x80:
+		out.append(n)
+	else:
+		var len_bytes := PackedByteArray()
+		while n > 0:
+			len_bytes.insert(0, n & 0xff)
+			n >>= 8
+		out.append(0x80 | len_bytes.size())
+		out.append_array(len_bytes)
+	out.append_array(content)
+	return out
 
 
 ## Canonical one-certificate PEM (64-char base64 lines) for `der`.
@@ -463,8 +570,8 @@ static func read_ca_der(path: String) -> PackedByteArray:
 static func pinned_tls(der: PackedByteArray) -> TLSOptions:
 	if der.is_empty():
 		return null
-	var cert := X509Certificate.new()
-	if cert.load_from_string(der_to_pem(der)) != OK:
+	var cert := load_ca(der)
+	if cert == null:
 		return null
 	return TLSOptions.client(cert)
 

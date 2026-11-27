@@ -35,6 +35,26 @@ DwIgMOSfC/VTjignJKv5JN8fPboxrEG7Mfuk0ijkIVTrcZQ=
 const CA_FP_FULL := "6A:17:46:3B:49:3B:2F:87:67:34:EF:4D:EE:B9:33:E0:67:8D:F0:BE:78:19:72:BC:A1:11:28:48:6C:4A:7D:F5"
 const CA_FP_SHORT := "6A:17:46:3B:49:3B:2F:87"
 
+## G1 (PLAN_V1_4_CA_COMPAT) real-shape CA: written by server/auth.mjs ensureTls() itself (test-only host forge.example.test,
+## Meshnet 100.64.0.10, LAN 192.0.2.10), so it carries `nameConstraints = critical, permitted;…` like every live VS CA.
+## Re-signed from ensureTls's own ca.cnf with -days 36500 so it never expires mid-suite; its key was deleted.
+## Godot's mbedtls cannot parse it as is (-9570 on 4.7.2, -98 on 4.8-dev7). Fingerprint from node (caFingerprint) and openssl.
+const REAL_CA_PEM := """-----BEGIN CERTIFICATE-----
+MIIB3TCCAYKgAwIBAgIUCUX2a2laG3HmagXKm0InjgVkdAUwCgYIKoZIzj0EAwIw
+HTEbMBkGA1UEAwwSVmliZVNxdWFkIExvY2FsIENBMCAXDTI2MTEyNzE3MzM0NloY
+DzIxMjYxMTAzMTczMzQ2WjAdMRswGQYDVQQDDBJWaWJlU3F1YWQgTG9jYWwgQ0Ew
+WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATrp+Rx+SBVcNsp2BNzwHhSN/hns+tD
+ao+fiwm7T8v81upTscrPk0vHayIDq7n0lB6O6OGPGCbCDCNs8WUHxMJko4GdMIGa
+MBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTu
+nLMh9GAQ8GgpUZ0QbATph0FAtzBVBgNVHR4BAf8ESzBJoEcwC4IJbG9jYWxob3N0
+MAqHCH8AAAH/////MBSCEmZvcmdlLmV4YW1wbGUudGVzdDAKhwhkQAAK/////zAK
+hwjAAAIK/////zAKBggqhkjOPQQDAgNJADBGAiEAn0FOzpgGnZssnjRHrJkBlXf8
+4bO+EpXSp8oLn6t40VkCIQCAPNnSUWl96Rxa4UWMus4yPwCb4rq0QyvDwiKCpMV6
+uQ==
+-----END CERTIFICATE-----
+"""
+const REAL_CA_FP_FULL := "FF:D4:59:BF:C7:DA:E6:67:58:33:26:17:A4:47:AC:42:AF:23:58:39:88:04:9C:2E:E6:DF:13:67:6C:54:76:39"
+
 var _pass := 0
 var _fail := 0
 
@@ -86,6 +106,7 @@ func _initialize() -> void:
 	_test_device_token_path()
 	_test_device_token_file()
 	_test_ca_fingerprint_and_pem()
+	await _test_real_ca_shape()
 	await _test_device_transport()
 	await _test_pairing()
 	await _test_autoload_pairing_api()
@@ -616,6 +637,63 @@ func _test_ca_fingerprint_and_pem() -> void:
 	}
 	for k: String in bad:
 		check(Token.pem_single_cert_der(str(bad[k])).is_empty(), "ca: refuses %s" % k)
+
+
+## True when `needle` occurs in `hay`.
+func _has_bytes(hay: PackedByteArray, needle: Array) -> bool:
+	var n := PackedByteArray(needle)
+	for i in hay.size() - n.size() + 1:
+		if hay.slice(i, i + n.size()) == n:
+			return true
+	return false
+
+
+## G1: the addon must pin the CA a real VS install serves (critical nameConstraints), not only a bare fixture CA.
+func _test_real_ca_shape() -> void:
+	var NC_CRITICAL := [0x06, 0x03, 0x55, 0x1d, 0x1e, 0x01, 0x01, 0xff] # OID nameConstraints + critical TRUE
+	var raw := Marshalls.base64_to_raw(REAL_CA_PEM.replace("-----BEGIN CERTIFICATE-----", "").replace("-----END CERTIFICATE-----", "").replace("\n", ""))
+	check(_has_bytes(raw, NC_CRITICAL), "real ca: fixture really has a CRITICAL nameConstraints extension (ensureTls shape)")
+	var der := Token.pem_single_cert_der(REAL_CA_PEM)
+	check(der == raw, "real ca: the ensureTls CA (critical nameConstraints) parses as a single PEM cert")
+	check(Token.ca_fingerprint(der).get("full") == REAL_CA_FP_FULL, "real ca: fingerprint is of the ORIGINAL bytes, as the VS pair dialog shows it")
+	var tls := Token.pinned_tls(der)
+	var stripped := Token.der_without_name_constraints(der)
+	check(tls != null and not tls.is_server() and not tls.is_unsafe_client() and _chain_der(tls) == stripped, "real ca: pinned TLS options trust the CA, with verification on")
+	# the mbedtls copy: only nameConstraints gone, everything else (key, subject, other extensions, signature) intact
+	check(not stripped.is_empty() and stripped.size() < der.size() and not _has_bytes(stripped, [0x06, 0x03, 0x55, 0x1d, 0x1e]), "real ca: mbedtls copy has no nameConstraints")
+	for ext: Array in [[0x55, 0x1d, 0x13, 0x01, 0x01, 0xff], [0x55, 0x1d, 0x0f, 0x01, 0x01, 0xff], [0x55, 0x1d, 0x0e]]:
+		check(_has_bytes(stripped, ext), "real ca: mbedtls copy keeps extension %s" % PackedByteArray(ext).hex_encode())
+	var sig_tail := der.slice(der.size() - 84)
+	check(stripped.slice(stripped.size() - 84) == sig_tail and _has_bytes(stripped, Array(der.slice(30, 120))), "real ca: mbedtls copy keeps the signature and the subject/key bytes")
+	var nc_free := Token.pem_single_cert_der(CA_PEM)
+	check(Token.der_without_name_constraints(nc_free) == nc_free, "real ca: a CA without nameConstraints is handed to mbedtls unchanged")
+	# malformed input never crashes and never yields a CA
+	for cut in [1, 10, 100, der.size() - 1]:
+		check(Token.der_without_name_constraints(der.slice(0, cut)).is_empty(), "real ca: truncated DER (%d bytes) refused" % cut)
+	var lying := raw.duplicate()
+	lying[1] = 0x83 # 3-byte length that runs past the end
+	check(Token.der_without_name_constraints(lying).is_empty() and Token.load_ca(PackedByteArray()) == null, "real ca: over-long length / empty DER refused")
+	# file round trip + the pairing flow (bootstrap -> confirm -> redeem pinned) with the real shape
+	var dir := _tmp_dir("realca")
+	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
+	check(Token.write_ca_cert(cpath, der) == OK and Token.read_ca_der(cpath) == der, "real ca: stored and read back byte for byte (original DER, not the mbedtls copy)")
+	Token.remove_file(cpath)
+	var t := Transport.new()
+	var mock := MockHttp.new()
+	t.http_fn = Callable(mock, "handle")
+	t.sleep_fn = func(_s: float) -> void: pass
+	t.device_token_path = dpath
+	t.ca_cert_path = cpath
+	t.server_url = "https://forge.example.test:4180"
+	var f: Dictionary = await _fetch_ca(t, mock, REAL_CA_PEM)
+	check(f["ok"] and f["fingerprint"].get("full") == REAL_CA_FP_FULL, "real ca: Pair with VS fetches it and shows its fingerprint (%s)" % str(f.get("error", "")))
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner", "allowedTeams": null, "hostId": "h"})]
+	var r: Dictionary = await t.pair("123456", REAL_CA_FP_FULL)
+	var c1: Dictionary = mock.calls[1] if mock.calls.size() > 1 else {}
+	check(r["ok"] and r["state"] == "paired" and _chain_der(c1.get("tls")) == stripped and Token.read_ca_der(cpath) == der, "real ca: pair redeems pinned to it and stores the original CA (%s)" % str(r.get("error", "")))
+	t.unpair()
+	t.free()
 
 
 func _has_header(headers: PackedStringArray, name: String) -> bool:

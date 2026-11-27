@@ -446,7 +446,11 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
   };
 
   const meshHttpServer = createServer(guardHandler(handleMeshnetHttp));
-  const httpsServer = createHttpsServer(tls, guardHandler(handleMeshnetHttps));
+  // Leaf only, never `ca`: Node appends a `ca` cert to the presented chain, and Godot's mbedtls refuses the whole
+  // handshake when the peer sends a cert it can't parse (the VS CA's critical nameConstraints: -9570 on 4.7, -98 on
+  // 4.8). RFC 8446 4.4.2 lets a server omit the trust anchor, and every client pins or installs the CA out of band
+  // (GET /ca.crt + fingerprint), so none reads it from the chain (@pto V1.4, PLAN_V1_4_CA_COMPAT).
+  const httpsServer = createHttpsServer({ key: tls.key, cert: tls.cert }, guardHandler(handleMeshnetHttps));
   const mux = createTcpServer((socket) => {
     socket.once("readable", () => {
       const chunk = socket.read(1);
