@@ -55,7 +55,10 @@ test("validateFinding shape", () => {
   const ok = { check: "#1", severity: "error", entityRef: { kind: "quest_step", id: "x_1" }, msg: "dangling", source: src };
   assert.equal(validateFinding(ok).ok, true);
   assert.equal(validateFinding({ ...ok, entityRef: null, source: null }).ok, true);
-  assert.equal(validateFinding({ ...ok, check: "#13" }).ok, false);
+  assert.equal(validateFinding({ ...ok, check: "#13" }).ok, true);
+  assert.equal(validateFinding({ ...ok, check: "#14" }).ok, true);
+  assert.equal(validateFinding({ ...ok, check: "#15" }).ok, true);
+  assert.equal(validateFinding({ ...ok, check: "#99" }).ok, false);
   assert.equal(validateFinding({ ...ok, severity: "fatal" }).ok, false);
   assert.equal(validateFinding({ ...ok, msg: "" }).ok, false);
   assert.equal(validateFinding({ ...ok, entityRef: { kind: "item", id: "" } }).ok, false);

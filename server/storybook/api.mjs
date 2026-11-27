@@ -11,6 +11,7 @@ import { assertAdapter } from "./adapter.mjs";
 import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs";
 import { makeSnapshot } from "./schema.mjs";
 import { SIGNALS } from "../registry/audit.mjs";
+import { buildArc } from "./unlocks.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -124,6 +125,7 @@ async function buildOnce(project, { refresh, deps }) {
       snap.warnings.push(`audit failed: ${String(e?.message ?? e).slice(0, 200)}`);
     }
   }
+  try { snap.arc = buildArc(snap.entities); } catch (e) { snap.warnings.push(`arc failed: ${String(e?.message ?? e).slice(0, 200)}`); }
   remember(project, sha, snap);
   return { snapshot: snap, fetch };
 }

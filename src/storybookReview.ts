@@ -46,6 +46,7 @@ export function speakerName(e: SbEntity, idx: EntityIndex): string {
   if (key === "system:system") return "System";
   if (key === "party:squad") return "Squad";
   if (key === "narrator:narrator") return "Narrator";
+  if (kind === "system") return titleCase(id.replace(/_/g, " "));
   const ent = kind === "legacy" ? null : idx.byKind(kind).find((x) => x.id.toLowerCase() === id) ?? null;
   return ent?.display ?? (typeof e.data?.speaker === "string" && e.data.speaker ? e.data.speaker : titleCase(id));
 }
@@ -77,10 +78,16 @@ export function buildReviewRows(entities: SbEntity[], idx: EntityIndex, items: L
       const speaker = speakerName(e, idx);
       const origin = String(d.origin ?? "");
       const cls = asClass(d.rowClass);
-      const named = !/^(system|party|narrator):/.test(lineSpeakerKey(e)); // a person: group under their name
-      const group = named ? speaker : typeof d.group === "string" && d.group ? d.group : ORIGIN_LABEL[origin] ?? "Other text";
-      const st = typeof d.status === "string" && d.status.trim() ? d.status.trim() : null;
       const sk = lineSpeakerKey(e), si = sk.indexOf(":");
+      const named = !/^(system|party|narrator):/.test(sk); // a person: group under their name
+      const rawGroup = typeof d.group === "string" ? d.group.trim() : "";
+      const isSystemScreen = sk.startsWith("system:") && sk !== "system:system";
+      const group = named
+        ? speaker
+        : rawGroup
+          ? (isSystemScreen && rawGroup.toLowerCase() === sk.slice(7) ? titleCase(rawGroup.replace(/_/g, " ")) : rawGroup)
+          : (isSystemScreen ? speaker : ORIGIN_LABEL[origin] ?? "Other text");
+      const st = typeof d.status === "string" && d.status.trim() ? d.status.trim() : null;
       const sref = idx.get(sk.slice(0, si), e.links.find((l) => l.rel === "spoken_by")?.id ?? sk.slice(si + 1)) ? { kind: sk.slice(0, si), id: e.links.find((l) => l.rel === "spoken_by")?.id ?? sk.slice(si + 1) } : null;
       push({
         id: entityKey(e.kind, e.id), kind: e.kind, entityId: e.id, cls, group, speaker, speakerRef: sref, text: cleanTodo(String(d.text ?? e.display)), title: null,

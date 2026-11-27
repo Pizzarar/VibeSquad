@@ -15,7 +15,7 @@ import { PROJECT_RE } from "./ids.mjs";
 export const SCHEMA_VERSION = 1;
 export const PRODUCTION_STATES = Object.freeze(["missing", "placeholder", "ai-draft", "needs-review", "final"]);
 export const SEVERITIES = Object.freeze(["error", "warn", "info"]);
-export const CHECK_IDS = Object.freeze([...Array.from({ length: 12 }, (_, i) => `#${i + 1}`), "#18"]);
+export const CHECK_IDS = Object.freeze([...Array.from({ length: 15 }, (_, i) => `#${i + 1}`), "#18"]);
 
 const isStr = (v) => typeof v === "string";
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
@@ -64,7 +64,7 @@ export function makeSchema(table) {
   function validateFinding(f) {
     const errors = [];
     if (!isObj(f)) return { ok: false, errors: ["finding is not an object"] };
-    if (!CHECK_IDS.includes(f.check)) errors.push(`check must be one of #1..#12 or #18`);
+    if (!CHECK_IDS.includes(f.check)) errors.push(`check must be one of #1..#15 or #18`);
     if (!SEVERITIES.includes(f.severity)) errors.push(`severity must be ${SEVERITIES.join("|")}`);
     if (f.entityRef !== null && !(isObj(f.entityRef) && ALL_KINDS.includes(f.entityRef.kind) && isStr(f.entityRef.id) && f.entityRef.id !== "")) errors.push("entityRef must be {kind,id} or null");
     if (!isStr(f.msg) || !f.msg) errors.push("msg must be a non-empty string");

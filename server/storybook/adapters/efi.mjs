@@ -45,6 +45,7 @@ export const GLOBAL_BAN_TERMS = ["paranormal", "supernatural", "ghost", "magic",
 const EXCEPTION_CLAUSE = /\b(?:anything but|except|other than|only)\b/i;
 const STORY_TODO = /^STORY-TODO:\s*/;
 const clean = (s) => String(s ?? "").replace(STORY_TODO, "").trim();
+const normText = (s) => clean(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, " ");
 const isTodo = (s) => STORY_TODO.test(String(s ?? ""));
 const titleCase = (id) => id.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const csvProduction = (status) => ({ "STORY-TODO": "placeholder", DRAFT: "ai-draft", "NEEDS-REWRITE": "needs-review", "OWNER-OK": "final" }[String(status).trim()] ?? null);
@@ -258,7 +259,6 @@ function parseRaidStory(text) {
 // kinds: trader | squad (a squad member id) | system (UI / toast / screen text) | party (the raid-log "Squad" / callsign voice) | narrator.
 // speakerSource: 'explicit' = the data/CSV names the speaker; 'inferred' = guessed from the source path (UI can show it as a guess).
 const NON_ENTITY_SPEAKERS = { system: "system", squad: "party", narrator: "narrator" }; // lowercase CSV/data speaker name -> kind (id = same word, party id = "squad")
-const SPEAKER_SYSTEM = { kind: "system", id: "system" };
 const SPEAKER_PARTY = { kind: "party", id: "squad" };
 
 /** name -> [{kind,id}] over traders (display or id) and squad members (callsign / name only; never the id, which collides with traders). */
@@ -291,15 +291,251 @@ function parseDataPath(s) {
 }
 
 /**
+ * V1.1: infer a readable screen/feature speakerId for System lines from data.group, falling back to source path.
+ * Keeps speakerKind = "system" while splitting the 3,200+ System blob into distinct readable screens (e.g. "raids", "armory", "items").
+ */
+function slugifyScreen(raw) {
+  const s = String(raw ?? "")
+    .replace(/^(?:Screen|Data|System|Script|Autoload)\s*:\s*/i, "")
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || null;
+}
+
+export function inferSystemScreenId(row) {
+  const fromGroup = slugifyScreen(row?.group);
+  if (fromGroup) return fromGroup;
+  const file = String(row?.file ?? "").replace(/\\/g, "/");
+  let m = /^scenes\/([^/]+)\//.exec(file);
+  if (m) return slugifyScreen(m[1]) ?? "system";
+  m = /^data\/([^/]+)\.json$/i.exec(file);
+  if (m) return slugifyScreen(m[1]) ?? "system";
+  m = /^(?:systems|autoloads|scripts)\/(?:.+\/)?([^/]+)\.\w+$/i.exec(file);
+  if (m) return slugifyScreen(m[1]) ?? "system";
+  return "system";
+}
+
+/**
  * Speaker of a speakerless CSV row, inferred from where it lives: trader/questline data -> that trader, squad.json -> that member,
- * raid_story.gd -> the party (callsign) voice, everything else (toasts, UI, system text) -> System. Always {source:'inferred'}.
+ * raid_story.gd -> the party (callsign) voice, locations long_haul -> narrator, everything else (toasts, UI, system text) -> System screen.
  */
 function inferCsvSpeaker(row, { traders, squadMembers }) {
   const dp = parseDataPath(row.data_path);
   if (dp && (dp[0] === "traders" || dp[0] === "questlines") && typeof dp[1] === "string" && Object.hasOwn(traders, dp[1])) return { kind: "trader", id: dp[1] };
   if (dp && dp[0] === "members" && Number.isInteger(dp[1]) && squadMembers[dp[1]]) return { kind: "squad", id: squadMembers[dp[1]].id };
+  if (row.file === P.locations && dp?.[1] === "long_haul") return { kind: "narrator", id: "narrator" };
   if (row.file === P.raidStory) return SPEAKER_PARTY;
-  return SPEAKER_SYSTEM;
+  return { kind: "system", id: inferSystemScreenId(row) };
+}
+
+// ---------- V1.1: dev-only string exclusion ----------
+const DEV_FILE_RE = /^(?:scripts\/debug|tools|tests)\//i;
+const DEV_WHERE_FN_RE = /\b(?:_?validate(?:_[a-z0-9_]+)?|_[a-z0-9_]*errors?|_save_reject_reason)\(\)/i;
+const DEV_CALL_RE = /\b(?:push_error|push_warning|assert|printerr|print_debug)\s*\(|(?:\berrors|\[["']errors["']\])\.append\s*\(/;
+// Safe: requires both an internal _load_*() loader helper in where_seen and a pure snake_case=%d/%s debug log signature (never matches player prose/toasts).
+const DEV_LOADER_WHERE_RE = /\b_load_[a-z0-9_]+\(\)/i;
+const DEV_LOADER_TEXT_RE = /^(?:[a-z_]+=%[ds]\s+)+[a-z_]+=%[ds]$/i;
+
+/** Load unique .gd files referenced by CSV rows (batched, read-only via pinned reader) for call-site checks. */
+async function loadGdSourcesForCsv(reader, records) {
+  const files = [...new Set(records.map(({ row }) => row.file).filter((f) => typeof f === "string" && f.endsWith(".gd")))];
+  const cache = new Map();
+  for (let i = 0; i < files.length; i += 16) {
+    const batch = await Promise.all(files.slice(i, i + 16).map(async (f) => [f, await reader.readFile(f)]));
+    for (const [f, text] of batch) if (text != null) cache.set(f, text.split("\n"));
+  }
+  return cache;
+}
+
+/**
+ * V1.1: true when a CSV row is a developer-only / validation / push_error / assert string rather than player-facing text.
+ * Checks file path, where_seen validation/error helper name, and (for .gd files) the actual call site in the pinned source.
+ * Never falls back to the raw CSV line number when the text needle is not found (CSV line numbers can be stale vs pinned sha).
+ */
+export function isDevOnlyCsvRow(row, gdSourceCache) {
+  const file = String(row?.file ?? "");
+  if (DEV_FILE_RE.test(file)) return true;
+  const where = String(row?.where_seen ?? "");
+  if (DEV_WHERE_FN_RE.test(where)) return true;
+  const text = String(row?.current_text ?? "");
+  if (DEV_LOADER_WHERE_RE.test(where) && DEV_LOADER_TEXT_RE.test(text.trim())) return true;
+  if (file.endsWith(".gd") && gdSourceCache?.has(file)) {
+    const lines = gdSourceCache.get(file);
+    const ln = Number(row?.line) || 0;
+    const needle = text.split("\n")[0].slice(0, 40);
+    if (needle && lines.length) {
+      const center = Math.max(0, Math.min(lines.length - 1, ln > 0 ? ln - 1 : 0));
+      const maxD = Math.max(center, lines.length - 1 - center);
+      let hitIdx = -1;
+      for (let d = 0; d <= maxD; d++) {
+        const hi = center + d;
+        if (hi < lines.length && lines[hi].includes(needle)) { hitIdx = hi; break; }
+        const lo = center - d;
+        if (d > 0 && lo >= 0 && lines[lo].includes(needle)) { hitIdx = lo; break; }
+      }
+      if (hitIdx >= 0) {
+        const srcLine = lines[hitIdx];
+        const prevLine = hitIdx > 0 ? lines[hitIdx - 1] : "";
+        if (DEV_CALL_RE.test(srcLine)) return true;
+        if (DEV_CALL_RE.test(prevLine) && !/\)\s*$/.test(prevLine.trim())) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// ---------- V1.1: extended links (spawn locations, contracts, containers, long_haul) ----------
+/** enemyId -> locationId[] (deduped, location order) from enemy_pool and boss slots. */
+function buildEnemySpawnMap(locations) {
+  const m = new Map();
+  const add = (eid, lid) => {
+    if (!eid || !lid) return;
+    const arr = m.get(eid) ?? m.set(eid, []).get(eid);
+    if (!arr.includes(lid)) arr.push(lid);
+  };
+  for (const l of locations) {
+    for (const p of l.enemy_pool ?? []) add(p?.id, l.id);
+    if (l.boss?.enemy_id) add(l.boss.enemy_id, l.id);
+  }
+  return m;
+}
+
+/** quest step (by trader + 0-based index) -> { location, enemy } from step links. */
+function questStepContext(ents) {
+  const m = new Map();
+  for (const e of ents) if (e.kind === "quest_step") {
+    const loc = e.links.find((l) => l.rel === "at_location")?.id ?? null;
+    const enemy = e.links.find((l) => l.rel === "targets_enemy")?.id ?? null;
+    if (loc || enemy) m.set(`${e.data.trader}:${e.data.index - 1}`, { location: loc, enemy });
+  }
+  return m;
+}
+
+/** V1.1: attach said_at / mentions links for CSV rows from questlines, locations (long_haul/containers), enemies, and squad synergy. */
+function linkCsvRowContext(L, row, dp, { stepCtx, locations, enemies, squadMembers, enemySpawnMap }) {
+  if (!dp) return;
+  if (row.file === P.questlines && dp[0] === "questlines" && dp[2] === "steps") {
+    const ctx = stepCtx.get(`${dp[1]}:${dp[3]}`);
+    if (ctx?.location) L("said_at", "location", ctx.location);
+    if (ctx?.enemy) L("mentions", "enemy", ctx.enemy);
+  } else if (row.file === P.locations && Number.isInteger(dp[0]) && locations[dp[0]]) {
+    L("said_at", "location", locations[dp[0]].id);
+  } else if (row.file === P.enemies && dp[0] === "enemies" && typeof dp[1] === "string" && Object.hasOwn(enemies, dp[1])) {
+    L("mentions", "enemy", dp[1]);
+    for (const locId of enemySpawnMap.get(dp[1]) ?? []) L("said_at", "location", locId);
+  } else if (row.file === P.squad && dp[0] === "members" && Number.isInteger(dp[1]) && dp[2] === "synergy" && squadMembers[dp[1]]) {
+    for (const locId of squadMembers[dp[1]].synergy?.locations ?? []) L("said_at", "location", locId);
+  }
+}
+
+// ---------- V1.1: entity/csv twin deduplication ----------
+const NATIVE_TWIN_FIELDS = ["at_s", "kind", "band", "item_id", "qty", "requires", "field"];
+const SQUAD_TWIN_FIELDS = new Set(["name", "bio", "trait_text"]);
+
+function mergeLinks(target, extra) {
+  const seen = new Set(target.map((l) => `${l.rel}|${l.kind}|${l.id}`));
+  const hasSpokenBy = target.some((l) => l.rel === "spoken_by");
+  for (const l of extra) {
+    if (l.rel === "spoken_by" && hasSpokenBy) continue; // CSV explicit speaker wins over native default
+    const k = `${l.rel}|${l.kind}|${l.id}`;
+    if (!seen.has(k)) { seen.add(k); target.push(l); }
+  }
+}
+
+function attachTwinProvenance(csvEnt, nativeEnt) {
+  const csvProv = { origin: "csv", id: csvEnt.id, source: { path: P.csv, line: csvEnt.data.csv_line ?? null } };
+  const keepNatText = isTodo(nativeEnt.data.text) || normText(nativeEnt.data.text) !== normText(csvEnt.data.text);
+  const natProv = { origin: nativeEnt.data.origin, id: nativeEnt.id, source: nativeEnt.source, ...(keepNatText ? { text: nativeEnt.data.text } : {}) };
+  const existing = Array.isArray(csvEnt.data.provenance) ? csvEnt.data.provenance : [csvProv];
+  if (!existing.some((p) => p.origin === natProv.origin && p.id === natProv.id)) existing.push(natProv);
+  csvEnt.data.provenance = existing;
+  mergeLinks(csvEnt.links, nativeEnt.links);
+  for (const k of NATIVE_TWIN_FIELDS) {
+    if (nativeEnt.data[k] !== undefined && csvEnt.data[k] === undefined) csvEnt.data[k] = nativeEnt.data[k];
+  }
+  if (nativeEnt.data.speaker != null && csvEnt.data.native_speaker === undefined) csvEnt.data.native_speaker = nativeEnt.data.speaker;
+  if (csvEnt.data.speakerKind === "system" && nativeEnt.data.speakerKind && nativeEnt.data.speakerKind !== "system") {
+    csvEnt.data.speakerKind = nativeEnt.data.speakerKind;
+    csvEnt.data.speakerId = nativeEnt.data.speakerId;
+    csvEnt.data.speakerSource = nativeEnt.data.speakerSource;
+  }
+  if (csvEnt.production == null && nativeEnt.production != null) csvEnt.production = nativeEnt.production;
+}
+
+/**
+ * Structural twin key for a CSV line row -> matches the exact native entity id it duplicates, or null for non-structural rows.
+ * Prevents identical text across distinct entities (e.g. long_haul on two locations, or identical flaws on two squad members) from collapsing.
+ */
+function csvStructuralTwinKey(e, { locations, squadMembers }) {
+  const file = e.data.file ?? e.source?.path ?? "";
+  const dp = parseDataPath(e.data.data_path);
+  if (!dp) return null;
+  if (file === P.locations && Number.isInteger(dp[0]) && dp[1] === "long_haul" && dp[2] === "text" && locations[dp[0]]) {
+    return `long_haul:${locations[dp[0]].id}`;
+  }
+  if (file === P.relations && dp[0] === "traders" && typeof dp[1] === "string") {
+    if (dp[2] === "lines" && typeof dp[3] === "string") return `rel:${dp[1]}:${dp[3]}`;
+    if (dp[2] === "encouragement" && Number.isInteger(dp[3])) return `enc:${dp[1]}:${dp[3]}`;
+  }
+  if (file === P.squad && dp[0] === "members" && Number.isInteger(dp[1]) && squadMembers[dp[1]]) {
+    const mid = squadMembers[dp[1]].id;
+    if (SQUAD_TWIN_FIELDS.has(dp[2]) && dp.length === 3) return `squad:${mid}:${dp[2]}`;
+    if ((dp[2] === "flaw" || dp[2] === "synergy") && dp[3] === "text") return `squad:${mid}:${dp[2]}`;
+  }
+  return null;
+}
+
+/**
+ * V1.1: dedupe native entity line rows against their CSV twins (same line from entity data and text_review.csv).
+ * Matches data-backed lines strictly by structural key (data_path -> native entity id) and raid_story 1-to-1 by normalized text.
+ * Keeps the CSV row as canonical, merges links + native metadata, and keeps both sources in data.provenance; unmatched natives stay separate.
+ */
+function dedupeLineTwins(ents, ctx) {
+  const csvByStructKey = new Map();
+  const csvRaidByText = new Map();
+  for (const e of ents) {
+    if (e.kind !== "line" || e.data.origin !== "csv") continue;
+    const sk = csvStructuralTwinKey(e, ctx);
+    if (sk) {
+      if (!csvByStructKey.has(sk)) csvByStructKey.set(sk, []);
+      csvByStructKey.get(sk).push(e);
+    } else if ((e.data.file ?? e.source?.path) === P.raidStory) {
+      const tk = normText(e.data.text);
+      if (!csvRaidByText.has(tk)) csvRaidByText.set(tk, []);
+      csvRaidByText.get(tk).push(e);
+    }
+  }
+  const dropped = new Set();
+  const claimedCsv = new Set();
+  for (const e of ents) {
+    if (e.kind !== "line" || e.data.origin === "csv") continue;
+    if (e.data.origin === "raid_story") {
+      const hits = csvRaidByText.get(normText(e.data.text));
+      const target = hits?.find((c) => !claimedCsv.has(c));
+      if (target) {
+        claimedCsv.add(target);
+        attachTwinProvenance(target, e);
+        dropped.add(e);
+      }
+      continue;
+    }
+    const candidates = csvByStructKey.get(e.id);
+    if (!candidates?.length) continue;
+    const hits = e.data.origin === "encouragement"
+      ? candidates.filter((c) => {
+          const ct = normText(c.data.text);
+          return ct && (ct === normText(e.data.title) || ct === normText(e.data.story));
+        })
+      : candidates.filter((c) => normText(c.data.text) === normText(e.data.text));
+    if (hits.length) {
+      for (const csvEnt of hits) attachTwinProvenance(csvEnt, e);
+      dropped.add(e);
+    }
+  }
+  return dropped.size ? ents.filter((e) => !dropped.has(e)) : ents;
 }
 
 /**
@@ -334,16 +570,6 @@ function linkSpeaker(L, who) {
   return L;
 }
 
-/** quest step (by trader + 0-based index) -> its location id, from the at_location link; used for said_at on questline CSV rows. */
-function questStepLocations(ents) {
-  const m = new Map();
-  for (const e of ents) if (e.kind === "quest_step") {
-    const loc = e.links.find((l) => l.rel === "at_location");
-    if (loc) m.set(`${e.data.trader}:${e.data.index - 1}`, loc.id);
-  }
-  return m;
-}
-
 // ---------- the adapter ----------
 async function load(reader, sha) {
   const warnings = [];
@@ -361,6 +587,7 @@ async function load(reader, sha) {
   const enemies = en.json?.enemies ?? {};
   const locations = Array.isArray(lo.json) ? lo.json : [];
   const bossIds = new Set(locations.map((l) => l.boss?.enemy_id).filter(Boolean));
+  const enemySpawnMap = buildEnemySpawnMap(locations);
   const relRivals = Object.fromEntries(Object.entries(relTraders).map(([k, v]) => [k, v.rivals ?? []]));
 
   // traders
@@ -394,6 +621,7 @@ async function load(reader, sha) {
     for (const r of e.rare_loot ?? []) L("drops", "item", r?.id);
     const bossLoc = locations.find((l) => l.boss?.enemy_id === id);
     if (bossLoc) L("boss_of", "location", bossLoc.id);
+    for (const locId of enemySpawnMap.get(id) ?? []) L("spawns_at", "location", locId); // V1.1: enemy -> spawn locations
     E({
       id, kind: "enemy", display: e.name ?? titleCase(id), aliases: [id], source: src(P.enemies, en.f.key(id)), links: L.links,
       data: { boss: bossIds.has(id) || e.boss === true, boss_of: bossLoc?.id ?? null, hp: e.hp ?? null, attack: e.attack ?? null, defense: e.defense ?? null, xp: e.xp ?? null, group: e.group ?? null, loot: e.loot ?? {} },
@@ -464,6 +692,10 @@ async function load(reader, sha) {
   for (const c of ctx) {
     const L = linker();
     L("spoken_by", "trader", c.trader); L("said_at", "location", c.location); // V1: who offers it, where
+    if (c.enemy) {
+      L("mentions", "enemy", c.enemy); // V1.1: consistent link shape
+      if (!c.location) for (const locId of enemySpawnMap.get(c.enemy) ?? []) L("said_at", "location", locId);
+    }
     L("trader", "trader", c.trader); L("item", "item", c.item); L("enemy", "enemy", c.enemy); L("location", "location", c.location);
     for (const r of c.requires ? (Array.isArray(c.requires) ? c.requires : [c.requires]) : []) L("requires_skill", "skill", r?.skill);
     const { id, ...rest } = c;
@@ -520,6 +752,7 @@ async function load(reader, sha) {
     for (const [field, text] of [["name", m.name], ["bio", m.bio], ["trait_text", m.trait_text], ["flaw", m.flaw?.text], ["synergy", m.synergy?.text]]) {
       if (!text) continue;
       const L = linker(); L("spoken_by", "squad", m.id);
+      if (field === "synergy") for (const locId of m.synergy?.locations ?? []) L("said_at", "location", locId);
       E({ id: `squad:${m.id}:${field}`, kind: "line", display: clean(text).slice(0, 60), source: src(P.squad, sline), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "squad", speaker: m.id, ...speakerData({ kind: "squad", id: m.id }, "explicit"), rowClass: rowClass({ origin: "squad", field }), field } });
     }
   }
@@ -529,22 +762,25 @@ async function load(reader, sha) {
     E({ id: `raid_story:${i + 1}`, kind: "line", display: t.text.slice(0, 60), source: src(P.raidStory, t.line), production: null, data: { text: t.text, origin: "raid_story", speaker: t.speaker, ...speakerData(SPEAKER_PARTY, "inferred"), rowClass: rowClass({ origin: "raid_story" }) } });
   });
 
-  // CSV rows as is
-  const stepLocs = questStepLocations(ents);
+  // CSV rows (V1.1: exclude dev-only/validation strings, split System by screen, extend links, dedupe entity/csv twins)
+  const stepCtx = questStepContext(ents);
   if (csvText != null) {
     const { header, records } = parseCsvObjects(csvText);
     if (!header.includes("current_text")) warnings.push(`${P.csv}: no current_text column, ${records.length} rows imported with empty text`);
+    const gdSourceCache = await loadGdSourcesForCsv(reader, records);
     const nameIndex = speakerNameIndex(traders, squadMembers);
     const seen = new Map();
     for (const { row, line } of records) {
+      if (isDevOnlyCsvRow(row, gdSourceCache)) continue;
       const base = `csv:${row.file}:${row.line}:${row.data_path}`;
       const n = (seen.get(base) ?? 0) + 1; seen.set(base, n);
       const L = linker();
       const named = resolveSpeakerName(row.speaker, nameIndex);
-      const who = named ?? inferCsvSpeaker(row, { traders, squadMembers });
+      const rawWho = named ?? inferCsvSpeaker(row, { traders, squadMembers });
+      const who = rawWho.kind === "system" && rawWho.id === "system" ? { kind: "system", id: inferSystemScreenId(row) } : rawWho;
       linkSpeaker(L, who);
       const dp = parseDataPath(row.data_path);
-      if (row.file === P.questlines && dp?.[0] === "questlines" && dp[2] === "steps") L("said_at", "location", stepLocs.get(`${dp[1]}:${dp[3]}`));
+      linkCsvRowContext(L, row, dp, { stepCtx, locations, enemies, squadMembers, enemySpawnMap });
       E({
         id: n === 1 ? base : `${base}#${n}`, kind: "line", display: (row.current_text ?? "").replace(/\s+/g, " ").slice(0, 60),
         source: src(row.file || P.csv, Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : null), links: L.links, production: csvProduction(row.status),
@@ -552,6 +788,8 @@ async function load(reader, sha) {
       });
     }
   }
+  const deduped = dedupeLineTwins(ents, { locations, squadMembers });
+  if (deduped !== ents) { ents.length = 0; ents.push(...deduped); }
 
   // voice cards
   const traderIds = new Set(Object.keys(traders));
@@ -613,6 +851,7 @@ async function load(reader, sha) {
     }
   }
   attachRenderedContracts(ents, sk.json?.mastery?.families); // V9: player-facing contract title per template (additive; own function)
+  await attachItemEconomy(reader, ents, locations);
   return { entities: ents, warnings };
 }
 
@@ -655,6 +894,70 @@ export function renderTemplates(entities, masteryFamilies = null) {
 function attachRenderedContracts(ents, masteryFamilies) {
   const r = renderTemplates(ents, masteryFamilies);
   for (const e of ents) if (e.kind === "contract" && r.has(e.id)) e.data.rendered = r.get(e.id);
+}
+
+/**
+ * V4: attach item sources/uses from optional EFI data files (nodes.json, actions.json, plants.json, power.json, camp.json)
+ * and location containers onto existing entities. Kept as a separate function so parallel adapter edits merge cleanly.
+ */
+async function attachItemEconomy(reader, ents, locations) {
+  const locById = new Map(ents.filter((e) => e.kind === "location").map((e) => [e.id, e]));
+  for (const l of locations) {
+    const ent = locById.get(l.id);
+    if (!ent || !Array.isArray(l.containers)) continue;
+    ent.data.containers = l.containers.map((c) => ({
+      id: c.id ?? "",
+      name: c.name ?? titleCase(String(c.id ?? "container")),
+      weight: c.weight ?? null,
+      rows: (c.rows ?? []).filter((r) => r?.item_id).map((r) => ({ item_id: r.item_id, quantity: r.quantity ?? 1, chance_bp: r.chance_bp ?? null })),
+    }));
+  }
+  const itemById = new Map(ents.filter((e) => e.kind === "item").map((e) => [e.id, e]));
+  if (!itemById.size) return;
+  const addSrc = (itemId, rec) => {
+    const it = itemById.get(itemId);
+    if (!it) return;
+    if (!Array.isArray(it.data.node_sources)) it.data.node_sources = [];
+    if (!it.data.node_sources.some((x) => x.kind === rec.kind && x.id === rec.id)) it.data.node_sources.push(rec);
+  };
+  const addUse = (itemId, rec) => {
+    const it = itemById.get(itemId);
+    if (!it) return;
+    if (!Array.isArray(it.data.extra_uses)) it.data.extra_uses = [];
+    if (!it.data.extra_uses.some((x) => x.kind === rec.kind && x.id === rec.id && x.label === rec.label)) it.data.extra_uses.push(rec);
+  };
+  const optJson = async (file) => {
+    const raw = await reader.readFile(file);
+    if (raw == null) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+  const [nodesJson, actionsJson, plantsJson, powerJson, campJson] = await Promise.all([
+    optJson("data/nodes.json"), optJson("data/actions.json"), optJson("data/plants.json"),
+    optJson("data/power.json"), optJson("data/camp.json"),
+  ]);
+  for (const [nid, n] of Object.entries(nodesJson?.nodes ?? {})) {
+    for (const d of n?.drops ?? []) if (d?.item_id) addSrc(d.item_id, { kind: "node", id: nid, label: n.display_name ?? titleCase(nid), skill: "scavenging", level_req: n.level_req ?? null });
+  }
+  const acts = actionsJson?.actions ?? (actionsJson && !actionsJson.meta ? actionsJson : {});
+  for (const [aid, a] of Object.entries(acts ?? {})) {
+    if (aid === "meta" || !a || typeof a !== "object") continue;
+    for (const d of a.drops ?? []) if (d?.item_id) addSrc(d.item_id, { kind: "action", id: aid, label: a.name ?? titleCase(aid), skill: a.skill ?? null, level_req: a.level_req ?? null });
+  }
+  for (const [pid, p] of Object.entries(plantsJson?.plants ?? {})) {
+    if (p?.crop_id) addSrc(p.crop_id, { kind: "plant", id: pid, label: titleCase(pid), skill: "farming" });
+    if (p?.seed_id) addUse(p.seed_id, { kind: "plant", id: pid, label: `Grow ${titleCase(p.crop_id ?? pid)}` });
+  }
+  for (const fuelId of Object.keys(powerJson?.fuels ?? {})) {
+    addUse(fuelId, { kind: "power", id: "generator", label: "Generator fuel" });
+  }
+  for (const [sid, s] of Object.entries(campJson?.structures ?? {})) {
+    const sname = s?.name ?? titleCase(sid);
+    for (const itemId of Object.keys(s?.cost ?? {})) addUse(itemId, { kind: "camp", id: sid, label: `Build ${sname}` });
+    for (const r of s?.convert?.rows ?? []) {
+      if (r?.from) addUse(r.from, { kind: "camp", id: sid, label: `${sname} input` });
+      if (r?.to) addSrc(r.to, { kind: "camp", id: sid, label: sname });
+    }
+  }
 }
 
 // ---------- hooks (computed from entity data) ----------

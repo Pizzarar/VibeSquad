@@ -194,6 +194,41 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
     assert.match(viewSrc, /<StorybookText[^>]*focus=\{textFocus\}[^>]*onFocusConsumed=\{clearTextFocus\}/);
   });
 
+  test("V5 Quests 'Review row →' and V4 sheets '→ Review' open the V3 Review row via openReviewRow (setTextFocus + tab review)", () => {
+    const viewSrc = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
+    assert.match(viewSrc, /const openReviewRow = useCallback\(\(e: SbEntity\) => \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?setTab\("review"\);/);
+    assert.match(viewSrc, /<QuestsTab[^>]*onGo=\{goTo\}[^>]*openLine=\{openReviewRow\}/);
+    assert.match(viewSrc, /<Locations[^>]*onReview=\{openReviewRow\}/);
+    assert.match(viewSrc, /<Characters[^>]*onReview=\{openReviewRow\}/);
+    assert.match(viewSrc, /<StorybookItems[^>]*onReview=\{openReviewRow\}/);
+    // goTo for a line entity also focuses the V3 Review row
+    assert.match(viewSrc, /if \(nav\.tab === "review"\) \{[\s\S]*?setTextFocus\(\{ id: entityKey\(e\.kind, e\.id\), n: Date\.now\(\) \}\);[\s\S]*?setTab\("review"\);/);
+  });
+
+  test("V1.1 polish: system:<screen> speakers display title-cased in entityCard, characterViews, and Review group headers", () => {
+    const armoryLine = {
+      id: "sys_armory_1", kind: "line", display: "Armory toast", aliases: [], source: { path: "scenes/armory/armory.gd", line: 10 },
+      links: [], production: null, data: { text: "Weapon equipped.", rowClass: "ui", speakerKind: "system", speakerId: "armory", speaker: "armory", group: "armory" },
+    };
+    const hudLine = {
+      id: "sys_hud_1", kind: "line", display: "HUD toast", aliases: [], source: { path: "scenes/raid_hud/hud.gd", line: 20 },
+      links: [], production: null, data: { text: "Low ammo.", rowClass: "ui", speakerKind: "system", speakerId: "raid_hud" },
+    };
+    const localIdx = L.indexEntities([armoryLine, hudLine]);
+    assert.equal(L.entityCard(armoryLine, localIdx).speaker, "Armory");
+    assert.equal(L.entityCard(hudLine, localIdx).speaker, "Raid Hud");
+    const chars = L.characterViews(localIdx);
+    assert.equal(chars.find((c) => c.id === "system:armory")?.speaker, "Armory");
+    assert.equal(chars.find((c) => c.id === "system:raid_hud")?.speaker, "Raid Hud");
+    const built = R.buildReviewRows([armoryLine, hudLine], localIdx, []);
+    assert.equal(built[0].speaker, "Armory");
+    assert.equal(built[0].group, "Armory");
+    assert.equal(built[1].speaker, "Raid Hud");
+    assert.equal(built[1].group, "Raid Hud");
+    const blocks = R.groupRows(built);
+    assert.deepEqual(blocks[0].groups.map((g) => g.label), ["Armory", "Raid Hud"]);
+  });
+
   test("group headers can be collapsed and re-expanded while searching or filtering (user toggle wins)", async () => {
     const { StorybookText } = await loadMod();
     const rows = R.buildReviewRows(snap.entities, idx, []);
