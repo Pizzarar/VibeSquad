@@ -114,7 +114,7 @@ test("summaryLine + CLI: line format, --json shape, usage exit 2, report-only ex
   const js = await run({ _: ["check", "efi"], json: true }, async () => snap);
   const parsed = JSON.parse(js.o);
   assert.equal(js.code, 0);
-  assert.deepEqual(Object.keys(parsed), ["schemaVersion", "project", "ref", "sha", "generatedAt", "entities", "findings", "warnings"]);
+  assert.deepEqual(Object.keys(parsed), ["schemaVersion", "project", "ref", "sha", "generatedAt", "entities", "findings", "warnings", "arc"]);
   assert.equal(parsed.findings.length, 3);
   assert.equal((await run({ _: [] })).code, 2);
   assert.equal((await run({ _: ["check"] })).code, 2);

@@ -31,7 +31,14 @@ export type SbSnapshot = {
   findings: SbFinding[];
   warnings: string[];
   audit?: { signal: string; severity: string; msg?: string }[];
+  arc?: SbArc; // server/storybook/unlocks.mjs (V5)
 };
+
+export type SbArcGate = { type: string; id?: string | null; level?: number | null; unlock_order?: number; trader?: string; rep?: number };
+export type SbArcStep = { id: string; index: number; task: string | null; stage: number; gates: SbArcGate[]; rep_after: number; lines: { id: string; field: string }[]; basis: string[] };
+export type SbArcTrader = { trader: string; display: string; level_0: boolean; steps: SbArcStep[]; chain_rep: number; reactions: string[] };
+export type SbPlayItem = { pos: number; kind: "map" | "reveal" | "quest_step" | "contract"; id: string; ref?: string; label: string; trader: string | null; stage: number; gates: SbArcGate[]; basis: string[] };
+export type SbArc = { arcs: SbArcTrader[]; playOrder: SbPlayItem[]; gaps: { kind: string; id: string; why: string }[]; notDerivable: string[]; tiedStages: number[] };
 
 export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed";
 export const SB_CATEGORIES: SbCategory[] = ["missing", "broken", "inconsistent", "unreviewed"];

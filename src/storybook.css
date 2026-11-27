@@ -174,6 +174,32 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-more { margin: 12px 0; }
 .sb-home { display: flex; flex-direction: column; gap: 4px; }
 
+/* V5 arcs + play order (StorybookArc.tsx). Mobile-first: one column; wide screens get a grid of trader columns. */
+.sb-arc-note { margin: 0 0 10px; color: var(--sb-text2); font-size: 13px; line-height: 1.45; }
+.sb-arcs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 12px; align-items: start; }
+.sb-arc { background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 10px; padding: 8px 10px 10px; min-width: 0; }
+.sb-arc-h { margin: 0 0 6px; font-size: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.sb-arc-steps { list-style: none; margin: 0; padding: 0 0 0 8px; border-left: 2px solid var(--sb-line); display: flex; flex-direction: column; gap: 10px; }
+.sb-arc-step { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sb-arc-stephead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sb-arc-task, .sb-arc-gates, .sb-order-who, .sb-order-kind, .sb-arc-field { font-size: 12px; color: var(--sb-text2); }
+.sb-arc-line { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; background: var(--sb-panel2); border-radius: 8px; overflow-wrap: anywhere; }
+.sb-arc-text { font-size: 14px; line-height: 1.45; color: var(--sb-text); }
+.sb-arc-open { align-self: flex-start; min-height: 44px; padding: 0 8px; font: inherit; font-size: 13px; color: var(--sb-accent-text); background: none; border: 0; cursor: pointer; }
+.sb-arc-react, .sb-arc-gaps { margin-top: 8px; font-size: 13px; }
+.sb-arc-react summary, .sb-arc-gaps summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.sb-arc-gaps ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.sb-order { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.sb-order-stage { margin-top: 10px; font-weight: 700; font-size: 13px; color: var(--sb-text); border-bottom: 1px solid var(--sb-line); padding-bottom: 2px; }
+.sb-order-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; min-width: 0; }
+.sb-order-pos { min-width: 28px; font-size: 12px; color: var(--sb-text2); font-variant-numeric: tabular-nums; }
+.sb-order-map { border-left: 3px solid var(--sb-accent); }
+@media (max-width: 600px) {
+  .sb-arc-text { font-size: 15px; }
+  .sb-arc-gates, .sb-arc-task, .sb-order-who, .sb-order-kind { font-size: 13px; }
+  .sb-order-item .sb-arc-gates { flex-basis: 100%; }
+}
+
 /* V4: entity sheets + Items tab (readable chrome, <= 600px friendly, 44px touch targets). */
 .sb-sheet { display: flex; flex-direction: column; gap: 8px; }
 .sb-sheet-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-top: 3px solid var(--sb-accent); border-radius: 8px; }
@@ -189,6 +215,8 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-container-row { flex-direction: column; align-items: flex-start !important; }
 .sb-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .sb-empty-sm { padding: 6px 2px; font-size: 13px; }
+.sb-items { min-width: 0; }
+.sb-items-detail { min-width: 0; }
 .sb-items-bar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .sb-search { width: 100%; max-width: 420px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
 .sb-search:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }

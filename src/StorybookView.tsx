@@ -14,6 +14,7 @@ import {
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import { StorybookArc } from "./StorybookArc";
 import { StorybookItems } from "./StorybookItems";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
 import "./storybook.css";
@@ -344,6 +345,21 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
   );
 }
 
+type QuestMode = "web" | "arcs" | "order";
+const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
+function QuestsTab({ snap, idx, card, sel, setSel, openLine, renderChip }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer }) {
+  const [mode, setMode] = useState<QuestMode>("arcs");
+  const chip = renderChip;
+  return (
+    <div>
+      <div className="sb-seg" role="tablist" aria-label="Quest views">
+        {QUEST_MODES.map(([m, l]) => <button key={m} type="button" role="tab" aria-selected={mode === m} className="sb-seg-btn" onClick={() => setMode(m)}>{l}</button>)}
+      </div>
+      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={openLine} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
+    </div>
+  );
+}
+
 function Locations({ idx, findings, sel, setSel, renderChip, onReview }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
 }) {
@@ -581,7 +597,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   // Finding → quest step: scroll to the step's chip, focus it (which opens its card) and flash it (UX R18 m9).
   useEffect(() => {
     if (!jump || tab !== "quests") return;
-    const el = [...document.querySelectorAll<HTMLElement>(".sb-step [data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === jump);
+    const el = [...document.querySelectorAll<HTMLElement>(".sb-step [data-sb-chip], .sb-arc-step [data-sb-chip]")].find((n) => n.getAttribute("data-sb-chip") === jump);
     setJump(null);
     if (!el) return;
     el.scrollIntoView({ block: "center" });
@@ -624,7 +640,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
             {tab === "review" && <Findings items={items} idx={idx} card={card} active={activeReview} setActive={setActiveReview} scope="text" setScope={() => {}} scopes={["text"]} goTo={goTo} />}
-            {tab === "quests" && <QuestWeb idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} openLine={goTo} renderChip={renderChip} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={goTo} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={goTo} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={goTo} />}
