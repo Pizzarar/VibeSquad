@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "../server/restart-coord.mjs";
-import { childEnv, sweepTestScratch, testTmpdirEnv } from "./test-child-env.mjs";
+import { checkTestTmp, childEnv, sweepTestScratch, testTmpdirEnv, testTmpdirOverride } from "./test-child-env.mjs";
 import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
 import { ensureTestLockDir } from "../cli/fifo-queue.mjs";
@@ -27,8 +27,20 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Forge 11-23: runner shells export TMPDIR=~/.vibesquad/tmp, and temp homes under ~/.vibesquad trip the real-home guard. Move it
 // to the OS temp, matching what childEnv() gives the children. The suite lock does not follow TMPDIR: suitePaths() uses the fixed
 // machine-wide testLockDir() (cli/fifo-queue.mjs), so every caller shares one slot and one last-run record.
+// idea-1209: VS_TEST_TMPDIR=<dir> overrides the temp (refused inside ~/.vibesquad, same Forge constraint).
+const tmpOverride = testTmpdirOverride();
+if (tmpOverride.error) {
+  console.error(`npm test: ${tmpOverride.error}`);
+  process.exit(1);
+}
 Object.assign(process.env, testTmpdirEnv());
 sweepTestScratch(); // idea-977: stale per-process test scratch dirs from killed runs (hermetic.mjs removes its own on exit)
+// idea-1209: fail fast (one line, exit 1) when the temp dir is full, over quota or unwritable, instead of dying with EDQUOT later.
+const tmpCheck = checkTestTmp(os.tmpdir());
+if (!tmpCheck.ok) {
+  console.error(tmpCheck.error);
+  process.exit(1);
+}
 const paths = suitePaths();
 try {
   ensureTestLockDir(paths.dir); // fails closed on a symlink, a foreign owner or open permissions (cli/fifo-queue.mjs)
