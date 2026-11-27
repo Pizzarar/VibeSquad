@@ -314,7 +314,8 @@ export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
 
 // ---- TLS artifacts (Root CA with Name Constraints + leaf) ----
 
-function opensslBin() {
+/** The openssl the server runs: Git for Windows' copy when present (none on PATH there by default), else `openssl`. */
+export function opensslBin() {
   const git = "C:\\Program Files\\Git\\usr\\bin\\openssl.exe";
   return existsSync(git) ? git : "openssl";
 }

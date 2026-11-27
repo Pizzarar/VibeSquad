@@ -66,6 +66,19 @@ const CD = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl', 'push-location
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const UNKNOWN = Symbol('unknown-dir');
 
+/**
+ * Git Bash (MSYS) drive paths on win32: `/c/Users/x` and `/cygdrive/c/Users/x` are C:\Users\x (bash cd goes there, and MSYS
+ * converts such argv and GIT_DIR / GIT_WORK_TREE values before native git.exe sees them), while path.resolve('/c/x') is
+ * <current drive>:\c\x and would miss the main checkout. Other platforms, and other strings, are returned unchanged.
+ */
+export function msysToWin(p, platform = process.platform) {
+  if (platform !== 'win32' || typeof p !== 'string') return p;
+  const m = /^\/(?:cygdrive\/)?([A-Za-z])(\/.*)?$/.exec(p);
+  return m ? `${m[1].toUpperCase()}:${m[2] ?? '/'}` : p;
+}
+/** path.resolve over host paths: every part goes through msysToWin first. */
+const resolveHost = (...ps) => path.resolve(...ps.map((p) => msysToWin(p)));
+
 // ---- shell tokenizer ----
 
 function readBalanced(s, i, open, close) {
@@ -150,7 +163,13 @@ export function tokenize(src, { env = process.env, vars = {}, powershell = false
       start(); word.quoted = true;
       i++;
       while (i < s.length && s[i] !== '"') {
-        if (s[i] === '\\' && !powershell && i + 1 < s.length) { word.text += s[i + 1]; i += 2; continue; }
+        // In "...", bash keeps a backslash unless it escapes $ ` " \ or a newline: `cd "C:\Users\x\repo"` (Git Bash) is
+        // C:\Users\x\repo, not C:Usersxrepo (that misread let a Windows main-checkout reset through).
+        if (s[i] === '\\' && !powershell && i + 1 < s.length && '$`"\\\n'.includes(s[i + 1])) {
+          if (s[i + 1] !== '\n') word.text += s[i + 1];
+          i += 2;
+          continue;
+        }
         if (s[i] === '$') { i = expandVar(i); continue; }
         if (s[i] === '`' && !powershell) {
           const end = s.indexOf('`', i + 1);
@@ -339,7 +358,7 @@ export function parseGitArgv(argv, cwd, { workTree: envWorkTree = null, gitDir: 
   let dir = cwd;
   let workTree = envWorkTree; // GIT_WORK_TREE / GIT_DIR from the command's env; --work-tree / --git-dir override them
   let gitDir = envGitDir;
-  const resolveFrom = (base, p) => (base === UNKNOWN || p === UNKNOWN ? (path.isAbsolute(String(p)) ? path.resolve(p) : UNKNOWN) : path.resolve(base, p));
+  const resolveFrom = (base, p) => (base === UNKNOWN || p === UNKNOWN ? (path.isAbsolute(String(p)) ? resolveHost(p) : UNKNOWN) : resolveHost(base, p));
   let k = 0;
   for (; k < argv.length; k++) {
     const w = argv[k];
@@ -517,8 +536,8 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
   let dir = cwd ? path.resolve(cwd) : UNKNOWN;
   const resolveDir = (base, w) => {
     if (!w || w === UNKNOWN || w.dynamic) return UNKNOWN;
-    if (path.isAbsolute(w.text)) return path.resolve(w.text);
-    return base === UNKNOWN ? UNKNOWN : path.resolve(base, w.text);
+    if (path.isAbsolute(w.text)) return resolveHost(w.text);
+    return base === UNKNOWN ? UNKNOWN : resolveHost(base, w.text);
   };
   // GIT_DIR / GIT_WORK_TREE every git here sees: inherited from the agent's env (the hook's own env), or handed down by the
   // caller (bash -c / eval / xargs / $(...) bodies get the env their shell had), then `export`/`unset` along the line.
@@ -616,7 +635,7 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
         } else if (push && /^[+-]\d+$/.test(t.text)) {
           dir = UNKNOWN; // stack rotation
         } else {
-          const next = !t ? env?.HOME || os.homedir() : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
+          const next = !t ? resolveHost(env?.HOME || os.homedir()) : t.text === '-' ? UNKNOWN : resolveDir(dir, t);
           if (push) dirStack.push(dir);
           dir = next;
         }

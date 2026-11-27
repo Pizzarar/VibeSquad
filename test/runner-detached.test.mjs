@@ -118,7 +118,8 @@ test('planLedgerReap: unattributed work of a known agent is "left", never reaped
 test('ledger file: round trip, mode 600, an empty ledger removes it, a broken one reads empty', async () => {
   const f = path.join(tmp(), DETACHED_FILE);
   await writeDetachedLedger(f, [ledgerOf({ pids: [{ pid: 500 }] })]);
-  assert.equal(statSync(f).mode & 0o777, 0o600);
+  // win32 has no POSIX modes (node reports 0o666); the file lives under the user's profile ACLs there, as the token files do
+  if (process.platform !== 'win32') assert.equal(statSync(f).mode & 0o777, 0o600);
   const back = readDetachedLedger(f);
   assert.equal(back.length, 1);
   assert.equal(back[0].root, 500);

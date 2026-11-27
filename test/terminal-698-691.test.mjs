@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { TerminalManager, loadNodePty } from "../server/terminals.mjs";
 import { chunkInput, exitNotice, isCopyKey, isPasteKey, LOST_NOTICE, makeInputSender } from "../src/terminalIo.ts";
@@ -19,11 +20,15 @@ async function waitProgress(done, { progress, exited, stallMs, maxMs, startedAt 
   return true;
 }
 const hasPty = Boolean(await loadNodePty());
+// The flood is a bash pipeline: /bin/bash on POSIX, Git for Windows' bash.exe under ConPTY on win32 (skipped if it is absent).
+const WIN = process.platform === "win32";
+const FLOOD_BASH = WIN ? `${process.env.ProgramFiles || "C:\\Program Files"}\\Git\\bin\\bash.exe` : "/bin/bash";
+const floodSkip = !hasPty ? "node-pty unavailable" : WIN && !existsSync(FLOOD_BASH) ? `no Git Bash at ${FLOOD_BASH}` : false;
 
-test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subscriber (backpressure ruled out)", { skip: !hasPty }, async () => {
-  const m = new TerminalManager({ shell: { file: "/bin/bash", args: [] } });
+test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subscriber (backpressure ruled out)", { skip: floodSkip }, async () => {
+  const m = new TerminalManager({ shell: { file: FLOOD_BASH, args: [] } });
   try {
-    const t = await m.create({ cwd: "/tmp" });
+    const t = await m.create({ cwd: WIN ? tmpdir() : "/tmp" });
     let got = 0;
     m.subscribe(t.id, { onData: (d) => { got += d.length; }, onExit: () => {} });
     m.input(t.id, "yes 'long apt-like output line xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' | head -c 30000000; echo FLOOD_$((40+2))\r");
@@ -39,8 +44,12 @@ test("idea-698: a 30 MB flood through the pty neither kills it nor stalls a subs
     await waitDrained(() => m.output(t.id).includes("FLOOD_42"));
     assert.ok(m.output(t.id).includes("FLOOD_42"), `flood marker never arrived (got ${got} chars, stalled ${STALL_MS} ms)`);
     // The marker can reach the ring before the last flood chunks reach this subscriber's onData: wait for the count.
-    await waitDrained(() => got >= 30_000_000);
-    assert.ok(got >= 30_000_000, `got ${got} of 30000000 chars`);
+    // win32: ConPTY renders a screen and emits repaints, not the byte stream, so the subscriber sees far fewer than 30 MB;
+    // there the marker (the flood finished, the shell ran on) plus the exit check below are the test.
+    if (!WIN) {
+      await waitDrained(() => got >= 30_000_000);
+      assert.ok(got >= 30_000_000, `got ${got} of 30000000 chars`);
+    }
     assert.equal(m.get(t.id).exited, null);
     assert.ok(m.output(t.id).length <= 200_000);
   } finally { m.killAll({ sync: true }); }
