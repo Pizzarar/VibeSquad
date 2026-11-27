@@ -12,6 +12,7 @@ import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs
 import { makeSnapshot } from "./schema.mjs";
 import { SIGNALS } from "../registry/audit.mjs";
 import { buildArc } from "./unlocks.mjs";
+import { QUOTED_HOST_PATH } from "../team-worktrees.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -236,13 +237,19 @@ function readJsonBody(req, limit = MARKS_BODY_MAX) {
   });
 }
 
-/** No host paths in a response: the repo path and the home dir become placeholders. */
-function scrubPaths(msg, repoPath) {
+// An unquoted absolute path (POSIX /a/b, Windows C:\a or C:/a, UNC \\host\share) not glued to a word, `~` or a placeholder.
+const BARE_HOST_PATH = /(?<![\w~.<>/\\-])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))[^\s'"<>]*/g;
+/** Both slash spellings of a host path (git prints C:/x on Windows where env vars hold C:\x), longest first. */
+const spellings = (p) => [...new Set([p, p.replace(/\\/g, "/"), p.replace(/\//g, "\\")])].filter((x) => x.length > 1).sort((a, b) => b.length - a.length);
+/**
+ * No host paths in a response: the repo path, VIBESQUAD_HOME and the home dir become placeholders (either slash style),
+ * then any other quoted or bare absolute path becomes <path> (QUOTED_HOST_PATH is the git-stderr masking of team-worktrees).
+ */
+export function scrubPaths(msg, repoPath, env = process.env) {
   let s = String(msg ?? "");
-  if (repoPath) s = s.split(repoPath).join("<repo>");
-  const home = process.env.HOME || process.env.USERPROFILE;
-  if (home) s = s.split(home).join("~");
-  return s;
+  const named = [[repoPath, "<repo>"], [env.VIBESQUAD_HOME, "<vs-home>"], [env.HOME, "~"], [env.USERPROFILE, "~"]];
+  for (const [p, ph] of named) if (p) for (const v of spellings(String(p).replace(/[\\/]+$/, ""))) s = s.split(v).join(ph);
+  return s.replace(QUOTED_HOST_PATH, "'<path>'").replace(BARE_HOST_PATH, "<path>");
 }
 
 /**

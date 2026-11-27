@@ -6,9 +6,18 @@ export type MarkAction = "ok" | "redo" | "edit" | "clear";
 export type MarkTarget = { file: string; data_path: string; where_seen: string; line: string; seen: string };
 export type Mark = { target: MarkTarget; action: MarkAction; note?: string; text?: string; contract?: string };
 export type ServerMark = { key: string; file: string; line: string; data_path: string; where_seen: string; status: string; note: string; contracts: Record<string, string>; rewrite: string; text: string; hashOk: boolean };
-export type MarksState = { exists: boolean; branch: string | null; pending: number; marks: ServerMark[]; head?: string | null };
-/** What a row shows: ok / redo / edit (OWNER-OK with a rewrite), or none. */
-export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string };
+export type MarksState = { exists: boolean; branch: string | null; pending: number; marks: ServerMark[]; head?: string | null; autoCommitError?: string };
+/**
+ * What a row shows: ok / redo / edit (OWNER-OK with the owner's own rewrite), or none. `draft`: an OK that approved the
+ * drafted rewrite (owner_rewrite equals the draft the row carried before review), shown as "OK (draft)", not "Edited".
+ */
+export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean };
+
+/** The label a mark state reads as. */
+export function markLabel(st: MarkState): string {
+  if (st.kind === "ok") return st.draft ? "OK (draft)" : "OK";
+  return st.kind === "redo" ? "Redo" : st.kind === "edit" ? "Edited" : "";
+}
 
 /** review_pack csv_unsafe. */
 export const csvUnsafe = (v: unknown): string => { const s = String(v ?? ""); return s.length >= 2 && s[0] === "'" && "+-=@".includes(s[1]) ? s.slice(1) : s; };
@@ -67,7 +76,12 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
     const cn = m?.contracts?.[hit.contract] ?? "";
     if (cn) return { kind: m?.status === "OWNER-OK" ? "ok" : "redo", note: "", rewrite: "", contractNote: cn };
   }
-  if (m) return { kind: m.status === "OWNER-OK" ? (m.rewrite ? "edit" : "ok") : "redo", note: m.note, rewrite: m.rewrite, contractNote: "" };
+  if (m) {
+    if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "" };
+    if (!m.rewrite) return { kind: "ok", note: m.note, rewrite: "", contractNote: "" };
+    const drafted = draftRewrite(hit.template ?? e);
+    return drafted && csvUnsafe(m.rewrite) === drafted ? { kind: "ok", note: m.note, rewrite: m.rewrite, contractNote: "", draft: true } : { kind: "edit", note: m.note, rewrite: m.rewrite, contractNote: "" };
+  }
   if (exists) return none;
   const d = (hit.template ?? e)?.data ?? {};
   const st = String(d.status ?? "").trim();
@@ -80,6 +94,15 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
 export function draftRewrite(e: SbEntity | null | undefined): string {
   const d = e?.data;
   return d && d.origin === "csv" ? csvUnsafe(d.owner_rewrite) : "";
+}
+
+/** One line for the session bar after End session: subject + sha, plus anything the owner must know. */
+export function commitSummary(b: { committed?: string | null; subject?: string; lost?: number; write?: string } | null): string {
+  if (!b?.committed) return "Nothing to commit";
+  const parts = [`${b.subject ?? "committed"} (${String(b.committed).slice(0, 8)})`];
+  if (b.lost) parts.push(`${b.lost} mark(s) lost in review_pack --write`);
+  if (b.write === "missing") parts.push("review_pack --write not run (python or tools/review_pack.py missing): run it before --check");
+  return parts.join(" · ");
 }
 
 /** Group progress: rows that can be marked, and how many carry an owner mark. */

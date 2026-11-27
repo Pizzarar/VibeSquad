@@ -1,8 +1,8 @@
 // Storybook V6 owner marks UI: the useMarks hook (GET/POST /api/storybook/:p/marks), the OK / Redo / Edit trio a Review row
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, draftRewrite, entityTarget, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -24,11 +24,24 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastCommit, setLastCommit] = useState<string | null>(null);
+  // The project this hook is bound to right now: a response for a project the owner has since switched away from is dropped.
+  const cur = useRef(url);
+  cur.current = url;
+  /** Re-read the session (marks, branch, pending, auto-commit failure) from the server. */
+  const reload = useCallback(async (forUrl: string) => {
+    try {
+      const r = await fetch(forUrl);
+      const b = await r.json().catch(() => null);
+      if (cur.current !== forUrl) return;
+      if (r.ok && b && Array.isArray(b.marks)) setState(b);
+      else if (!r.ok && b?.error) setError(b.error);
+    } catch { /* marks are optional: no session yet */ }
+  }, []);
   useEffect(() => {
-    let live = true;
-    fetch(url).then((r) => r.json()).then((b) => { if (live && b && Array.isArray(b.marks)) setState(b); }).catch(() => { /* marks are optional: no session yet */ });
-    return () => { live = false; };
-  }, [url]);
+    // project switch: nothing of the previous project's session may show while this one loads
+    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false);
+    void reload(url);
+  }, [url, reload]);
   const lines = useMemo(() => allLines(idx), [idx]);
   const byKey = useMemo(() => marksByKey(state.marks), [state.marks]);
   const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists), [lines, byKey, state.exists]);
@@ -38,27 +51,31 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
     try {
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ marks }) });
       const b = await r.json().catch(() => null);
+      if (cur.current !== url) return false;
       if (!r.ok) { setError(b?.error ?? `mark failed (${r.status})`); return false; }
-      setState((s) => ({ ...s, exists: true, branch: b.branch, pending: b.pending, marks: b.marks }));
+      setState((s) => ({ ...s, exists: true, branch: b.branch, pending: b.pending, marks: b.marks, autoCommitError: undefined }));
       const bad = (b.results as { ok: boolean; error?: string }[]).filter((x) => !x.ok);
       if (bad.length) setError(`${bad.length} of ${marks.length} not saved: ${bad[0].error}${bad[0].error?.startsWith("stale") ? " (Refresh to see the current text)" : ""}`);
+      else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`);
       return bad.length === 0;
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; } finally { setBusy(false); }
+    } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); return false; } finally { if (cur.current === url) setBusy(false); }
   }, [url]);
   const commit = useCallback(async () => {
     setBusy(true); setError(null);
     try {
       const r = await fetch(`${url}/commit`, { method: "POST" });
       const b = await r.json().catch(() => null);
-      if (!r.ok) { setError(b?.error ?? `commit failed (${r.status})`); return; }
-      setState((s) => ({ ...s, pending: 0 }));
-      setLastCommit(b.committed ? `${b.subject} (${String(b.committed).slice(0, 8)})${b.lost ? ` · ${b.lost} mark(s) lost in review_pack --write` : ""}` : "Nothing to commit");
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
-  }, [url]);
+      if (cur.current !== url) return;
+      if (!r.ok) { setError(b?.error ?? `commit failed (${r.status})`); await reload(url); return; }
+      setLastCommit(commitSummary(b));
+      if (b?.write === "missing") setError("review_pack --write did not run: run python tools/review_pack.py --write in the review worktree before --check.");
+      // the server's sheet is the truth after --write (marks it dropped, the branch after a midnight rollover)
+      await reload(url);
+    } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); } finally { if (cur.current === url) setBusy(false); }
+  }, [url, reload]);
   return { state, busy, error, lines, byKey, stateOf, mark, commit, lastCommit };
 }
 
-const KIND_LABEL: Record<MarkState["kind"], string> = { ok: "OK", redo: "Redo", edit: "Edited", none: "" };
 
 /** OK / Redo / Edit on one entity (a csv line or a contract). data-mark-key 1/2/3 lets the row's keyboard handler press them. */
 export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: MarksApi }) {
@@ -73,12 +90,13 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
   return (
     <span className="sb-mark" data-testid="sb-mark" data-mark={st.kind}>
       {st.kind !== "none" && (
-        <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || KIND_LABEL[st.kind]}>
-          {KIND_LABEL[st.kind]}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}
+        <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || markLabel(st)}>
+          {markLabel(st)}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}
         </span>
       )}
       {st.kind === "none" && drafted && <span className="sb-mark-draft" title="Drafted rewrite: OK approves it">Draft: {drafted}</span>}
       {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
+      {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
       <span className="sb-mark-btns">
         <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={m.busy} title={hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
         <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={m.busy} title="Redo with a note (key 2)" onClick={() => start("redo")}>Redo</button>
@@ -133,6 +151,7 @@ export function MarksBar({ m }: { m: MarksApi }) {
       </span>
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
+      {m.state.autoCommitError && <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">Auto-commit failed: {m.state.autoCommitError}</span>}
       {m.error && <span className="sb-marksbar-err" role="alert" data-testid="sb-marks-error">{m.error}</span>}
     </div>
   );

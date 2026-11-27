@@ -6,9 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   pyRow, csvSafe, csvUnsafe, textHash, splitRecords, toObj, findRecord, parseNote, joinNote, markRow, applyMarks,
-  listMarks, reviewBranch, marksFor, SHEET,
+  listMarks, reviewBranch, marksFor, SHEET, lockKey, worktreeFor,
 } from "../server/storybook/marks.mjs";
-import { makeFakeRepo, git } from "./storybook-fake-repo.mjs";
+import { scrubPaths } from "../server/storybook/api.mjs";
+import { makeFakeRepo, git, FILES } from "./storybook-fake-repo.mjs";
 
 const hasPython = spawnSync("python3", ["--version"]).status === 0;
 
@@ -281,3 +282,144 @@ test("HTTP marks routes behind the VS API guard: GET / POST / commit, no host pa
     fake.cleanup(); fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+// ── review FAIL rn-f51381b5ee47 fixes ─────────────────────────────────────────────
+
+const GIT_ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+async function withGitEnv(fn) {
+  const saved = Object.fromEntries(Object.keys(GIT_ENV).map((k) => [k, process.env[k]]));
+  Object.assign(process.env, GIT_ENV);
+  try { return await fn(); } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+}
+const WARY = { file: "data/trader_relations.json", data_path: JSON.stringify(["traders", "doc", "lines", "wary"]), seen: "Doc frowns." };
+const BIO = { file: "data/squad.json", data_path: JSON.stringify(["members", 0, "bio"]), seen: "A former paramedic." };
+const wtPathFor = (root) => (_r, b) => path.join(root, b.replace(/\//g, "-"));
+
+test("M1: Edit back to the current text clears a drafted/earlier owner_rewrite (no stale rewrite for --apply)", () => {
+  const row = rowsOf(SHEET_TEXT)[1]; // DRAFT with owner_rewrite "Bring me thirty clean casings."
+  const back = markRow(row, { action: "edit", text: "Bring thirty casings,\nand \"he'll\" know you." });
+  assert.equal(back.owner_rewrite, "", "the drafted rewrite is gone");
+  assert.equal(back.status, "OWNER-OK");
+  assert.equal(back.reviewed_hash, textHash(row.current_text));
+  const edited = markRow(row, { action: "edit", text: "Thirty casings." });
+  assert.equal(markRow(edited, { action: "edit", text: "  Bring thirty casings,\r\nand \"he'll\" know you.  " }).owner_rewrite, "", "an earlier owner edit is dropped too (CRLF/space-insensitive)");
+  const res = applyMarks(SHEET_TEXT, [{ target: T.story, action: "edit", text: T.story.seen }]);
+  const m = listMarks(res.text).find((x) => x.file === "data/questlines.json");
+  assert.equal(m.rewrite, "");
+  assert.equal(m.status, "OWNER-OK");
+});
+
+test("M2: a review branch checked out in the main checkout is refused (409), never written there", async () => withGitEnv(async () => {
+  const fake = makeFakeRepo();
+  try {
+    const branch = "storybook/review-2026-11-27";
+    git(fake.clone, "checkout", "-q", "-b", branch);
+    const head = git(fake.clone, "rev-parse", "HEAD");
+    const sheet = fs.readFileSync(path.join(fake.clone, SHEET), "utf8");
+    await assert.rejects(worktreeFor(fake.clone, branch), (e) => e.status === 409 && /main checkout/.test(e.message));
+    await assert.rejects(worktreeFor(fake.clone + path.sep, branch), (e) => e.status === 409, "however the repo path is spelled");
+    const api = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(path.join(fake.root, "wt")) });
+    await assert.rejects(api.set([{ target: WARY, action: "ok" }]), (e) => e.status === 409);
+    await assert.rejects(api.commit(), (e) => e.status === 409);
+    await assert.rejects(api.get(), (e) => e.status === 409);
+    assert.equal(fs.readFileSync(path.join(fake.clone, SHEET), "utf8"), sheet, "main checkout sheet untouched");
+    assert.equal(git(fake.clone, "status", "--porcelain"), "");
+    assert.equal(git(fake.clone, "rev-parse", "HEAD"), head);
+    assert.ok(!fs.existsSync(path.join(fake.root, "wt")), "no worktree made either");
+    // a linked worktree on the branch is still found
+    git(fake.clone, "checkout", "-q", "main");
+    const linked = path.join(fake.root, "linked");
+    git(fake.clone, "worktree", "add", "-q", linked, branch);
+    assert.equal(fs.realpathSync(await worktreeFor(fake.clone, branch)), fs.realpathSync(linked));
+  } finally { fake.cleanup(); }
+}));
+
+const FAILING_PACK = `import sys
+if sys.argv[1] == "--check":
+    sys.exit(0)
+open("docs/review/text_review.csv", "a", encoding="utf-8").write("half,written\\n")
+open("docs/review/README.md", "w", encoding="utf-8").write("partial regen\\n")
+print("review_pack: refusing orphan rows", file=sys.stderr)
+sys.exit(3)
+`;
+
+test("M3: a failed review_pack --write is never committed; marks stay, half-written pack files are restored, the error reaches the owner", { skip: !hasPython && "python3 missing" }, async () => withGitEnv(async () => {
+  const fake = makeFakeRepo({ ...FILES, "tools/review_pack.py": FAILING_PACK, "docs/review/README.md": "pack readme\n" });
+  try {
+    const wtRoot = path.join(fake.root, "wt");
+    const api = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    const set = await api.set([{ target: WARY, action: "redo", note: "colder" }, { target: BIO, action: "ok" }]);
+    assert.deepEqual(set.results.map((r) => r.ok), [true, true]);
+    const wt = path.join(wtRoot, "storybook-review-2026-11-27");
+    const head = git(wt, "rev-parse", "HEAD");
+    const marked = fs.readFileSync(path.join(wt, SHEET), "utf8");
+    await assert.rejects(api.commit(), (e) => e.status === 409 && /review_pack --write failed \(exit 3\)/.test(e.message) && /refusing orphan rows/.test(e.message) && /Nothing committed/.test(e.message));
+    assert.equal(git(wt, "rev-parse", "HEAD"), head, "no commit");
+    assert.equal(git(wt, "diff", "--cached", "--name-only"), "", "nothing staged");
+    assert.equal(fs.readFileSync(path.join(wt, SHEET), "utf8"), marked, "the owner's marked sheet is back, without the half-written row");
+    assert.equal(fs.readFileSync(path.join(wt, "docs/review/README.md"), "utf8"), "pack readme\n", "the half-written pack file is restored");
+    const got = await api.get();
+    assert.equal(got.pending, 2, "marks still pending");
+    // the auto-commit path keeps the failure for the owner's next read
+    const auto = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 25, managedPath: wtPathFor(wtRoot) });
+    await auto.set([{ target: WARY, action: "redo", note: "colder still" }]);
+    await new Promise((r) => setTimeout(r, 400));
+    const after = await auto.get();
+    assert.match(after.autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
+    assert.equal(git(wt, "rev-parse", "HEAD"), head);
+  } finally { fake.cleanup(); }
+}));
+
+test("M3: with review_pack missing only the sheet is committed, flagged write: missing", async () => withGitEnv(async () => {
+  const fake = makeFakeRepo();
+  try {
+    const wtRoot = path.join(fake.root, "wt");
+    const api = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    await api.set([{ target: WARY, action: "ok" }]);
+    const wt = path.join(wtRoot, "storybook-review-2026-11-27");
+    fs.writeFileSync(path.join(wt, "docs/review/stray.md"), "not ours\n");
+    const c = await api.commit();
+    assert.equal(c.write, "missing");
+    assert.equal(git(wt, "show", "--name-only", "--format=", "HEAD"), SHEET);
+  } finally { fake.cleanup(); }
+}));
+
+test("m1: scrubPaths masks repo, VIBESQUAD_HOME, home (both slash styles) and any other absolute path", () => {
+  const env = { HOME: "/home/u", VIBESQUAD_HOME: "/srv/vs", USERPROFILE: "C:\\Users\\u" };
+  const s = (m) => scrubPaths(m, "/home/u/projects/efi", env);
+  assert.equal(s("fatal: '/srv/vs/worktrees/efi/x' already exists"), "fatal: '<vs-home>/worktrees/efi/x' already exists");
+  assert.equal(s("/home/u/projects/efi/docs bad"), "<repo>/docs bad");
+  assert.equal(s("fatal: C:/Users/u/wt/x is locked"), "fatal: ~/wt/x is locked", "forward-slash spelling of a backslash env path");
+  assert.equal(s("C:\\Users\\u\\wt failed"), "~\\wt failed");
+  assert.equal(s("at /opt/other/thing.py line 3"), "at <path> line 3");
+  assert.equal(s("fatal: 'D:\\x\\y' missing"), "fatal: '<path>' missing");
+  assert.equal(s("open \\\\host\\share\\p"), "open <path>");
+  assert.equal(s("2 of 3 not saved: origin/main docs/review/text_review.csv a-b"), "2 of 3 not saved: origin/main docs/review/text_review.csv a-b", "relative paths and refs stay");
+  for (const m of ["x /srv/vs/a", "x /home/u/b", "x /tmp/sb-1/c", "x C:/Users/u/d", "x E:/e"]) assert.doesNotMatch(s(m), /\/srv|\/home|\/tmp|[A-Z]:[\\/]/, m);
+});
+
+test("m2: one lock per repo however spelled; auto-commit after midnight commits the branch the marks were written on", async () => withGitEnv(async () => {
+  assert.equal(lockKey("/a/b/"), lockKey("/a/b"));
+  assert.equal(lockKey("/a/b/../b"), lockKey("/a/b"));
+  const fake = makeFakeRepo();
+  try {
+    const wtRoot = path.join(fake.root, "wt");
+    let clock = new Date("2026-11-27T23:59:50Z");
+    const api = marksFor(fake.clone, { now: () => clock, autoCommitMs: 25, managedPath: wtPathFor(wtRoot) });
+    assert.equal((await api.set([{ target: WARY, action: "redo", note: "colder" }])).pending, 1);
+    clock = new Date("2026-11-28T00:00:10Z");
+    await new Promise((r) => setTimeout(r, 400));
+    const wt = path.join(wtRoot, "storybook-review-2026-11-27");
+    assert.match(git(wt, "log", "-1", "--format=%s"), /^storybook review 2026-11-27: 0 OK, 1 redo, 0 edit$/);
+    const got = await api.get();
+    assert.equal(got.branch, "storybook/review-2026-11-27", "after midnight the read side shows yesterday's unmerged branch");
+    assert.equal(got.pending, 0);
+    assert.equal(got.autoCommitError, undefined);
+    // a second marksFor on a differently spelled path shares the lock: two concurrent sets both land
+    const api2 = marksFor(fake.clone + path.sep, { now: () => clock, autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    const [a, b] = await Promise.all([api.set([{ target: BIO, action: "ok" }]), api2.set([{ target: WARY, action: "redo", note: "warmer" }])]);
+    assert.equal(a.branch, b.branch);
+    const marks = (await api.get()).marks;
+    assert.ok(marks.some((m) => m.file === "data/squad.json" && m.status === "OWNER-OK") && marks.some((m) => m.file === "data/trader_relations.json" && m.note === "warmer"), "neither write lost the other");
+  } finally { fake.cleanup(); }
+}));

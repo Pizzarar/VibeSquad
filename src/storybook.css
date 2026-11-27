@@ -275,6 +275,8 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-mbtn-save, .sb-root .sb-mbtn-commit { background: var(--sb-accent); color: var(--sb-on-accent); border-color: var(--sb-accent); }
 .sb-root .sb-mark-state { font-size: 12px; padding: 1px 6px; border-radius: 4px; max-width: 36ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-root .sb-mark-ok { color: #6be3a8; } .sb-root .sb-mark-redo { color: var(--sb-warn); } .sb-root .sb-mark-edit { color: var(--sb-accent-text); }
+/* a marked row reads as its mark only: the sheet status it started from (STORY-TODO / DRAFT ...) steps aside */
+.sb-root .sb-row:has(.sb-mark:not([data-mark="none"])) .sb-row-head .sb-status { display: none; }
 .sb-root .sb-mark-draft { font-size: 12px; color: var(--sb-text2); font-style: italic; flex-basis: 100%; text-align: left; }
 .sb-root .sb-mark-hint { font-size: 12px; color: var(--sb-warn); }
 .sb-root .sb-mark-form { display: flex; flex-direction: column; gap: 6px; flex-basis: 100%; }
