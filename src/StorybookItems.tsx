@@ -7,7 +7,7 @@ import {
 } from "./storybookLogic";
 import { ItemSheet, type ChipRenderer } from "./StorybookSheet";
 import type { MarksApi } from "./StorybookMarks";
-import type { ProgressTextBucket, SbProgress } from "./storybookProgress";
+import type { ProgressTextBucket, SbProgress } from "./storybookProgressLogic";
 
 export function StorybookItems({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity, marks }: {
   idx: EntityIndex;

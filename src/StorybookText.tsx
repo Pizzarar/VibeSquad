@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { applyLiveUnreviewed, wordDiff, groupRows, filterRows, type ReviewGroup, searchEntities, speakerEntityKey, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
 import { lineSpeakerKey, type EntityIndex, type SbEntity, type TextChanges } from "./storybookLogic";
-import { PROGRESS_AREA_LABEL, PROGRESS_BUCKET_LABEL, statusBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgress";
+import { PROGRESS_AREA_LABEL, PROGRESS_BUCKET_LABEL, statusBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgressLogic";
 
 const GROUP_PAGE = 60; // rows shown per group before "show more" (a screen has hundreds)
 

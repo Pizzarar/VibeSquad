@@ -1,7 +1,7 @@
 // Storybook V12 progress types and pure presentation/overlay helpers (no React/DOM, no rollup logic).
 // The server computes the rollup once per snapshot (server/storybook/progress.mjs); this module formats labels
 // and applies the live V6 marks delta in O(marks.length) so marking moves the bar immediately.
-import type { ServerMark } from "./storybookMarks";
+import type { ServerMark } from "./storybookMarksLogic";
 
 export type ProgressAreaId = "traders" | "locations" | "squad" | "items" | "ui";
 export type ProgressTextBucket = "ok" | "draft" | "rewrite" | "todo";

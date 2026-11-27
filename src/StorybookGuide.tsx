@@ -1,6 +1,6 @@
 // Storybook in-app "How to use" walkthrough overlay (PLAN_STORYBOOK_V2 W4-guide).
 import { useEffect, useRef } from "react";
-import { GUIDE_FOOTER_NOTE, GUIDE_STEPS, GUIDE_SUBTITLE, GUIDE_TITLE, type GuideStep } from "./storybookGuide";
+import { GUIDE_FOOTER_NOTE, GUIDE_STEPS, GUIDE_SUBTITLE, GUIDE_TITLE, type GuideStep } from "./storybookGuideLogic";
 import "./StorybookGuide.css";
 
 export function StorybookGuide({ open, onClose, onShowMe }: {

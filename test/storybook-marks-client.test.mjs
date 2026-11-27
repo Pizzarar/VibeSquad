@@ -1,10 +1,10 @@
-// PLAN_STORYBOOK_V2 V6 client marks (src/storybookMarks.ts, pure): mark labels, "OK (draft)", the End-session summary,
+// PLAN_STORYBOOK_V2 V6 client marks (src/storybookMarksLogic.ts, pure): mark labels, "OK (draft)", the End-session summary,
 // and the CSS rule that hides a marked row's origin status tag.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const M = await import("../src/storybookMarks.ts");
+const M = await import("../src/storybookMarksLogic.ts");
 
 const line = (over = {}) => ({
   kind: "line", id: "l1", name: "x",

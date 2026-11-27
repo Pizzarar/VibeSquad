@@ -6,7 +6,7 @@ import {
   type FindingScope, type ListItem, type SbChanges, type SbEntity, type SbSnapshot,
 } from "./storybookLogic";
 import { ProgressBarRow } from "./StorybookProgress";
-import type { ProgressAreaId, ProgressTextBucket, SbProgress } from "./storybookProgress";
+import type { ProgressAreaId, ProgressTextBucket, SbProgress } from "./storybookProgressLogic";
 
 const BUCKETS: FindingScope[] = ["problems", "story", "coverage", "text"];
 const GONE_PREVIEW_CAP = 60;

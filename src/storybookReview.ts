@@ -2,7 +2,7 @@
 // Turns the snapshot's text lines, contract templates and lore into ONE ordered list of rows the owner reads top to bottom:
 // story first, then flavor, then toasts/system/UI; grouped by speaker (people) or screen/file (system text). Read-only.
 import { cleanTodo, entityKey, fmtSource, lineSpeakerKey, plainText, titleCase, type EntityIndex, type ListItem, type SbEntity } from "./storybookLogic.ts";
-import { statusBucket, type ProgressTextBucket } from "./storybookProgress.ts";
+import { statusBucket, type ProgressTextBucket } from "./storybookProgressLogic.ts";
 
 export type RowClass = "story" | "flavor" | "contracts" | "ui";
 export const ROW_CLASSES: RowClass[] = ["story", "flavor", "contracts", "ui"];

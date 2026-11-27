@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cleanTodo, contractTitle, formatNeverSays, indexEntities, itemSheetData, lineChipLabel } from "../src/storybookLogic.ts";
-import { liveLineBucket, PROGRESS_BUCKET_LABEL } from "../src/storybookProgress.ts";
+import { liveLineBucket, PROGRESS_BUCKET_LABEL } from "../src/storybookProgressLogic.ts";
 
 const src = { path: "data/items.json", line: 1 };
 const ent = (o) => ({ source: src, links: [], data: {}, production: "placeholder", ...o });

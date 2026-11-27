@@ -8,7 +8,7 @@ import {
   segmentPct,
   type ProgressEntry,
   type ProgressTextBucket,
-} from "./storybookProgress";
+} from "./storybookProgressLogic";
 
 const BUCKET_ORDER: ProgressTextBucket[] = ["ok", "draft", "rewrite", "todo"];
 
