@@ -39,6 +39,12 @@ export const VERDICT_LINE_RE = new RegExp(VERDICT_LINE_SRC, "m");
 const LINE_PARSE_RE = new RegExp(VERDICT_LINE_SRC);
 const NON_IMPLEMENTER_REVIEW_PROFILE_RE = /^Review\b/i;
 const UX_REVIEWER_RE = /\bUX Review(?:er)?\b/i;
+/** idea-1200: a UX Review role key / normalized profile (`ux-review`, `ux-reviewer`, `UX_Reviewer`), and the `role=` of a vs.route label. */
+const UX_ROLE_KEY_RE = /^ux-review(?:er)?(?:-|$)/;
+/** idea-1200: implementer-side profiles (role labels and legacy names, normalized): never a code reviewer, whatever the title says. */
+const IMPLEMENTER_PROFILE_RE = /^(?:implement|implementer|planner|spec|work-order|mechanical|senior-reasoning|art-director|art-painter|art|lead|brainstorm|buddy|worker|coder)(?:-|$)/;
+const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+const routeRole = (route) => /(?:^|\s)role=(\S+)/.exec(String(route ?? ""))?.[1] ?? "";
 const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s-])review(?:\s|$)/i;
 
 /** The full verdict line (byte-for-byte, minus trailing whitespace) of the message's effective verdict: the first FAIL if any,
@@ -121,15 +127,32 @@ function scanVerdicts(text) {
   return out;
 }
 
-/** A reviewer run: a `Review - …` profile, or a reviewer-shaped title ("Review - Gemini", "re-review", "R2 review"). */
+/**
+ * A code-reviewer run (its H/M/L verdict can gate a merge). idea-1200: decided by profile and role label first, the title only
+ * as a fallback, so a `Review` profile titled "... UX Review ..." is still a code reviewer. Fail closed, in order:
+ * 1. UX Review signal in the profile (`UX Reviewer - Opus`, `UX Review`, `ux-review`) or a role label (`labels.role` /
+ *    `role` / vs.route `role=` of `ux-review[er]`) -> false.
+ * 2. `Review…` profile -> true (title ignored).
+ * 3. implementer-side profile (Implement, Planner, Work Order, Art …, Lead, …) -> false (title ignored).
+ * 4. no profile or an unknown one (e.g. Pre-check, a custom name): today's title rules (UX title -> false, "review fix" -> false,
+ *    else a reviewer-shaped title "Review - Gemini" / "re-review" / "R2 review").
+ */
 export function isReviewerAgent(agent) {
   const labels = agent?.labels ?? {};
   const profile = String(labels.profile ?? agent?.profile ?? "").trim();
   const title = String(agent?.title ?? "").trim();
   // UX Reviewer is not a code reviewer: its verdict is a plain PASS/FAIL line in docs/UX_REVIEW_<lane>_R<n>.md (no H/M/L <hash>),
   // so it is excluded here; its digest is not rewritten to NO-VERDICT and `vs verdict` says "not a reviewer".
-  if (UX_REVIEWER_RE.test(profile) || UX_REVIEWER_RE.test(title)) return false;
-  if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;
+  const profiles = [profile, String(agent?.profile ?? "").trim()].filter(Boolean);
+  if (profiles.some((p) => UX_REVIEWER_RE.test(p) || UX_ROLE_KEY_RE.test(normKey(p)))) return false;
+  const roles = [labels.role, agent?.role, routeRole(labels["vs.route"])].map(normKey);
+  if (roles.some((r) => UX_ROLE_KEY_RE.test(r))) return false;
+  if (profile) {
+    if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;
+    if (IMPLEMENTER_PROFILE_RE.test(normKey(profile))) return false;
+  }
+  // Title fallback (no profile, or one this gate doesn't know): unchanged from before idea-1200.
+  if (UX_REVIEWER_RE.test(title)) return false;
   if (/\breview\s+fix/i.test(title)) return false; // an implementer fixing review findings
   return NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(title) || REVIEWER_TITLE_RE.test(title);
 }

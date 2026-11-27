@@ -185,6 +185,50 @@ test("UX Reviewer is not an H/M/L code reviewer: digest 'done' is not rewritten 
   assert.equal(g.exitCode ?? g.code, GATE_EXIT.notReviewer);
 });
 
+test("idea-1200: profile and role label decide before the title; the title is only a fallback", () => {
+  const tip = "ed4da6e6aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  // Repro (Per4 rn-7a04150cd996 / rn-52607d95dc8a): a Review profile whose title mentions "UX Review" is a code reviewer.
+  const per4 = { id: "rn-7a04150cd996", profile: "Review", title: "Per4 · UX Review role re-review", labels: { role: "worker", "vs.route": "stakes=normal model=claude-sonnet-5-5 effort=medium reason=override tier=mid role=review why=override" } };
+  assert.equal(isReviewerAgent(per4), true);
+  assert.equal(evaluateVerdictGate({ agent: per4, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.pass);
+  for (const agent of [
+    { title: "Per4 · UX Review role review", labels: { profile: "Review" } },
+    { title: "UX Reviewer · R3", labels: { profile: "Review - Gemini" } },
+    { title: "UX review R3", labels: { profile: "Review - Sonnet" } },
+  ]) assert.equal(isReviewerAgent(agent), true, JSON.stringify(agent));
+  // A UX Reviewer profile (legacy name, new role label, normalized key) is refused whatever its title.
+  for (const p of ["UX Reviewer - Opus", "UX Review", "ux-review", "UX_Reviewer"]) {
+    for (const title of ["Review - Gemini", "R2 re-review", "R1 review", "", "UX review R3"]) {
+      const agent = { title, labels: { profile: p } };
+      assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+      assert.equal(evaluateVerdictGate({ agent, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.notReviewer);
+    }
+  }
+  assert.equal(isReviewerAgent({ profile: "UX Reviewer - Opus", title: "R2 review", labels: {} }), false); // top-level profile
+  // A ux-review role label refuses even under a Review profile (conflicting signals fail closed).
+  assert.equal(isReviewerAgent({ title: "R1 review", labels: { profile: "Review", role: "ux-review" } }), false);
+  assert.equal(isReviewerAgent({ title: "R1 review", labels: { profile: "Review", "vs.route": "stakes=normal tier=top role=ux-review" } }), false);
+  assert.equal(isReviewerAgent({ title: "Review - Gemini", role: "ux-reviewer", labels: {} }), false);
+  // No profile: the old title fallback still refuses a UX title and accepts a reviewer title.
+  assert.equal(isReviewerAgent({ title: "Per4 · UX Review role re-review", labels: { role: "worker" } }), false);
+  assert.equal(isReviewerAgent({ title: "UX review R3", labels: {} }), false);
+  assert.equal(isReviewerAgent({ title: "R2 re-review idea-160", labels: { role: "worker" } }), true);
+  // Implementer profiles never count as reviewers, whatever the title says.
+  for (const p of ["Implement", "Implement - Sonnet", "Implement - Gemini (trial)", "Planner", "Spec - Opus", "Work Order - DSP", "Mechanical - DSF", "Senior Reasoning - DSP", "Art Director", "Art Painter - Opus", "Lead - Claude", "Brainstorm"]) {
+    for (const title of ["Review - Gemini", "R2 re-review", "R1 review", "Reviewer pass"]) {
+      const agent = { title, labels: { profile: p } };
+      assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+    }
+  }
+  assert.equal(evaluateVerdictGate({ agent: { title: "Review - Gemini", labels: { profile: "Implement" } }, lastMessage: "PASS 0/0/0 ed4da6e6", tip }).code, GATE_EXIT.notReviewer);
+  // An unknown profile keeps exactly today's title fallback (no widening): reviewer title passes, UX / plain titles don't.
+  assert.equal(isReviewerAgent({ title: "R2 review", labels: { profile: "CustomUnknown" } }), true);
+  assert.equal(isReviewerAgent({ title: "UX review R3", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "Per4 · UX Review role re-review", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "fix the bug", labels: { profile: "CustomUnknown" } }), false);
+  assert.equal(isReviewerAgent({ title: "Review fix R2", labels: { profile: "Pre-check - Flash" } }), false);
+});
+
 test("/vs-log: a digest's done entry is rewritten in code from the worker's own message (FAIL kept over a PASS digest, NO-VERDICT, passthrough)", async () => {
   const failing = await worker("FAIL 1/0/1 3528a4c lock not released\nH1: watch-sets.mjs:88", { profile: "Review - Gemini" });
   const e1 = await digestLog(digestFor(failing), "PASS: review approved");
