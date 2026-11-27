@@ -114,6 +114,9 @@ test("X2 caps: a capped (or past-soft-line) antigravity-cli caps neon and carbon
   // Claude capped on both routes: Gemini arms keep alternating between themselves.
   const cl = await decideArm(base({ listAgents: async () => [ag("neon")], capProbe: async () => ({ claude: {}, "agy-claude": {} }) }));
   assert.deepEqual([cl.arm, cl.reason], ["carbon", "capped:claude"]);
+  // All arms hard-capped: antigravity-cli is shared by neon and carbon, so reason dedupes the family.
+  const allHard = await decideArm(base({ capProbe: async () => ({ claude: {}, "agy-claude": {}, "antigravity-cli": {} }) }));
+  assert.deepEqual([allHard.arm, allHard.reason, allHard.capped], ["sonnet", "capped:claude+antigravity-cli", true]);
   // spawn_worker end to end: a capped Gemini never lands a Carbon spawn.
   const { ctx, creates } = ctxWith([ag("sonnet"), ag("neon")], { env: { VIBESQUAD_HOME: home({ "antigravity-cli": {} }) } });
   const res = await go(ctx, { profile: "Implement", stakes: "normal" });

@@ -362,7 +362,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     // Pass 2: every arm is past soft (or hard). Fall back to hard caps only so we don't strand the spawn.
     arm = pickArm(requested, counts, { arms: set, capped: new Set(hardCapped.keys()), weights });
     usedHardFallback = true;
-    if (!arm) return keep(`capped:${[...hardCapped.values()].join("+")}`, { counts, capped: true }); // every arm hard-capped
+    if (!arm) return keep(`capped:${[...new Set(hardCapped.values())].join("+")}`, { counts, capped: true }); // every arm hard-capped
   }
   // The reason names a cap/soft line only when it changed the outcome (the uncapped pick was skipped).
   let reason = "alternation";
