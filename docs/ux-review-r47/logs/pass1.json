@@ -1,0 +1,1366 @@
+{
+ "dark-1920": {
+  "pf": {
+   "cardH": 256,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "sv": {
+   "cardH": 256,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "a: survivor-only — keep only listed tickers and report coverage %",
+     "w": 423,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "b: stop at A1 — ship the A1 universe and defer delisted data",
+     "w": 381,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000014",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000014",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "parry": {
+   "cardH": 216,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "Try 150ms first",
+     "w": 111,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000006",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000006",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "cardHeights": [
+   [
+    "01",
+    184
+   ],
+   [
+    "02",
+    184
+   ],
+   [
+    "03",
+    144
+   ],
+   [
+    "13",
+    256
+   ],
+   [
+    "05",
+    184
+   ],
+   [
+    "06",
+    216
+   ],
+   [
+    "07",
+    144
+   ],
+   [
+    "09",
+    184
+   ],
+   [
+    "10",
+    184
+   ],
+   [
+    "11",
+    144
+   ],
+   [
+    "14",
+    256
+   ]
+  ],
+  "counts": {
+   "nav": "· 14",
+   "summary": "14 open · 11 here · 3 off-screen"
+  },
+  "focusRing": {
+   "tag": "BUTTON",
+   "outline": "solid 2px rgb(155, 114, 232)",
+   "boxShadow": "none"
+  },
+  "pfSource": {
+   "role": "region",
+   "tabindex": "0",
+   "aria": "Source excerpt for Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+   "h": 108,
+   "scrollH": 106,
+   "overflowY": "auto",
+   "maxH": "232px",
+   "ws": "pre-wrap",
+   "fs": "12px",
+   "ff": "\"JetBrains Mono\", Consolas, monospace",
+   "color": "rgb(195, 192, 207)",
+   "bg": "rgb(18, 18, 24)",
+   "text": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?",
+   "expanded": "true",
+   "cardH": 370
+  },
+  "spaceCloses": true,
+  "tabSeq": [
+   "boring-decision-source-body-ny-00000000000000000013|Partial fills are the last ope",
+   "boring-decision-alt-ny-00000000000000000013-0|A: fill-or-kill at entry — can",
+   "boring-decision-alt-ny-00000000000000000013-1|B: keep the partial fill and r",
+   "boring-decision-alt-ny-00000000000000000013-2|C: top up the remainder at the",
+   "boring-decision-not-ny-00000000000000000013|Not that",
+   "boring-decision-input-ny-00000000000000000013|Add a note or reply…"
+  ],
+  "svSource": {
+   "h": 72,
+   "scrollH": 70,
+   "text": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+  },
+  "parrySource": "No source message excerpt available.",
+  "sendBefore": "Send 0 answers",
+  "sendAfterB": "Send 1 answer",
+  "sendAfterBType": "Send 1 answer",
+  "afterMixed": {
+   "cardH": 370,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "true"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Hide source ▴",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "true",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 91
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "inputVal": "Yes, add the 30s veto window",
+  "footer": "1 ready to send · 6 leans not included\nUse all leans (6)\nSend 1 answer",
+  "afterSwitchC": {
+   "pressed": [
+    "false",
+    "false",
+    "true"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterUnpick": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterNot": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "notPressed": "true",
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "review": "Sending 1 answer in 5s…\nUndo\nSend now",
+  "errs": []
+ },
+ "light-1920": {
+  "pf": {
+   "cardH": 256,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "sv": {
+   "cardH": 256,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "a: survivor-only — keep only listed tickers and report coverage %",
+     "w": 423,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "b: stop at A1 — ship the A1 universe and defer delisted data",
+     "w": 381,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000014",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000014",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "parry": {
+   "cardH": 216,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "Try 150ms first",
+     "w": 111,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000006",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000006",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "cardHeights": [
+   [
+    "01",
+    184
+   ],
+   [
+    "02",
+    184
+   ],
+   [
+    "03",
+    144
+   ],
+   [
+    "13",
+    256
+   ],
+   [
+    "05",
+    184
+   ],
+   [
+    "06",
+    216
+   ],
+   [
+    "07",
+    144
+   ],
+   [
+    "09",
+    184
+   ],
+   [
+    "10",
+    184
+   ],
+   [
+    "11",
+    144
+   ],
+   [
+    "14",
+    256
+   ]
+  ],
+  "counts": {
+   "nav": "· 14",
+   "summary": "14 open · 11 here · 3 off-screen"
+  },
+  "focusRing": {
+   "tag": "BUTTON",
+   "outline": "solid 2px rgb(154, 127, 224)",
+   "boxShadow": "none"
+  },
+  "pfSource": {
+   "role": "region",
+   "tabindex": "0",
+   "aria": "Source excerpt for Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+   "h": 108,
+   "scrollH": 106,
+   "overflowY": "auto",
+   "maxH": "232px",
+   "ws": "pre-wrap",
+   "fs": "12px",
+   "ff": "\"JetBrains Mono\", Consolas, monospace",
+   "color": "rgb(74, 69, 88)",
+   "bg": "rgb(247, 246, 243)",
+   "text": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?",
+   "expanded": "true",
+   "cardH": 370
+  },
+  "spaceCloses": true,
+  "tabSeq": [
+   "boring-decision-source-body-ny-00000000000000000013|Partial fills are the last ope",
+   "boring-decision-alt-ny-00000000000000000013-0|A: fill-or-kill at entry — can",
+   "boring-decision-alt-ny-00000000000000000013-1|B: keep the partial fill and r",
+   "boring-decision-alt-ny-00000000000000000013-2|C: top up the remainder at the",
+   "boring-decision-not-ny-00000000000000000013|Not that",
+   "boring-decision-input-ny-00000000000000000013|Add a note or reply…"
+  ],
+  "svSource": {
+   "h": 72,
+   "scrollH": 70,
+   "text": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+  },
+  "parrySource": "No source message excerpt available.",
+  "sendBefore": "Send 0 answers",
+  "sendAfterB": "Send 1 answer",
+  "sendAfterBType": "Send 1 answer",
+  "afterMixed": {
+   "cardH": 370,
+   "cardW": 834,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "true"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Hide source ▴",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "true",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 91
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "inputVal": "Yes, add the 30s veto window",
+  "footer": "1 ready to send · 6 leans not included\nUse all leans (6)\nSend 1 answer",
+  "afterSwitchC": {
+   "pressed": [
+    "false",
+    "false",
+    "true"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterUnpick": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterNot": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "notPressed": "true",
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "review": "Sending 1 answer in 5s…\nUndo\nSend now",
+  "errs": []
+ },
+ "dark-3200": {
+  "pf": {
+   "cardH": 256,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "sv": {
+   "cardH": 216,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "a: survivor-only — keep only listed tickers and report coverage %",
+     "w": 423,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "b: stop at A1 — ship the A1 universe and defer delisted data",
+     "w": 381,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000014",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000014",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "parry": {
+   "cardH": 216,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "Try 150ms first",
+     "w": 111,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000006",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000006",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "cardHeights": [
+   [
+    "01",
+    184
+   ],
+   [
+    "02",
+    184
+   ],
+   [
+    "03",
+    144
+   ],
+   [
+    "13",
+    256
+   ],
+   [
+    "05",
+    184
+   ],
+   [
+    "06",
+    216
+   ],
+   [
+    "07",
+    144
+   ],
+   [
+    "09",
+    184
+   ],
+   [
+    "10",
+    184
+   ],
+   [
+    "11",
+    144
+   ],
+   [
+    "14",
+    216
+   ]
+  ],
+  "counts": {
+   "nav": "· 14",
+   "summary": "14 open · 11 here · 3 off-screen"
+  },
+  "focusRing": {
+   "tag": "BUTTON",
+   "outline": "solid 2px rgb(155, 114, 232)",
+   "boxShadow": "none"
+  },
+  "pfSource": {
+   "role": "region",
+   "tabindex": "0",
+   "aria": "Source excerpt for Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+   "h": 108,
+   "scrollH": 106,
+   "overflowY": "auto",
+   "maxH": "232px",
+   "ws": "pre-wrap",
+   "fs": "12px",
+   "ff": "\"JetBrains Mono\", Consolas, monospace",
+   "color": "rgb(195, 192, 207)",
+   "bg": "rgb(18, 18, 24)",
+   "text": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?",
+   "expanded": "true",
+   "cardH": 370
+  },
+  "spaceCloses": true,
+  "tabSeq": [
+   "boring-decision-source-body-ny-00000000000000000013|Partial fills are the last ope",
+   "boring-decision-alt-ny-00000000000000000013-0|A: fill-or-kill at entry — can",
+   "boring-decision-alt-ny-00000000000000000013-1|B: keep the partial fill and r",
+   "boring-decision-alt-ny-00000000000000000013-2|C: top up the remainder at the",
+   "boring-decision-not-ny-00000000000000000013|Not that",
+   "boring-decision-input-ny-00000000000000000013|Add a note or reply…"
+  ],
+  "svSource": {
+   "h": 72,
+   "scrollH": 70,
+   "text": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+  },
+  "parrySource": "No source message excerpt available.",
+  "sendBefore": "Send 0 answers",
+  "sendAfterB": "Send 1 answer",
+  "sendAfterBType": "Send 1 answer",
+  "afterMixed": {
+   "cardH": 370,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "true"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Hide source ▴",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "true",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(195, 192, 207)",
+    "h": 22,
+    "w": 91
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "inputVal": "Yes, add the 30s veto window",
+  "footer": "1 ready to send · 6 leans not included\nUse all leans (6)\nSend 1 answer",
+  "afterSwitchC": {
+   "pressed": [
+    "false",
+    "false",
+    "true"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterUnpick": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterNot": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "notPressed": "true",
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "review": "Sending 1 answer in 5s…\nUndo\nSend now",
+  "errs": []
+ },
+ "light-3200": {
+  "pf": {
+   "cardH": 256,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "sv": {
+   "cardH": 216,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "a: survivor-only — keep only listed tickers and report coverage %",
+     "w": 423,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "b: stop at A1 — ship the A1 universe and defer delisted data",
+     "w": 381,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000014",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000014",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "parry": {
+   "cardH": 216,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "Try 150ms first",
+     "w": 111,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Show source ▾",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "false",
+    "controls": "boring-decision-source-body-ny-00000000000000000006",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 96
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000006",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "cardHeights": [
+   [
+    "01",
+    184
+   ],
+   [
+    "02",
+    184
+   ],
+   [
+    "03",
+    144
+   ],
+   [
+    "13",
+    256
+   ],
+   [
+    "05",
+    184
+   ],
+   [
+    "06",
+    216
+   ],
+   [
+    "07",
+    144
+   ],
+   [
+    "09",
+    184
+   ],
+   [
+    "10",
+    184
+   ],
+   [
+    "11",
+    144
+   ],
+   [
+    "14",
+    216
+   ]
+  ],
+  "counts": {
+   "nav": "· 14",
+   "summary": "14 open · 11 here · 3 off-screen"
+  },
+  "focusRing": {
+   "tag": "BUTTON",
+   "outline": "solid 2px rgb(154, 127, 224)",
+   "boxShadow": "none"
+  },
+  "pfSource": {
+   "role": "region",
+   "tabindex": "0",
+   "aria": "Source excerpt for Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+   "h": 108,
+   "scrollH": 106,
+   "overflowY": "auto",
+   "maxH": "232px",
+   "ws": "pre-wrap",
+   "fs": "12px",
+   "ff": "\"JetBrains Mono\", Consolas, monospace",
+   "color": "rgb(74, 69, 88)",
+   "bg": "rgb(247, 246, 243)",
+   "text": "Partial fills are the last open question on the entry path.\nA) fill-or-kill at entry: cancel the order unless it fills completely\nB) keep the partial fill and resize the stop to the filled size\nC) top up the remainder at the next bar's open\nSeparately: should I add a 30s veto window on the check-5 same-ticker block?",
+   "expanded": "true",
+   "cardH": 370
+  },
+  "spaceCloses": true,
+  "tabSeq": [
+   "boring-decision-source-body-ny-00000000000000000013|Partial fills are the last ope",
+   "boring-decision-alt-ny-00000000000000000013-0|A: fill-or-kill at entry — can",
+   "boring-decision-alt-ny-00000000000000000013-1|B: keep the partial fill and r",
+   "boring-decision-alt-ny-00000000000000000013-2|C: top up the remainder at the",
+   "boring-decision-not-ny-00000000000000000013|Not that",
+   "boring-decision-input-ny-00000000000000000013|Add a note or reply…"
+  ],
+  "svSource": {
+   "h": 72,
+   "scrollH": 70,
+   "text": "U11 needs a call on survivorship before we freeze the dataset.\n(a) survivor-only: keep only listed tickers and report coverage %\n(b) stop at A1: ship the A1 universe and defer delisted data"
+  },
+  "parrySource": "No source message excerpt available.",
+  "sendBefore": "Send 0 answers",
+  "sendAfterB": "Send 1 answer",
+  "sendAfterBType": "Send 1 answer",
+  "afterMixed": {
+   "cardH": 370,
+   "cardW": 1096,
+   "alts": [
+    {
+     "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+     "w": 412,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    },
+    {
+     "text": "B: keep the partial fill and resize the stop to the filled size",
+     "w": 368,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "true"
+    },
+    {
+     "text": "C: top up the remainder at the next bar's open",
+     "w": 305,
+     "h": 32,
+     "lines": 1,
+     "clipped": false,
+     "ws": "normal",
+     "to": "clip",
+     "fs": "13px",
+     "title": "",
+     "aria": null,
+     "pressed": "false"
+    }
+   ],
+   "toggle": {
+    "text": "Hide source ▴",
+    "tag": "BUTTON",
+    "type": "button",
+    "expanded": "true",
+    "controls": "boring-decision-source-body-ny-00000000000000000013",
+    "fs": "12px",
+    "color": "rgb(74, 69, 88)",
+    "h": 22,
+    "w": 91
+   },
+   "order": [
+    "boring-decision-card-meta",
+    "boring-decision-ask",
+    "boring-decision-decides",
+    "boring-decision-source-ny-00000000000000000013",
+    "boring-decision-choices",
+    "boring-decision-answer-row"
+   ]
+  },
+  "inputVal": "Yes, add the 30s veto window",
+  "footer": "1 ready to send · 6 leans not included\nUse all leans (6)\nSend 1 answer",
+  "afterSwitchC": {
+   "pressed": [
+    "false",
+    "false",
+    "true"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterUnpick": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "afterNot": {
+   "pressed": [
+    "false",
+    "false",
+    "false"
+   ],
+   "notPressed": "true",
+   "input": "Yes, add the 30s veto window",
+   "send": "Send 1 answer"
+  },
+  "review": "Sending 1 answer in 5s…\nUndo\nSend now",
+  "errs": []
+ }
+}

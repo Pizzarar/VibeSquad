@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isInterruptibleWork } from "./provider-failover.mjs";
+import { isInterruptibleWork, normalizeProviderFamily } from "./provider-failover.mjs";
 
 // EXP6 (Sonnet vs DSP, 11-19..11-23) is closed; these stay for the history readers (verdict probe, EXP6.md re-reads).
 export const EXP6_SINCE = "2026-11-19T00:00:00Z";
@@ -223,14 +223,16 @@ function splitHardCaps(caps) {
 function softReasonForArm(wf, caps, { role = false } = {}) {
   if (!caps || Array.isArray(caps)) return "";
   const fams = ARM_CAP_FAMILIES[wf] ?? [];
-  const check = (k) => {
+  const check = (k, fam) => {
     const v = caps[k];
-    return v && typeof v === "object" && v.soft === true && typeof v.reason === "string" ? v.reason : "";
+    if (!(v && typeof v === "object" && v.soft === true && typeof v.reason === "string" && v.reason.trim())) return "";
+    const r = v.reason.trim();
+    return fam && !r.startsWith(`${fam} `) && !/^[a-z0-9-]+\s+pool\s+/i.test(r) ? `${fam} ${r}` : r;
   };
   if (role && wf === "sonnet") {
     for (const k of Object.keys(caps)) {
       if (String(k ?? "").trim().toLowerCase().split("/")[0] === "agy-claude") {
-        const r = check(k);
+        const r = check(k, "agy-claude");
         if (r) return r;
       }
     }
@@ -238,7 +240,8 @@ function softReasonForArm(wf, caps, { role = false } = {}) {
   for (const k of Object.keys(caps)) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
     if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
-      const r = check(k);
+      const normFam = fam === "agy" ? "antigravity-cli" : normalizeProviderFamily(k);
+      const r = check(k, normFam);
       if (r) return r;
     }
   }
@@ -280,8 +283,10 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     }
     if (hardKey) return keep(`capped:${hardKey}`, { capped: true });
     if (allKey && !armCapKey(requested.wf, rawCaps, { role: roleSpawn })) {
-      const sr = softReasonForArm(optInKey, rawCaps, { role: roleSpawn }) || "soft quota: interruptible only";
-      return keep(`${sr} -> ${requested.provider}`, { capped: true, softFailover: true });
+      const skippedFam = allKey === "agy" ? "antigravity-cli" : normalizeProviderFamily(allKey) || optInArm.provider;
+      const sr = softReasonForArm(optInKey, rawCaps, { role: roleSpawn }) || `${skippedFam} soft quota: interruptible only`;
+      // C fu1 L3: a soft-line skip is not a cap: report soft (spawn_worker result.ab.soft), never capped.
+      return keep(`${sr} -> ${requested.provider}`, { soft: true, softFailover: true });
     }
     const swapped = optInArm.wf !== requested.wf;
     const profileOut = swapped && !roleSpawn ? optInArm.profile : String(profile);
@@ -330,7 +335,9 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
     if (usedHardFallback || hardCapped.has(free.wf)) {
       reason = `capped:${hardCapped.get(free.wf)}`;
     } else {
-      const sr = softReasonForArm(free.wf, rawCaps, { role: roleSpawn }) || "soft quota: interruptible only";
+      const rawKey = allCapped.get(free.wf);
+      const skippedFam = rawKey ? (rawKey === "agy" ? "antigravity-cli" : normalizeProviderFamily(rawKey)) : (ARMS[free.wf]?.provider ?? "");
+      const sr = softReasonForArm(free.wf, rawCaps, { role: roleSpawn }) || (skippedFam ? `${skippedFam} soft quota: interruptible only` : "soft quota: interruptible only");
       reason = `${sr} -> ${arm.provider}`;
       softFailover = true;
     }
@@ -341,7 +348,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   return {
     mode: "arm", arm: arm.wf, requestedArm: requested.wf, swapped, reason, counts, profile: profileOut,
     ...(roleSpawn ? { role: true, provider: arm.provider } : {}),
-    ...(reason !== "alternation" ? { capped: true } : {}),
-    ...(softFailover ? { softFailover: true } : {}),
+    ...(reason !== "alternation" && !softFailover ? { capped: true } : {}),
+    ...(softFailover ? { soft: true, softFailover: true } : {}),
   };
 }

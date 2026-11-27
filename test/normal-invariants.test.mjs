@@ -31,8 +31,8 @@ for (const line of fs.readFileSync(path.join(E.REPO_ROOT, "src", "demo.tsx"), "u
 let unavailable = null, server = null, browser = null, ctx = null, page = null, baseUrl = "";
 
 before(async () => {
-  const pw = E.resolvePlaywright();
-  if (!pw) { unavailable = "Playwright not found (set PLAYWRIGHT_DIR or install playwright)."; return; }
+  const pw = E.resolvePlaywright({ npx: false });
+  if (!pw) { unavailable = E.PLAYWRIGHT_MISSING; return; }
   const exe = E.findBrowser();
   if (!exe) { unavailable = "No Edge/Chrome executable found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)."; return; }
   await E.ensureDist();

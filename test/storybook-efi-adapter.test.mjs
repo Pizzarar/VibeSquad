@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeFakeRepo } from "./storybook-fake-repo.mjs";
+import { makeFakeRepo, FILES } from "./storybook-fake-repo.mjs";
 import { makeReader } from "../server/storybook/git-read.mjs";
-import { efiAdapter, NEVER_SAYS_OVERRIDES } from "../server/storybook/adapters/efi.mjs";
+import { efiAdapter, NEVER_SAYS_OVERRIDES, inferSystemScreenId, isDevOnlyCsvRow } from "../server/storybook/adapters/efi.mjs";
 import { assertAdapter, loadSnapshot } from "../server/storybook/adapter.mjs";
 import { makeRegistry, validateSnapshot, KINDS, validateEntity } from "../server/storybook/schema.mjs";
 
@@ -78,25 +78,28 @@ test("registries: enemy boss flag via locations[].boss, location pool, line numb
 test("narrative units: quest steps with task links, relations, squad text, long_haul, raid_story", () => {
   const k = reg.get("quest_step", "popper_2");
   assert.equal(k.data.trader, "popper");
-  assert.deepEqual(k.links.filter((l) => l.rel !== "trader").map((l) => `${l.rel}:${l.kind}:${l.id}`).sort(), ["at_location:location:harbor_district", "targets_enemy:enemy:scav"]);
+  assert.deepEqual(k.links.filter((l) => !["trader", "spoken_by", "said_at"].includes(l.rel)).map((l) => `${l.rel}:${l.kind}:${l.id}`).sort(), ["at_location:location:harbor_district", "targets_enemy:enemy:scav"]);
   assert.equal(k.production, null);
   assert.equal(reg.get("quest_step", "popper_1").production, "placeholder");
   assert.equal(reg.get("quest_step", "popper_1").display, "Spent Brass");
   assert.ok(reg.get("quest_step", "doc_1").links.some((l) => l.rel === "needs_room" && l.id === "workshop"));
   assert.equal(reg.get("line", "rel:popper:word").data.speaker, "popper");
   assert.ok(reg.get("line", "enc:popper:0").links.some((l) => l.rel === "requires_skill" && l.id === "scavenging"));
-  assert.ok(reg.has("line", "squad:doc:bio") && reg.has("line", "squad:doc:flaw") && reg.has("line", "squad:doc:synergy"));
+  assert.ok(reg.has("line", "squad:doc:flaw") && reg.has("line", "squad:doc:synergy"));
+  // squad:doc:bio is deduped into its CSV twin with both sources kept in provenance
+  assert.equal(reg.has("line", "squad:doc:bio"), false);
+  const bioCsv = reg.byKind("line").find((l) => l.data.origin === "csv" && l.data.data_path?.includes("bio"));
+  assert.ok(bioCsv.data.provenance.some((p) => p.origin === "squad" && p.id === "squad:doc:bio"));
   assert.equal(reg.get("line", "long_haul:harbor_district").data.origin, "long_haul");
-  const rs = reg.byKind("line").filter((l) => l.data.origin === "raid_story");
-  assert.equal(rs.length, 4, "pool.append is not a template");
-  assert.deepEqual(rs.map((r) => r.data.speaker), ["squad", "actor", "narrator", "narrator"]);
+  const rs = reg.byKind("line").filter((l) => l.data.origin === "raid_story" || l.data.provenance?.some((p) => p.origin === "raid_story"));
+  assert.equal(rs.length, 4, "pool.append is not a template; deduped twin counted once");
   assert.equal(reg.get("trader", "popper").links.filter((l) => l.rel === "rival")[0].id, "doc");
 });
 
 test("text_review.csv imported as is, quoted newline kept, status -> production, speaker linked", () => {
   const rows = reg.byKind("line").filter((l) => l.data.origin === "csv");
-  assert.equal(rows.length, 3);
-  const q = rows.find((r) => r.data.group === "Trader questlines");
+  assert.equal(rows.length, 9, "9 player rows kept; 4 dev/validation rows excluded");
+  const q = rows.find((r) => r.data.group === "Trader questlines" && r.data.speaker === "Popper");
   assert.equal(q.data.current_text, 'Bring thirty casings,\nand "he\'ll" know you.');
   for (const col of ["group", "file", "line", "data_path", "current_text", "status", "speaker", "owner_rewrite", "owner_note", "reviewed_hash"]) assert.ok(col in q.data, col);
   assert.equal(q.data.owner_rewrite, "Bring me thirty clean casings.");
@@ -250,4 +253,206 @@ test("fixture efi-mini.json: matches the adapter output (+1 hand-made finding), 
   const kinds = new Set(fx.entities.map((e) => e.kind));
   for (const k of Object.keys(KINDS)) assert.ok(kinds.has(k), `fixture has ${k}`);
   assert.deepEqual({ ...fx, sha: "x" }, { ...generated, sha: "x" }, "regenerate with UPDATE_FIXTURE=1 node --test test/storybook-efi-adapter.test.mjs");
+});
+
+test("V1: speaker identity is (kind,id): Saint (squad doc) != Doc (trader doc); every line has a speaker; inferred is marked", () => {
+  const lines = reg.byKind("line");
+  for (const l of lines) {
+    assert.ok(l.data.speakerKind && l.data.speakerId, `${l.id} has a speaker`);
+    assert.ok(["explicit", "inferred"].includes(l.data.speakerSource), l.id);
+  }
+  const saint = lines.filter((l) => l.data.speakerKind === "squad" && l.data.speakerId === "doc");
+  const doc = lines.filter((l) => l.data.speakerKind === "trader" && l.data.speakerId === "doc");
+  assert.ok(saint.length >= 1 && doc.length >= 1);
+  for (const l of saint) assert.ok(!l.links.some((x) => x.rel === "spoken_by" && x.kind === "trader"), l.id);
+  const sys = lines.filter((l) => l.data.speakerKind === "system");
+  assert.ok(sys.length >= 1);
+  assert.ok(sys.every((l) => l.data.speakerSource === "inferred" || l.data.speaker?.toLowerCase() === "system"));
+  for (const l of lines.filter((x) => x.data.origin === "raid_story")) assert.deepEqual([l.data.speakerKind, l.data.speakerId, l.data.speakerSource], ["party", "squad", "inferred"]);
+});
+
+test("V1: quest steps and contracts carry spoken_by / said_at", () => {
+  const q = reg.get("quest_step", "popper_2");
+  assert.ok(q.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "popper"));
+  assert.ok(q.links.some((l) => l.rel === "said_at" && l.kind === "location"), "kill step has a location");
+  const c = reg.get("contract", "d_popper_scrap_metal");
+  assert.ok(c.links.some((l) => l.rel === "spoken_by" && l.kind === "trader"));
+});
+
+test("V1: every line has a rowClass; story/flavor/ui rules by origin and path", () => {
+  const lines = reg.byKind("line");
+  for (const l of lines) assert.ok(["story", "flavor", "ui"].includes(l.data.rowClass), l.id);
+  for (const l of lines.filter((x) => x.data.origin === "raid_story" || x.data.origin === "trader_relations")) assert.equal(l.data.rowClass, "story");
+  for (const l of lines.filter((x) => x.data.origin === "encouragement")) assert.equal(l.data.rowClass, "flavor");
+  for (const l of lines.filter((x) => x.data.origin === "csv" && x.data.file === "data/questlines.json")) assert.equal(l.data.rowClass, "story");
+});
+
+test("V1: speakerless CSV rows infer from the JSON-array data_path / file; CSV said_at; contract said_at; squad.json rowClass", () => {
+  const csv = reg.byKind("line").filter((l) => l.data.origin === "csv");
+  const by = (file, pred = () => true) => csv.find((l) => l.data.file === file && !l.data.speaker && pred(l));
+  const title = by("data/questlines.json");
+  assert.deepEqual([title.data.speakerKind, title.data.speakerId, title.data.speakerSource], ["trader", "popper", "inferred"]);
+  assert.ok(title.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "popper"));
+  assert.ok(title.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"), "step 1 kill location");
+  assert.equal(title.data.rowClass, "story");
+  const bio = by("data/squad.json", (l) => l.data.data_path.includes("bio"));
+  assert.deepEqual([bio.data.speakerKind, bio.data.speakerId, bio.data.speakerSource, bio.data.rowClass], ["squad", "doc", "inferred", "story"]);
+  assert.ok(bio.links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "doc"));
+  assert.ok(!bio.links.some((l) => l.kind === "trader"), "Saint is not Doc");
+  const trait = by("data/squad.json", (l) => l.data.data_path.includes("trait_text"));
+  assert.equal(trait.data.rowClass, "ui");
+  const rs = by("scenes/raids/corridor/raid_story.gd");
+  assert.deepEqual([rs.data.speakerKind, rs.data.speakerId, rs.data.speakerSource], ["party", "squad", "inferred"]);
+  const ui = by("scenes/armory/armory_view.gd");
+  assert.deepEqual([ui.data.speakerKind, ui.data.speakerSource, ui.data.rowClass], ["system", "inferred", "ui"]);
+  const ex = reg.get("contract", "x_doc_vault");
+  assert.ok(ex.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "sealed_vault"));
+  assert.ok(ex.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "doc"));
+});
+
+test("V1.1: System speaker split by screen (data.group / source path)", () => {
+  assert.equal(inferSystemScreenId({ group: "Screen: Armory" }), "armory");
+  assert.equal(inferSystemScreenId({ group: "Screen: Shell (nav, status bar, overlays)" }), "shell");
+  assert.equal(inferSystemScreenId({ group: "System: SkillSystem" }), "skill-system");
+  assert.equal(inferSystemScreenId({ group: "", file: "scenes/hideout/hideout_view.gd" }), "hideout");
+  assert.equal(inferSystemScreenId({ group: "", file: "data/items.json" }), "items");
+  assert.equal(inferSystemScreenId({}), "system");
+  const armory = reg.byKind("line").find((l) => l.data.file === "scenes/armory/armory_view.gd");
+  assert.deepEqual([armory.data.speakerKind, armory.data.speakerId, armory.data.speakerSource], ["system", "armory", "inferred"]);
+  const loc = reg.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.origin === "csv");
+  assert.deepEqual([loc.data.speakerKind, loc.data.speakerId], ["system", "locations"]);
+});
+
+test("V1.1: dev-only / validation / push_error / assert strings excluded; player text kept", () => {
+  const csv = reg.byKind("line").filter((l) => l.data.origin === "csv");
+  assert.ok(!csv.some((l) => l.data.file === "autoloads/ItemRegistry.gd"), "ItemRegistry validation/push_error/assert rows excluded");
+  assert.ok(!csv.some((l) => l.data.file === "scripts/debug/art_inspector.gd"), "debug tool rows excluded");
+  assert.equal(isDevOnlyCsvRow({ file: "systems/PowerSystem.gd", where_seen: "PowerSystem _warn_crossings()", current_text: "Generator fuel low: %s left." }, new Map()), false);
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", where_seen: "SkillSystem _strike_error()", current_text: "strike is not an object" }, new Map()), true);
+});
+
+test("V1.1: stale CSV line numbers never fall back to raw line; whole-file call-site search + tightened loader filter", () => {
+  // Simulate a stale CSV line pointing at push_error() while the real player toast moved >100 lines away (SkillSystem.gd case)
+  const filler = Array.from({ length: 120 }, () => "\tpass");
+  const skillLines = [
+    "extends Node",
+    'push_error("stale line now holds a dev error")', // line 2 (stale CSV line)
+    ...filler,
+    'EventBus.show_notification.emit("%s needs more inputs in the stash" % action_id)', // line 123
+    'push_error("moved far away dev error")', // line 124
+  ];
+  const contractLines = [
+    "func parse(data):",
+    '\tout["errors"].append("globals: invalid %s" % key)',
+    '\tEventBus.show_notification.emit("globals: invalid order")',
+  ];
+  const cache = new Map([
+    ["systems/SkillSystem.gd", skillLines],
+    ["systems/ContractSystem.gd", contractLines],
+  ]);
+  // Stale line points to push_error, actual toast is >40 lines away -> kept
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "%s needs more inputs in the stash" }, cache), false);
+  // Stale line points to push_error, needle absent from file -> kept (no raw-line fallback)
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "Removed player toast" }, cache), false);
+  // Dev error moved >40 lines away -> found via whole-file scan and excluded
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "moved far away dev error" }, cache), true);
+  // out["errors"].append(...) caught by call site; player toast starting "globals:" is NOT hidden
+  assert.equal(isDevOnlyCsvRow({ file: "systems/ContractSystem.gd", line: "2", where_seen: "ContractSystem parse()", current_text: "globals: invalid %s" }, cache), true);
+  assert.equal(isDevOnlyCsvRow({ file: "systems/ContractSystem.gd", line: "3", where_seen: "ContractSystem parse()", current_text: "globals: invalid order" }, cache), false);
+  // Loader log signature only matches pure snake_case=%d/%s pairs in _load_*()
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "1", where_seen: "SkillSystem _load_mastery()", current_text: "families=%d thresholds=%s" }, new Map()), true);
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "1", where_seen: "SkillSystem _load_mastery()", current_text: "globals: invalid order" }, new Map()), false);
+});
+
+test("V1.1: extended links — contracts, containers, enemies -> spawn locations, squad synergy", () => {
+  // kill contract gets said_at (from enemy spawn locations) + mentions (enemy) + spoken_by (trader)
+  const kc = reg.get("contract", "k_popper_scav");
+  assert.ok(kc.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "popper"));
+  assert.ok(kc.links.some((l) => l.rel === "mentions" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(kc.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"));
+  // enemies link to spawn locations
+  assert.ok(reg.get("enemy", "scav").links.some((l) => l.rel === "spawns_at" && l.kind === "location" && l.id === "harbor_district"));
+  assert.ok(reg.get("enemy", "boss_dockmaster").links.some((l) => l.rel === "spawns_at" && l.kind === "location" && l.id === "harbor_district"));
+  // container CSV line links to location
+  const crate = reg.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.data_path?.includes("containers"));
+  assert.ok(crate.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"));
+  // enemy CSV line links to enemy + spawn location
+  const scavLine = reg.byKind("line").find((l) => l.data.file === "data/enemies.json");
+  assert.ok(scavLine.links.some((l) => l.rel === "mentions" && l.kind === "enemy" && l.id === "scav"));
+  assert.ok(scavLine.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"));
+  // squad synergy line links to synergy location
+  const syn = reg.get("line", "squad:doc:synergy");
+  assert.ok(syn.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "sealed_vault"));
+});
+
+test("V1.1: entity/csv twin dedupe preserves both sources as provenance (long_haul + encouragement)", async () => {
+  const extraCsv = FILES["docs/review/text_review.csv"] +
+    'Data: locations,data,data/locations.json,5,"[0, ""long_haul"", ""text""]",,A supply drop came down nearby. The squad reached it.,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Trader relations,data,data/trader_relations.json,9,"[""traders"", ""popper"", ""encouragement"", 0, ""story""]",,"\'I\'m out. {qty}.\'",relations,,,verify,,,DRAFT,,,\r\n';
+  const f = makeFakeRepo({ ...FILES, "docs/review/text_review.csv": extraCsv });
+  try {
+    const s = await loadSnapshot(efiAdapter, makeReader(f.clone, f.sha), { ref: "origin/main" });
+    const r = makeRegistry(s.entities);
+    assert.equal(r.has("line", "long_haul:harbor_district"), false, "native long_haul deduped");
+    const lh = r.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.data_path?.includes("long_haul"));
+    assert.equal(lh.data.speakerKind, "narrator");
+    assert.equal(lh.data.at_s, 1800, "native at_s preserved on CSV twin");
+    assert.equal(lh.data.native_speaker, "narrator", "native speaker preserved");
+    assert.ok(lh.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"));
+    assert.ok(lh.data.provenance.some((p) => p.origin === "csv") && lh.data.provenance.some((p) => p.origin === "long_haul"));
+    assert.equal(r.has("line", "enc:popper:0"), false, "native encouragement deduped");
+    const enc = r.byKind("line").find((l) => l.data.file === "data/trader_relations.json" && l.data.data_path?.includes("encouragement"));
+    assert.equal(enc.data.item_id, "scrap_metal", "native item_id preserved");
+    assert.equal(enc.data.qty, 100, "native qty preserved");
+    assert.deepEqual(enc.data.requires, [{ skill: "scavenging", level: 30 }], "native requires preserved");
+    assert.ok(enc.links.some((l) => l.rel === "wants_item" && l.kind === "item" && l.id === "scrap_metal"));
+    assert.ok(enc.data.provenance.some((p) => p.origin === "encouragement" && p.id === "enc:popper:0"));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("V1.1: structural twin dedupe keeps identical text across distinct entities separate and preserves native metadata", async () => {
+  const locs = JSON.parse(FILES["data/locations.json"]);
+  locs[1].long_haul = { at_s: 2400, text: locs[0].long_haul.text, rows: [] };
+  const squad = JSON.parse(FILES["data/squad.json"]);
+  squad.members.push({ id: "prof", callsign: "Prof", name: "Patel", bio: "Analyst.", trait_text: "Fast reader", flaw: { key: "hp", size: -2, text: squad.members[0].flaw.text } });
+  // Only harbor_district (index 0) has a CSV row for long_haul; both squad members (0 and 1) have CSV rows for identical flaw text
+  const extraCsv = FILES["docs/review/text_review.csv"] +
+    'Data: locations,data,data/locations.json,5,"[0, ""long_haul"", ""text""]",,A supply drop came down nearby. The squad reached it.,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,11,"[""members"", 0, ""flaw"", ""text""]",,Hauls a trauma kit,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,12,"[""members"", 1, ""flaw"", ""text""]",,Hauls a trauma kit,squad page,,,verify,,,DRAFT,,,\r\n';
+  const f = makeFakeRepo({
+    ...FILES,
+    "data/locations.json": JSON.stringify(locs, null, 2),
+    "data/squad.json": JSON.stringify(squad, null, 2),
+    "docs/review/text_review.csv": extraCsv,
+  });
+  try {
+    const s = await loadSnapshot(efiAdapter, makeReader(f.clone, f.sha), { ref: "origin/main" });
+    const r = makeRegistry(s.entities);
+    // harbor_district long_haul merged into [0,"long_haul","text"]; sealed_vault long_haul has no CSV row so it stays separate!
+    assert.equal(r.has("line", "long_haul:harbor_district"), false);
+    assert.equal(r.has("line", "long_haul:sealed_vault"), true, "unmatched native with same text stays separate");
+    assert.equal(r.get("line", "long_haul:sealed_vault").data.at_s, 2400);
+    const lh0 = r.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.data_path?.includes("long_haul"));
+    assert.equal(lh0.data.at_s, 1800);
+    assert.deepEqual(lh0.links.filter((l) => l.rel === "said_at").map((l) => l.id), ["harbor_district"]);
+    // Both squad members' identical flaw rows merge strictly with their own CSV twin, preserving distinct spoken_by + field
+    assert.equal(r.has("line", "squad:doc:flaw"), false);
+    assert.equal(r.has("line", "squad:prof:flaw"), false);
+    const flaws = r.byKind("line").filter((l) => l.data.file === "data/squad.json" && l.data.data_path?.includes('"flaw"'));
+    assert.equal(flaws.length, 2);
+    const bySp = new Map(flaws.map((l) => [l.data.speakerId, l]));
+    assert.ok(bySp.get("doc").links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "doc"));
+    assert.ok(bySp.get("prof").links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "prof"));
+    assert.equal(bySp.get("doc").data.field, "flaw");
+    assert.equal(bySp.get("prof").data.field, "flaw");
+    assert.equal(bySp.get("prof").data.native_speaker, "prof");
+    // Trader relations twin preserves band
+    const docWary = r.byKind("line").find((l) => l.data.file === "data/trader_relations.json" && l.data.data_path?.includes("wary"));
+    assert.equal(docWary.data.band, "wary");
+  } finally {
+    f.cleanup();
+  }
 });

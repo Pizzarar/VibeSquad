@@ -70,6 +70,7 @@ import {
   routeRoleKeyOf,
   routeTierOf,
   softCappedFamilies,
+  unknownQuotaFamilies,
 } from "../spawn-route.mjs";
 import { armRouteFor } from "../exp6-arm.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
@@ -429,6 +430,7 @@ export const EVERYONE_LAYER = [
   "- Your lead is the agent in your team and lane with label role=lead (never one titled (old)). Find it with `vs who lead`.",
   "- A Squad (`team` label) can run multiple feature lanes (`lane` label) in parallel, each with 1 Buddy (`role=brainstorm`, mascot name \"Buddy\") and 1 Lead (`role=lead`).",
   `- To flag something for the owner (${loadUserSettings().userName}), run \`vs log needs-you "<ask>" --decides "<what it changes>" --lean "<option>" [--alt "<opt>"]... [--kind yesno|answer|offscreen]\` (workers have no vs verb for this: put it in your final message as a blocker).`,
+  "- Never log a needs-you that asks \"A, B or C?\" without one `--alt` per option, each option defined in one line.",
   "- Catch up on Squad state with `vs log --since-me` (shares `decision` / `you` / `needs-you` entries across all lanes in the Squad). Naming conventions: docs/NAMING.md.",
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
@@ -494,7 +496,7 @@ export const HUB_LEAD_RULES = [
   "- Multi-item waits (several leads, a suite run, a restart): run `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping). Use no `vs wait` loops and no heartbeats for multi-item waits; the ladder's `vs wait <lead> --timeout 90` stays for a single steer.",
   "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`. Restart via the server-side request, not a hand-held drain: `vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]` (the server asks every live lead of every Squad to drain, fires `vs restart` once, logs restart-done; end your turn, no timer to hold), follow it with `vs restart status`, call it off with `vs restart abort`. Restart windows: a non-urgent request is queued for the next fixed UTC window (13:00Z / 21:00Z) and later non-urgent requests fold into it, so routine merges batch into 2 restarts a day and never cut a running suite; request as soon as a merge needs it and let the window fire. Add `--urgent --reason \"<why>\"` only for a security fix, a broken server, or a blocker for all lanes: it drains now and pulls the queued tips in with it. A plain `vs restart` while a request is open or queued prints a warning. Fallback only if the request path is unavailable: send the drain asks yourself, wait for each `drained`, then run `vs restart`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
   "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
-  "- Escalations to the owner (phone cockpit): when you need a decision, end your message with a fenced block ```vs:decision with lines `summary: <1-2 lines: what stopped>`, `decides: <what the answer changes>`, `do: <your recommended action>`, one `alt: <other option>` per alternative, and optionally `vs:riff @<lane>` to send the owner to that lane's Buddy. It renders as one-tap buttons; keep each line short and put nothing else in the fence.",
+  "- Escalations to the owner (phone cockpit): when you need a decision, end your message with a fenced block ```vs:decision with lines `summary: <1-2 lines: what stopped>`, `decides: <what the answer changes>`, `do: <your recommended action>`, one `alt: <label>: <what it means, one line>` per alternative (each alt defines its option; `do:` names and defines the lean the same way), and optionally `vs:riff @<lane>` to send the owner to that lane's Buddy. It renders as one-tap buttons; keep each line short and put nothing else in the fence.",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 
@@ -2059,9 +2061,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
+          // C fu1 L5: the same soft line (+ kind, no-row ranking) as before(agent.create), so a re-route never undoes it.
+          const usageNow = currentUsageList();
+          const softOpts = { stakes: labels.stakes, kind: labels.kind, role: hint };
           const hit = roleSpawnProfile(hint, {
             stakes: labels.stakes,
-            caps: cappedFamilies(currentUsageList()),
+            kind: labels.kind,
+            caps: cappedFamilies(usageNow),
+            softCaps: softCappedFamilies(usageNow, [], softOpts),
+            unknown: unknownQuotaFamilies(usageNow, [], softOpts),
             roles,
             ...armRouteFor(hint, labels["vs.arm"]),
             override: parseRouteOverride(labels[ROUTE_OVERRIDE_LABEL]), // H1: the caller's provider/model still win here
@@ -2225,7 +2233,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * idea-504 reuses it for a worker that died on an upstream failure (`name` = the worker's profile; `executes` false keeps a
      * plan/read-only pick for a worker that was read-only itself).
      */
-    const alternateProfileFor = (name: string, failedProviders: string[], executes = true): StoredProfile | null => {
+    const alternateProfileFor = (name: string, failedProviders: string[], executes = true, work: { stakes?: string; kind?: string } = {}): StoredProfile | null => {
       const failed = new Set(failedProviders.map((p) => normalizeProviderFamily(p)).filter(Boolean));
       const skipped = new Set<string>(); // families with no profile that can run the digest's vs command
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
@@ -2235,7 +2243,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (;;) {
         // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
         const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
-        const fo = resolveProfileWithFailover(name, stored, usage);
+        // C fu1 L5: the respawned task's stakes/kind decide the soft line (kind=docs stays interruptible).
+        const fo = resolveProfileWithFailover(name, stored, usage, { stakes: work.stakes || undefined, kind: work.kind || undefined });
         const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
         const fam = normalizeProviderFamily(alt?.provider);
         if (!alt?.provider || !fam || failed.has(fam) || skipped.has(fam)) return null;
@@ -2253,7 +2262,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * as caps (the legacy failover returns null for role names); an old/stored profile name uses the idea-218 failover order.
      * null when nothing off the failed family is available.
      */
-    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string): StoredProfile | null => {
+    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string, kind = ""): StoredProfile | null => {
       const stored = loadStoredProfiles();
       const roles = liveRoles(stored);
       const failedFam = normalizeProviderFamily(failedProvider);
@@ -2261,10 +2270,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
         const quota = quotaList();
         const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
+        const softOpts = { stakes: stakes || undefined, kind: kind || undefined, role: fromProfile };
         const route = roleSpawnProfile(fromProfile, {
           stakes: stakes || undefined,
+          kind: kind || undefined,
           caps: cappedFamilies(usage, failedFam ? [failedFam] : []),
-          softCaps: softCappedFamilies(usage, failedFam ? [failedFam] : [], { stakes: stakes || undefined, role: fromProfile }),
+          softCaps: softCappedFamilies(usage, failedFam ? [failedFam] : [], softOpts),
+          unknown: unknownQuotaFamilies(usage, failedFam ? [failedFam] : [], softOpts),
           roles,
         });
         const p = (route?.profile ?? null) as StoredProfile | null;
@@ -2276,7 +2288,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return p?.provider && fam && fam !== failedFam ? p : null;
       }
       const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
-      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true);
+      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true, { stakes, kind });
     };
 
     // ---- Hook 1: before agent.create ---------------------------------------
@@ -2404,6 +2416,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               roles,
               explicitModel: rawCallerModel,
               override: routeOverride,
@@ -2430,6 +2443,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: reroute.stakes, kind: kindRaw, role: reroute.role }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: reroute.stakes, kind: kindRaw, role: reroute.role }),
               roles: liveRoles(loadStoredProfiles()),
               explicitModel: rawCallerModel,
             };
@@ -2793,6 +2807,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               kind: kindRaw,
               caps: cappedFamilies(usageList, [provider]),
               softCaps: softCappedFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
+              unknown: unknownQuotaFamilies(usageList, [provider], { stakes: stakesRaw, kind: kindRaw, role: requestedProfileName }),
               explicitModel: rawModel,
             });
             if (meta) {
@@ -2844,6 +2859,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // result) rides the label as ` why=<reason>` (server/spawn-reason.mjs); the `route:` metric above keeps its fields.
           const why = shownSpawnReason({
             hookReason: reason,
+            // C fu1 L3: a route that skipped a family only for its soft line shows `soft`, never a capped-provider failover.
+            soft: Boolean(roleRoute?.route?.softFailover) || Boolean(softFailoverReason),
             // A role route that skipped a capped provider is a failover even when the metric names `ladder` (stakes win there).
             // G2: a caller that already failed over before spawning (lead-handoff successor) says so in `vs.failover` / VS_FAILOVER.
             failover:
@@ -3542,7 +3559,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const fromProfile = String(labels.profile ?? "").trim();
       if (!fromProfile) return skip("no-profile");
-      const alt = alternateWorkerProfile(fromProfile, fromFam === "?" ? fromProvider : fromFam, String(labels.stakes ?? ""));
+      const alt = alternateWorkerProfile(fromProfile, fromFam === "?" ? fromProvider : fromFam, String(labels.stakes ?? ""), String(labels.kind ?? ""));
       if (!alt?.provider) return skip("no-alternate");
       // R2 H1: the claim, synchronously before the create (no await since the A4 check).
       if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { updateJsonFileSync } from "./file-lock.mjs";
 import { isForbiddenRealHome } from "./test-guard.mjs";
 import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
+import { INTERRUPTIBLE_KINDS, isInterruptibleWork } from "./interruptible-work.mjs";
 import { GEMINI_TOP_MODEL, AGY_CLAUDE_FAMILY, AGY_CLAUDE_SUFFIXED_RE, isAgyClaudeModel } from "./model-ids.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
@@ -12,7 +13,7 @@ export const QUOTA_FAILOVER_THRESHOLD = 95;
  * only interruptible work (stakes=mechanical, or kind/role in docs, audit, spike, pre-check) routes to that family.
  */
 export const QUOTA_SOFT_THRESHOLD = 70;
-export const INTERRUPTIBLE_KINDS = Object.freeze(new Set(["docs", "audit", "spike", "pre-check"]));
+export { INTERRUPTIBLE_KINDS };
 /**
  * R10: agy-claude fails over to direct claude at this pool %, below the 95 default. agy polls its pool at most every
  * 30 min (runner/limits.mjs), so a reading can lag a busy pool by that long; 85 leaves the headroom. A caller's lower
@@ -75,30 +76,9 @@ export function resolveSoftQuotaThreshold(providerId, opts = {}) {
   return QUOTA_SOFT_THRESHOLD;
 }
 
-/**
- * Interruptible work may still route to a family past its soft quota line (under its hard line).
- * Interruptible = stakes=mechanical, or kind/role of docs, audit, spike or Pre-check.
- */
-export function isInterruptibleWork({ stakes, kind, role } = {}) {
-  if (String(stakes ?? "").trim().toLowerCase() === "mechanical") return true;
-  const normKey = (v) => String(v ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
-  const k = normKey(kind);
-  if (k && INTERRUPTIBLE_KINDS.has(k)) return true;
-  const r = normKey(role);
-  if (r && INTERRUPTIBLE_KINDS.has(r)) return true;
-  if (
-    r &&
-    (r.startsWith("pre-check-") ||
-      r.startsWith("audit-") ||
-      r.startsWith("mechanical-") ||
-      r.startsWith("docs-") ||
-      r.startsWith("spike-") ||
-      r === "check-haiku")
-  ) {
-    return true;
-  }
-  return false;
-}
+// Interruptible work (stakes=mechanical, kind/role docs, audit, spike, Pre-check, incl. old names like Check - Haiku): the
+// one definition lives in the pure interruptible-work.mjs (src/roleSpawn.ts imports it too).
+export { isInterruptibleWork };
 
 // Role failover chains (R1, docs/PLAN_PER_ROLES_LADDER_1125.md): role key -> provider families in hop order, the most
 // capable provider for that role first. The one source for server/role-route.mjs ROLE_TABLE.providers; a role spawn
@@ -543,15 +523,21 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
   return next.capped;
 }
 
+/**
+ * Quota verdict for one family: { overQuota, reason, usedPct } (hard line) + { softOverQuota, softThreshold, softReason }
+ * (the soft line; never set for interruptible work, opts.stakes/kind/role) + hasRow: false when no usage row or cap
+ * speaks for the family. Stale readings never get here (limits-read.mjs usageFromLimits drops rows older than
+ * QUOTA_READING_MAX_AGE_MS), so a stale row reads as no row (C fu1 L4: the soft pass ranks no-row families last).
+ */
 export function isProviderOverQuota(providerId, usageProviders = [], threshold = QUOTA_FAILOVER_THRESHOLD, opts = {}) {
   const targetFamily = normalizeProviderFamily(providerId);
   if (!targetFamily) {
-    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null };
+    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null, hasRow: false };
   }
 
   // In-memory cap overrides are checked first.
   if (opts.cappedProviders && isFamilyCapped(opts.cappedProviders, targetFamily)) {
-    return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null };
+    return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null, hasRow: true };
   }
 
   const list = extractUsageList(usageProviders);
@@ -562,12 +548,12 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
   if (!entry && opts.ignoreDiskCaps !== true) {
     const readDisk = opts.useDiskCaps === true || !!process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH;
     if (readDisk && (() => { const c = readCappedProviders(opts); return capKin(targetFamily).some((f) => c[f]); })()) {
-      return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null };
+      return { overQuota: true, reason: `${targetFamily} is marked capped`, usedPct: 100, softOverQuota: false, softThreshold: null, softReason: null, hasRow: true };
     }
   }
 
   if (!entry) {
-    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null };
+    return { overQuota: false, reason: null, usedPct: null, softOverQuota: false, softThreshold: null, softReason: null, hasRow: false };
   }
 
   let limitThreshold = typeof threshold === "number" && Number.isFinite(threshold) ? threshold : QUOTA_FAILOVER_THRESHOLD;
@@ -616,6 +602,7 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
       softOverQuota: false,
       softThreshold: softLimit,
       softReason: null,
+      hasRow: true,
     };
   }
 
@@ -634,6 +621,7 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
       softOverQuota: false,
       softThreshold: softLimit,
       softReason: null,
+      hasRow: true,
     };
   }
 
@@ -652,7 +640,8 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
         usedPct: effectiveUsedPct,
         softOverQuota: true,
         softThreshold: softLimit,
-        softReason: `pool ${reportedPct}% >= soft ${softLimit}: interruptible only`,
+        softReason: `${targetFamily} pool ${reportedPct}% >= soft ${softLimit}: interruptible only`,
+        hasRow: true,
       };
     }
   }
@@ -664,6 +653,7 @@ export function isProviderOverQuota(providerId, usageProviders = [], threshold =
     softOverQuota: false,
     softThreshold: softLimit,
     softReason: null,
+    hasRow: true,
   };
 }
 
@@ -739,9 +729,15 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
     }
   }
 
-  // Pass 1: prefer a candidate under both hard and soft lines. Remember the first candidate under the hard line
-  // in case every family is past its soft line.
+  // Pass 1: prefer a candidate under both hard and soft lines. C fu1 L4: while the soft line is in play (the primary or a
+  // candidate family is past soft, under hard), a family with a known reading under soft ranks before a family with no
+  // (fresh) row: an unread pool may be the fullest one. Remember the first candidate under the hard line in case every
+  // family is past its soft line.
   let firstUnderHard = null;
+  let firstKnownUnderSoft = null;
+  let firstUnknownUnderSoft = null;
+  let firstAnyUnderSoft = null;
+  let softInPlay = !check.overQuota && check.softOverQuota;
   for (const name of candidates) {
     const cand =
       lookupProfileInList(name, effectiveProfiles) ||
@@ -749,21 +745,32 @@ export function resolveProfileWithFailover(requestedNameOrProfile, profiles = []
     if (!cand || !cand.provider) continue;
     if (cand.name === profile.name) continue;
     const candCheck = isProviderOverQuota(cand.provider, usageProviders, threshold, checkOpts);
-    if (!candCheck.overQuota && !candCheck.softOverQuota) {
-      const softOnly = !check.overQuota && check.softOverQuota;
-      const candFam = normalizeProviderFamily(cand.provider);
-      return {
-        profile: cand,
-        failedOver: true,
-        fromProfile: profile.name,
-        toProfile: cand.name,
-        reason: softOnly ? `${check.softReason} -> ${candFam}` : check.reason,
-        ...(softOnly ? { softFailover: true } : {}),
-      };
+    if (candCheck.overQuota) continue;
+    if (!firstUnderHard) firstUnderHard = cand;
+    if (candCheck.softOverQuota) {
+      softInPlay = true;
+      continue;
     }
-    if (!candCheck.overQuota && !firstUnderHard) {
-      firstUnderHard = cand;
+    if (!firstAnyUnderSoft) firstAnyUnderSoft = cand;
+    if (candCheck.hasRow) {
+      if (!firstKnownUnderSoft) firstKnownUnderSoft = cand;
+    } else if (!firstUnknownUnderSoft) {
+      firstUnknownUnderSoft = cand;
     }
+  }
+  // No family past soft: walk order, as before C. Soft line in play: known under soft, then no-row under soft.
+  const firstUnderSoft = softInPlay ? (firstKnownUnderSoft ?? firstUnknownUnderSoft) : firstAnyUnderSoft;
+  if (firstUnderSoft) {
+    const softOnly = !check.overQuota && check.softOverQuota;
+    const candFam = normalizeProviderFamily(firstUnderSoft.provider);
+    return {
+      profile: firstUnderSoft,
+      failedOver: true,
+      fromProfile: profile.name,
+      toProfile: firstUnderSoft.name,
+      reason: softOnly ? `${check.softReason} -> ${candFam}` : check.reason,
+      ...(softOnly ? { softFailover: true } : {}),
+    };
   }
 
   // Pass 2: every candidate is past its soft line (or hard). Don't strand the spawn: use the first family under hard.

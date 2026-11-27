@@ -365,6 +365,32 @@ test('report writes as the caller; types are restricted', async () => {
   await assert.rejects(callTool(ctx, 'report', { type: 'metric', text: 'x' }), /type must be/);
 });
 
+test('report needs-you: lettered options without alts warn (idea-1142); alts present or other types do not', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  const r1 = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?' });
+  assert.match(r1.warning, /lettered/);
+  assert.equal(ctx.logs.length, 1, 'still logged');
+  const r2 = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['B: slow', 'C: skip'] });
+  assert.equal(r2.warning, undefined);
+  const rd = await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick A, B, or C?', do: 'A: fast', alt: ['A: fast'] });
+  assert.match(rd.warning, /lettered/, 'an alt that duplicates do is stripped, so it still warns');
+  const r3 = await callTool(ctx, 'report', { type: 'blocker', text: 'Pick A, B, or C?' });
+  assert.equal(r3.warning, undefined);
+});
+
+test('report needs-you: bare-letter lean without a matching alt warns (idea-1155) and still logs', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  for (const lean of ['B', '(b)', 'Option B', 'B.', 'B:', 'B)', 'B -']) {
+    const r = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: lean, alt: ['A: fast'] });
+    assert.match(r.warning, /bare letter/, lean);
+    assert.equal(r.logged, true, lean);
+  }
+  const ok = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: 'Option B', alt: ['A: fast', 'B: slow'] });
+  assert.equal(ok.warning, undefined);
+  const spelled = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: 'B: slow', alt: ['A: fast'] });
+  assert.equal(spelled.warning, undefined);
+});
+
 test('report needs-you carries validated structured fields (D1); fields on other types are refused', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick a db', decides: 'storage engine', do: 'sqlite', alt: ['postgres', 'sqlite'], kind: 'answer' });
@@ -434,6 +460,16 @@ test('vs spawn --stakes parses and the stakes value reaches the spawn request (i
   assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job', spawned: 'Implement · claude-sonnet-5-5 · legacy-name' }); // mechanical is never EXP6-picked: no ab
   assert.equal(runnerBackend.calls[0][1].labels.stakes, 'mechanical');
   await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
+});
+
+test('vs spawn --kind parses and labels.kind reaches the spawn request; blank --kind sets none (@per C fu1 L5)', async () => {
+  assert.equal(parseArgs(['--kind', 'docs']).kind, 'docs');
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  await runAgentVerb('spawn', { _: [], title: 'CLI docs', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'normal', kind: ' docs ' }, ctx);
+  assert.equal(runnerBackend.calls[0][1].labels.kind, 'docs');
+  await runAgentVerb('spawn', { _: [], title: 'CLI none', profile: 'Implement - Sonnet', prompt: 'do x', kind: '  ' }, ctx);
+  assert.equal(runnerBackend.calls.at(-1)[1].labels.kind, undefined);
 });
 
 test('vs status --full returns the whole lastMessage; the default stays capped (idea-466)', async () => {

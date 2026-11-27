@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright } from "../scripts/ui-overlap/env.mjs";
+import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, PLAYWRIGHT_MISSING } from "../scripts/ui-overlap/env.mjs";
 
 const LINKED = "rn-zzzz-desk-lead";
 const ROSTER_SIZE = 520;
@@ -31,10 +31,10 @@ let pw, executablePath, browser, server, baseUrl, unavailable;
 const streams = new Set();
 
 before(async () => {
-  pw = resolvePlaywright();
+  pw = resolvePlaywright({ npx: false });
   executablePath = findBrowser();
   if (!pw || !executablePath) {
-    unavailable = !pw ? "Playwright not found (PLAYWRIGHT_DIR or a local/global install)" : "no Edge/Chrome executable";
+    unavailable = !pw ? PLAYWRIGHT_MISSING : "no Edge/Chrome executable";
     return;
   }
   await ensureDist();

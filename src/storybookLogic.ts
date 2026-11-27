@@ -30,15 +30,24 @@ export type SbSnapshot = {
   entities: SbEntity[];
   findings: SbFinding[];
   warnings: string[];
+  audit?: { signal: string; severity: string; msg?: string }[];
+  arc?: SbArc; // server/storybook/unlocks.mjs (V5)
 };
 
-export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed";
-export const SB_CATEGORIES: SbCategory[] = ["missing", "broken", "inconsistent", "unreviewed"];
+export type SbArcGate = { type: string; id?: string | null; level?: number | null; unlock_order?: number; trader?: string; rep?: number };
+export type SbArcStep = { id: string; index: number; task: string | null; stage: number; gates: SbArcGate[]; rep_after: number; lines: { id: string; field: string }[]; basis: string[] };
+export type SbArcTrader = { trader: string; display: string; level_0: boolean; steps: SbArcStep[]; chain_rep: number; reactions: string[] };
+export type SbPlayItem = { pos: number; kind: "map" | "reveal" | "quest_step" | "contract"; id: string; ref?: string; label: string; trader: string | null; stage: number; gates: SbArcGate[]; basis: string[] };
+export type SbArc = { arcs: SbArcTrader[]; playOrder: SbPlayItem[]; gaps: { kind: string; id: string; why: string }[]; notDerivable: string[]; tiedStages: number[] };
+
+export type SbCategory = "missing" | "broken" | "inconsistent" | "unreviewed" | "toolong";
+export const SB_CATEGORIES: SbCategory[] = ["missing", "broken", "inconsistent", "unreviewed", "toolong"];
 export const SB_CATEGORY_LABEL: Record<SbCategory, string> = {
   missing: "Missing",
   broken: "Broken",
   inconsistent: "Inconsistent",
   unreviewed: "Unreviewed",
+  toolong: "Too long",
 };
 
 export type EntityIndex = { get(kind: string, id: string): SbEntity | null; all: SbEntity[]; byKind(kind: string): SbEntity[] };
@@ -59,15 +68,17 @@ export function indexEntities(entities: SbEntity[]): EntityIndex {
   return { get: (kind, id) => byKey.get(entityKey(kind, id)) ?? null, all: [...byKey.values()], byKind: (kind) => [...(kinds.get(kind) ?? [])] };
 }
 
-/** Owner mapping: #1/#2/#5 Broken; #3/#4/#6/#7/#9/#10/#11 Inconsistent; #8 Missing. #12 (lore contradictions, v1.1) is Inconsistent. */
+/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
 export function findingCategory(check: string): SbCategory | null {
   switch (check) {
-    case "#1": case "#2": case "#5":
+    case "#1": case "#2": case "#5": case "#13":
       return "broken";
-    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12":
+    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14":
       return "inconsistent";
-    case "#8":
+    case "#8": case "#15":
       return "missing";
+    case "#18":
+      return "toolong";
     default:
       return null;
   }
@@ -89,6 +100,8 @@ export type ListItem = {
   msg: string;
   entityRef: { kind: string; id: string } | null;
   source: SbSource | null;
+  /** V3: a #8 STORY-TODO code comment (no entity). Lives in the Dev TODOs bucket, never in the Problems count. */
+  dev?: boolean;
 };
 
 /** Checker findings plus one Unreviewed item per non-OWNER-OK csv text row. Unmapped checks are dropped. */
@@ -97,7 +110,7 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
   snap.findings.forEach((f, i) => {
     const category = findingCategory(f.check);
     if (!category) return;
-    out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source });
+    out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source, ...(isDevTodoFinding(f) ? { dev: true } : {}) });
   });
   for (const e of snap.entities) {
     if (!isUnreviewedLine(e)) continue;
@@ -116,7 +129,7 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
 }
 
 export function countByCategory(items: ListItem[]): Record<SbCategory, number> {
-  const c: Record<SbCategory, number> = { missing: 0, broken: 0, inconsistent: 0, unreviewed: 0 };
+  const c: Record<SbCategory, number> = { missing: 0, broken: 0, inconsistent: 0, unreviewed: 0, toolong: 0 };
   for (const it of items) c[it.category]++;
   return c;
 }
@@ -166,9 +179,9 @@ const NODE_SHAPE: Record<string, (label: string) => string> = {
   skill: (l) => `("${l}")`,
 };
 
-/** Mermaid-safe label: no quotes/brackets/pipes/newlines, bounded length. */
+/** Mermaid-safe label: no quotes/brackets/pipes/newlines, bounded length (preserves apostrophes). */
 export function mermaidLabel(s: string, max = 38): string {
-  return truncate(s.replace(/["'`<>[\]{}()|#;&%\\\r\n]/g, " "), max) || "?";
+  return truncate(s.replace(/["`<>[\]{}()|#;&%\\\r\n]/g, " "), max) || "?";
 }
 
 /** Chains longer than this lay out top-down so the web stays readable (a 16-step LR strip fits to ~40px tall). */
@@ -205,7 +218,7 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
     if (prev) edges.push(`  ${prev} --> ${sn}`);
     prev = sn;
     for (const l of s.links) {
-      if (l.rel === "trader") continue;
+      if (l.rel === "trader" || l.rel === "spoken_by" || l.rel === "said_at") continue; // V1 identity links duplicate trader / at_location here
       const t = idx.get(l.kind, l.id);
       if (!t) continue;
       edges.push(`  ${sn} -.->|${mermaidLabel(l.rel.replace(/_/g, " "), 24)}| ${nodeFor(t)}`);
@@ -255,28 +268,56 @@ export function fmtWindow(minS: number | null, maxS: number | null): string {
   return `${f(minS ?? 0)}–${f(maxS)}`;
 }
 
-export type CharacterView = { id: string; speaker: string; card: SbEntity | null; entity: SbEntity | null; lines: SbEntity[] };
+export type CharacterView = { id: string; speaker: string; card: SbEntity | null; entity: SbEntity | null; lines: SbEntity[]; kind: string; inferred: number };
 
-/** Lowercased speaker key of a text line: csv rows carry a display name ("Popper"), others an id ("popper", "narrator"). */
+/** Lowercased speaker id of a text line (legacy shape, id only; use lineSpeakerKey for identity): csv rows carry a display name, others an id. */
 export function lineSpeaker(e: SbEntity): string {
   const link = e.links.find((l) => l.rel === "spoken_by");
   return String(link?.id ?? e.data?.speaker ?? "").toLowerCase();
 }
 
-/** One entry per speaker that has lines or a voice card, sorted by line count desc then name. */
+/** Speaker identity of a line as `kind:id` (V1): adapter speakerKind/speakerId, else the spoken_by link, else the legacy speaker string, else System. Never empty. */
+export function lineSpeakerKey(e: SbEntity): string {
+  const d = e.data ?? {};
+  if (typeof d.speakerKind === "string" && d.speakerKind && typeof d.speakerId === "string" && d.speakerId) return `${d.speakerKind}:${d.speakerId.toLowerCase()}`;
+  const link = e.links.find((l) => l.rel === "spoken_by");
+  if (link) return `${link.kind}:${link.id.toLowerCase()}`;
+  const legacy = typeof d.speaker === "string" ? d.speaker.trim().toLowerCase() : "";
+  return legacy ? `legacy:${legacy}` : "system:system";
+}
+
+/** Characters-tab key for any entity that can be opened there (line / trader / squad / voice card); null for others. */
+export function speakerKeyOf(e: SbEntity): string | null {
+  if (e.kind === "line") return lineSpeakerKey(e);
+  if (e.kind === "trader" || e.kind === "squad") return `${e.kind}:${e.id.toLowerCase()}`;
+  if (e.kind === "voice_card") return `${String(e.data?.speakerKind ?? "trader")}:${String(e.data?.speakerId ?? e.id).toLowerCase()}`;
+  return null;
+}
+
+const FIXED_SPEAKER_NAMES: Record<string, string> = { "system:system": "System", "party:squad": "Squad", "narrator:narrator": "Narrator" };
+
+/** One entry per (kind,id) speaker that has lines or a voice card (squad-x cards fold into squad member x), sorted by line count desc then name. */
 export function characterViews(idx: EntityIndex): CharacterView[] {
   const speakers = new Map<string, SbEntity[]>();
   for (const l of idx.byKind("line")) {
-    const s = lineSpeaker(l);
-    if (!s) continue;
-    (speakers.get(s) ?? speakers.set(s, []).get(s)!).push(l);
+    const k = lineSpeakerKey(l);
+    (speakers.get(k) ?? speakers.set(k, []).get(k)!).push(l);
   }
-  for (const c of idx.byKind("voice_card")) if (!speakers.has(c.id.toLowerCase())) speakers.set(c.id.toLowerCase(), []);
+  const cards = new Map<string, SbEntity>();
+  for (const c of idx.byKind("voice_card")) {
+    const k = speakerKeyOf(c)!;
+    cards.set(k, c);
+    if (!speakers.has(k)) speakers.set(k, []);
+  }
   return [...speakers.entries()]
-    .map(([id, lines]) => {
-      const card = idx.get("voice_card", id) ?? idx.byKind("voice_card").find((c) => c.id.toLowerCase() === id) ?? null;
-      const entity = idx.get("trader", id) ?? idx.get("squad", id) ?? idx.get("enemy", id);
-      return { id, speaker: entity?.display ?? card?.display ?? titleCase(id), card, entity, lines };
+    .map(([key, lines]) => {
+      const i = key.indexOf(":");
+      const kind = key.slice(0, i);
+      const sid = key.slice(i + 1);
+      const card = cards.get(key) ?? null;
+      const entity = kind === "trader" || kind === "squad" || kind === "enemy" ? idx.byKind(kind).find((x) => x.id.toLowerCase() === sid) ?? null : null;
+      const inferred = lines.filter((l) => l.data?.speakerSource === "inferred").length;
+      return { id: key, kind, speaker: entity?.display ?? card?.display ?? FIXED_SPEAKER_NAMES[key] ?? (kind === "system" ? titleCase(sid.replace(/_/g, " ")) : titleCase(sid)), card, entity, lines, inferred };
     })
     .sort((a, b) => b.lines.length - a.lines.length || a.speaker.localeCompare(b.speaker));
 }
@@ -301,8 +342,10 @@ export function entityCard(e: SbEntity, idx: EntityIndex): EntityCard {
   const d = e.data ?? {};
   const areaLink = e.links.find((l) => l.kind === "location");
   const area = areaLink ? idx.get("location", areaLink.id)?.display ?? areaLink.id : typeof d.where_seen === "string" && d.where_seen ? d.where_seen : typeof d.group === "string" && d.group ? d.group : null;
-  const speakerRaw = e.kind === "line" ? lineSpeaker(e) : e.kind === "quest_step" ? String(d.trader ?? "") : "";
-  const speaker = speakerRaw ? (idx.get("trader", speakerRaw) ?? idx.get("squad", speakerRaw))?.display ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : speakerRaw) : null;
+  const speakerRaw = e.kind === "line" ? lineSpeakerKey(e) : e.kind === "quest_step" ? `trader:${String(d.trader ?? "")}` : "";
+  const [spKind, ...spRest] = speakerRaw.split(":");
+  const spId = spRest.join(":");
+  const speaker = spId ? (spKind === "trader" || spKind === "squad" ? idx.get(spKind, spId)?.display : null) ?? FIXED_SPEAKER_NAMES[speakerRaw] ?? (spKind === "system" ? titleCase(spId.replace(/_/g, " ")) : null) ?? (typeof d.speaker === "string" && d.speaker ? d.speaker : titleCase(spId)) : null;
   const text =
     e.kind === "quest_step" ? [cleanTodo(String(d.story ?? "")), taskText(d.task)].filter(Boolean).join("\n") :
     e.kind === "line" || e.kind === "lore" ? String(d.text ?? e.display) :
@@ -390,12 +433,14 @@ export const SB_CATEGORY_HELP: Record<SbCategory, string> = {
   inconsistent: "Two places disagree: order, ownership, values or wording do not line up.",
   missing: "Something that should exist is not there yet.",
   unreviewed: "A text row from text_review.csv that the owner has not marked OWNER-OK.",
+  toolong: "Player-facing text longer than its screen budget (check #18): it will not fit.",
 };
 
 export const CHECK_NAME: Record<string, string> = {
   "#1": "dangling reference", "#2": "dangling reference", "#5": "dangling reference",
   "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
-  "#8": "missing piece", "#12": "lore contradiction",
+  "#8": "missing piece", "#12": "lore contradiction", "#18": "too long",
+  "#13": "unobtainable item", "#14": "orphan item", "#15": "item has no story",
 };
 export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
 
@@ -404,3 +449,230 @@ export const plainText = (s: string): string => s.replace(/\*\*(.+?)\*\*/g, "$1"
 
 /** Speaker id → readable name when no entity/card names it ("narrator" → "Narrator"). */
 export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, (_m, a, b) => a + b.toUpperCase());
+
+// ── Overview + Findings split (V2) ──────────────────────────────────────────────
+
+/** Findings scopes: Problems = real checker findings; Text to review = the unreviewed text inventory; Story issues = coherence checks (J4-2). */
+export type FindingScope = "problems" | "story" | "text" | "toolong" | "dev" | "all";
+export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "toolong", "dev", "all"];
+export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
+export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
+  problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
+  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
+  text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
+  toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
+  dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
+  all: "Everything above, together.",
+};
+/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
+export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
+export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
+/** A real problem: not a text-inventory row, not a Too-long fit note, not a dev code comment. */
+export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev;
+export const isTooLong = (it: ListItem): boolean => it.category === "toolong";
+export const isDevTodo = (it: ListItem): boolean => it.dev === true;
+/** #8 findings with no entity are the `# STORY-TODO` comments in .gd source (V3). */
+export const isDevTodoFinding = (f: Pick<SbFinding, "check" | "entityRef">): boolean => f.check === "#8" && !f.entityRef;
+export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check);
+
+export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
+  switch (scope) {
+    case "problems": return items.filter(isProblem);
+    case "story": return items.filter(isStoryIssue);
+    case "text": return items.filter(isTextToReview);
+    case "toolong": return items.filter(isTooLong);
+    case "dev": return items.filter(isDevTodo);
+    default: return items;
+  }
+}
+
+export function scopeCounts(items: ListItem[]): Record<FindingScope, number> {
+  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, toolong: 0, dev: 0, all: items.length };
+  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else c.problems++; if (isStoryIssue(it)) c.story++; }
+  return c;
+}
+
+/** The tab badge counts Problems only. */
+export const problemCount = (items: ListItem[]): number => scopeCounts(items).problems;
+
+const KIND_PLURAL: Record<string, string> = { quest_step: "Quest steps", voice_card: "Voice cards", lore: "Lore entries", enemy: "Enemies", squad: "Squad members", line: "Text lines" };
+export const kindLabel = (kind: string): string => KIND_PLURAL[kind] ?? `${titleCase(kind.replace(/_/g, " "))}s`;
+
+/** Entity kinds present, largest first. */
+export function kindCounts(entities: SbEntity[]): { kind: string; label: string; n: number }[] {
+  const m = new Map<string, number>();
+  for (const e of entities) m.set(e.kind, (m.get(e.kind) ?? 0) + 1);
+  return [...m.entries()].map(([kind, n]) => ({ kind, label: kindLabel(kind), n })).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+}
+
+export const AUDIT_SIGNALS = ["coverage", "integrity", "cohesion", "signoff"] as const;
+export const AUDIT_LABEL: Record<string, string> = { coverage: "Coverage", integrity: "Integrity", cohesion: "Cohesion", signoff: "Sign-off" };
+export const AUDIT_HELP: Record<string, string> = {
+  coverage: "Things that should exist but do not: missing slots, no art.",
+  integrity: "References that point at nothing.",
+  cohesion: "Places that disagree with each other.",
+  signoff: "Pieces still placeholder, AI-generated or awaiting review.",
+};
+/** Counts per F2 audit signal from snapshot.audit (null when the snapshot has no audit data). */
+export function auditCounts(audit: SbSnapshot["audit"]): Record<string, number> | null {
+  if (!Array.isArray(audit)) return null;
+  const c: Record<string, number> = Object.fromEntries(AUDIT_SIGNALS.map((s) => [s, 0]));
+  for (const f of audit) if (f && Object.hasOwn(c, f.signal)) c[f.signal]++;
+  return c;
+}
+
+/** Which tab shows a kind, if any (Overview kind chips link there). */
+export function kindTab(kind: string): string | null {
+  if (kind === "quest_step" || kind === "contract" || kind === "skill") return "quests";
+  if (kind === "location" || kind === "lore" || kind === "room") return "world";
+  if (kind === "trader" || kind === "squad" || kind === "voice_card" || kind === "enemy" || kind === "art_slot") return "cast";
+  if (kind === "item" || kind === "recipe") return "items";
+  if (kind === "line") return "review";
+  return null;
+}
+
+// ── V4: navigation, entity sheets, items ────────────────────────────────────────
+
+export type ItemFilter = "all" | "orphan" | "no-story" | "unobtainable";
+export const ITEM_FILTERS: ItemFilter[] = ["all", "unobtainable", "orphan", "no-story"];
+export const ITEM_FILTER_LABEL: Record<ItemFilter, string> = {
+  all: "All items",
+  unobtainable: "Unobtainable (#13)",
+  orphan: "Orphan (#14)",
+  "no-story": "No story (#15)",
+};
+
+export type NavTarget = {
+  tab: "home" | "review" | "quests" | "world" | "cast" | "items" | "problems";
+  sel?: string;
+  jump?: string;
+  scope?: FindingScope;
+  category?: SbCategory | null;
+  itemFilter?: ItemFilter;
+};
+
+/** Resolve any entity chip / RefPopover / finding target to its destination tab + sheet selection. */
+export function entityNavTarget(e: SbEntity): NavTarget | null {
+  if (e.kind === "location") return { tab: "world", sel: e.id };
+  if (e.kind === "quest_step") return { tab: "quests", sel: String(e.data?.trader ?? e.id), jump: entityKey(e.kind, e.id) };
+  if (e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") return { tab: "cast", sel: speakerKeyOf(e) ?? "system:system" };
+  if (e.kind === "enemy") return { tab: "cast", sel: `enemy:${e.id.toLowerCase()}` };
+  if (e.kind === "item") return { tab: "items", sel: e.id };
+  if (e.kind === "line") return { tab: "review", sel: e.id, jump: entityKey(e.kind, e.id) };
+  if (e.kind === "contract") {
+    const tid = typeof e.data?.trader === "string" && e.data.trader ? e.data.trader : e.links.find((l) => l.kind === "trader")?.id;
+    return tid ? { tab: "cast", sel: `trader:${tid.toLowerCase()}` } : { tab: "quests" };
+  }
+  if (e.kind === "recipe") {
+    const outId = typeof e.data?.result_id === "string" && e.data.result_id ? e.data.result_id : e.links.find((l) => l.rel === "produces" && l.kind === "item")?.id;
+    return outId ? { tab: "items", sel: outId } : { tab: "items" };
+  }
+  if (e.kind === "lore") {
+    const loc = e.links.find((l) => l.kind === "location");
+    if (loc) return { tab: "world", sel: loc.id };
+    const en = e.links.find((l) => l.kind === "enemy");
+    if (en) return { tab: "cast", sel: `enemy:${en.id.toLowerCase()}` };
+    return { tab: "world" };
+  }
+  if (e.kind === "room") return { tab: "world" };
+  if (e.kind === "skill") return { tab: "quests" };
+  return null;
+}
+
+/** Map an F2 audit signal card on Home to the filtered Problems / Review view it counts. */
+export function auditSignalTarget(signal: string): NavTarget {
+  switch (signal) {
+    case "integrity": return { tab: "problems", scope: "problems", category: "broken" };
+    case "cohesion": return { tab: "problems", scope: "problems", category: "inconsistent" };
+    case "coverage": return { tab: "problems", scope: "problems", category: "missing" };
+    case "signoff": return { tab: "review", scope: "text", category: null };
+    default: return { tab: "problems", scope: "problems", category: null };
+  }
+}
+
+/** Findings directly targeting one entity. */
+export function entityFindings(e: SbEntity, findings: SbFinding[]): SbFinding[] {
+  return findings.filter((f) => f.entityRef && f.entityRef.kind === e.kind && f.entityRef.id === e.id);
+}
+
+const ITEM_SOURCE_RELS = new Set([
+  "drops", "sells", "produces",
+  "first_clear_unique", "kill_valuable", "key_drop", "locked_room_loot", "container_loot", "long_haul_loot",
+]);
+const ITEM_USE_RELS = new Set(["wants_item", "item", "ingredient", "upgrade_material"]);
+
+export type ItemLinkRow = { kind: string; id: string; rel: string; label: string; entity: SbEntity | null };
+export type ItemSheetData = {
+  item: SbEntity;
+  hasDescription: boolean;
+  sources: ItemLinkRow[];
+  uses: ItemLinkRow[];
+  lines: SbEntity[];
+  findings: SbFinding[];
+  isOrphan: boolean;
+  isNoStory: boolean;
+  isUnobtainable: boolean;
+};
+
+/** Full sheet derivation for one item: sources, uses, text lines, findings, and #13/#14/#15 flags. */
+export function itemSheetData(item: SbEntity, idx: EntityIndex, findings: SbFinding[]): ItemSheetData {
+  const sources: ItemLinkRow[] = [];
+  const uses: ItemLinkRow[] = [];
+  const lines: SbEntity[] = [];
+  let required = false;
+
+  for (const ns of Array.isArray(item.data?.node_sources) ? item.data.node_sources : []) {
+    sources.push({ kind: String(ns.kind ?? "node"), id: String(ns.id ?? ""), rel: String(ns.kind ?? "node"), label: String(ns.label ?? ns.id ?? ""), entity: null });
+  }
+  for (const eu of Array.isArray(item.data?.extra_uses) ? item.data.extra_uses : []) {
+    uses.push({ kind: String(eu.kind ?? "use"), id: String(eu.id ?? ""), rel: String(eu.kind ?? "use"), label: String(eu.label ?? eu.id ?? ""), entity: null });
+  }
+  for (const e of idx.all) {
+    for (const l of e.links) {
+      if (l.kind !== "item" || l.id !== item.id) continue;
+      if (ITEM_SOURCE_RELS.has(l.rel)) {
+        sources.push({ kind: e.kind, id: e.id, rel: l.rel, label: e.display, entity: e });
+      }
+      if (ITEM_USE_RELS.has(l.rel)) {
+        uses.push({ kind: e.kind, id: e.id, rel: l.rel, label: e.display, entity: e });
+        if ((e.kind === "quest_step" && l.rel === "wants_item") || (e.kind === "contract" && l.rel === "item")) required = true;
+      }
+      if (e.kind === "line") lines.push(e);
+    }
+  }
+  const ownFindings = entityFindings(item, findings);
+  const hasDescription = typeof item.data?.description === "string" && item.data.description.trim().length > 0;
+  const isUnobtainable = ownFindings.some((f) => f.check === "#13") || (required && sources.length === 0);
+  const isOrphan = ownFindings.some((f) => f.check === "#14") || (sources.length === 0 && uses.length === 0);
+  const isNoStory = ownFindings.some((f) => f.check === "#15") || (!hasDescription && !ownFindings.length && lines.length === 0 && !uses.some((u) => u.kind === "quest_step"));
+  return { item, hasDescription, sources, uses, lines, findings: ownFindings, isOrphan, isNoStory, isUnobtainable };
+}
+
+export type EnemySheetData = {
+  enemy: SbEntity;
+  look: SbEntity | null;
+  missingDescription: boolean;
+  spawns: { location: SbEntity; minS: number | null; maxS: number | null; boss: boolean }[];
+  drops: SbEntity[];
+  quests: SbEntity[];
+  contracts: SbEntity[];
+  lines: SbEntity[];
+  findings: SbFinding[];
+};
+
+/** Full sheet derivation for one enemy: CONTENT_BREADTH look line, missing-description flag, spawns, drops, quests/contracts, findings. */
+export function enemySheetData(enemy: SbEntity, idx: EntityIndex, findings: SbFinding[]): EnemySheetData {
+  const look = idx.byKind("lore").find((l) => l.data?.lore_kind === "enemy_look" && l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id)) ?? null;
+  const missingDescription = !(typeof enemy.data?.description === "string" && enemy.data.description.trim().length > 0);
+  const spawns: EnemySheetData["spawns"] = [];
+  for (const loc of idx.byKind("location")) {
+    const pool = Array.isArray(loc.data?.enemy_pool) ? loc.data.enemy_pool : [];
+    for (const p of pool) if (String(p.id) === enemy.id) spawns.push({ location: loc, minS: numOrNull(p.min_time_seconds), maxS: numOrNull(p.max_time_seconds), boss: false });
+    if (loc.data?.boss?.enemy_id === enemy.id) spawns.push({ location: loc, minS: numOrNull(loc.data.boss.at_seconds), maxS: null, boss: true });
+  }
+  const drops = enemy.links.filter((l) => l.rel === "drops" && l.kind === "item").map((l) => idx.get("item", l.id)).filter((x): x is SbEntity => x !== null);
+  const quests = idx.byKind("quest_step").filter((q) => q.links.some((l) => l.kind === "enemy" && l.id === enemy.id)).sort(byIndexThenId);
+  const contracts = idx.byKind("contract").filter((c) => c.links.some((l) => l.kind === "enemy" && l.id === enemy.id));
+  const lines = idx.byKind("line").filter((l) => l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id));
+  return { enemy, look, missingDescription, spawns, drops, quests, contracts, lines, findings: entityFindings(enemy, findings) };
+}

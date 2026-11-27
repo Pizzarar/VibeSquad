@@ -79,6 +79,8 @@ export type DecisionItem = {
   sourceIds?: string[];
   groupSize?: number;
   rawText?: string;
+  /** C1: plain-text excerpt of the asker's defining message (max 1500 chars, \n kept). Render as plain text ONLY. */
+  context?: string;
   ts: number;
   at?: string;
   ageMs?: number;
@@ -87,9 +89,9 @@ export type DecisionItem = {
 export type DecisionRowType = "yesno" | "answer" | "offscreen";
 
 export type StagedChoice =
-  | { choice: "lean" }
-  | { choice: `alt:${number}` }
-  | { choice: "not" }
+  | { choice: "lean"; text?: string }
+  | { choice: `alt:${number}`; text?: string }
+  | { choice: "not"; text?: string }
   | { choice: "reply"; text: string }
   | { choice: "dismiss" };
 
@@ -107,6 +109,14 @@ export type AnswerResultItem = {
   via?: string;
   error?: string;
   already?: boolean;
+  summary?: string;
+};
+
+export type SentAnswerSummary = {
+  id: string;
+  lane: string;
+  ask: string;
+  summary: string;
 };
 
 export type StatusLaneLine = {
@@ -143,6 +153,148 @@ export function classifyDecisionRow(item: Pick<DecisionItem, "kind" | "lean">): 
   return item.lean && item.lean.trim() ? "yesno" : "answer";
 }
 
+/** True when a non-offscreen card has option buttons to show alongside the reply box (C2). */
+export function hasDecisionOptions(item: Pick<DecisionItem, "kind" | "lean" | "alts">): boolean {
+  const rowType = classifyDecisionRow(item);
+  if (rowType === "offscreen") return false;
+  if (rowType === "yesno") return true;
+  return Boolean(item.lean && item.lean.trim()) || (Array.isArray(item.alts) && item.alts.length > 0);
+}
+
+/**
+ * C2b idea-1149: a bare-letter lean ("B", "b", "(b)", "Option B") names one of the lettered options ("A: …", "B) …").
+ * Returns that option's index, or -1 when the lean is not a bare letter or no option carries the letter.
+ */
+export function resolveLeanAlt(item: Pick<DecisionItem, "lean" | "alts">): number {
+  const m = /^\s*(?:option\s+)?\(?([A-Za-z])\)?[.:]?\s*$/i.exec(item.lean ?? "");
+  if (!m) return -1;
+  const letter = m[1].toUpperCase();
+  return (item.alts ?? []).findIndex((a) => {
+    const am = /^\s*(?:option\s+([A-Za-z])(?![A-Za-z0-9])|\(([A-Za-z])\)|([A-Za-z])(?:[.:)]|\s+[-–—]|\s*$))/i.exec(a);
+    return Boolean(am) && (am![1] ?? am![2] ?? am![3]).toUpperCase() === letter;
+  });
+}
+
+/** Staged choice for "go with the lean": the lettered option it names when it resolves (C2b G1), else the lean. */
+export function leanStage(item: Pick<DecisionItem, "lean" | "alts">): StagedChoice {
+  const li = resolveLeanAlt(item);
+  return li >= 0 ? { choice: `alt:${li}` } : { choice: "lean" };
+}
+
+/** True when the lean is a bare letter that no option resolves (shown as the letter, pointing to Show source). */
+export function isUnresolvedBareLean(item: Pick<DecisionItem, "lean" | "alts">): boolean {
+  return /^\s*(?:option\s+)?\(?[A-Za-z]\)?[.:]?\s*$/i.test(item.lean ?? "") && resolveLeanAlt(item) < 0;
+}
+
+/** C2b idea-1151: distinct options on a card (a lean that resolves to an option is the same choice, not another). */
+export function decisionOptionCount(item: Pick<DecisionItem, "lean" | "alts">): number {
+  const alts = (item.alts ?? []).length;
+  return alts + (item.lean && item.lean.trim() && resolveLeanAlt(item) < 0 ? 1 : 0);
+}
+
+/** The "not" button label: "None of these" with 2+ options, else "Not that". */
+export function notChoiceLabel(item: Pick<DecisionItem, "lean" | "alts">): string {
+  return decisionOptionCount(item) >= 2 ? "None of these" : "Not that";
+}
+
+const normalizeSourceCompare = (s: string | undefined): string =>
+  typeof s === "string" ? s.replace(/\s+/g, " ").trim().toLowerCase() : "";
+
+/** True when a card should show the `Show source ▾` disclosure: has context (or rawText when inferred) and adds info beyond `ask` (L2 idea-1150). */
+export function hasSourceDisclosure(item: Partial<Pick<DecisionItem, "ask" | "inferred" | "context" | "rawText">>): boolean {
+  const hasContext = typeof item.context === "string" && item.context.trim().length > 0;
+  const raw = hasContext
+    ? item.context
+    : item.inferred && typeof item.rawText === "string" && item.rawText.trim().length > 0
+      ? item.rawText
+      : "";
+  const normExcerpt = normalizeSourceCompare(raw);
+  if (!normExcerpt) return false;
+  const normAsk = normalizeSourceCompare(item.ask);
+  if (normAsk && normAsk.includes(normExcerpt)) return false;
+  return true;
+}
+
+const quoteShortClient = (s: string | undefined, max = 60): string => {
+  const full = String(s ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/-{3,}/g, "—");
+  if (full.length <= max) return JSON.stringify(full);
+  if (max <= 1) return JSON.stringify("…");
+  return JSON.stringify(`${full.slice(0, max - 1)}…`);
+};
+
+/** L2 idea-1154: client-side mirror of server `choiceLabel` for sent-answer disclosure (option + reply). */
+export function formatSentChoiceSummary(
+  item: Pick<DecisionItem, "lean" | "alts">,
+  ans: Pick<AnswerPayloadItem, "choice" | "text">,
+): string {
+  const text = typeof ans.text === "string" ? ans.text.trim() : "";
+  let base: string;
+  if (ans.choice === "lean") {
+    const li = resolveLeanAlt(item);
+    base = li >= 0 ? `lean, option ${li + 1} ${quoteShortClient((item.alts ?? [])[li])}` : `lean ${quoteShortClient(item.lean)}`;
+  } else if (ans.choice.startsWith("alt:")) {
+    const idx = Number(ans.choice.slice(4));
+    base = `option ${idx + 1} ${quoteShortClient((item.alts ?? [])[idx])}`;
+  } else if (ans.choice === "not") {
+    base = decisionOptionCount(item) >= 2 ? "none of these" : "not that";
+  } else if (ans.choice === "reply") {
+    return `reply ${quoteShortClient(text)}`;
+  } else {
+    return "dismissed";
+  }
+  return text ? `${base} + reply ${quoteShortClient(text)}` : base;
+}
+
+/** Plain-text excerpt rendered inside the `Show source` disclosure (never markdown or HTML). */
+export function sourceExcerptText(item: Pick<DecisionItem, "context" | "rawText">): string {
+  if (typeof item.context === "string" && item.context.trim().length > 0) return item.context;
+  if (typeof item.rawText === "string" && item.rawText.trim().length > 0) return item.rawText;
+  return "No source message excerpt available.";
+}
+
+function SourceDisclosure({
+  item,
+  open: isSourceOpen,
+  onToggle,
+}: {
+  item: DecisionItem;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!hasSourceDisclosure(item)) return null;
+  const bodyId = `boring-decision-source-body-${item.id}`;
+  return (
+    <div className="boring-decision-source" data-testid={`boring-decision-source-${item.id}`}>
+      <button
+        type="button"
+        className="boring-decision-source-toggle"
+        data-testid={`boring-decision-source-toggle-${item.id}`}
+        aria-expanded={isSourceOpen}
+        aria-controls={bodyId}
+        onClick={onToggle}
+      >
+        {isSourceOpen ? "Hide source ▴" : "Show source ▾"}
+      </button>
+      {isSourceOpen && (
+        <div
+          id={bodyId}
+          className="boring-decision-source-body"
+          data-testid={bodyId}
+          role="region"
+          aria-label={`Source excerpt for ${item.ask}`}
+          tabIndex={0}
+        >
+          {sourceExcerptText(item)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Group open feed items (excluding offscreen) by Squad, preserving oldest-first order inside each Squad and across Squads. */
 export function groupFeedBySquad(items: DecisionItem[]): { squad: string; squadName: string; items: DecisionItem[] }[] {
   const sorted = [...items].sort((a, b) => a.ts - b.ts);
@@ -176,11 +328,54 @@ export function buildAnswerBatch(items: DecisionItem[], staged: Readonly<Record<
       const text = sel.text.trim();
       if (!text) continue;
       out.push({ id: item.id, choice: "reply", text });
+    } else if (sel.choice === "dismiss") {
+      out.push({ id: item.id, choice: "dismiss" });
     } else {
-      out.push({ id: item.id, choice: sel.choice });
+      const text = typeof sel.text === "string" ? sel.text.trim() : "";
+      // C2b: a lean that names a lettered option is that option: send one consistent answer (the option's definition).
+      const li = sel.choice === "lean" ? resolveLeanAlt(item) : -1;
+      const choice = li >= 0 ? (`alt:${li}` as const) : sel.choice;
+      out.push(text ? { id: item.id, choice, text } : { id: item.id, choice });
     }
   }
   return out;
+}
+
+/** Pure state transition for toggling an option/dismiss choice while preserving any typed reply on mixed asks (C2). */
+export function applyChoiceToggle(cur: Readonly<Record<string, StagedChoice>>, id: string, next: StagedChoice): Record<string, StagedChoice> {
+  const prev = cur[id];
+  if (next.choice === "dismiss" || next.choice === "reply") {
+    if (prev && prev.choice === next.choice && (prev.choice !== "reply" || (next.choice === "reply" && prev.text === next.text))) {
+      const copy = { ...cur };
+      delete copy[id];
+      return copy;
+    }
+    return { ...cur, [id]: next };
+  }
+  const existingText = prev && prev.choice !== "dismiss" ? prev.text : undefined;
+  if (prev && prev.choice === next.choice) {
+    if (existingText && existingText.trim()) return { ...cur, [id]: { choice: "reply", text: existingText } };
+    const copy = { ...cur };
+    delete copy[id];
+    return copy;
+  }
+  const mergedText = next.text ?? existingText;
+  return { ...cur, [id]: mergedText ? { choice: next.choice, text: mergedText } : { choice: next.choice } };
+}
+
+/** Pure state transition for editing a card's reply input while preserving any selected option on mixed asks (C2). */
+export function applyReplyText(cur: Readonly<Record<string, StagedChoice>>, id: string, text: string): Record<string, StagedChoice> {
+  const prev = cur[id];
+  if (prev && prev.choice !== "reply" && prev.choice !== "dismiss") {
+    return { ...cur, [id]: text ? { choice: prev.choice, text } : { choice: prev.choice } };
+  }
+  if (!text.trim()) {
+    if (!prev || prev.choice === "dismiss") return cur as Record<string, StagedChoice>;
+    const copy = { ...cur };
+    delete copy[id];
+    return copy;
+  }
+  return { ...cur, [id]: { choice: "reply", text } };
 }
 
 /** Match the newest `done` or `decision` log entry for a lane (matches by laneId, `@code`, or code). */
@@ -339,6 +534,59 @@ export function demoDecisionItems(now = Date.now()): DecisionItem[] {
     { id: "ny-00000000000000000010", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "importer", askerId: "demo-im-ld", asker: { id: "demo-im-ld", title: "Importer · Lead 1", live: true }, ask: "Allow non-power-of-two textures in dev builds?", decides: "Relaxes asset import validation outside release builds", lean: "Warn in dev, error in release", alts: ["Error everywhere"], kind: "yesno", structured: true, ts: m(19) },
     { id: "ny-00000000000000000011", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "ci", askerId: "demo-ci-ld", asker: { id: "demo-ci-ld", title: "CI · Lead 1", live: true }, ask: "Which artifact retention window (days) do we want for nightly builds?", decides: "Sets storage cleanup policy on the build bucket", lean: "", alts: [], kind: "answer", structured: true, ts: m(12) },
     { id: "ny-00000000000000000012", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "billing", askerId: "demo-bi-ld", asker: { id: "demo-bi-ld", title: "Billing · Lead 1", live: true }, ask: "Approve the $20/mo build-cache storage upgrade", decides: "Increases remote cache quota for CI runners", lean: "", alts: [], kind: "offscreen", structured: true, ts: m(6) },
+    {
+      id: "ny-00000000000000000013",
+      source: "log",
+      squad: "vibesquad",
+      squadName: "VibeSquad",
+      lane: "desk",
+      askerId: "demo-desk-ld",
+      asker: { id: "demo-desk-ld", title: "Overlord", live: true },
+      ask: "Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+      decides: "A spec change for partial-fill entries, plus whether the owner can veto the check-5 block",
+      lean: "",
+      alts: [
+        "A: fill-or-kill at entry — cancel the order unless it fills completely",
+        "B: keep the partial fill and resize the stop to the filled size",
+        "C: top up the remainder at the next bar's open",
+      ],
+      kind: "yesno",
+      structured: false,
+      inferred: true,
+      context: [
+        "Partial fills are the last open question on the entry path.",
+        "A) fill-or-kill at entry: cancel the order unless it fills completely",
+        "B) keep the partial fill and resize the stop to the filled size",
+        "C) top up the remainder at the next bar's open",
+        "Separately: should I add a 30s veto window on the check-5 same-ticker block?",
+      ].join("\n"),
+      ts: m(4),
+    },
+    {
+      id: "ny-00000000000000000014",
+      source: "label",
+      squad: "studio-tools",
+      squadName: "Studio Tools",
+      lane: "ci",
+      askerId: "demo-ci-ld",
+      asker: { id: "demo-ci-ld", title: "CI · Lead 1", live: true },
+      ask: "U11 survivorship: (a) survivor-only with coverage %, or (b) stop at A1?",
+      decides: "Sets U11 scope and whether delisted rows are deferred",
+      lean: "",
+      alts: [
+        "a: survivor-only — keep only listed tickers and report coverage %",
+        "b: stop at A1 — ship the A1 universe and defer delisted data",
+      ],
+      kind: "yesno",
+      structured: false,
+      inferred: true,
+      context: [
+        "U11 needs a call on survivorship before we freeze the dataset.",
+        "(a) survivor-only: keep only listed tickers and report coverage %",
+        "(b) stop at A1: ship the A1 universe and defer delisted data",
+      ].join("\n"),
+      ts: m(2),
+    },
   ];
 }
 
@@ -509,9 +757,11 @@ export function BoringDecisionDesk({
   const [logRev, setLogRev] = useState(0);
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sending, setSending] = useState(false);
-  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string; details?: SentAnswerSummary[] } | null>(null);
+  const [bannerOpen, setBannerOpen] = useState(false);
   const wide = useWideRail();
   const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
+  const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -586,7 +836,7 @@ export function BoringDecisionDesk({
     for (const i of fresh) autoLeaned.current.add(i.id);
     setStaged((cur) => {
       const next = { ...cur };
-      for (const i of fresh) if (!next[i.id]) next[i.id] = { choice: "lean" };
+      for (const i of fresh) if (!next[i.id]) next[i.id] = leanStage(i);
       return next;
     });
   }, [feedItems]);
@@ -600,29 +850,13 @@ export function BoringDecisionDesk({
   const toggleChoice = (id: string, next: StagedChoice) => {
     if (pending || sending) return;
     setBanner(null);
-    setStaged((cur) => {
-      const prev = cur[id];
-      if (prev && prev.choice === next.choice && (prev.choice !== "reply" || (next.choice === "reply" && prev.text === next.text))) {
-        const copy = { ...cur };
-        delete copy[id];
-        return copy;
-      }
-      return { ...cur, [id]: next };
-    });
+    setStaged((cur) => applyChoiceToggle(cur, id, next));
   };
 
   const setReplyText = (id: string, text: string) => {
     if (pending || sending) return;
     setBanner(null);
-    setStaged((cur) => {
-      if (!text.trim()) {
-        if (!(id in cur)) return cur;
-        const copy = { ...cur };
-        delete copy[id];
-        return copy;
-      }
-      return { ...cur, [id]: { choice: "reply", text } };
-    });
+    setStaged((cur) => applyReplyText(cur, id, text));
   };
 
   const stageAllLeans = () => {
@@ -630,7 +864,10 @@ export function BoringDecisionDesk({
     setBanner(null);
     setStaged((cur) => {
       const next = { ...cur };
-      for (const id of unstagedLeanIds) next[id] = { choice: "lean" };
+      for (const id of unstagedLeanIds) {
+        const it = feedItems.find((i) => i.id === id);
+        next[id] = it ? leanStage(it) : { choice: "lean" };
+      }
       return next;
     });
   };
@@ -639,6 +876,9 @@ export function BoringDecisionDesk({
     cancelPending();
     setSending(true);
     setBanner(null);
+    setBannerOpen(false);
+    const itemsById = new Map(store.items.map((i) => [i.id, i]));
+    const payloadById = new Map(toSend.map((b) => [b.id, b]));
     try {
       const res = await dispatchAnswerBatch(toSend);
       if (res.error) {
@@ -647,9 +887,21 @@ export function BoringDecisionDesk({
       }
       const nextErrs: Record<string, string> = {};
       const succeeded = new Set<string>();
+      const sentDetails: SentAnswerSummary[] = [];
       for (const r of res.results) {
         if (r.status === "delivered" || r.status === "dismissed" || r.already) succeeded.add(r.id);
         else nextErrs[r.id] = r.error || "Delivery failed";
+        if (r.status === "delivered" || r.status === "dismissed") {
+          const it = itemsById.get(r.id);
+          const pay = payloadById.get(r.id);
+          const summary = r.summary || (it && pay ? formatSentChoiceSummary(it, pay) : r.choice);
+          sentDetails.push({
+            id: r.id,
+            lane: it?.lane ? `@${it.lane.replace(/^@/, "")}` : "Desk",
+            ask: it?.ask ?? r.id,
+            summary,
+          });
+        }
       }
       setRowErrors(nextErrs);
       setStaged((cur) => {
@@ -657,10 +909,10 @@ export function BoringDecisionDesk({
         for (const id of succeeded) delete copy[id];
         return copy;
       });
-      const okCount = res.results.filter((r) => r.status === "delivered" || r.status === "dismissed").length;
+      const okCount = sentDetails.length;
       const failCount = Object.keys(nextErrs).length;
-      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).` });
-      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.` });
+      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).`, ...(okCount > 0 ? { details: sentDetails } : {}) });
+      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.`, ...(okCount > 0 ? { details: sentDetails } : {}) });
       await refreshDecisions();
       setLogRev((n) => n + 1);
     } finally {
@@ -852,12 +1104,15 @@ export function BoringDecisionDesk({
             <div className="boring-decision-cards">
               {grp.items.map((item) => {
                 const rowType = classifyDecisionRow(item);
+                const hasOptions = hasDecisionOptions(item);
                 const sel = staged[item.id];
                 const isStaged = Boolean(sel);
                 const age = formatAge(item.ts, now);
                 const askerLabel = item.asker?.title ? cleanTitle(item.asker.title) : item.askerId || "";
                 const groupCount = item.groupSize && item.groupSize > 1 ? item.groupSize : Array.isArray(item.sourceIds) && item.sourceIds.length > 1 ? item.sourceIds.length : 0;
-                const leanStaged = sel?.choice === "lean";
+                const leanAlt = resolveLeanAlt(item);
+                const leanStaged = sel?.choice === "lean" || (leanAlt >= 0 && sel?.choice === `alt:${leanAlt}`);
+                const replyValue = sel && sel.choice !== "dismiss" ? (sel.text ?? "") : "";
                 return (
                   <article
                     key={item.id}
@@ -892,9 +1147,15 @@ export function BoringDecisionDesk({
                       </div>
                     )}
 
-                    {rowType === "yesno" ? (
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
+
+                    {hasOptions && (
                       <div className="boring-decision-choices" role="group" aria-label={`Options for ${item.ask}`}>
-                        {item.lean && (
+                        {item.lean && leanAlt < 0 && (
                           <button
                             type="button"
                             className={`boring-decision-choice is-lean${leanStaged ? " selected staged" : " suggested"}`}
@@ -905,48 +1166,55 @@ export function BoringDecisionDesk({
                           >
                             <span className="boring-decision-choice-tag">{sel?.choice === "lean" ? "✓ Lean" : "Lean"}</span>
                             <span>{item.lean}</span>
+                            {isUnresolvedBareLean(item) && <span className="boring-decision-lean-hint">{hasSourceDisclosure(item) ? "(letter only; see Show source)" : "(letter only; option not defined)"}</span>}
                           </button>
                         )}
                         {(item.alts ?? []).map((alt, idx) => {
                           const key = `alt:${idx}` as const;
-                          const on = sel?.choice === key;
+                          const isLean = idx === leanAlt;
+                          const on = sel?.choice === key || (isLean && sel?.choice === "lean"); // a stale {lean} on a resolved lean is this option
                           return (
                             <button
                               key={key}
                               type="button"
-                              className={`boring-decision-choice${on ? " selected staged" : ""}`}
+                              className={`boring-decision-choice${isLean ? " is-lean" : ""}${on ? " selected staged" : isLean ? " suggested" : ""}`}
                               data-testid={`boring-decision-alt-${item.id}-${idx}`}
                               aria-pressed={on}
                               disabled={Boolean(pending) || sending}
-                              onClick={() => toggleChoice(item.id, { choice: key })}
+                              onClick={() => toggleChoice(item.id, isLean && sel?.choice === "lean" ? { choice: "lean" } : { choice: key })}
                             >
-                              {alt}
+                              {isLean && <span className="boring-decision-choice-tag">{on ? "✓ Lean" : "Lean"}</span>}
+                              <span>{alt}</span>
                             </button>
                           );
                         })}
-                        <button
-                          type="button"
-                          className={`boring-decision-choice is-not${sel?.choice === "not" ? " selected staged" : ""}`}
-                          data-testid={`boring-decision-not-${item.id}`}
-                          aria-pressed={sel?.choice === "not"}
-                          disabled={Boolean(pending) || sending}
-                          onClick={() => toggleChoice(item.id, { choice: "not" })}
-                        >
-                          Not that
-                        </button>
+                        {rowType === "yesno" && (
+                          <button
+                            type="button"
+                            className={`boring-decision-choice is-not${sel?.choice === "not" ? " selected staged" : ""}`}
+                            data-testid={`boring-decision-not-${item.id}`}
+                            aria-pressed={sel?.choice === "not"}
+                            disabled={Boolean(pending) || sending}
+                            onClick={() => toggleChoice(item.id, { choice: "not" })}
+                          >
+                            {notChoiceLabel(item)}
+                          </button>
+                        )}
                       </div>
-                    ) : (
-                      <div className="boring-decision-answer-row">
-                        <input
-                          type="text"
-                          className="boring-decision-input"
-                          data-testid={`boring-decision-input-${item.id}`}
-                          aria-label={`Answer for ${item.ask}`}
-                          placeholder="One-line answer…"
-                          disabled={Boolean(pending) || sending}
-                          value={sel?.choice === "reply" ? sel.text : ""}
-                          onChange={(e) => setReplyText(item.id, e.target.value)}
-                        />
+                    )}
+
+                    <div className="boring-decision-answer-row">
+                      <input
+                        type="text"
+                        className="boring-decision-input"
+                        data-testid={`boring-decision-input-${item.id}`}
+                        aria-label={`Answer for ${item.ask}`}
+                        placeholder={hasOptions ? "Add a note or reply…" : "One-line answer…"}
+                        disabled={Boolean(pending) || sending}
+                        value={replyValue}
+                        onChange={(e) => setReplyText(item.id, e.target.value)}
+                      />
+                      {rowType !== "yesno" && (
                         <button
                           type="button"
                           className={`boring-decision-dismiss${sel?.choice === "dismiss" ? " staged" : ""}`}
@@ -956,8 +1224,8 @@ export function BoringDecisionDesk({
                         >
                           {sel?.choice === "dismiss" ? "✓ Dismiss" : "Dismiss"}
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {rowErrors[item.id] && (
                       <div className="boring-decision-row-err" role="alert">
@@ -1002,6 +1270,11 @@ export function BoringDecisionDesk({
                         <span className="boring-decision-decides-label">Decides:</span> {item.decides}
                       </div>
                     )}
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
                   </div>
                   <div className="boring-decision-offscreen-actions">
                     <button
@@ -1115,9 +1388,41 @@ export function BoringDecisionDesk({
               {`Sending ${pending.batch.length} ${pending.batch.length === 1 ? "answer" : "answers"} in ${pending.remainingSec}s…`}
             </span>
           ) : banner ? (
-            <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
-              {banner.text}
-            </span>
+            <div className="boring-decision-banner-wrap">
+              <div className="boring-decision-banner-head">
+                <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
+                  {banner.text}
+                </span>
+                {banner.details && banner.details.length > 0 && (
+                  <button
+                    type="button"
+                    className="boring-decision-banner-toggle"
+                    data-testid="boring-decision-banner-toggle"
+                    aria-expanded={bannerOpen}
+                    aria-controls={bannerOpen ? "boring-decision-banner-details" : undefined}
+                    onClick={() => setBannerOpen((v) => !v)}
+                  >
+                    {bannerOpen ? "Hide details ▴" : "Details ▾"}
+                  </button>
+                )}
+              </div>
+              {bannerOpen && banner.details && banner.details.length > 0 && (
+                <ul
+                  id="boring-decision-banner-details"
+                  className="boring-decision-banner-list"
+                  data-testid="boring-decision-banner-details"
+                  aria-label="Sent answers"
+                >
+                  {banner.details.map((d) => (
+                    <li key={d.id} className="boring-decision-banner-item" data-testid={`boring-decision-banner-item-${d.id}`}>
+                      <span className="boring-decision-banner-lane">{d.lane}</span>
+                      <span className="boring-decision-banner-summary">{d.summary}</span>
+                      <span className="boring-decision-banner-ask" title={d.ask}>{`re ${d.ask}`}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           ) : (
             <span className="boring-decision-bar-hint">
               {batch.length > 0

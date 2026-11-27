@@ -107,6 +107,9 @@ export type ProfilesState = {
   hiddenRoles?: string[];
   /** R2: provider families currently capped (GET /__vibesquad/roles capped); New Agent shows where a spawn lands. */
   capped?: string[];
+  /** C fu1 L2: families past their soft quota line (family -> reason) and families with no fresh quota row (same GET). */
+  softCapped?: Record<string, string>;
+  quotaUnknown?: string[];
   /** "v2" = stored roles, "v1" = built live from the legacy profiles (nothing saved yet), "default" = shipped table. */
   rolesSource?: string;
 };
@@ -139,7 +142,7 @@ export function defaultBriefFor(name: string, role: Role): string {
 }
 
 export const SHARED_NOTE_PREFIX = [
-  "Project rules first: if the repo has AGENTS.md or CLAUDE.md (and, for leads, docs/LEAD_RULES.md), read them; where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
+  "Project rules first: if the repo has AGENTS.md or CLAUDE.md (and, for leads, docs/LEAD_RULES.md if present), read them; where they conflict with this note, they win. Report with evidence (raw output, file:line, commit hashes), never prose claims.",
   "To find your current lead: run `vs who lead`. It returns the single live lead for your team and lane (never `(old)` or `former-lead`), or `NONE` / `CONFLICT`. Check existing lane Buddies with `vs who brainstorm`.",
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
@@ -704,6 +707,8 @@ function applyRolesBody(body: Record<string, unknown>): void {
     ladderDefaults: (body.ladderDefaults as Ladder) ?? state.ladderDefaults,
     hiddenRoles: Array.isArray(body.hiddenRoles) ? (body.hiddenRoles as string[]) : state.hiddenRoles,
     capped: Array.isArray(body.capped) ? (body.capped as string[]) : state.capped,
+    softCapped: body.softCapped && typeof body.softCapped === "object" && !Array.isArray(body.softCapped) ? (body.softCapped as Record<string, string>) : state.softCapped,
+    quotaUnknown: Array.isArray(body.quotaUnknown) ? (body.quotaUnknown as string[]) : state.quotaUnknown,
     rolesSource: String(body.source ?? state.rolesSource ?? ""),
   };
   notify();

@@ -9,19 +9,22 @@ export const SPAWN_REASON = Object.freeze({
   OVERRIDE: "override",
   ARM: "arm",
   FAILOVER: "failover",
+  SOFT: "soft",
   LEGACY_NAME: "legacy-name",
   ALL_CAPPED: "all-capped",
 });
 
 /** The reasons a spawn can show. ladder = the role x stakes tier ladder; override = the caller named a provider and/or model
  *  (or a non-routed raw spawn); arm = an R0 implementer alternation pick; failover = a capped/over-quota provider was
- *  skipped; legacy-name = an old profile name (or alias) ran its stored profile (P5f removes these); all-capped = every
+ *  skipped; soft = a family past its soft quota line (@per PLAN_PER_QUOTA_FIT_1126 C) was skipped because this work is
+ *  not interruptible; legacy-name = an old profile name (or alias) ran its stored profile (P5f removes these); all-capped = every
  *  provider on the route was capped, so the first one runs anyway. */
 export const SPAWN_REASONS = Object.freeze([
   SPAWN_REASON.LADDER,
   SPAWN_REASON.OVERRIDE,
   SPAWN_REASON.ARM,
   SPAWN_REASON.FAILOVER,
+  SPAWN_REASON.SOFT,
   SPAWN_REASON.LEGACY_NAME,
   SPAWN_REASON.ALL_CAPPED,
 ]);
@@ -33,14 +36,15 @@ export const LEGACY_SPAWN_REASONS = Object.freeze({ rung: SPAWN_REASON.LADDER })
 export const ROUTE_WHY_KEY = "why";
 
 /**
- * The reason a spawn shows, from the hook's route facts. Precedence: failover (the model differs from what was asked)
- * > override (the caller's pick) > all-capped > arm > legacy-name > ladder.
- * @param {{ hookReason?: string, failover?: boolean, override?: boolean, allCapped?: boolean, arm?: boolean, legacyName?: boolean, routed?: boolean }} f
+ * The reason a spawn shows, from the hook's route facts. Precedence: soft (a family was skipped for its soft quota line,
+ * C fu1 L3) > failover (the model differs from what was asked) > override (the caller's pick) > all-capped > arm > legacy-name > ladder.
+ * @param {{ hookReason?: string, soft?: boolean, failover?: boolean, override?: boolean, allCapped?: boolean, arm?: boolean, legacyName?: boolean, routed?: boolean }} f
  *   hookReason: the hook's `reason=` (default | ladder | explicit | explicit+ladder | override | override+failover | failover | all-capped);
  *   routed: false when no stored profile or role matched (the caller's own provider/model ran = override).
  */
-export function shownSpawnReason({ hookReason = "", failover = false, override = false, allCapped = false, arm = false, legacyName = false, routed = true } = {}) {
+export function shownSpawnReason({ hookReason = "", soft = false, failover = false, override = false, allCapped = false, arm = false, legacyName = false, routed = true } = {}) {
   const r = String(hookReason ?? "");
+  if (soft) return SPAWN_REASON.SOFT;
   if (failover || /\bfailover\b/.test(r)) return SPAWN_REASON.FAILOVER;
   if (override || /^(override|explicit)/.test(r) || !routed) return SPAWN_REASON.OVERRIDE;
   if (allCapped || /(?:^|\+)all-capped\b/.test(r)) return SPAWN_REASON.ALL_CAPPED;
@@ -55,6 +59,41 @@ export function routeWhy(routeText) {
   if (!m) return "";
   const v = Object.hasOwn(LEGACY_SPAWN_REASONS, m[1]) ? LEGACY_SPAWN_REASONS[m[1]] : m[1];
   return SPAWN_REASONS.includes(v) ? v : "";
+}
+
+/** The soft-line text in a `vs.route` label (routeMetricText ` soft="pool 78% >= soft 70: interruptible only -> claude"`), or "". */
+export function routeSoftReason(routeText) {
+  const m = /(?:^|\s)soft="([^"]*)"/.exec(String(routeText ?? ""));
+  return m ? m[1] : "";
+}
+
+/** Provider id -> the one name the UI uses for it (also src/roleSpawn.ts PROVIDER_NAME). */
+export const PROVIDER_DISPLAY_NAME = { claude: "Claude", "agy-claude": "Claude (AGY)", "antigravity-cli": "Gemini", opencode: "OpenCode" };
+const displayName = (id) => PROVIDER_DISPLAY_NAME[id] ?? id;
+
+/**
+ * C fu2 UX m1: ONE formatter for the soft reason in UI text (drawer tooltip, New Agent badge tooltip, spawn_worker result).
+ * "claude pool 78% >= soft 70: interruptible only -> antigravity-cli" -> "Claude pool at 78%, soft line 70%". The raw `>=` / `->`
+ * tail stays in the server strings (machine detail); `family` names the skipped pool when the caller knows it, otherwise
+ * the leading family token in `raw` is used (never guessed backwards from the `-> <target>` tail).
+ * @param {string} raw @param {{ family?: string }} [opts]
+ */
+export function formatSoftReason(raw, { family = "" } = {}) {
+  const s = String(raw ?? "").trim();
+  const explicitFam = String(family ?? "").trim();
+  if (!s) return explicitFam ? `${displayName(explicitFam)} pool past its soft line` : "";
+  const tail = /\s*->\s*(\S+)\s*$/.exec(s);
+  const body = (tail ? s.slice(0, tail.index) : s).trim();
+  const m = /^(?:([a-z0-9-]+)\s+)?pool (\d+(?:\.\d+)?)% >= soft (\d+(?:\.\d+)?)/i.exec(body);
+  if (m) {
+    const fam = explicitFam || (m[1] ? m[1].toLowerCase() : "");
+    return `${fam ? `${displayName(fam)} pool` : "Pool"} at ${m[2]}%, soft line ${m[3]}%`;
+  }
+  const noRow = /^no quota row for ([^:]+)/i.exec(body);
+  if (noRow) return `No quota row for ${noRow[1].split("+").map((p) => displayName(p.trim())).join(" + ")}`;
+  const softPref = /^([a-z0-9-]+)\s+soft quota\b/i.exec(body);
+  const fam = explicitFam || (softPref ? softPref[1].toLowerCase() : "");
+  return fam ? `${displayName(fam)} pool past its soft line` : "Pool past its soft line";
 }
 
 /** `Implement · claude-sonnet-5-5 · arm` (parts that are empty drop out). */

@@ -21,10 +21,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { linesFromEnd } from "./log-tail.mjs";
 import { isLiveAgent, loadTeamsRegistry, resolveAgentIdentity } from "./identity.mjs";
-import { isNeedsYouType } from "./needs-you-fields.mjs";
+import { findLeanAltIndex, isNeedsYouType } from "./needs-you-fields.mjs";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, LEGACY_USER_TYPE, loadUserSettings } from "./user-settings.mjs";
 import { createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { createDecisionAssistant } from "./decision-assistant.mjs";
+import { lastAssistantText } from "./mcp/tools.mjs";
 
 export const DECISION_ID_RE = /^n[yl]-[0-9a-f]{20}$/;
 export const DECISION_REF_PREFIX = "decision:";
@@ -218,6 +219,264 @@ export async function collectOpenDecisions({ teams, agents, now = Date.now(), cl
   return openDecisions({ squads, agents, teams, now, closedIds, ownerNames });
 }
 
+// ---- C1 (docs/PLAN_DESK_DD_CHOICES.md): the asker's message as context ----
+// "A, B, or C?" is a one-line pointer; the definitions live in the asker's chat message. The feed attaches `context` (a
+// plain-text excerpt of that message) to every unstructured item, and to structured items whose ask names options but has
+// no alts. Source: for a log item the asker's newest assistant message at or before the entry ts; for a label item its
+// newest assistant message. No context (asker gone, outside the item's Squad, timeline unreadable or slow): the item is
+// unchanged.
+// tierA-security: the excerpt is agent text. It is control-stripped (newlines kept, bidi / line-separator chars removed)
+// and the client gets it as a plain string (never markdown / HTML). It never reaches buildAnswerPrompt: answerDecisions
+// builds the sent prompt from the quoted ask / decides / lean / alts fields only.
+// Cost: one timeline tail read per asker per refresh at most (items of one asker share it), only for askers whose items
+// still lack a cached context, at most CONTEXT_MAX_ASKERS per refresh, each with a hard timeout. Results are cached per item
+// id (a found context for good; none for CONTEXT_NONE_RETRY_MS), and a read still running is shared by the next refresh.
+
+/** Excerpt cap (chars), windowed around the first option marker. */
+export const CONTEXT_MAX = 1500;
+/** Chars kept before the first option marker (the question usually leads into the options). */
+export const CONTEXT_LEAD = 300;
+/** Timeline entries read per asker (one tail read, no full-log fallback). */
+export const CONTEXT_TAIL = 400;
+/** Askers whose timeline is read per refresh; the rest wait for the next refresh. */
+export const CONTEXT_MAX_ASKERS = 8;
+/** Hard timeout of one timeline read. */
+export const CONTEXT_FETCH_TIMEOUT_MS = 5000;
+/** How long a feed GET waits for this refresh's reads; slower reads land in the cache for the next GET. */
+export const CONTEXT_WAIT_MS = 1500;
+/** A failed / empty read is retried after this. */
+export const CONTEXT_NONE_RETRY_MS = 10 * 60_000;
+export const CONTEXT_CACHE_MAX = 1000;
+
+// Lettered / numbered option markers in a message: "A)", "A:", "A.", "(a)", "1)", "Option B", "**A**", "- B:" at a line start.
+const OPTION_MARKERS = [
+  /(?:^|\n)[ \t]*(?:[-*•>][ \t]*)?(?:\*\*)?(?:\(?[A-Ha-h1-9]\)|[A-H1-9][.:]|[A-H]\*\*[ \t]*[:.)\-—–])[ \t*]/,
+  /\([A-Ha-h1-9]\)[ \t]+\S/,
+  /\b[Oo]ption[ \t]+[A-H1-9]\b/,
+  /(?:^|[\s(])[A-H]\)[ \t]+\S/,
+];
+// An ask that names options: "A, B, or C", "A or B", "A/B", "(a) ... (b)", "option A".
+const NAMES_OPTIONS = [/\b[A-H]\s*(?:,\s*(?:or\s+)?|\/\s*|\s+or\s+)[A-H]\b/, /\([A-Ha-h1-9]\)[\s\S]*\([A-Ha-h1-9]\)/, /\b[Oo]ptions?[ \t]+[A-H1-9]\b/];
+
+/** True when an ask names lettered / numbered options (so its definitions are worth fetching). */
+export function namesOptions(text) {
+  const t = String(text ?? "");
+  return NAMES_OPTIONS.some((re) => re.test(t));
+}
+
+/** Whether a feed item gets context: every unstructured item; a structured one only when its ask names options but it has no alts. */
+export function wantsContext(item) {
+  if (!item || typeof item !== "object") return false;
+  if (!item.structured) return true;
+  return !(Array.isArray(item.alts) && item.alts.length) && namesOptions(`${item.ask ?? ""} ${item.rawText ?? ""}`);
+}
+
+/** Plain text, one excerpt: CRLF -> LF, line / paragraph separators -> LF, other control and bidi-override chars dropped. */
+function plainText(s) {
+  return String(s ?? "")
+    .replace(/\r\n?|[\u2028\u2029]/g, "\n")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * The excerpt of one message: plain text, at most `max` chars, windowed so it starts up to CONTEXT_LEAD chars before the
+ * first option marker (snapped to that line's start); no marker -> the message's tail (conclusions sit at the end). A cut
+ * end is marked with "…". Returns "" for an empty message.
+ */
+export function contextExcerpt(text, max = CONTEXT_MAX) {
+  const t = plainText(text);
+  if (!t) return "";
+  if (t.length <= max) return t;
+  let marker = -1;
+  for (const re of OPTION_MARKERS) {
+    const m = re.exec(t);
+    if (m && (marker < 0 || m.index < marker)) marker = m.index;
+  }
+  // A window that starts past 0 carries a leading "…", so it holds max - 1 message chars; it never ends before the message does.
+  let start = t.length - (max - 1);
+  if (marker >= 0) {
+    start = Math.max(0, marker - CONTEXT_LEAD);
+    const nl = t.lastIndexOf("\n", Math.max(0, marker - 1));
+    if (nl >= 0 && nl + 1 >= start) start = nl + 1;
+    if (start > 0) start = Math.min(start, t.length - (max - 1));
+  }
+  const head = start > 0 ? "…" : "";
+  const room = max - head.length;
+  const body = t.slice(start, start + room);
+  const tail = start + room < t.length ? "…" : "";
+  return (head + (tail ? body.slice(0, room - 1) : body) + tail).trim();
+}
+
+const AGENT_ERROR_PREFIX = "[agent error]";
+/**
+ * The context text in one asker timeline ({ entries } as fetchAgentTimeline returns it): the newest assistant message, or
+ * with `atOrBefore` (ms) the newest one that started at or before it. Uses lastAssistantText (the MCP `status` reader);
+ * its `[agent error]` fallback is not a message, so it counts as none.
+ */
+export function contextFromTimeline(timeline, { atOrBefore = null } = {}) {
+  const all = Array.isArray(timeline?.entries) ? timeline.entries : Array.isArray(timeline) ? timeline : [];
+  const entries = atOrBefore == null ? all : all.filter((e) => tsOf(e?.timestamp) <= atOrBefore);
+  if (!entries.some((e) => (e?.item ?? e)?.type === "assistant_message")) return "";
+  const text = lastAssistantText({ entries }, Infinity);
+  if (!text || text.startsWith(AGENT_ERROR_PREFIX)) return "";
+  return contextExcerpt(text);
+}
+
+/**
+ * The asker whose timeline may be read for `item`: a live runner agent from the agent list that resolves to the item's own
+ * Squad (the Desk is owner-wide, but an item's context only ever comes from an agent of the Squad whose log or label raised
+ * it, so a forged `agent` field cannot pull another Squad's chat onto a card). Null otherwise.
+ */
+export function contextAsker(item, agentsById, teams) {
+  const a = agentsById.get(item?.askerId);
+  if (!a || !isRunnerAgentId(a.id) || !isLiveAgent(a)) return null;
+  const who = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+  if (who.isOrphan || String(who.teamId ?? "").toLowerCase() !== String(item.squad ?? "").toLowerCase()) return null;
+  return a;
+}
+
+/**
+ * The context source: attach(items, { agents, teams, backend }) -> { items, hold } where `hold` is the Set of item ids whose
+ * context is still being read (the Assistant skips them this pass so the one model call per item sees the context).
+ * deps: { waitMs, fetchTimeoutMs, maxAskers, noneRetryMs, maxCache, now }.
+ */
+export function createContextSource({
+  waitMs = CONTEXT_WAIT_MS,
+  fetchTimeoutMs = CONTEXT_FETCH_TIMEOUT_MS,
+  maxAskers = CONTEXT_MAX_ASKERS,
+  noneRetryMs = CONTEXT_NONE_RETRY_MS,
+  maxCache = CONTEXT_CACHE_MAX,
+  now = () => Date.now(),
+} = {}) {
+  const cache = new Map(); // item id -> { text } | { text: "", until } (Map insertion order = LRU)
+  const reads = new Map(); // asker id -> { promise, itemIds, queued, backend, nextPromise, resolveNext }
+  let fetches = 0;
+  let generation = 0;
+
+  const put = (id, v) => {
+    cache.delete(id);
+    cache.set(id, v);
+    while (cache.size > maxCache) cache.delete(cache.keys().next().value);
+  };
+  const hit = (id) => {
+    const v = cache.get(id);
+    if (!v) return null;
+    if (!v.text && now() >= v.until) { cache.delete(id); return null; }
+    // LRU: refresh entry to most-recently-used.
+    cache.delete(id);
+    cache.set(id, v);
+    return v;
+  };
+
+  function startRead(backend, askerId, items, gen) {
+    fetches++;
+    let timer;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timeline read timed out")), fetchTimeoutMs); timer.unref?.(); });
+    const entry = {
+      itemIds: new Set(items.map((i) => i.id)),
+      queued: new Map(),
+      backend,
+      promise: null,
+      nextPromise: null,
+      resolveNext: null,
+    };
+    const p = Promise.race([Promise.resolve().then(() => backend.fetchAgentTimeline(askerId, { direction: "tail", limit: CONTEXT_TAIL })), timeout])
+      .then((tl) => {
+        if (gen !== generation) return;
+        for (const i of items) {
+          const text = contextFromTimeline(tl, { atOrBefore: i.source === "log" ? i.ts : null });
+          put(i.id, text ? { text } : { text: "", until: now() + noneRetryMs });
+        }
+      })
+      .catch((e) => {
+        if (gen !== generation) return;
+        console.warn(`[vibesquad] decisions: asker context for ${askerId} unavailable (${e?.message ?? e}); showing the card without it`);
+        for (const i of items) put(i.id, { text: "", until: now() + noneRetryMs });
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        if (reads.get(askerId) === entry) reads.delete(askerId);
+        if (gen === generation && entry.queued.size > 0) {
+          const nextItems = [...entry.queued.values()].filter((i) => !hit(i.id));
+          if (nextItems.length > 0) {
+            const next = startRead(entry.backend, askerId, nextItems, gen);
+            next.finally(() => entry.resolveNext?.());
+            return;
+          }
+        }
+        entry.resolveNext?.();
+      });
+    entry.promise = p;
+    reads.set(askerId, entry);
+    return p;
+  }
+
+  function read(backend, askerId, items) {
+    const existing = reads.get(askerId);
+    if (!existing) return startRead(backend, askerId, items, generation);
+    for (const i of items) {
+      if (!existing.itemIds.has(i.id) && !existing.queued.has(i.id)) {
+        existing.queued.set(i.id, i);
+        existing.backend = backend;
+      }
+    }
+    if (!items.some((i) => existing.queued.has(i.id))) return existing.promise;
+    if (!existing.nextPromise) existing.nextPromise = new Promise((r) => { existing.resolveNext = r; });
+    return existing.nextPromise;
+  }
+
+  async function attach(items, { agents = [], teams = [], backend } = {}) {
+    const hold = new Set();
+    if (typeof backend?.fetchAgentTimeline !== "function") return { items, hold };
+    const agentsById = new Map((agents ?? []).filter((a) => a?.id).map((a) => [a.id, a]));
+    const byAsker = new Map(); // asker id -> items still without a cached context
+    for (const i of items) {
+      if (!wantsContext(i) || hit(i.id)) continue;
+      if (!contextAsker(i, agentsById, teams)) continue; // gone / out of scope: no context, nothing held
+      if (!byAsker.has(i.askerId)) byAsker.set(i.askerId, []);
+      byAsker.get(i.askerId).push(i);
+    }
+    const waits = [];
+    for (const [askerId, list] of [...byAsker].slice(0, maxAskers)) {
+      waits.push(read(backend, askerId, list));
+      list.forEach((i) => hold.add(i.id));
+    }
+    // Askers beyond the cap: their items wait (held) for a later refresh, so their one model call still sees the context.
+    for (const [, list] of [...byAsker].slice(maxAskers)) list.forEach((i) => hold.add(i.id));
+    if (waits.length) {
+      let timer;
+      await Promise.race([Promise.allSettled(waits), new Promise((r) => { timer = setTimeout(r, waitMs); timer.unref?.(); })]);
+      clearTimeout(timer);
+    }
+    const out = items.map((i) => {
+      const c = wantsContext(i) ? hit(i.id) : null;
+      if (c) hold.delete(i.id);
+      return c?.text ? { ...i, context: c.text } : i;
+    });
+    return { items: out, hold };
+  }
+
+  return {
+    attach,
+    fetches: () => fetches,
+    async idle() {
+      while (reads.size > 0) {
+        await Promise.allSettled([...reads.values()].map((e) => e.nextPromise ?? e.promise));
+      }
+    },
+    reset() {
+      generation++;
+      cache.clear();
+      for (const e of reads.values()) e.resolveNext?.();
+      reads.clear();
+      fetches = 0;
+    },
+  };
+}
+
 // ---- Answers ----
 
 const badRequest = (msg) => Object.assign(new Error(msg), { status: 400 });
@@ -266,10 +525,25 @@ export function headerField(s, max = 80) {
     .trim();
 }
 
+/** C2b: option index a bare-letter lean ("B", "(b)", "Option B", "B.", "B:", "B)", "B -") names among lettered alts ("A: …", "B) …"), else -1. */
+export function resolveLeanAltIndex(item) {
+  return findLeanAltIndex(item?.lean, item?.alts);
+}
+
+/** C2b: distinct options on an item (a lean naming a lettered option is that option, not another). */
+function optionCount(item) {
+  return (item.alts?.length ?? 0) + (item.lean && item.lean.trim() && resolveLeanAltIndex(item) < 0 ? 1 : 0);
+}
+
 /** The owner's answer line, composed by the server (only quoted item values are agent text). */
 function answerLine(item, ans) {
-  if (ans.choice === "lean") return `Go with your lean: ${quoteLine(item.lean)}.`;
+  if (ans.choice === "lean") {
+    const li = resolveLeanAltIndex(item);
+    if (li >= 0) return `Go with your lean, option ${li + 1}: ${quoteLine(item.alts[li])}.`;
+    return `Go with your lean: ${quoteLine(item.lean)}.`;
+  }
   if (ans.choice === "alt") return `Go with option ${ans.altIndex + 1}: ${quoteLine(item.alts[ans.altIndex])}.`;
+  if (ans.choice === "not" && optionCount(item) >= 2) return "None of these: do NOT go with any of the options listed below.";
   if (ans.choice === "not") return item.lean ? `Not that: do NOT go with your lean ${quoteLine(item.lean)}.` : "Not that: no, do not go ahead.";
   return "See the owner's reply below.";
 }
@@ -327,8 +601,74 @@ export function resolveAnswerTarget(item, agents, teams, pickLiveAgent) {
   return null;
 }
 
-const choiceLabel = (item, ans) =>
-  ans.choice === "lean" ? `lean ${quoteLine(item.lean, 60)}` : ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteLine(item.alts[ans.altIndex], 60)}` : ans.choice === "not" ? "not that" : ans.choice === "reply" ? `reply ${quoteLine(ans.text, 60)}` : "dismissed";
+const normQuoteInner = (s) => JSON.parse(quoteLine(s, 100000));
+
+// quoteLine cut to `max` chars, with "…" when it cut.
+const quoteShort = (s, max = 60) => {
+  const full = normQuoteInner(s);
+  if (full.length <= max) return JSON.stringify(full);
+  if (max <= 1) return JSON.stringify("…");
+  return quoteLine(`${full.slice(0, max - 1)}…`, max);
+};
+const choiceLabelBase = (item, ans, max = 60) => {
+  if (ans.choice === "lean") {
+    const li = resolveLeanAltIndex(item);
+    return li >= 0 ? `lean, option ${li + 1} ${quoteShort(item.alts[li], max)}` : `lean ${quoteShort(item.lean, max)}`;
+  }
+  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteShort(item.alts[ans.altIndex], max)}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteShort(ans.text, max)}` : "dismissed";
+};
+// C2b idea-1152: an option picked with a typed note keeps the note in the summary.
+export const choiceLabel = (item, ans, { optMax = 60, replyMax = 60 } = {}) => {
+  if (ans.choice === "reply") return choiceLabelBase(item, ans, replyMax);
+  const base = choiceLabelBase(item, ans, optMax);
+  return ans.choice !== "dismiss" && ans.text ? `${base} + reply ${quoteShort(ans.text, replyMax)}` : base;
+};
+
+/**
+ * L2 idea-1154: build the <=240-char delivery log summary without dropping the end of the question.
+ * Shrinks the quoted option/reply parts first (with "…") before ever shortening the question.
+ */
+export function deliveryLogSummary(item, ans, { deliveredTo = null, via = "asker", maxLen = 240 } = {}) {
+  const target = deliveredTo ? ` → ${deliveredTo}${via !== "asker" ? ` (${via}; asker ${item.askerId || "unknown"} gone)` : ""}` : "";
+  const hasOpt = ans.choice === "lean" || ans.choice === "alt";
+  const hasReply = Boolean(ans.text) && (ans.choice === "reply" || ans.choice !== "dismiss");
+  const li = ans.choice === "lean" ? resolveLeanAltIndex(item) : -1;
+  const optSrc = ans.choice === "lean" ? (li >= 0 ? item.alts[li] : item.lean) : ans.choice === "alt" ? item.alts[ans.altIndex] : "";
+  let optMax = hasOpt ? Math.min(60, normQuoteInner(optSrc).length) : 0;
+  let replyMax = hasReply ? Math.min(60, normQuoteInner(ans.text).length) : 0;
+  let askMax = Math.min(120, normQuoteInner(item.ask).length);
+
+  const render = () => `Decision Desk: ${choiceLabel(item, ans, { optMax, replyMax })}${target} re ${quoteShort(item.ask, askMax)}`;
+  let out = render();
+  const MIN_QUOTE = 4;
+
+  while (out.length > maxLen && (optMax > MIN_QUOTE || replyMax > MIN_QUOTE)) {
+    const excess = out.length - maxLen;
+    if (optMax > MIN_QUOTE && replyMax > MIN_QUOTE) {
+      if (optMax > replyMax) {
+        const drop = Math.min(excess, optMax - replyMax);
+        optMax = Math.max(MIN_QUOTE, optMax - Math.max(1, drop));
+      } else if (replyMax > optMax) {
+        const drop = Math.min(excess, replyMax - optMax);
+        replyMax = Math.max(MIN_QUOTE, replyMax - Math.max(1, drop));
+      } else {
+        const half = Math.max(1, Math.ceil(excess / 2));
+        optMax = Math.max(MIN_QUOTE, optMax - half);
+        replyMax = Math.max(MIN_QUOTE, replyMax - half);
+      }
+    } else if (optMax > MIN_QUOTE) {
+      optMax = Math.max(MIN_QUOTE, optMax - excess);
+    } else {
+      replyMax = Math.max(MIN_QUOTE, replyMax - excess);
+    }
+    out = render();
+  }
+  while (out.length > maxLen && askMax > MIN_QUOTE) {
+    askMax = Math.max(MIN_QUOTE, askMax - (out.length - maxLen));
+    out = render();
+  }
+  return out.length > maxLen ? out.slice(0, maxLen) : out;
+}
 
 // Process-wide answer state: ids being sent right now, and ids answered / dismissed by this process (a log append that
 // failed after a delivery must not reopen the item for a second send). Single server process per VIBESQUAD_HOME.
@@ -341,6 +681,8 @@ const pruneClosed = (now) => {
 
 // D3: the process-wide Assistant (in-memory cache by entry id). Tests swap it with setDecisionAssistantForTest.
 let decisionAssistant = createDecisionAssistant();
+// C1: the process-wide asker-context source (in-memory cache by item id). Tests swap it with setDecisionContextForTest.
+let decisionContext = createContextSource();
 
 /** Tests only. */
 export function resetDecisionStateForTest() {
@@ -348,6 +690,13 @@ export function resetDecisionStateForTest() {
   closedHere.clear();
   postLimiter.reset?.();
   decisionAssistant.reset();
+  decisionContext.reset();
+}
+
+/** Tests only: replace the context source (pass the createContextSource deps); returns it. No arg restores the default. */
+export function setDecisionContextForTest(opts) {
+  decisionContext = opts && typeof opts.attach === "function" ? opts : createContextSource(opts);
+  return decisionContext;
 }
 
 /** Tests only: replace the Assistant (pass the createDecisionAssistant deps); returns it. No arg restores the default. */
@@ -389,8 +738,8 @@ async function deliverOne(item, ans, { agents, teams, backend, appendLog, ownerN
       via = target.via;
     }
     closedHere.set(item.id, Date.now());
-    const target = deliveredTo ? ` → ${deliveredTo}${via !== "asker" ? ` (${via}; asker ${item.askerId || "unknown"} gone)` : ""}` : "";
-    const text = `Decision Desk: ${choiceLabel(item, ans)}${target} re ${quoteLine(item.ask, 120)}`.slice(0, 240);
+    const summary = choiceLabel(item, ans);
+    const text = deliveryLogSummary(item, ans, { deliveredTo, via });
     let logged = true;
     try {
       appendLog({ teamId: item.squad, laneId: item.lane, agent: ownerName, type: "you", text, refs: [`${DECISION_REF_PREFIX}${item.id}`] });
@@ -404,7 +753,7 @@ async function deliverOne(item, ans, { agents, teams, backend, appendLog, ownerN
         console.warn(`[vibesquad] decisions: could not clear the needs-you label on ${item.askerId}: ${e?.message ?? e}`),
       );
     }
-    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged };
+    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged, summary };
   } catch (e) {
     // Only reached before a send (target resolution / prompt build): the item stays open.
     console.warn(`[vibesquad] decisions: answer ${item.id} failed: ${e?.message ?? e}`);
@@ -466,6 +815,7 @@ export async function answerDecisions(answers, deps) {
       results.push({
         ...base,
         status: okCount === per.length ? okStatus : okCount === 0 ? "failed" : "partial",
+        ...(okCount > 0 ? { summary: choiceLabel(item, ans) } : {}),
         ...(okCount < per.length ? { error: "some source items were not delivered; they stay open" } : {}),
         members: [...per, ...skipped],
       });
@@ -498,11 +848,20 @@ export async function handleDecisionsList(req, res, ctx) {
     }
     const now = ctx.now?.() ?? Date.now();
     pruneClosed(now);
-    const rawItems = await collectOpenDecisions({ teams: loadTeamsRegistry(rootDir), agents, now, closedIds: new Set(closedHere.keys()) });
-    // D3: the Assistant pass. It never fails the feed: any error (or no key, a timeout, bad output) leaves the raw text.
-    let items = rawItems;
+    const teams = loadTeamsRegistry(rootDir);
+    const rawItems = await collectOpenDecisions({ teams, agents, now, closedIds: new Set(closedHere.keys()) });
+    // C1: asker context first (bounded wait), so the Assistant's one call per item sees it. Never fails the feed.
+    let withContext = rawItems;
+    let hold = new Set();
     try {
-      items = await (ctx.assistant ?? decisionAssistant).enrich(rawItems);
+      ({ items: withContext, hold } = await (ctx.contextSource ?? decisionContext).attach(rawItems, { agents, teams, backend }));
+    } catch (e) {
+      console.warn(`[vibesquad] decisions context failed: ${e?.message ?? e}`);
+    }
+    // D3: the Assistant pass. It never fails the feed: any error (or no key, a timeout, bad output) leaves the raw text.
+    let items = withContext;
+    try {
+      items = await (ctx.assistant ?? decisionAssistant).enrich(withContext, { hold });
     } catch (e) {
       console.warn(`[vibesquad] decisions assistant failed: ${e?.message ?? e}`);
     }

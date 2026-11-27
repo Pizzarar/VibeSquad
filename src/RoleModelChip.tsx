@@ -2,11 +2,11 @@
 import { shortModel } from "./profiles";
 import { providerName, spawnChipTitle, spawnReasonLabel } from "./roleSpawn";
 
-export function RoleModelChip({ role, model, reason, staged, provider }: { role?: string | null; model?: string | null; reason: string; staged?: boolean; provider?: string | null }) {
+export function RoleModelChip({ role, model, reason, staged, provider, softReason }: { role?: string | null; model?: string | null; reason: string; staged?: boolean; provider?: string | null; softReason?: string }) {
   const short = shortModel(model);
   if (!short && !role && !reason) return null;
   const full = model ?? short;
-  const title = spawnChipTitle({ role: role ?? undefined, model: full, reason, staged, provider: provider ? providerName(provider) : undefined });
+  const title = spawnChipTitle({ role: role ?? undefined, model: full, reason, staged, provider: provider ? providerName(provider) : undefined, softReason });
   return (
     <span className="role-model-chip" data-testid="drawer-role-model" title={title}>
       <span className="rmc-main">{[role, short].filter(Boolean).join(" · ")}</span>

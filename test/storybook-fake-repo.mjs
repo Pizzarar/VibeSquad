@@ -21,6 +21,7 @@ export const FILES = {
   } }, null, 2),
   "data/locations.json": JSON.stringify([
     { id: "harbor_district", display_name: "Harbor District", threat_tier: "low", default_raid_seconds: 600, first_clear_unique: "pistol_9mm", long_haul: { at_s: 1800, text: "A supply drop came down nearby. The squad reached it.", rows: [{ item_id: "scrap_metal", quantity: 4 }] },
+      containers: [{ id: "cargo_crate", name: "Cargo crate", rows: [{ item_id: "scrap_metal", quantity: 2 }] }],
       boss: { enemy_id: "boss_dockmaster", at_seconds: 240, min_hunt_seconds: 600 },
       enemy_pool: [{ id: "scav", tier: 1, min_time_seconds: 0, max_time_seconds: 900, weight: 1 }, { id: "armored_scav", tier: 2, min_time_seconds: 600, max_time_seconds: 1800, weight: 1 }] },
     { id: "sealed_vault", display_name: "Sealed Vault", threat_tier: "high", default_raid_seconds: 1200, enemy_pool: [{ id: "exo_trooper", tier: 2, min_time_seconds: 0, max_time_seconds: 2400, weight: 1 }] },
@@ -35,6 +36,7 @@ export const FILES = {
   "data/skills.json": JSON.stringify({ meta: {}, skills: { combat: { xp: 0 }, medicine: { xp: 0 } }, mastery: {} }, null, 2),
   "data/contracts.json": JSON.stringify({ meta: {}, templates: [
     { id: "d_popper_scrap_metal", trader: "popper", type: "deliver", item: "scrap_metal", requires: { skill: "scavenging", level: 1 }, qty_min: 68, qty_max: 135 },
+    { id: "x_doc_vault", trader: "doc", type: "extract", location: "sealed_vault", qty_min: 1, qty_max: 2 },
     { id: "k_popper_scav", trader: "popper", type: "kill", enemy: "scav", qty_min: 10, qty_max: 20 },
   ] }, null, 2),
   "data/recipes.json": JSON.stringify({ meta: {}, recipes: { bandage: { ingredients: { cloth: 2 }, result_id: "bandage", result_qty: 1, description: "Wrap a wound.", skill_req: "medicine", level_req: 1, required_workshop: "workshop" } } }, null, 2),
@@ -59,10 +61,28 @@ static func lines(obs, ctx):
 \tresult.append("...and the raid went on.")
 \tpool.append("I")
 `,
+  "autoloads/ItemRegistry.gd": `extends Node
+func validate_attachment_definitions():
+\tvar errors: Array = []
+\terrors.append("Item '%s' has category '%s' but defines attachment_slot.")
+\tpush_error("Bad item table")
+\tassert(false, "unreachable schema state")
+\treturn errors
+`,
   "docs/review/text_review.csv": "﻿group,source,file,line,data_path,id,current_text,where_seen,length_budget,tags,confidence,appendix,owner_rewrite,status,speaker,owner_note,reviewed_hash\r\n" +
     'Screen: Armory,gd,scenes/armory/armory_view.gd,14,,,Build the Armory (Hideout),armory page,none,,verify,,,STORY-TODO,,,\r\n' +
-    'Trader questlines,data,data/questlines.json,12,questlines.popper.steps[0].story,popper_1,"Bring thirty casings,\nand ""he\'ll"" know you.",quests,,,verify,,"Bring me thirty clean casings.",DRAFT,Popper,"keep it short",\r\n' +
-    'Trader relations,data,data/trader_relations.json,5,traders.doc.lines.wary,,Doc frowns.,relations,,,verify,,,OWNER-OK,Saint,,abc123\r\n',
+    'Trader questlines,data,data/questlines.json,12,"[""questlines"", ""popper"", ""steps"", 1, ""story""]",popper_2,"Bring thirty casings,\nand ""he\'ll"" know you.",quests,,,verify,,"Bring me thirty clean casings.",DRAFT,Popper,"keep it short",\r\n' +
+    'Trader relations,data,data/trader_relations.json,5,"[""traders"", ""doc"", ""lines"", ""wary""]",,Doc frowns.,relations,,,verify,,,OWNER-OK,Saint,,abc123\r\n' +
+    'Trader questlines,data,data/questlines.json,20,"[""questlines"", ""popper"", ""steps"", 1, ""title""]",,Dock Runs,quests,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,3,"[""members"", 0, ""bio""]",,A former paramedic.,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,4,"[""members"", 0, ""trait_text""]",,Medic: meds heal more,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Screen: Raids,gd,scenes/raids/corridor/raid_story.gd,30,,,%s slip into %s.,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: locations,data,data/locations.json,10,"[0, ""containers"", 0, ""name""]",,Cargo crate,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: enemies,data,data/enemies.json,4,"[""enemies"", ""scav"", ""name""]",,Scav,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Autoload: ItemRegistry,gd,autoloads/ItemRegistry.gd,4,,,Item \'%s\' has category \'%s\' but defines attachment_slot.,text built in ItemRegistry validate_attachment_definitions(),,,verify,,,DRAFT,,,\r\n' +
+    'Autoload: ItemRegistry,gd,autoloads/ItemRegistry.gd,5,,,Bad item table,text built in ItemRegistry _load(),,,verify,,,DRAFT,,,\r\n' +
+    'Autoload: ItemRegistry,gd,autoloads/ItemRegistry.gd,6,,,unreachable schema state,text built in ItemRegistry _load(),,,verify,,,DRAFT,,,\r\n' +
+    'Script: art_inspector,gd,scripts/debug/art_inspector.gd,12,,,ART INSPECTOR,debug tool,,,verify,,,DRAFT,,,\r\n',
   "docs/narrative/VOICE_BIBLE.md": `# Voice Bible
 
 ## How to use

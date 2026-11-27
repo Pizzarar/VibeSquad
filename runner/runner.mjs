@@ -433,6 +433,9 @@ function foldRecord(id, st) {
   return { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.lastSeq, createdAt: st.created.ts, updatedAt: st.lastTs, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
 }
 
+// idea-1144: watch-open errors that are transient (inotify instance/watch budget exhausted): retried with a capped backoff.
+const ROSTER_WATCH_TRANSIENT = new Set(['EMFILE', 'ENOSPC']);
+const ROSTER_WATCH_BACKOFF_MAX_MS = 60_000;
 // How often the roster-watch guard stats the agents dir (idea-594). One async stat per tick, unref'd; see _ensureRosterWatchGuard.
 const DEFAULT_ROSTER_WATCH_GUARD_MS = 5000;
 
@@ -446,6 +449,7 @@ export class Runner {
   constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), creditsFile = path.join(path.dirname(limitsFile), 'credits.json'), pollAgy = false, agyUsage, pollCredits = false, creditFetch, creditResolveKey, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null, rosterWatchGuardMs = DEFAULT_ROSTER_WATCH_GUARD_MS, detachedProbe = null, detachedFile = null, detachedScanMs = 15_000, onDetached = null }) {
     this.store = new LogStore(dir);
     this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
+    this._startGen = new Map(); // id -> how many processes this runner started for it (idea-1140 review L2: a reap armed before a restart of the agent never fires)
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
     this.hubLane = hubLane;
@@ -465,6 +469,8 @@ export class Runner {
     this._rosterWatchGuardMs = rosterWatchGuardMs;
     this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
     this._rosterWatchIdentity = null; // `${ino}:${birthtimeNs}` (bigint; ns because ms collides on ino reuse) of the watched dir, captured when the watch opens
+    this._rosterWatchBackoff = 0; // consecutive transient (EMFILE/ENOSPC) failures: scales the guard retry delay (idea-1144)
+    this._rosterWatchRetryAt = 0; // epoch ms before which _ensureRosterWatch will not retry the open
     this._rosterWatchReopen = false; // a reopen is pending: the guard closed the watch (missing/replaced dir) and reopens once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
@@ -884,6 +890,7 @@ export class Runner {
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
+    this._startGen.set(id, (this._startGen.get(id) ?? 0) + 1); // before the start: a reap armed by an earlier end sees it at once
     const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null, progress: 0, idleProgress: 0, turnGen: 0, work: null, heldSince: null, role: roleOf(meta), team: meta?.team ?? meta?.labels?.team ?? null, lane: meta?.lane ?? meta?.labels?.lane ?? null };
     this.live.set(id, entry);
     const emit = (type, data) => {
@@ -1413,6 +1420,12 @@ export class Runner {
   // this.reaper (runner/reap.mjs: env-token proof, never held work, never another agent's, fail closed). Protected: every live
   // agent's last-probed shells (held or not) and this entry's own last hold, the runner and its parent. Nothing is killed once
   // the agent is live again or the runner is shutting down. One reap per process (entry.reapArmed).
+  // idea-1140: when the worker is really done (why 'exit' or 'stop' = archive), the job also asks for its leftovers: every
+  // non-listener process still carrying its id + token outside every live CLI tree (headless Chromium's crashpad and helpers,
+  // reparented to the subreaper), created before the end (runner/detached.mjs createLeftoverReaper). Not on 'park': a parked
+  // worker resumes with the same token, and work it detached on purpose (`nohup suite &`, checked next turn) is still its
+  // work; only its leaked listeners are reaped there, as before. If such work outlives a later exit or archive, that end reaps it
+  // (an archive of the already-parked worker too: _reapArchivedNotLive).
   _reapAfterEnd(id, entry, why) {
     if (!this.reaper || entry.reapArmed || entry.role !== 'worker' || this._shutDown) return;
     const token = this.tokensById.get(id);
@@ -1422,14 +1435,34 @@ export class Runner {
     const cliPid = Number.isInteger(entry.handle?.pid) ? entry.handle.pid : null;
     const shellPids = (e) => [e.heldNow, e.heldWork, e.work].flatMap((w) => (Array.isArray(w) ? w : [])).map((w) => w?.pid);
     const own = shellPids(entry);
-    const stillOk = () => !this._shutDown && !this.live.has(id);
-    const report = (res) => { if (res.reaped?.length || res.skipped?.length || res.error) { try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}) }); } catch { /* reporting is best effort */ } } };
+    // Review L2: not live is not enough: the agent may have been started again since this end (resumed, then parked or exited
+    // again inside reapDelayMs). That later process's end arms its own reap; this one never kills.
+    const gen = this._startGen.get(id) ?? 0;
+    const stillOk = () => !this._shutDown && !this.live.has(id) && (this._startGen.get(id) ?? 0) === gen;
+    const leftovers = why === 'exit' || why === 'stop';
+    const report = (res) => {
+      const lo = res.leftovers;
+      const loAny = !!lo && (lo.reaped?.length || lo.skipped?.length || lo.error);
+      if (!(res.reaped?.length || res.skipped?.length || res.error || loAny)) return;
+      try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}), ...(loAny ? { leftovers: { reaped: lo.reaped ?? [], skipped: lo.skipped ?? [], ...(lo.error ? { error: lo.error } : {}) } } : {}) }); } catch { /* reporting is best effort */ }
+    };
     const t = setTimeout(() => {
       if (!stillOk()) return; // resumed (its new process owns the tree now) or shutting down: nothing to reap
       const protectedPids = [...own, ...[...this.live.values()].flatMap(shellPids), process.pid, process.ppid].filter((p) => Number.isInteger(p) && p > 0);
-      Promise.resolve().then(() => this.reaper({ agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk })).then(report, (err) => report({ error: String(err?.message ?? err) }));
+      const job = { agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk, ...(leftovers ? { leftovers: true, liveCliPids: this._liveCliPids(), selfPid: process.pid } : {}) };
+      Promise.resolve().then(() => this.reaper(job)).then(report, (err) => report({ error: String(err?.message ?? err) }));
     }, this.reapDelayMs);
     t.unref?.();
+  }
+
+  // Review M2: archiving a worker that is not live (it auto-parked, or exited) reaches no _stopKeepingSession, so its
+  // leftovers are reaped from here: this runner lifetime still holds its token, the folded role says worker. endedAt = now.
+  _reapArchivedNotLive(id) {
+    if (!this.reaper || this._shutDown || this.live.has(id) || !this.tokensById.has(id)) return;
+    let meta = {};
+    try { meta = this._fold(id)?.meta ?? {}; } catch { return; }
+    const stub = { handle: null, role: roleOf(meta), team: meta.team ?? meta.labels?.team ?? null, lane: meta.lane ?? meta.labels?.lane ?? null };
+    this._reapAfterEnd(id, stub, 'stop');
   }
 
   // Ends an agent's process for good measure but leaves it resumable: with a session it is logged as parked (so unarchive + send
@@ -2155,7 +2188,7 @@ export class Runner {
         e.archiveTimer = setTimeout(() => { if (this.live.get(id) === e) this._stopKeepingSession(id, e); this._pump(); }, this.archiveKillMs); // hung or ignoring cancel
         e.archiveTimer.unref?.();
       }
-    }
+    } else this._reapArchivedNotLive(id);
     this.store.append(id, 'archive', {});
     for (const a of new Set(Object.values(this.adapters))) a.cleanup?.(id); // drop per-agent prompt file; a resume rewrites it
     this._pump();
@@ -2242,6 +2275,7 @@ export class Runner {
   // permanent failure: _ensureRosterWatch just returns and the guard retries once the dir is recreated.
   _ensureRosterWatch() {
     if (this._rosterWatch || this._rosterWatchFailed || this._shutDown) return;
+    if (this._rosterWatchRetryAt && Date.now() < this._rosterWatchRetryAt) return; // transient-failure backoff (idea-1144)
     let identity = null;
     try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeNs ?? st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
     let w;
@@ -2254,14 +2288,49 @@ export class Runner {
     } catch (err) {
       // The dir vanished between the stat above and the watch open (ENOENT): a missing dir, not a permanent failure (L2).
       if (err?.code === 'ENOENT') return;
+      // EMFILE/ENOSPC: inotify budget exhausted, usually briefly. Not permanent: retry on the guard with a bounded backoff (idea-1144).
+      if (ROSTER_WATCH_TRANSIENT.has(err?.code)) { this._rosterWatchTransientFailure(); return; }
       this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return;
     }
     if (!w) { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
-    w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
+    w.on?.('error', (err) => {
+      if (this._rosterWatch !== w || this._shutDown) return; // a replaced/closed handle's late error must not touch the live watch
+      if (ROSTER_WATCH_TRANSIENT.has(err?.code)) {
+        this._closeRosterWatchHandle();
+        this._rosterWatchIdentity = null;
+        this._rosterWatchTransientFailure();
+        return;
+      }
+      this.closeRosterWatch(); this._rosterWatchFailed = true;
+    });
     this._rosterWatch = w;
+    this._rosterWatchBackoff = 0; this._rosterWatchRetryAt = 0; // a successful open resets the backoff
     this._rosterWatchIdentity = identity; // captured now, not on the first guard tick (M3)
     this._rosterWatchReopen = false;
     this._ensureRosterWatchGuard();
+  }
+
+  // A transient open/runtime failure (EMFILE/ENOSPC): keep the reopen pending, back off exponentially from the guard interval
+  // (capped), and (re)arm the guard so it retries. Never sets _rosterWatchFailed, so the roster is not abandoned for good.
+  _rosterWatchTransientFailure() {
+    if (this._shutDown) return;
+    this._rosterWatchBackoff = Math.min((this._rosterWatchBackoff || 0) + 1, 10);
+    this._rosterWatchReopen = true;
+    this._rosterWatchRetryAt = Date.now() + this._rosterWatchBackoffMs();
+    this._stopRosterWatchGuard(); // re-arm below with the backoff delay
+    this._ensureRosterWatchGuard();
+  }
+
+  _rosterWatchGuardIntervalMs() {
+    const ms = Number(this._rosterWatchGuardMs);
+    return Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
+  }
+
+  // interval * 2^(n-1), capped at ROSTER_WATCH_BACKOFF_MAX_MS; the plain guard interval when no transient failure is pending.
+  _rosterWatchBackoffMs() {
+    const n = this._rosterWatchBackoff || 0;
+    const base = this._rosterWatchGuardIntervalMs();
+    return n > 0 ? Math.min(base * 2 ** (n - 1), Math.max(base, ROSTER_WATCH_BACKOFF_MAX_MS)) : base;
   }
 
   // Closes only the fs.watch handle and forgets every clean mark. Used by the guard when it detects a missing/replaced
@@ -2281,6 +2350,7 @@ export class Runner {
     this._rosterWatchFailed = false;
     this._rosterWatchIdentity = null;
     this._rosterWatchReopen = false;
+    this._rosterWatchBackoff = 0; this._rosterWatchRetryAt = 0;
     this._stopRosterWatchGuard();
   }
 
@@ -2289,8 +2359,7 @@ export class Runner {
   // clearing it), and closeRosterWatch/shutdown clear it. No sync fs on the hot scan path.
   _ensureRosterWatchGuard() {
     if (this._rosterWatchGuard || this._shutDown || this._rosterWatchFailed || !(this._rosterWatch || this._rosterWatchReopen)) return;
-    const ms = Number(this._rosterWatchGuardMs);
-    const interval = Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
+    const interval = this._rosterWatchBackoffMs();
     this._rosterWatchGuard = setTimeout(() => { this._rosterWatchGuardTick(); }, interval);
     this._rosterWatchGuard.unref?.();
   }
@@ -2326,6 +2395,7 @@ export class Runner {
         this._ensureRosterWatch();
       }
     } else if (this._rosterWatchReopen && st) {
+      this._rosterWatchRetryAt = 0; // the tick IS the scheduled retry: the monotonic timer may fire ~1ms before the wall-clock gate
       this._ensureRosterWatch(); // the dir is back: reopen on it; the reopen flag clears only on success (L1)
     }
     this._ensureRosterWatchGuard(); // reschedule only while the watch (or a pending reopen) is still live

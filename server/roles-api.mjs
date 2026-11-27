@@ -11,6 +11,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { withFileLock } from "./file-lock.mjs";
 import { readCappedProviders } from "./provider-failover.mjs";
+import { liveQuotaUsage } from "./limits-read.mjs";
+import { cappedFamilies as quotaCappedFamilies, softCappedFamilies, unknownQuotaFamilies } from "./spawn-route.mjs";
 import { getProfilesPath, loadProfiles, normalizeProfile, profilesFileBody } from "./profiles.mjs";
 import { buildRolesFromProfiles, loadRoles, migrateProfilesFile, normalizeRole, normalizeRoles, roleKeyOf } from "./profiles-v2.mjs";
 import { ROLE_TABLE, isHiddenRole } from "./role-route.mjs";
@@ -61,8 +63,32 @@ function cappedFamilies() {
   }
 }
 
-export function getRolesState({ profilesPath, ladderPath } = {}) {
+/**
+ * C fu1 L2 (@per PLAN_PER_QUOTA_FIT_1126): the caps the New Agent / Add Buddy badge walks, from the same list the spawn
+ * hook routes on (agent-duties.ts currentUsageList: disk caps as `exhausted` rows ahead of the live quota rows), so the
+ * badge lands where the server does: `capped` (disk caps + families over their hard line), `softCapped` (family -> soft
+ * reason, under hard and past soft; landingPick ignores it for interruptible work) and `quotaUnknown` (no fresh row).
+ * `usage` is injectable for tests; default = liveQuotaUsage(). Never throws (unreadable = the disk caps alone).
+ */
+function quotaRouteState(usage) {
+  const disk = cappedFamilies();
+  try {
+    const live = Array.isArray(usage) ? usage : liveQuotaUsage();
+    const list = [...disk.map((id) => ({ id, status: "exhausted", usedPct: 100 })), ...live];
+    const opts = { ignoreDiskCaps: true };
+    return {
+      capped: [...new Set([...disk, ...quotaCappedFamilies(list, [], opts)])],
+      softCapped: softCappedFamilies(list, [], opts),
+      quotaUnknown: unknownQuotaFamilies(list, [], opts),
+    };
+  } catch {
+    return { capped: disk, softCapped: {}, quotaUnknown: [] };
+  }
+}
+
+export function getRolesState({ profilesPath, ladderPath, usage } = {}) {
   const loaded = loadRoles(profilesPath);
+  const quota = quotaRouteState(usage);
   return {
     ok: true,
     source: loaded.source,
@@ -74,7 +100,9 @@ export function getRolesState({ profilesPath, ladderPath } = {}) {
     tiers: [...TIERS],
     efforts: [...EFFORT_VALUES],
     providers: [...ROLE_PROVIDERS],
-    capped: cappedFamilies(),
+    capped: quota.capped,
+    softCapped: quota.softCapped,
+    quotaUnknown: quota.quotaUnknown,
     path: getProfilesPath(profilesPath),
   };
 }

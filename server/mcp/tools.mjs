@@ -19,9 +19,9 @@ import { ARM_LABEL, ARM_REASON_LABEL, MODEL_LABEL, armOfProfile, decideArm, read
 import { claimHoldNotice, holdText, laneSpawnHold, releaseHoldNotice, spawnStreakPath } from "../spawn-streak.mjs";
 import { ROUTE_OVERRIDE_ENV, ROUTE_OVERRIDE_LABEL, routeOverrideLabel } from "../route-override.mjs";
 import { lookupRole } from "../role-route.mjs";
-import { routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
+import { SPAWN_REASON, formatSoftReason, routeSoftReason, routeWhy, shownSpawnReason, spawnShownLine } from "../spawn-reason.mjs";
 import { ART_DUET, ART_PAINTERS } from "../art-duet.mjs";
-import { NEEDS_YOU_KINDS, validateNeedsYouFields } from "../needs-you-fields.mjs";
+import { NEEDS_YOU_KINDS, needsYouWarnings, validateNeedsYouFields } from "../needs-you-fields.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -225,7 +225,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles, { stakes, prefer, tier, override } = {}) {
+    async resolveProfile(name, profiles, { stakes, kind, prefer, tier, override } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
       // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
       // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
@@ -236,7 +236,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       if (!stored) {
         const { roleSpawnConfig } = await import("../spawn-route.mjs");
         // prefer: R1 arm provider for a role spawn; tier: R8 opt-in arm tier. override: the caller's own provider/model (H1), which win.
-        const roleCfg = roleSpawnConfig(name, { profiles, stakes, prefer, tier, override });
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes, kind, prefer, tier, override });
         if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
       }
       const profile = findProfile(name, profiles);
@@ -427,6 +427,8 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   let ab = null;
   let pickedProfile = profileName;
   const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
+  // C fu1 L5: kind (docs | audit | spike | pre-check = interruptible past the soft line), like stakes: labels.kind wins.
+  const kindNow = clean(args.labels?.kind) || clean(args.kind);
   // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
   if (profileName && (given.provider || given.model)) {
     const asked = armOfProfile(profileName);
@@ -439,9 +441,9 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     const abLane = clean(ctx.identity.lane) || clean(args.labels?.lane);
     const abTeam = clean(ctx.identity.team) || clean(args.labels?.team);
     ab = await decideArm({
-      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
+      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: { ...(args.labels ?? {}), ...(kindNow ? { kind: kindNow } : {}) }, lane: abLane, team: abTeam,
       arms: ctx.implementerArms,
-      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env, stakes: stakesNow, kind: clean(args.labels?.kind), role: profileName })),
+      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env, stakes: stakesNow, kind: kindNow, role: profileName })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
     if (ab?.swapped && !ab.role) pickedProfile = ab.profile;
@@ -450,6 +452,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     const profiles = await ctx.loadProfiles();
     const stk = {
       stakes: clean(args.labels?.stakes) || clean(args.stakes),
+      ...(kindNow ? { kind: kindNow } : {}),
       ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}),
       ...(ab?.role && ab.tier ? { tier: ab.tier } : {}),
       ...(given.provider || given.model ? { override: { provider: given.provider, model: given.model } } : {}),
@@ -481,6 +484,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     if (!STAKES_VALUES.includes(stakesArg)) throw new Error(`unknown stakes "${stakesArg}". Known: ${STAKES_VALUES.join(", ")}`);
     if (!clean(labels.stakes)) labels.stakes = stakesArg;
   }
+  if (kindNow && !clean(labels.kind)) labels.kind = kindNow;
   const requestedRole = clean(labels.role).toLowerCase();
   const requestedTeam = clean(labels.team);
   const requestedLane = clean(labels.lane);
@@ -596,7 +600,7 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   // pick: after the hook, no model means the provider's own default runs, so the pre-hook `model` would name one that doesn't.
   const hookWhy = routeWhy(agent?.labels?.["vs.route"]);
   const actualModel = clean(agent?.model) || clean(agent?.labels?.[MODEL_LABEL]) || (hookWhy ? "" : model) || "";
-  const reasonShown =
+  let reasonShown =
     hookWhy ||
     shownSpawnReason({
       // A pre-R2 hook's `reason=` (no `why=`) still names a failover; so does an agent that came back on another provider
@@ -609,12 +613,18 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
       routed: Boolean(profile),
     });
   const roleName = lookupRole(profile?.name || profileName)?.role?.name || "";
+  // C fu2 L1: an arm pick that skipped a family for its soft line shows `soft`, distinct from a hard cap skip (`capped`).
+  if (ab?.soft) reasonShown = SPAWN_REASON.SOFT;
   result.spawned = spawnShownLine({ role: roleName, model: actualModel, reason: reasonShown });
+  // C fu1 L3: name the soft line itself ("pool 78% >= soft 70: interruptible only -> antigravity-cli"), from the hook's
+  // vs.route or an arm pick that skipped a soft pool; a soft skip is never reported as capped.
+  const softShown = routeSoftReason(agent?.labels?.["vs.route"]) || (ab?.soft ? String(ab.reason ?? "") : "");
+  if (softShown) result.soft = formatSoftReason(softShown); // machine text stays on result.ab.reason
   if (ab) {
     const shown = labels.profile ?? profileName;
     result.ab = {
       arm: ab.arm, reason: ab.reason, model: actualModel || null, profile: shown, swapped: ab.swapped, counts: ab.counts,
-      ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: provider || null } : {}), ...(ab.capped ? { capped: true } : {}),
+      ...(ab.swapped && !ab.role ? { requested: profileName } : {}), ...(ab.role ? { provider: provider || null } : {}), ...(ab.capped ? { capped: true } : {}), ...(ab.soft ? { soft: true } : {}),
     };
     // One line a lead can read without digging: `arm=neon reason=alternation model=gemini-4-neon (Implement - Sonnet -> ...)`.
     // A role spawn keeps its name, so a swap shows the provider it moved to: `(Implement -> antigravity-cli)`.
@@ -720,7 +730,8 @@ async function reportTool(ctx, args = {}) {
   const fields = validateNeedsYouFields(type, text, structured);
   await verifyCaller(ctx); // X1b: 403 on a bad token before the server is asked; the server re-attributes the entry
   const entry = await ctx.writeLog({ type, text, refs: args.refs, ...(fields ?? {}) });
-  return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}) };
+  const warning = needsYouWarnings(type, text, fields).join("; ");
+  return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}), ...(warning ? { warning } : {}) };
 }
 
 const HANDOFF_DEDUPE_MS = 10 * 60_000;
@@ -1176,13 +1187,14 @@ async function postBuddyRestartToServer(body, ctx) {
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
 const S = { type: "string" };
+const KIND_PARAM = { type: "string", description: "Work kind; sets labels.kind (an explicit labels.kind wins). docs | audit | spike | pre-check are interruptible: they may still run on a pool past its soft quota line." };
 const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes the spawn's model + effort by stakes; sets labels.stakes (an explicit labels.stakes wins)." };
 
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
     description: "Start a worker agent in your lane. profile = a role name (Implement, Review, Planner, Pre-check, Art Director, Art Painter; see `vs profiles`). stakes picks the model + effort from the role's tier ladder (tierA-security | tierA-invariant | normal | mechanical; same as labels.stakes, labels.stakes wins if both); pass provider/model only to override. Returns {id, title}.",
-    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM }, ["title", "profile", "prompt"]),
+    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM, kind: KIND_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
@@ -1235,7 +1247,7 @@ const aliasResult = (name, r) => {
 // Paseo-shaped inputs per alias (agentId, prompt/initialPrompt, mode/modeId); the canonical schemas stay VS-shaped.
 const AGENT_ID = { agentId: S, id: S };
 const ALIAS_SCHEMAS = {
-  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S, thinkingOptionId: S, thinking: S, stakes: STAKES_PARAM }),
+  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S, thinkingOptionId: S, thinking: S, stakes: STAKES_PARAM, kind: KIND_PARAM }),
   send_agent_prompt: obj({ ...AGENT_ID, prompt: S, text: S }),
   get_agent_status: obj({ ...AGENT_ID, full: { type: "boolean" } }),
   list_agents: obj({}),
