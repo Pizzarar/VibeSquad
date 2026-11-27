@@ -2,7 +2,7 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME**, **CRUNCH MODE**, and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** and **Legacy: Psycho mode** (off = Normal, the default; see [Normal and Psycho](../Concepts/Modes.md)) are on **About**. The screenshot below is the **App** tab, which opens first.
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME**, **Crunch mode**, and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** and **Legacy: Psycho mode** (off = Normal, the default; see [Normal and Psycho](../Concepts/Modes.md)) are on **About**. The screenshot below is the **App** tab, which opens first.
 
 ![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
@@ -65,8 +65,8 @@ If the server itself restarted, an agent turn that finished while it was down is
 The **Profiles** tab configures how agents are dispatched across roles and provider models. It has three sections:
 
 1. **ROLES**: The Role Editor. Agents are dispatched by role (Lead, Brainstorm, Implement, Planner, Review, Pre-check, Art Director, Art Painter) rather than rigid profile names. The Planner role creates precise work orders; internal helper roles like Work Order are hidden. Each role defines its tier (`top`, `mid`, `cheap`), provider preference order, per-provider modes and thinking effort, prompt layers, and tool permissions.
-2. **LADDER**: The Tier Ladder Editor. Maps tiers (`top`, `mid`, `cheap`) to specific models and thinking effort per provider family (Claude, Gemini, OpenCode).
-3. **LEGACY AGENT PROFILES**: Shows existing profiles from `~/.vibesquad/profiles.json`. Pickers across the app (New Agent, Buddy start) list roles with tier-ladder routing and optional model overrides (`Role · model` labels). Spawns requesting an old profile name still work, but saving a role makes legacy profiles read-only.
+2. **TIER LADDER**: The Tier Ladder Editor. Maps tiers (`top`, `mid`, `cheap`) to specific models and thinking effort per provider family (Claude, Gemini, OpenCode).
+3. **LEGACY AGENT PROFILES**: Shows existing profiles from `~/.vibesquad/profiles.json`. Pickers across the app (New Agent, Buddy start) list roles with tier-ladder routing and optional model overrides (`<provider> · ladder model` or `<provider> · <model>`). Spawns requesting an old profile name still work, but saving a role makes legacy profiles read-only.
 
 The legacy profile fields:
 
@@ -132,7 +132,7 @@ The runner is the background program that actually runs your agents. This tab li
 
 When a provider's usage window is nearly used up, a red, dismissible banner appears across the app, for example "Claude 5h: 8% left. Resets in 1h 20m. Spend a reset now?". **Open Usage** jumps to the Usage dashboard; **✕** dismisses that alert.
 
-VibeSquad enforces a **70% per-family soft quota line**. Above 70% family quota usage, only interruptible work (`docs`, `audit`, `spike`, `pre-check`, and `mechanical` stakes) routes to that family, while non-interruptible work routes to the next family under its soft limit. If all candidate families exceed soft limits, routing falls back to the first family under hard quota limits (95% general, 85% for Claude via Antigravity).
+VibeSquad enforces a **70% per-family soft quota line**. At or above 70% family quota usage (>= 70%), only interruptible work (`docs`, `audit`, `spike`, `pre-check`, and `mechanical` stakes) routes to that family, while non-interruptible work routes to the next family under its soft limit. If all candidate families exceed soft limits, routing falls back to the first family under hard quota limits (95% general, 85% for Claude via Antigravity).
 
 ## Remote Control
 
