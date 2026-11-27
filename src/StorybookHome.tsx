@@ -8,7 +8,7 @@ import {
 
 const BUCKETS: FindingScope[] = ["problems", "story", "text"];
 
-export function StorybookHome({ snap, items, onTab, onFindings }: { snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void }) {
+export function StorybookHome({ snap, items, onTab, onFindings, onSignal }: { snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void; onSignal?: (signal: string) => void }) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const audit = useMemo(() => auditCounts(snap.audit), [snap]);
@@ -29,13 +29,15 @@ export function StorybookHome({ snap, items, onTab, onFindings }: { snap: SbSnap
       {audit && (
         <section className="sb-section">
           <h3 className="sb-h">Audit signals</h3>
-          <dl className="sb-signals" data-testid="sb-signals">
+          <div className="sb-signals" data-testid="sb-signals">
             {AUDIT_SIGNALS.map((s) => (
-              <div key={s} className={`sb-signal${audit[s] ? " sb-signal-on" : ""}`} data-testid={`sb-signal-${s}`}>
-                <dt>{AUDIT_LABEL[s]}</dt><dd>{audit[s]}</dd><dd className="sb-signal-help">{AUDIT_HELP[s]}</dd>
-              </div>
+              <button key={s} type="button" className={`sb-signal${audit[s] ? " sb-signal-on" : ""}`} data-testid={`sb-signal-${s}`} onClick={() => onSignal?.(s)}>
+                <span className="sb-signal-name">{AUDIT_LABEL[s]}</span>
+                <span className="sb-signal-n">{audit[s]}</span>
+                <span className="sb-signal-help">{AUDIT_HELP[s]}</span>
+              </button>
             ))}
-          </dl>
+          </div>
         </section>
       )}
       <section className="sb-section">

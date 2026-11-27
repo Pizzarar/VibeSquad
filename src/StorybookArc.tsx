@@ -126,7 +126,7 @@ function GapList({ arc, idx }: { arc: SbArc; idx: EntityIndex }) {
     <details className="sb-arc-gaps" data-testid="sb-arc-gaps">
       <summary>What could not be ordered ({arc.gaps.length}) and what is not in the data ({arc.notDerivable.length})</summary>
       <ul>
-        {arc.gaps.map((g) => <li key={`${g.kind}:${g.id}`}><b>{g.kind} {cleanTodo(idx.get(g.kind === "map" ? "location" : g.kind, g.id)?.display ?? g.id)}</b>: {g.why}</li>)}
+        {arc.gaps.map((g, i) => <li key={`${g.kind}:${g.id}:${i}`}><b>{g.kind} {cleanTodo(idx.get(g.kind === "map" ? "location" : g.kind, g.id)?.display ?? g.id)}</b>: {g.why}</li>)}
         {arc.notDerivable.map((n, i) => <li key={`n${i}`}>{n}</li>)}
       </ul>
     </details>
