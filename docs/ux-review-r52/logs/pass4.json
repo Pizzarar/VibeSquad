@@ -1,0 +1,326 @@
+{
+ "dark-1920": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 472,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -440
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 472,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -440
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ },
+ "light-1920": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 472,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -440
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 472,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -440
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 472,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -248
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ },
+ "dark-3200": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 832,
+    "flash": [
+     "05"
+    ],
+    "scrollY": 0
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 832,
+    "flash": [
+     "05"
+    ],
+    "scrollY": 0
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ },
+ "light-3200": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 832,
+    "flash": [
+     "05"
+    ],
+    "scrollY": 0
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 832,
+    "flash": [
+     "05"
+    ],
+    "scrollY": 0
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 832,
+    "flash": [
+     "04"
+    ],
+    "scrollY": 192
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ },
+ "dark-1600": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 432,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -400
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 432,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -400
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ },
+ "light-1600": {
+  "cards": {},
+  "cycle": [
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 432,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -400
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   },
+   {
+    "label": "2 need a look",
+    "card": "05",
+    "top": 432,
+    "flash": [
+     "05"
+    ],
+    "scrollY": -400
+   },
+   {
+    "label": "2 need a look",
+    "card": "04",
+    "top": 432,
+    "flash": [
+     "04"
+    ],
+    "scrollY": -208
+   }
+  ],
+  "afterAnswer4": "1 need a look",
+  "afterAnswer4Jump": "05",
+  "bar": "1 ready to send · 7 leans not included\n1 need a look\nUse all leans (7)\nSend 1 answer",
+  "errs": []
+ }
+}

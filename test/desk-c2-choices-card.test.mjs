@@ -60,6 +60,7 @@ const {
   isUnresolvedBareLean,
   notChoiceLabel,
   decisionOptionCount,
+  nextNeedLookId,
 } = await import(pathToFileURL(join(dir, "BoringDecisionDesk.mjs")).href);
 const F = await import(pathToFileURL(join(dir, "decisionFilter.mjs")).href);
 
@@ -385,4 +386,32 @@ test("L3 fix: executeBatch clears lastSent before dispatch; details list is labe
   assert.match(eb, /setLastSent\(null\)/);
   assert.match(ddSrc, /aria-label="Sent answers"/);
   assert.ok(!/details\?: SentAnswerSummary/.test(ddSrc));
+});
+
+// ---- S2 (PLAN_DESK_SWEEP_1127: idea-1081, idea-1164, idea-1165) ----
+
+test("S2 idea-1164: nextNeedLookId cycles through unresolved bare-letter lean cards and button/flash contracts hold", () => {
+  assert.equal(nextNeedLookId([], null), null);
+  assert.equal(nextNeedLookId(["c1", "c2", "c3"], null), "c1");
+  assert.equal(nextNeedLookId(["c1", "c2", "c3"], "c1"), "c2");
+  assert.equal(nextNeedLookId(["c1", "c2", "c3"], "c2"), "c3");
+  assert.equal(nextNeedLookId(["c1", "c2", "c3"], "c3"), "c1", "wraps around");
+  assert.equal(nextNeedLookId(["c2", "c3"], "c1"), "c2", "falls back to first when previous card was answered");
+  assert.equal(nextNeedLookId(["c1"], "c1"), "c1", "single card re-targets itself");
+
+  assert.match(ddSrc, /<button[\s\S]*?data-testid="boring-decision-need-look"[\s\S]*?onClick=\{jumpToNeedLook\}/);
+  assert.match(ddSrc, /tabIndex=\{-1\}/);
+  assert.match(ddSrc, /flashCardId === item\.id \? " is-flash" : ""/);
+});
+
+test("S2 CSS contracts (idea-1081, idea-1164, idea-1165): rail 8-char code padding, flash style, inline Sent rows", () => {
+  const css = readFileSync(join(ROOT, "src", "boring.css"), "utf8");
+  const s2Start = css.indexOf("/* @desk S2 (PLAN_DESK_SWEEP_1127)");
+  const f1Start = css.indexOf("/* @desk F1 (PLAN_DESK_DD_FILTER)");
+  assert.ok(s2Start > 0 && f1Start > s2Start, "S2 CSS sits before F1 marker");
+  const s2Css = css.slice(s2Start, f1Start);
+  assert.match(s2Css, /\.boring-decision-desk\.is-wide \.boring-decision-code\s*\{\s*padding-inline:\s*4px;/);
+  assert.match(s2Css, /\.boring-decision-banner-item\s*\{\s*display:\s*block;/);
+  assert.match(s2Css, /\.boring-decision-card\.is-flash\s*\{/);
+  assert.match(css.slice(f1Start), /\.boring-decision-pill-staged-dot\s*\{/);
 });
