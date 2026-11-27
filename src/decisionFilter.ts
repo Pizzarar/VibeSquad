@@ -210,3 +210,69 @@ export function countHiddenStaged(
   }
   return hidden;
 }
+
+export type HiddenStagedProject = {
+  squadId: string;
+  squadName: string;
+  count: number;
+};
+
+export type HiddenStagedSummary = {
+  total: number;
+  projects: HiddenStagedProject[];
+  bySquad: Record<string, number>;
+};
+
+/** Summarize sendable staged answers whose project is currently hidden by the filter, ordered by pill order. */
+export function summarizeHiddenStaged(
+  allItems: readonly { id: string; squad: string; squadName?: string }[],
+  visible: ReadonlySet<string>,
+  staged: Readonly<Record<string, StagedLike | undefined>>,
+  pills: readonly Pick<DecisionFilterPill, "squadId" | "squadName">[] = [],
+): HiddenStagedSummary {
+  const bySquad: Record<string, number> = {};
+  const fallbackMeta = new Map<string, { squadId: string; squadName: string }>();
+  let total = 0;
+  for (const item of allItems) {
+    const key = item.squad.toLowerCase();
+    if (visible.has(key)) continue;
+    if (!isStagedSendable(staged[item.id])) continue;
+    total++;
+    bySquad[key] = (bySquad[key] ?? 0) + 1;
+    if (!fallbackMeta.has(key)) {
+      fallbackMeta.set(key, { squadId: item.squad, squadName: item.squadName || item.squad });
+    }
+  }
+  const projects: HiddenStagedProject[] = [];
+  const seen = new Set<string>();
+  for (const p of pills) {
+    const key = p.squadId.toLowerCase();
+    const count = bySquad[key];
+    if (!count || seen.has(key)) continue;
+    seen.add(key);
+    projects.push({ squadId: p.squadId, squadName: p.squadName, count });
+  }
+  for (const [key, meta] of fallbackMeta) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    projects.push({ squadId: meta.squadId, squadName: meta.squadName, count: bySquad[key] ?? 0 });
+  }
+  return { total, projects, bySquad };
+}
+
+/** Format the Send button's hidden-staged suffix and tooltip (idea-1121). */
+export function formatHiddenStagedLabel(
+  summary: HiddenStagedSummary,
+  maxNames = 2,
+): { suffix: string; title: string } {
+  if (summary.total <= 0) return { suffix: "", title: "" };
+  const names = summary.projects.map((p) => p.squadName);
+  const shown = names.slice(0, Math.max(1, maxNames));
+  const rest = names.length - shown.length;
+  const list = rest > 0 ? `${shown.join(", ")}, +${rest} more` : shown.join(", ");
+  const suffix = list ? ` · +${summary.total} hidden (${list})` : ` (+${summary.total} hidden)`;
+  const title = names.length > 0
+    ? `${summary.total} staged ${summary.total === 1 ? "answer" : "answers"} hidden in: ${names.join(", ")}`
+    : `${summary.total} staged ${summary.total === 1 ? "answer" : "answers"} hidden`;
+  return { suffix, title };
+}

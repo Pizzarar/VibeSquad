@@ -181,24 +181,37 @@ for (const cfg of [
         assert.equal(await page.locator('[data-testid="boring-decision-summary"]').textContent(), "4 open · 3 here · 1 off-screen");
         assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 4", "sidebar badge matches Active preset");
 
-        // 4. Stage an answer, hide its project -> "+1 hidden"; unhide -> answer intact
+        // 4. Stage an answer, hide its project -> "+1 hidden (Project)" + pill dot; unhide -> answer intact
         await page.locator('[data-testid="boring-decision-lean-ny-f1-01"]').click();
         assert.equal(await page.locator('[data-testid="boring-decision-send-btn"]').textContent(), "Send 1 answer");
         await page.locator('[data-testid="boring-decision-pill-vibesquad"]').click();
         const sendBtn = page.locator('[data-testid="boring-decision-send-btn"]');
-        assert.equal(await sendBtn.textContent(), "Send 0 answers (+1 hidden)");
+        assert.equal(await sendBtn.textContent(), "Send 0 answers · +1 hidden (VibeSquad)");
+        assert.equal(await sendBtn.getAttribute("title"), "1 staged answer hidden in: VibeSquad");
         assert.equal(await sendBtn.isDisabled(), true, "0 visible answers keeps Send disabled");
+        assert.equal(await page.locator('[data-testid="boring-decision-pill-staged-dot-vibesquad"]').count(), 1, "hidden staged pill shows dot");
+        assert.equal(await page.locator('[data-testid="boring-decision-pill-vibesquad"]').getAttribute("title"), "1 staged answer hidden");
         assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 2", "sidebar badge drops when vibesquad hidden");
 
-        // Stage a visible answer too -> "Send 1 answer (+1 hidden)"
+        // Stage a visible answer too -> "Send 1 answer · +1 hidden (VibeSquad)"
         await page.locator('[data-testid="boring-decision-lean-ny-f1-03"]').click();
-        assert.equal(await sendBtn.textContent(), "Send 1 answer (+1 hidden)");
+        assert.equal(await sendBtn.textContent(), "Send 1 answer · +1 hidden (VibeSquad)");
         assert.equal(await sendBtn.isDisabled(), false);
 
-        // Unhide vibesquad -> staged lean is intact and hidden count disappears
+        // Hide efi as well -> "+2 hidden (VibeSquad, Main Game Project)" with dots on both pills
+        await page.locator('[data-testid="boring-decision-pill-efi"]').click();
+        assert.equal(await sendBtn.textContent(), "Send 0 answers · +2 hidden (VibeSquad, Main Game Project)");
+        assert.equal(await sendBtn.getAttribute("title"), "2 staged answers hidden in: VibeSquad, Main Game Project");
+        assert.equal(await page.locator('[data-testid="boring-decision-pill-staged-dot-efi"]').count(), 1, "second hidden staged pill shows dot");
+
+        // Unhide both -> staged leans intact, dots & hidden note disappear
+        await page.locator('[data-testid="boring-decision-pill-efi"]').click();
         await page.locator('[data-testid="boring-decision-pill-vibesquad"]').click();
         assert.equal(await page.locator('[data-testid="boring-decision-lean-ny-f1-01"]').getAttribute("aria-pressed"), "true", "staged answer survived toggle");
         assert.equal(await sendBtn.textContent(), "Send 2 answers");
+        assert.equal(await sendBtn.getAttribute("title"), null);
+        assert.equal(await page.locator('[data-testid="boring-decision-pill-staged-dot-vibesquad"]').count(), 0);
+        assert.equal(await page.locator('[data-testid="boring-decision-pill-staged-dot-efi"]').count(), 0);
         assert.equal(await page.locator('[data-testid="boring-decisions-nav-count"]').textContent(), "· 4", "sidebar badge restores when vibesquad unhidden");
       }
 

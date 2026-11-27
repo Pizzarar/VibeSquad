@@ -214,8 +214,9 @@ test("F1 source contracts: BoringAde passes allViews+folders, CSS scoped to .bor
   assert.match(dd, /data-testid="boring-decision-pills-on-hold"/);
   assert.match(dd, /data-testid="boring-decision-empty-show-all"/);
   assert.match(dd, />Asleep<\/span>/);
-  assert.match(dd, /aria-label=\{\`\$\{p\.squadName\}, \$\{p\.openCount\} open\`\}/);
-  assert.match(dd, /\(\+\$\{hiddenStagedCount\} hidden\)/);
+  assert.match(dd, /aria-label=\{hiddenCount > 0 \? `\$\{p\.squadName\}, \$\{p\.openCount\} open, \$\{hiddenCount\} staged hidden` : `\$\{p\.squadName\}, \$\{p\.openCount\} open`\}/);
+  assert.match(dd, /hiddenStagedLabel\.suffix/);
+  assert.match(dd, /data-testid=\{`boring-decision-pill-staged-dot-\$\{p\.squadId\}`\}/);
 
   const f1Start = css.indexOf("/* @desk F1 (PLAN_DESK_DD_FILTER)");
   assert.ok(f1Start > 0, "F1 CSS block present");
@@ -224,4 +225,59 @@ test("F1 source contracts: BoringAde passes allViews+folders, CSS scoped to .bor
   for (const line of f1Css.split("\n").filter((l) => /\{/.test(l))) {
     assert.match(line, /^html\[data-vibe="boring"\] \.boring-decision-pill/, `scoped to .boring-decision-pill*: ${line}`);
   }
+});
+
+test("S2 idea-1121: summarizeHiddenStaged + formatHiddenStagedLabel name hidden projects, cap inline list, and keep full list in title", () => {
+  const pills = [
+    { squadId: "alpha", squadName: "Alpha" },
+    { squadId: "beta", squadName: "Beta" },
+    { squadId: "gamma", squadName: "Gamma" },
+    { squadId: "delta", squadName: "Delta" },
+  ];
+  const items = [
+    { id: "i1", squad: "alpha", squadName: "Alpha" },
+    { id: "i2", squad: "beta", squadName: "Beta" },
+    { id: "i3", squad: "gamma", squadName: "Gamma" },
+    { id: "i4", squad: "delta", squadName: "Delta" },
+    { id: "i5", squad: "delta", squadName: "Delta" },
+  ];
+  const staged = {
+    i1: { choice: "lean" },
+    i2: { choice: "alt:0" },
+    i3: { choice: "reply", text: "ok" },
+    i4: { choice: "reply", text: "   " }, // blank reply not sendable
+    i5: { choice: "dismiss" },
+  };
+
+  // All visible -> empty
+  const none = F.summarizeHiddenStaged(items, new Set(["alpha", "beta", "gamma", "delta"]), staged, pills);
+  assert.equal(none.total, 0);
+  assert.deepEqual(F.formatHiddenStagedLabel(none), { suffix: "", title: "" });
+
+  // 1 hidden project (beta)
+  const one = F.summarizeHiddenStaged(items, new Set(["alpha", "gamma", "delta"]), staged, pills);
+  assert.equal(one.total, 1);
+  assert.deepEqual(one.bySquad, { beta: 1 });
+  assert.deepEqual(F.formatHiddenStagedLabel(one), {
+    suffix: " · +1 hidden (Beta)",
+    title: "1 staged answer hidden in: Beta",
+  });
+
+  // 2 hidden projects (beta, gamma)
+  const two = F.summarizeHiddenStaged(items, new Set(["alpha", "delta"]), staged, pills);
+  assert.equal(two.total, 2);
+  assert.deepEqual(two.bySquad, { beta: 1, gamma: 1 });
+  assert.deepEqual(F.formatHiddenStagedLabel(two), {
+    suffix: " · +2 hidden (Beta, Gamma)",
+    title: "2 staged answers hidden in: Beta, Gamma",
+  });
+
+  // 3 hidden projects (beta, gamma, delta): inline caps at 2 + "+1 more", title keeps full list
+  const three = F.summarizeHiddenStaged(items, new Set(["alpha"]), staged, pills);
+  assert.equal(three.total, 3);
+  assert.deepEqual(three.bySquad, { beta: 1, gamma: 1, delta: 1 });
+  assert.deepEqual(F.formatHiddenStagedLabel(three), {
+    suffix: " · +3 hidden (Beta, Gamma, +1 more)",
+    title: "3 staged answers hidden in: Beta, Gamma, Delta",
+  });
 });
