@@ -258,6 +258,18 @@ export function chainToMermaid(chain: QuestChain, idx: EntityIndex): ChainGraph 
   return { code: [chain.steps.length > LONG_CHAIN ? "flowchart TD" : "flowchart LR", ...decl, ...edges].join("\n"), nodes, empty: chain.steps.length === 0 };
 }
 
+/** Player-facing title of a contract (V9 rendered template), falling back to its raw id only when nothing is rendered. */
+export const contractTitle = (c: SbEntity): string => {
+  const t = c.data?.rendered?.title;
+  return typeof t === "string" && t.trim() ? t.trim() : c.display;
+};
+/** Chip label of a text line on a sheet: its group / speaker, never the raw `csv` origin. */
+export const lineChipLabel = (l: SbEntity): string => {
+  const d = l.data ?? {};
+  const g = typeof d.group === "string" ? d.group.trim() : "";
+  const origin = String(d.origin ?? "");
+  return g || (origin && origin !== "csv" ? titleCase(origin.replace(/_/g, " ")) : "") || (typeof d.speaker === "string" && d.speaker ? d.speaker : "Text line");
+};
 export const cleanTodo = (s: string): string => s.replace(/^\s*STORY-TODO:\s*/i, "");
 
 export type LocationView = {
@@ -703,7 +715,7 @@ export function itemSheetData(item: SbEntity, idx: EntityIndex, findings: SbFind
   const hasDescription = typeof item.data?.description === "string" && item.data.description.trim().length > 0;
   const isUnobtainable = ownFindings.some((f) => f.check === "#13") || (required && sources.length === 0);
   const isOrphan = ownFindings.some((f) => f.check === "#14") || (sources.length === 0 && uses.length === 0);
-  const isNoStory = ownFindings.some((f) => f.check === "#15") || (!hasDescription && !ownFindings.length && lines.length === 0 && !uses.some((u) => u.kind === "quest_step"));
+  const isNoStory = ownFindings.some((f) => f.check === "#15"); // the engine's #15 only: a client fallback rule made the tab count (240) disagree with Problems/Coverage (232)
   return { item, hasDescription, sources, uses, lines, findings: ownFindings, isOrphan, isNoStory, isUnobtainable };
 }
 

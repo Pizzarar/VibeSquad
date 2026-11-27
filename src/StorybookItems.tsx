@@ -6,15 +6,17 @@ import {
   type EntityIndex, type ItemFilter, type SbEntity, type SbFinding,
 } from "./storybookLogic";
 import { ItemSheet, type ChipRenderer } from "./StorybookSheet";
+import type { MarksApi } from "./StorybookMarks";
 import type { ProgressTextBucket, SbProgress } from "./storybookProgress";
 
-export function StorybookItems({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity }: {
+export function StorybookItems({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity, marks }: {
   idx: EntityIndex;
   findings: SbFinding[];
   sel: string | null;
   setSel: (id: string) => void;
   renderChip: ChipRenderer;
   onReview: (e: SbEntity) => void;
+  marks?: MarksApi;
   progress?: SbProgress | null;
   onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
@@ -104,6 +106,7 @@ export function StorybookItems({ idx, findings, sel, setSel, renderChip, onRevie
               findings={findings}
               renderChip={renderChip}
               onReview={onReview}
+              marks={marks}
               progress={progress?.entities[`item:${active.item.id}`] ?? null}
               onProgress={onProgressEntity ? (st) => onProgressEntity(`item:${active.item.id}`, active.item.display, st) : undefined}
             />

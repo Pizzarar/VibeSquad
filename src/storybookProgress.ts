@@ -158,3 +158,10 @@ export function segmentPct(count: number, total: number): number {
   if (total <= 0 || count <= 0) return 0;
   return Math.round((count / total) * 1000) / 10;
 }
+
+/** Live text-status bucket of one line: the owner's V6 mark wins, else the csv status / production state (same rule Review rows use). */
+export function liveLineBucket(markKind: "ok" | "redo" | "edit" | "none", status: string | null | undefined, production?: string | null): ProgressTextBucket {
+  if (markKind === "ok" || markKind === "edit") return "ok";
+  if (markKind === "redo") return "rewrite";
+  return statusBucket(status, production);
+}
