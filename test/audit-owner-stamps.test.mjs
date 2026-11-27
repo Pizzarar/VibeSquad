@@ -21,7 +21,7 @@ test('owner input filter and word count', () => {
   assert.equal(wordCount(' a  b c '), 3);
 });
 
-import { isSystemNotice, isAgentReport, relayBucket, handoffBucket, fixerBucket, unitOf, isReviewer } from '../scripts/audit-owner-stamps.mjs';
+import { isSystemNotice, isDecisionApproval, isAgentReport, relayBucket, handoffBucket, fixerBucket, unitOf, isReviewer } from '../scripts/audit-owner-stamps.mjs';
 
 test('system notices and forwarded reports are not relays', () => {
   for (const t of ['New team log event in vibesquad: x', 'Idea sent over from Perfection: x', 'Report to ★ Art5 (rn-0ac9049c7e0d).']) {
@@ -31,6 +31,8 @@ test('system notices and forwarded reports are not relays', () => {
   assert.equal(isAgentReport('Bug2: PLAN_PIN_BRIEF_HOME PASS. B1+B2 116d2dc, merged'), true);
   assert.equal(isAgentReport('@usa B7 merged 26e9280 (Review-Gemini PASS)'), true);
   assert.equal(isAgentReport('i think the faces are meh, send it'), false);
+  assert.equal(isDecisionApproval('Approved: Push 65b41bb6 and fold into the main branch. Go ahead.'), true);
+  assert.equal(isAgentReport('Approved: Push 65b41bb6 and fold into the main branch. Go ahead.'), false);
 });
 
 const run = (o) => ({ outputs: 0, maxCtx: 0, inputs: [], labels: {}, cwd: '', ts: 1, ...o });
@@ -44,6 +46,22 @@ test('relayBucket separates owner-marked from unmarked and drops system notices'
   ] })];
   const r = relayBucket(runs);
   assert.deepEqual([r.strict, r.unmarkedUpperBound, r.systemOrForwardedExcluded], [1, 1, 1]);
+});
+
+test('relayBucket excludes decision-card approvals but keeps real pasted reports strict (@per idea-1174)', () => {
+  const approval = 'Approved: Push 65b41bb6 and fold into the main branch. Go ahead.';
+  const report = 'Bug2: PLAN_PIN_BRIEF_HOME PASS. B1+B2 116d2dc, merged';
+  const runs = [run({ id: 'b', role: 'brainstorm', inputs: [
+    { ts: 1, text: approval, owner: true },
+    { ts: 2, text: report, owner: true },
+  ] })];
+  const r = relayBucket(runs);
+  assert.equal(r.strict, 1);
+  assert.equal(r.systemOrForwardedExcluded, 1);
+  assert.deepEqual(r.strictExamples, [report.slice(0, 40)]);
+  assert.equal(isDecisionApproval(approval), true);
+  assert.equal(isAgentReport(approval), false);
+  assert.equal(isAgentReport(report), true);
 });
 
 test('handoffBucket excludes fixtures and splits by predecessor tokens', () => {
