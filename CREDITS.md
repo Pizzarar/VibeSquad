@@ -21,7 +21,7 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented VS MCP Paseo-name aliases — Thanks to **Paseo** by `getpaseo`
 - Implemented ACP adapters — Thanks to **Agent Client Protocol** by `Zed Industries`
 - Implemented VS native schedules & heartbeats — Thanks to **Paseo** by `getpaseo`
-- Implemented runner-era agent orchestration (originally built on Paseo) — Thanks to **Paseo** by `getpaseo`
+- Originally built on Paseo by `getpaseo` — runner-era agent orchestration
 - Implemented runner-agent terminals (PTY shells) — Thanks to **node-pty** by `Microsoft` and **xterm.js** by `the xterm.js authors`
 - Implemented hand-pixelled office art pipeline (indexed palettes, batch scripts) — Thanks to **Aseprite** by `Igara Studio`
 - Implemented Aseprite pixel pipeline — Thanks to **aseprite-mcp** by `diivi`
