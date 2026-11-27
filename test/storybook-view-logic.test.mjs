@@ -514,10 +514,33 @@ describe("V2 Home + findings split", () => {
     assert.ok(L.scopeItems(items, "problems").every((i) => i.category !== "unreviewed"));
     assert.ok(L.scopeItems(items, "text").every((i) => i.category === "unreviewed"));
   });
-  test("story issues = coherence checks only", () => {
+  test("story issues = coherence checks only (W4: #11 and #7 info moved to Other checks)", () => {
     const story = L.scopeItems(items, "story");
-    assert.ok(story.every((i) => ["#4", "#7", "#11", "#12", "#19"].includes(i.check)));
-    assert.equal(story.length, items.filter((i) => ["#4", "#7", "#11", "#12", "#19"].includes(i.check)).length);
+    const isStory = (i) => ["#4", "#7", "#12", "#19"].includes(i.check) && !(i.check === "#7" && i.severity === "info");
+    assert.ok(story.every(isStory));
+    assert.equal(story.length, items.filter(isStory).length);
+  });
+  test("W4 friction 2: Problems scope includes #5/#19/#7-warn and moves #11 and #7-info to Other checks", () => {
+    const mk = (check, severity, entityRef = { kind: "enemy", id: "e1" }) => ({
+      key: `${check}:${severity}`, category: L.findingCategory(check), check, severity, msg: check, entityRef, source: null, dev: L.isDevTodoFinding({ check, entityRef }),
+    });
+    const list = [
+      mk("#1", "error"), mk("#2", "warn"), mk("#5", "warn"), mk("#13", "warn"),
+      mk("#4", "warn"), mk("#7", "warn"), mk("#12", "warn"), mk("#19", "warn"),
+      mk("#7", "info"), mk("#11", "info"), mk("#3", "warn"), mk("#6", "warn"), mk("#9", "warn"), mk("#10", "warn"), mk("#14", "info"), mk("#16", "info"), mk("#17", "info"),
+      mk("#8", "info"), mk("#15", "info"),
+      mk("#18", "warn"),
+      mk("#8", "info", null),
+    ];
+    assert.deepEqual(L.scopeItems(list, "problems").map((i) => i.key), ["#1:error", "#2:warn", "#5:warn", "#13:warn", "#4:warn", "#7:warn", "#12:warn", "#19:warn"]);
+    assert.deepEqual(L.scopeItems(list, "other").map((i) => i.key), ["#7:info", "#11:info", "#3:warn", "#6:warn", "#9:warn", "#10:warn", "#14:info", "#16:info", "#17:info"]);
+    assert.deepEqual(L.scopeItems(list, "coverage").map((i) => i.key), ["#8:info", "#15:info"]);
+    assert.deepEqual(L.scopeItems(list, "toolong").map((i) => i.key), ["#18:warn"]);
+    assert.deepEqual(L.scopeItems(list, "dev").map((i) => i.key), ["#8:info"]);
+    const sc = L.scopeCounts(list);
+    assert.equal(sc.problems, 8);
+    assert.equal(sc.other, 9);
+    assert.equal(sc.problems + sc.coverage + sc.other + sc.text + sc.toolong + sc.dev, list.length);
   });
   test("kind counts, audit counts, kind→tab", () => {
     const k = L.kindCounts(snap.entities);
