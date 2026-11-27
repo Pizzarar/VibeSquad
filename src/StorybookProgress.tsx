@@ -71,7 +71,7 @@ export function ProgressBarRow({
             )
           )}
           {artLabel && (
-            <span className="sb-prog-art" data-testid={`sb-prog-art-${entry.id}`}>
+            <span className="sb-prog-art" data-testid={`sb-prog-art-${entry.id}`} title="Art counts one unit per entity (a missing slot counts as 1); entity sheets count each slot.">
               {artLabel}
             </span>
           )}

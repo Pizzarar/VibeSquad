@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildProgress, lineAreaId, lineMarkKey, PROGRESS_AREAS, statusToBucket } from "../server/storybook/progress.mjs";
+import { markState } from "../src/storybookMarks.ts";
 import { applyLiveMarks, formatArtSummary, formatProgressSummary } from "../src/storybookProgress.ts";
 
 function makeLine({ id, file = "data/quests.json", data_path = `["${id}"]`, status = "STORY-TODO", origin = "csv", speakerKind = "trader", speakerId = "popper", links = [], production = "placeholder" }) {
@@ -214,5 +215,68 @@ describe("V12 progress rollup (server/storybook/progress.mjs)", () => {
     assert.equal(lineAreaId(makeLine({ id: "d", speakerKind: "system", speakerId: "raids", links: [{ rel: "said_at", kind: "location", id: "depot" }] })), "locations");
     assert.equal(lineAreaId(makeLine({ id: "e", speakerKind: "system", speakerId: "items", file: "data/items.json" })), "items");
     assert.equal(lineAreaId(makeLine({ id: "f", speakerKind: "system", speakerId: "shell", file: "scripts/ui.gd" })), "ui");
+  });
+
+  it("invariant: every bar segment (area + sheet) equals the Review filter's row count, before and after a mark on a duplicated key", () => {
+    const L = (id, o = {}) => makeLine({ id, ...o });
+    const dup = '["dup"]';
+    const lines = [
+      L("t1", { status: "DRAFT", production: "ai-draft" }),
+      L("t2", { status: "STORY-TODO" }),
+      // two csv rows sharing one mark key (same file + data_path), different base statuses, one trader
+      L("d1", { data_path: dup, status: "DRAFT" }),
+      L("d2", { data_path: dup, status: "STORY-TODO" }),
+      L("d3", { data_path: dup, status: "OWNER-OK" }),
+      // items.json rows carry no link: owned by their id prefix
+      L("i1", { file: "data/items.json", data_path: '["items",0,"name"]', speakerKind: "system", speakerId: "items", status: "STORY-TODO" }),
+      L("i2", { file: "data/items.json", data_path: '["items",0,"desc"]', speakerKind: "system", speakerId: "items", status: "DRAFT" }),
+      // a squad line that mentions the item and the location (counts on those sheets, not in their areas)
+      L("s1", { speakerKind: "squad", speakerId: "saint", status: "DRAFT", links: [{ rel: "mentions", kind: "item", id: "brass" }, { rel: "said_at", kind: "location", id: "depot" }] }),
+      L("l1", { file: "data/locations.json", data_path: '["locations",0,"name"]', speakerKind: "system", speakerId: "locations", status: "STORY-TODO" }),
+      L("u1", { file: "scripts/ui.gd", data_path: "", speakerKind: "system", speakerId: "shell", status: "DRAFT" }),
+    ];
+    lines[5].data.id = "brass.name";
+    lines[6].data.id = "brass.desc";
+    lines[8].data.id = "depot.name";
+    const snap = { entities: [makeEntity("trader", "popper"), makeEntity("squad", "saint"), makeEntity("item", "brass"), makeEntity("location", "depot"), ...lines] };
+    const base = buildProgress(snap);
+    const dupKey = lineMarkKey(lines[2]);
+    assert.equal(base.markIndex[dupKey].lines.reduce((n, g) => n + g.n, 0), 3);
+
+    const reviewBucket = (e, marks) => {
+      const m = marks.find((x) => x.key === lineMarkKey(e));
+      const st = markState(e, lines, new Map(marks.map((x) => [x.key, x])), true);
+      if (m) return st.kind === "ok" || st.kind === "edit" ? "ok" : "rewrite";
+      return statusToBucket(e.data.status, e.production);
+    };
+    const check = (prog, marks) => {
+      const T = ["ok", "draft", "rewrite", "todo"];
+      for (const a of PROGRESS_AREAS) {
+        const rows = lines.filter((e) => prog.lineAreas[e.id] === a.id);
+        const area = prog.areas.find((x) => x.id === a.id);
+        assert.equal(area.text.total, rows.length, `${a.id} total`);
+        for (const b of T) assert.equal(area.text[b], rows.filter((e) => reviewBucket(e, marks) === b).length, `${a.id} ${b}`);
+      }
+      for (const [ek, ent] of Object.entries(prog.entities)) {
+        const rows = lines.filter((e) => base.lineSheets[e.id].includes(ek));
+        assert.equal(ent.text.total, rows.length, `${ek} total`);
+        for (const b of T) assert.equal(ent.text[b], rows.filter((e) => reviewBucket(e, marks) === b).length, `${ek} ${b}`);
+      }
+    };
+    check(base, []);
+    // item/location data rows land on their own sheets (same rule as the area), plus the squad mention
+    assert.equal(base.entities["item:brass"].text.total, 3);
+    assert.equal(base.entities["location:depot"].text.total, 2);
+    assert.equal(base.areas.find((a) => a.id === "items").text.total, 2);
+
+    const marks = [{ key: dupKey, file: "data/quests.json", line: "1", data_path: dup, where_seen: "", status: "OWNER-OK", note: "", contracts: {}, rewrite: "", text: "", hashOk: true }];
+    const live = applyLiveMarks(base, marks);
+    check(live, marks);
+    assert.equal(live.areas.find((a) => a.id === "traders").text.ok, 3, "all three duplicate rows flip");
+    // a Redo on the same key moves them all to rewrite; server-side marks agree with the live overlay
+    const redo = [{ ...marks[0], status: "NEEDS-REWRITE" }];
+    check(applyLiveMarks(base, redo), redo);
+    assert.deepEqual(buildProgress(snap, { marks: redo }).areas, applyLiveMarks(base, redo).areas);
+    assert.deepEqual(buildProgress(snap, { marks: redo }).entities, applyLiveMarks(base, redo).entities);
   });
 });

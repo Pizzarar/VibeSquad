@@ -38,6 +38,11 @@ export function statusToBucket(status, production = null) {
   return "todo";
 }
 
+/** Bucket a V6 owner mark shows in Review: OWNER-OK is OK, any other mark status is a Redo (needs rewrite). */
+export function markToBucket(status) {
+  return typeof status === "string" && status.trim().toUpperCase() === "OWNER-OK" ? "ok" : "rewrite";
+}
+
 /** Map a line entity to its primary V12 area id. Every line belongs to exactly one area. */
 export function lineAreaId(e) {
   const d = e?.data ?? {};
@@ -50,6 +55,19 @@ export function lineAreaId(e) {
   if (links.some((l) => l.kind === "location") || /(^|[\\/])locations\.json$/i.test(file) || sid === "locations") return "locations";
   if (links.some((l) => l.kind === "item") || /(^|[\\/])items\.json$/i.test(file) || sid === "items") return "items";
   return "ui";
+}
+
+/** Owning item/location sheet of an items.json / locations.json row (no link; its data id is "<entityId>.<field>"). */
+function dataFileOwner(e, itemIdByLower, locIdByLower) {
+  const d = e?.data ?? {};
+  const file = String(d.file ?? e?.source?.path ?? "");
+  const id = typeof d.id === "string" ? d.id : "";
+  const dot = id.indexOf(".");
+  if (dot <= 0) return null;
+  const pre = id.slice(0, dot).toLowerCase();
+  if (/(^|[\\/])items\.json$/i.test(file) && itemIdByLower.has(pre)) return `item:${itemIdByLower.get(pre)}`;
+  if (/(^|[\\/])locations\.json$/i.test(file) && locIdByLower.has(pre)) return `location:${locIdByLower.get(pre)}`;
+  return null;
 }
 
 /** Speaker key for a line entity (matches src/storybookLogic.ts lineSpeakerKey). */
@@ -126,7 +144,8 @@ function normalizeMarks(marks) {
  *   areas: [{ id, label, text: {ok,draft,rewrite,todo,total}, art: {tracked,final,draft,placeholder,missing,total} }],
  *   entities: { [entityKey]: { id, kind, label, text, art } },
  *   lineAreas: { [lineEntityId]: areaId },
- *   markIndex: { [markKey]: { base: bucket, area: areaId, entities: string[] } },
+ *   lineSheets: { [lineEntityId]: entityKey[] }   (the sheets that show the line; Review's entity filter reads this)
+ *   markIndex: { [markKey]: { lines: [{ base, area, entities, n }] } },  (n = csv rows sharing that key)
  *   artTracked: boolean,
  * }
  */
@@ -160,6 +179,8 @@ export function buildProgress(snapshot, { marks = null } = {}) {
   const enemies = [];
   const locIds = new Set();
   const itemIds = new Set();
+  const itemIdByLower = new Map();
+  const locIdByLower = new Map();
 
   for (const e of entities) {
     if (e.kind === "trader") {
@@ -168,6 +189,7 @@ export function buildProgress(snapshot, { marks = null } = {}) {
     } else if (e.kind === "location") {
       locations.push(e);
       locIds.add(e.id.toLowerCase());
+      locIdByLower.set(e.id.toLowerCase(), e.id);
       ensureEntity(`location:${e.id}`, "location", e.display);
     } else if (e.kind === "squad") {
       squad.push(e);
@@ -175,6 +197,7 @@ export function buildProgress(snapshot, { marks = null } = {}) {
     } else if (e.kind === "item") {
       items.push(e);
       itemIds.add(e.id.toLowerCase());
+      itemIdByLower.set(e.id.toLowerCase(), e.id);
       ensureEntity(`item:${e.id}`, "item", e.display);
     } else if (e.kind === "enemy") {
       enemies.push(e);
@@ -294,6 +317,7 @@ export function buildProgress(snapshot, { marks = null } = {}) {
   // 4. Roll up all text lines into their area AND every matching entity sheet
   const lineAreas = {};
   const markIndex = {};
+  const lineSheets = {};
 
   for (const e of entities) {
     if (e.kind !== "line") continue;
@@ -302,13 +326,15 @@ export function buildProgress(snapshot, { marks = null } = {}) {
 
     const mk = lineMarkKey(e);
     const baseBucket = statusToBucket(e.data?.status, e.production);
-    const effectiveBucket = mk && markMap.has(mk) ? statusToBucket(markMap.get(mk), e.production) : baseBucket;
+    const effectiveBucket = mk && markMap.has(mk) ? markToBucket(markMap.get(mk)) : baseBucket;
 
     const areaText = areaById.get(areaId).text;
     areaText[effectiveBucket]++;
     areaText.total++;
 
-    // Determine which entity sheets display this line (matches CharacterSheet, MapSheet, EnemySheet, ItemSheet)
+    // ONE attribution rule: the sheets that show this line = its speaker sheet + every linked location/item/enemy +
+    // the owning item/location of a data-file row (items.json / locations.json rows carry no link, only an id prefix).
+    // Review's entity filter reads this same list (lineSheets), so a sheet bar always equals its Review list.
     const sheetKeys = new Set();
     const sk = lineSpeakerKey(e);
     if (sk) {
@@ -323,6 +349,8 @@ export function buildProgress(snapshot, { marks = null } = {}) {
       else if (l.kind === "item") sheetKeys.add(`item:${l.id}`);
       else if (l.kind === "enemy") sheetKeys.add(`enemy:${String(l.id).toLowerCase()}`);
     }
+    const owner = dataFileOwner(e, itemIdByLower, locIdByLower);
+    if (owner) sheetKeys.add(owner);
 
     const validSheets = [];
     for (const ek of sheetKeys) {
@@ -332,19 +360,22 @@ export function buildProgress(snapshot, { marks = null } = {}) {
       rec.text.total++;
       validSheets.push(ek);
     }
+    lineSheets[e.id] = validSheets;
 
     if (mk) {
-      // A mark key maps to one csv row; if multiple lines ever share a mark key, accumulate cleanly.
-      if (!markIndex[mk]) {
-        markIndex[mk] = { base: baseBucket, area: areaId, entities: validSheets };
-      } else {
-        for (const ek of validSheets) if (!markIndex[mk].entities.includes(ek)) markIndex[mk].entities.push(ek);
-      }
+      // Several csv rows can share one mark key (duplicate text); Review flips all of them, so keep every line's
+      // (base, area, sheets) grouped with a count and let the client move exactly that many.
+      const group = (markIndex[mk] ??= { lines: [] });
+      const sig = `${baseBucket}|${areaId}|${validSheets.join(",")}`;
+      const hit = group.lines.find((g) => g.sig === sig);
+      if (hit) hit.n++;
+      else group.lines.push({ sig, base: baseBucket, area: areaId, entities: validSheets, n: 1 });
     }
   }
 
   const areas = PROGRESS_AREAS.map((a) => areaById.get(a.id));
   const entitiesOut = Object.fromEntries(entityRollups);
 
-  return { areas, entities: entitiesOut, lineAreas, markIndex, artTracked };
+  for (const g of Object.values(markIndex)) for (const l of g.lines) delete l.sig;
+  return { areas, entities: entitiesOut, lineAreas, lineSheets, markIndex, artTracked };
 }

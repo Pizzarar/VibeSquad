@@ -31,16 +31,16 @@ export type ProgressEntry = {
   art: ProgressArtCounts;
 };
 
-export type ProgressMarkEntry = {
-  base: ProgressTextBucket;
-  area: ProgressAreaId;
-  entities: string[];
-};
+/** csv rows sharing one mark key, grouped by identical (base bucket, area, sheets); n = how many rows. */
+export type ProgressMarkLines = { base: ProgressTextBucket; area: ProgressAreaId; entities: string[]; n: number };
+export type ProgressMarkEntry = { lines: ProgressMarkLines[] };
 
 export type SbProgress = {
   areas: ProgressEntry[];
   entities: Record<string, ProgressEntry>;
   lineAreas: Record<string, ProgressAreaId>;
+  /** Sheets (entity keys) that show each line; Review's entity filter reads this so bars equal lists. */
+  lineSheets?: Record<string, string[]>;
   markIndex: Record<string, ProgressMarkEntry>;
   artTracked: boolean;
 };
@@ -73,6 +73,11 @@ export function statusBucket(status: string | null | undefined, production?: str
   return "todo";
 }
 
+/** Bucket a V6 owner mark shows in Review: OWNER-OK is OK, any other mark status is a Redo (needs rewrite). */
+export function markBucket(status: string | null | undefined): ProgressTextBucket {
+  return typeof status === "string" && status.trim().toUpperCase() === "OWNER-OK" ? "ok" : "rewrite";
+}
+
 /**
  * Apply live V6 session marks on top of the server-computed snapshot progress in O(marks.length).
  * Returns the original object untouched when there are no marks to apply.
@@ -97,22 +102,23 @@ export function applyLiveMarks(progress: SbProgress | null | undefined, marks: S
   };
 
   let changed = false;
+  const move = (c: ProgressTextCounts, from: ProgressTextBucket, to: ProgressTextBucket, n: number) => {
+    const k = Math.min(n, c[from]);
+    c[from] -= k;
+    c[to] += k;
+  };
   for (const m of marks) {
     const idx = progress.markIndex[m.key];
     if (!idx) continue;
-    const next = statusBucket(m.status);
-    if (next === idx.base) continue;
-    changed = true;
-    const area = areaById.get(idx.area);
-    if (area && area.text[idx.base] > 0) {
-      area.text[idx.base]--;
-      area.text[next]++;
-    }
-    for (const ek of idx.entities) {
-      const ent = cloneEntity(ek);
-      if (ent && ent.text[idx.base] > 0) {
-        ent.text[idx.base]--;
-        ent.text[next]++;
+    const next = markBucket(m.status);
+    for (const g of idx.lines) {
+      if (next === g.base) continue;
+      changed = true;
+      const area = areaById.get(g.area);
+      if (area) move(area.text, g.base, next, g.n);
+      for (const ek of g.entities) {
+        const ent = cloneEntity(ek);
+        if (ent) move(ent.text, g.base, next, g.n);
       }
     }
   }

@@ -19,8 +19,10 @@ export type TextPreset = {
   n: number;
 } | null;
 
-function matchesEntityKey(r: ReviewRow, idx: EntityIndex, ek: string): boolean {
+function matchesEntityKey(r: ReviewRow, idx: EntityIndex, ek: string, progress?: SbProgress | null): boolean {
   if (r.kind !== "line") return false;
+  const sheets = progress?.lineSheets?.[r.entityId]; // same attribution the sheet bars were counted with
+  if (sheets) return sheets.includes(ek);
   const e = idx.get("line", r.entityId);
   if (!e) return false;
   const i = ek.indexOf(":");
@@ -62,10 +64,15 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const base = useMemo(() => {
     let list = only === "changed" ? rows.filter(isChanged) : only === "contracts" ? rows.filter((r) => r.kind === "contract") : rows;
     if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
-    if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key));
+    if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key, progress));
     if (statusFilter) list = list.filter((r) => r.kind === "line" && (rowStatusBucket ? rowStatusBucket(r) : statusBucket(r.status)) === statusFilter);
     return list;
   }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A bar/area/status filter counts text lines only (contracts have no bar), so its denominator is the line total, not all rows.
+  const lineFiltered = areaFilter != null || entityFilter != null || statusFilter != null;
+  const nLines = useMemo(() => rows.filter((r) => r.kind === "line").length, [rows]);
+  const denom = lineFiltered ? nLines : rows.length;
+  const denomLabel = lineFiltered ? "lines" : "rows";
   const speakerKey = speakerFilter?.key ?? null;
   const searched = useMemo(() => filterRows(base, { query, speakerKey, classes: new Set(), tooLong: false, unreviewed: false }), [base, query, speakerKey]);
   const filter = useMemo(() => ({ query: "", classes, tooLong, unreviewed }), [classes, tooLong, unreviewed]);
@@ -150,7 +157,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
       {header}
       <div className="sb-search">
         <input type="search" className="sb-search-input" data-testid="sb-text-search" placeholder="Search lines and entities: text, speaker, key, file" aria-label="Search text" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <span className="sb-search-n" data-testid="sb-text-n" role="status">{filtered.length === rows.length ? `${rows.length} rows` : `${filtered.length} of ${rows.length} rows`}</span>
+        <span className="sb-search-n" data-testid="sb-text-n" role="status">{filtered.length === denom ? `${denom} ${denomLabel}` : `${filtered.length} of ${denom} ${denomLabel}`}</span>
       </div>
       <div className="sb-filter" role="group" aria-label="Filter text" data-testid="sb-text-filter">
         {areaFilter && (
