@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import {
+  isSnapBrowser, snapSafeTmpdir,
   playwrightCandidates, resolvePlaywrightInfo, browserSkipReason, shellQuote,
   PLAYWRIGHT_INSTALL_CMD, PLAYWRIGHT_MISSING, DURABLE_TOOLS_DIR,
 } from "../scripts/ui-overlap/env.mjs";
@@ -174,4 +175,23 @@ test("nothing resolves: null, and the missing-Playwright message names the exact
 test("the durable dir is never under /tmp or the npx cache", () => {
   assert.ok(!DURABLE_TOOLS_DIR.startsWith("/tmp"));
   assert.ok(!DURABLE_TOOLS_DIR.includes(`${path.sep}_npx${path.sep}`));
+});
+
+test("snapSafeTmpdir: only a snap browser with a tmpdir under a hidden $HOME dir gets redirected", () => {
+  const base = { home: "/home/u", platform: "linux" };
+  const hidden = "/home/u/.cache/vibesquad-tmp";
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: hidden, snap: true }), "/tmp");
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: hidden, snap: false }), null, "non-snap browsers keep TMPDIR");
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: "/tmp", snap: true }), null, "already outside $HOME");
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: "/home/u/work/tmp", snap: true }), null, "visible home dir is fine for snap");
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: hidden, snap: true, platform: "win32" }), null);
+  assert.equal(snapSafeTmpdir({ ...base, tmpdir: "/home/u2/.x", snap: true }), null, "a sibling home is not $HOME");
+});
+
+test("isSnapBrowser: /snap paths and the wrapper that execs /snap/bin/chromium", () => {
+  assert.equal(isSnapBrowser("/snap/bin/chromium"), true);
+  assert.equal(isSnapBrowser("/usr/bin/chromium-browser", { readHead: () => "#!/bin/sh\nexec /snap/bin/chromium \"$@\"" }), true);
+  assert.equal(isSnapBrowser("/usr/bin/google-chrome", { readHead: () => "\x7fELF" }), false);
+  assert.equal(isSnapBrowser("/nope", { readHead: () => { throw new Error("ENOENT"); } }), false);
+  assert.equal(isSnapBrowser(null), false);
 });

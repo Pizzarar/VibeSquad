@@ -81,10 +81,43 @@ export function playwrightCandidates({
   return out;
 }
 
-/** { mod, from } for the first candidate that loads, or null. `load` is injectable for tests. */
-export function resolvePlaywrightInfo({ load = (c) => require2(c), ...opts } = {}) {
+/** True when `exe` is a snap Chromium: it lives under /snap, or it is the /usr/bin wrapper script that execs /snap/bin/chromium. */
+export function isSnapBrowser(exe, { readHead = (p) => fs.readFileSync(p).subarray(0, 4096).toString("latin1") } = {}) {
+  if (!exe) return false;
+  if (exe.startsWith("/snap/")) return true;
+  try { return readHead(exe).includes("/snap/bin/"); } catch { return false; }
+}
+
+/**
+ * Snap Chromium is confined and cannot create its profile (SingletonLock) under a hidden dir in $HOME, which is where the
+ * forge service puts TMPDIR (~/.cache/vibesquad-tmp). Playwright makes its temp profile under os.tmpdir() at launch, so for
+ * a snap browser with such a tmpdir return a snap-visible dir to use instead; null means leave TMPDIR alone.
+ */
+export function snapSafeTmpdir({ exe, tmpdir = os.tmpdir(), home = os.homedir(), platform = process.platform, snap = isSnapBrowser(exe), fallback = "/tmp" } = {}) {
+  if (platform !== "linux" || !snap) return null;
+  const rel = path.relative(home, tmpdir);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null; // not under $HOME
+  if (!rel.split(path.sep).some((seg) => seg.startsWith("."))) return null; // no hidden segment: snap can write it
+  return fallback;
+}
+
+/** Point TMPDIR at a snap-visible dir when the browser we will launch needs it (every launch path resolves Playwright through here). */
+function applySnapSafeTmpdir() {
+  try {
+    const dir = snapSafeTmpdir({ exe: findBrowser() });
+    if (dir) process.env.TMPDIR = dir;
+  } catch {}
+}
+
+/** { mod, from } for the first candidate that loads, or null. `load` is injectable for tests (and skips the TMPDIR hook). */
+export function resolvePlaywrightInfo({ load, ...opts } = {}) {
+  const real = !load;
+  load ??= (c) => require2(c);
   for (const c of playwrightCandidates(opts)) {
-    try { return { mod: load(c), from: c }; } catch {}
+    let mod;
+    try { mod = load(c); } catch { continue; }
+    if (real) applySnapSafeTmpdir();
+    return { mod, from: c };
   }
   return null;
 }

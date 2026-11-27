@@ -25,7 +25,7 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureDist, PLAYWRIGHT_MISSING, resolvePlaywrightInfo } from "../scripts/ui-overlap/env.mjs";
+import { ensureDist, findBrowser, PLAYWRIGHT_MISSING, resolvePlaywrightInfo } from "../scripts/ui-overlap/env.mjs";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "..");
@@ -62,16 +62,6 @@ const BUDDY_ID = "demo-bs-vs"; // the demo Brainstorm: a character on the Office
 const WORKER_ID = "demo-art-o"; // claude worker, status running
 
 // ── Playwright / browser resolution ──────────────────────────────────────────
-const CANDIDATE_EXECUTABLES = [
-  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-  "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-  "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-  process.env.LOCALAPPDATA && `${process.env.LOCALAPPDATA}/Microsoft/Edge/Application/msedge.exe`,
-  "C:/Program Files/Google/Chrome/Application/chrome.exe",
-  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-  process.env.LOCALAPPDATA && `${process.env.LOCALAPPDATA}/Google/Chrome/Application/chrome.exe`,
-].filter(Boolean);
-
 // ── Shared state (populated in `before`) ─────────────────────────────────────
 let pw = null;
 let executablePath = null;
@@ -116,15 +106,9 @@ before(async () => {
     unavailable = PLAYWRIGHT_MISSING;
     return;
   }
-  executablePath = CANDIDATE_EXECUTABLES.find((p) => {
-    try {
-      return fs.existsSync(p);
-    } catch {
-      return false;
-    }
-  }) ?? null;
+  executablePath = findBrowser();
   if (!executablePath) {
-    unavailable = "No Edge/Chrome executable found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH).";
+    unavailable = "No Chromium/Chrome/Edge executable found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH).";
     return;
   }
 
