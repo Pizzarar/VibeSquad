@@ -259,7 +259,9 @@ const probeComposer = async (extra) => {
   const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
   const snap = () => [...document.querySelectorAll(".boring-composer-bar *")].map((e) => { const r = e.getBoundingClientRect(); return `${r.left},${r.top},${r.width},${r.height}`; }).join("|");
   await document.fonts.ready;
-  for (let prev = null, same = 0, i = 0; same < 2 && i < 200; i++) { await frame(); const cur = snap(); same = cur === prev ? same + 1 : 0; prev = cur; }
+  let prev = null, same = 0, frames = 0;
+  for (; same < 2 && frames < 200; frames++) { await frame(); const cur = snap(); same = cur === prev ? same + 1 : 0; prev = cur; }
+  if (same < 2) throw new Error(`probeComposer: layout never settled (rects still changing after ${frames} frames)`);
   const els = { actions: q(".boring-composer-actions"), cfg: q(".boring-composer-cfg"), staged: q(".boring-composer-staged"), send: q(".boring-composer-send") };
   const present = Object.entries(els).filter(([, e]) => e);
   const items = present.map(([k, e]) => ({ k, r: e.getBoundingClientRect() })).sort((a, b) => a.r.top - b.r.top);
