@@ -336,10 +336,11 @@ export function parseArgs(argv) {
     const eq = a.indexOf("=");
     const flag = eq > 0 ? a.slice(0, eq) : a;
     if (i === 0 && RELEASE_STAGES.includes(a)) out.stage = a;
-    else if (valued[flag]) {
+    else if (Object.hasOwn(valued, flag)) {
       const value = eq > 0 ? a.slice(eq + 1) : argv[++i];
       if (value === undefined || value === "") throw new UsageError(`${flag} needs a value.`);
       out[valued[flag]] = value;
+      if (flag === "--channel") out.channelExplicit = true;
     }
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--unsigned") out.unsigned = true;
@@ -348,10 +349,9 @@ export function parseArgs(argv) {
     else if (a === "--with-android") out.withAndroid = true;
     else throw new UsageError(`Unknown argument: ${a}`);
   }
-  out.channelExplicit = argv.some((a) => a === "--channel" || a.startsWith("--channel="));
   if (out.channelExplicit && out.channel !== "beta" && out.channel !== "stable") throw new UsageError(`--channel must be beta or stable, got "${out.channel}".`);
   if (!out.stage && !out.channelExplicit) throw new UsageError("Pass a subcommand (stage|build|sign|publish) or an explicit --channel; a bare run no longer defaults to beta.");
-  if (out.unsigned && out.noAuthenticode) throw new Error("--unsigned and --no-authenticode cannot be combined: --unsigned is a test build, --no-authenticode an owner-approved release.");
+  if (out.unsigned && out.noAuthenticode) throw new UsageError("--unsigned and --no-authenticode cannot be combined: --unsigned is a test build, --no-authenticode an owner-approved release.");
   out.version = out.version.replace(/^v/, "");
   return out;
 }

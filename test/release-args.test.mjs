@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, symlinkSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs, runRelease, UsageError, USAGE } from "../server/release.mjs";
@@ -22,6 +22,9 @@ describe("release arg parsing", () => {
   test("no subcommand and no --channel is refused", () => {
     assert.throws(() => parseArgs([]), /explicit --channel/);
     assert.throws(() => parseArgs(["--stage-only"]), UsageError);
+    assert.throws(() => parseArgs(["toString", "--channel", "beta"]), UsageError);
+    assert.throws(() => parseArgs(["--toString", "x", "--channel", "beta"]), UsageError);
+    assert.throws(() => parseArgs(["build", "--unsigned", "--no-authenticode"]), UsageError);
     assert.throws(() => parseArgs(["--channel", "stabel"]), /beta or stable/);
   });
   test("every legitimate form still parses", () => {
@@ -54,7 +57,7 @@ describe("release.mjs as a child process (fixture copy, never the real checkout)
     cpSync(join(repo, "server"), join(dir, "server"), { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x", version: "0.3.0", type: "module" }));
     writeFileSync(join(dir, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "0.3.0" }));
-    execFileSync("ln", ["-s", join(repo, "node_modules"), join(dir, "node_modules")]);
+    symlinkSync(join(repo, "node_modules"), join(dir, "node_modules"), "junction");
     const git = (...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8" });
     git("init", "-q");
     git("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A");
