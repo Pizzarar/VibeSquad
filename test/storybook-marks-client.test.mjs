@@ -85,3 +85,10 @@ test("W4 friction 1: per-contract note keeps note on its preview, does not mark 
   assert.equal(M.markState(c2, lines, byKey2, true).contractNote, "too low payout");
   assert.equal(rows.filter((e) => M.isMarkedCsvRow(e, lines, byKey2, true)).length, 1);
 });
+
+test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft rows", () => {
+  const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+  assert.match(css, /\.sb-row-actions \{ margin-left: auto; \}/);
+  assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \{ flex: 1 1 100%; \}/);
+  assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \.sb-mark \{ width: 100%; \}/);
+});

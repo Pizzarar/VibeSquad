@@ -400,11 +400,20 @@ async function commitIn(wt, branch, { reason = "" } = {}) {
   const n = { ok: 0, redo: 0, edit: 0, cleared: 0 };
   const head = await runGit(wt, ["show", `HEAD:${SHEET}`]);
   const prev = new Map(head.ok ? listMarks(head.out).map((m) => [m.key, m]) : []);
+  // Track pre-existing owner_rewrite (e.g. DRAFT rows) so "OK (draft)" counts as OK, not edit (W4 friction 7).
+  const prevRewrite = new Map();
+  if (head.ok) {
+    const { header, records } = splitRecords(head.out);
+    for (const rec of records) {
+      const r = toObj(header, rec.cells);
+      prevRewrite.set(rowKey(r), csvUnsafe(r.owner_rewrite));
+    }
+  }
   for (const m of after) {
     const p = prev.get(m.key);
     if (p && p.status === m.status && p.note === m.note && p.rewrite === m.rewrite && JSON.stringify(p.contracts) === JSON.stringify(m.contracts)) continue;
     if (m.status !== "OWNER-OK") n.redo++;
-    else if (m.rewrite) n.edit++;
+    else if (m.rewrite && m.rewrite !== (prevRewrite.get(m.key) ?? "")) n.edit++;
     else n.ok++;
   }
   const afterKeys = new Set(after.map((m) => m.key));

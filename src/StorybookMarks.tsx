@@ -89,14 +89,14 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
   const start = (k: "redo" | "edit") => { setDraft(k === "redo" ? (st.contractNote || st.note) : (st.rewrite || drafted || hit.target.seen.replace(/^'(?=[+\-=@])/, ""))); setOpen(open === k ? null : k); };
   return (
     <span className="sb-mark" data-testid="sb-mark" data-mark={st.kind}>
+      {st.kind === "none" && drafted && <span className="sb-mark-draft" title="Drafted rewrite: OK approves it">Draft: {drafted}</span>}
+      {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
+      {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
       {st.kind !== "none" && (
         <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || markLabel(st)}>
           {markLabel(st)}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}
         </span>
       )}
-      {st.kind === "none" && drafted && <span className="sb-mark-draft" title="Drafted rewrite: OK approves it">Draft: {drafted}</span>}
-      {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
-      {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
       <span className="sb-mark-btns">
         <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={m.busy} title={hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
         <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={m.busy} title="Redo with a note (key 2)" onClick={() => start("redo")}>Redo</button>

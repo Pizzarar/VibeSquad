@@ -208,7 +208,10 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
 .sb-row-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .sb-row-sub { font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
+.sb-row-actions { margin-left: auto; }
 .sb-row-actions:empty { display: none; } /* V6 slot: OK / Redo / Edit buttons mount here */
+.sb-row-actions:has(.sb-mark-draft, .sb-mark-form) { flex: 1 1 100%; }
+.sb-row-actions:has(.sb-mark-draft, .sb-mark-form) .sb-mark { width: 100%; }
 .sb-cat-toolong { border-color: var(--sb-warn); }
 .sb-ent-filter[aria-pressed="true"] { background: var(--sb-accent); color: var(--sb-on-accent); border-color: var(--sb-accent); }
 
@@ -287,7 +290,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-mark-ok { color: #6be3a8; } .sb-root .sb-mark-redo { color: var(--sb-warn); } .sb-root .sb-mark-edit { color: var(--sb-accent-text); }
 /* a marked row reads as its mark only: the sheet status it started from (STORY-TODO / DRAFT ...) steps aside */
 .sb-root .sb-row:has(.sb-mark:not([data-mark="none"])) .sb-row-meta .sb-status { display: none; }
-.sb-root .sb-mark-draft { font-size: 12px; color: var(--sb-text2); font-style: italic; flex-basis: 100%; text-align: left; }
+.sb-root .sb-mark-draft { font-size: 12px; color: var(--sb-text2); font-style: italic; flex: 1 1 240px; text-align: left; }
 .sb-root .sb-mark-hint { font-size: 12px; color: var(--sb-warn); }
 .sb-root .sb-mark-form { display: flex; flex-direction: column; gap: 6px; flex-basis: 100%; }
 .sb-root .sb-mark-input { width: 100%; box-sizing: border-box; background: var(--sb-bg); color: var(--sb-text); border: 1px solid var(--sb-line); border-radius: 6px; padding: 6px 8px; font: inherit; }
@@ -312,6 +315,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 @media (pointer: coarse), (max-width: 640px) {
   .sb-root .sb-mbtn { min-height: 44px; min-width: 44px; font-size: 14px; }
   .sb-root .sb-mark { justify-content: stretch; width: 100%; }
+  .sb-root .sb-mark-draft { flex-basis: 100%; }
   .sb-root .sb-mark-btns { width: 100%; } .sb-root .sb-mark-btns .sb-mbtn { flex: 1 1 0; }
   .sb-root .sb-tgroup-extra { padding-left: 8px; }
 }
