@@ -789,8 +789,9 @@ const within = (p, root) => { const r = path.relative(root, p); return r === '' 
 /** Temp dirs whose main checkouts are scratch repos (tests, scripts), not a shared checkout: os.tmpdir() for `env`, plus its realpath. */
 export function scratchRootsOf(env = process.env) {
   const t = env?.TMPDIR || env?.TMP || env?.TEMP || os.tmpdir();
-  const roots = new Set([resolveHost(t)]);
-  try { roots.add(realpathSync(t)); } catch { /* missing temp dir: the literal path only */ }
+  const resolved = resolveHost(t);
+  const roots = new Set([resolved]);
+  try { roots.add(realpathSync(resolved)); } catch { /* missing temp dir: the literal path only */ }
   return [...roots].filter((r) => path.dirname(r) !== r); // never `/`: TMPDIR=/ must not exempt every repo
 }
 

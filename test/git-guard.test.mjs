@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { findViolation, gitArgvViolation, gitGuardDecision, msysToWin, repoKind, tokenize } from '../runner/git-guard.mjs';
+import { findViolation, gitArgvViolation, gitGuardDecision, msysToWin, scratchRootsOf, repoKind, tokenize } from '../runner/git-guard.mjs';
 import { createClaudeAdapter, drainHookSettings, DRAIN_HOOK_SCRIPT, isWorkerAgent } from '../runner/adapters/claude.mjs';
 
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'vs-git-guard-')));
@@ -357,6 +357,21 @@ test('win32: an MSYS cwd (/c/..., /cygdrive/c/...) resolves like its C:\\ form (
       assert.equal(v.root.toLowerCase(), MAIN.toLowerCase());
       assert.ok(gitArgvViolation(['reset', '--hard'], { cwd: c, env }), `argv cwd ${c}`);
     }
+  }
+});
+
+test('win32: scratchRootsOf maps an MSYS TMPDIR to its drive path and never keeps a drive root', () => {
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  try {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    for (const t of ['/c', '/cygdrive/c', '/c/']) {
+      assert.deepEqual(scratchRootsOf({ TMPDIR: t }).filter((r) => /^[A-Za-z]:[\\/]*$/.test(r) || r === '/'), [], `TMPDIR=${t}`);
+    }
+    const roots = scratchRootsOf({ TMPDIR: '/c/vs-nonexistent-tmp' });
+    assert.ok(roots.some((r) => /(^|[\\/])C:[\\/]+vs-nonexistent-tmp$/i.test(r)), roots.join(','));
+    assert.ok(!roots.some((r) => /[\\/]c[\\/]vs-nonexistent-tmp$/.test(r) && !/C:/i.test(r)), 'no raw /c/... root');
+  } finally {
+    Object.defineProperty(process, 'platform', real);
   }
 });
 
