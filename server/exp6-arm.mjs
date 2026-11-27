@@ -162,8 +162,9 @@ export function armModel(wf) {
  * vs.arm=carbon on a tierA or mechanical respawn keeps the ladder rung.
  */
 export function armRouteFor(roleName, wf) {
-  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "", armModel: "" };
-  return { prefer: armProvider(wf), tier: armTier(wf), armModel: armModel(wf) };
+  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "" };
+  const model = armModel(wf);
+  return { prefer: armProvider(wf), tier: armTier(wf), ...(model ? { armModel: model } : {}) };
 }
 
 /** EXP6 history: open until a verdict is logged or the end date passes. `endIso` is VS_EXP6_END (or the default). */
