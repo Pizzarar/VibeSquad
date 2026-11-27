@@ -64,9 +64,9 @@ test("#3 claimed hyphenated item names are matched (First-Aid Kit)", async () =>
   assert.match(sev(fs, "warn").map((x) => x.msg).join("\n"), /says "first aid kit"/);
 });
 
-test("#4 base fixture: only inference tallies (info)", async () => {
+test("#4 base fixture: no findings (speaker-inference diagnostics routed to warnings)", async () => {
   const fs = await run("#4");
-  assert.deepEqual(fs.filter((f) => f.severity !== "info"), []);
+  assert.deepEqual(fs, []);
 });
 test("#4 card neverSays + player word 'runner' flag; global bans do not; no-callsPlayer card allows runner", async () => {
   const fs = await run("#4", (f) => ql(f, (q) => {

@@ -162,7 +162,8 @@ export function runSpeakers(ctx) {
     if (t.role) parts.push(`${t.role} rows get the actor/callsign role`);
     if (t.explicit) parts.push(`${t.explicit} rows already carry a speaker`);
     if (t.unresolved) parts.push(`${t.unresolved} rows could not be inferred`);
-    out.push({ check: "#4", severity: "info", entityRef: null, msg: `${file}: ${parts.join("; ")}`, source: { path: file, line: null } });
+    // DOGFOOD_W2 friction 11: route #4 speaker-inference adapter diagnostics out of Story issues to snapshot.warnings.
+    if (Array.isArray(ctx.snapshot?.warnings)) ctx.snapshot.warnings.push(`speaker inference (${file}): ${parts.join("; ")}`);
   }
   // bans
   const cards = cardIndex(reg);

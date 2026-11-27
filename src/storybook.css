@@ -263,6 +263,28 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
   .sb-items-bar .sb-search { max-width: none; }
 }
 
+/* V10: Glossary tab (canonical terms, banned terms, name-style rules). */
+.sb-glossary { display: flex; flex-direction: column; gap: 10px; }
+.sb-gloss-head { display: flex; flex-direction: column; gap: 8px; }
+.sb-gloss-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sb-gloss-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sb-gloss-cards { display: flex; flex-direction: column; gap: 8px; }
+.sb-gloss-bans { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; }
+.sb-gloss-card { padding: 10px 12px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sb-gloss-card-hit { border-left: 4px solid var(--sb-warn); }
+.sb-gloss-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sb-gloss-term { font-size: 15px; color: var(--sb-text); }
+.sb-gloss-note { margin: 0; font-size: 13px; color: var(--sb-text2); overflow-wrap: anywhere; }
+.sb-gloss-variants { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; }
+.sb-gloss-var { padding: 1px 6px; border-radius: 6px; background: var(--sb-panel2); border: 1px solid var(--sb-line); font-family: var(--mono, ui-monospace, "JetBrains Mono", monospace); font-size: 12px; color: var(--sb-text); }
+.sb-gloss-badge-warn { background: color-mix(in srgb, var(--sb-warn) 24%, transparent); color: var(--sb-text); }
+.sb-gloss-hits { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.sb-gloss-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sb-gloss-hit { padding: 6px 10px; background: var(--sb-panel2); border: 1px solid var(--sb-line); border-left: 3px solid var(--sb-line); border-radius: 6px; }
+.sb-gloss-msg { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.sb-gloss-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 2px; }
+.sb-gloss-more { align-self: flex-start; }
+
 /* W3 riders: Cast grouping + scroll target, Story arc index & live task chips, Play order unordered per trader. */
 .sb-cast-sec { margin-bottom: 8px; }
 .sb-cast-lbl { margin: 0 0 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sb-text2); display: flex; align-items: center; gap: 6px; }
