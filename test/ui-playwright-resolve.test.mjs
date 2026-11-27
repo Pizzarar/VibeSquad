@@ -3,6 +3,7 @@
 // it lives under ~/.vibesquad, not /tmp and not the npx cache.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -194,4 +195,20 @@ test("isSnapBrowser: /snap paths and the wrapper that execs /snap/bin/chromium",
   assert.equal(isSnapBrowser("/usr/bin/google-chrome", { readHead: () => "\x7fELF" }), false);
   assert.equal(isSnapBrowser("/nope", { readHead: () => { throw new Error("ENOENT"); } }), false);
   assert.equal(isSnapBrowser(null), false);
+});
+
+test("snapSafeTmpdir: non-linux never reads the browser file; '..foo' under $HOME is inside $HOME", () => {
+  const boom = () => { throw new Error("readHead must not be called"); };
+  for (const platform of ["win32", "darwin"]) {
+    assert.equal(snapSafeTmpdir({ exe: "/x/chromium", tmpdir: "/home/u/.cache/t", home: "/home/u", platform, readHead: boom }), null);
+  }
+  // linux with no `snap` override does consult readHead
+  assert.equal(snapSafeTmpdir({ exe: "/usr/bin/chromium-browser", tmpdir: "/home/u/.cache/t", home: "/home/u", platform: "linux", readHead: () => "exec /snap/bin/chromium" }), "/tmp");
+  assert.equal(snapSafeTmpdir({ home: "/home/u", platform: "linux", snap: true, tmpdir: "/home/u/..foo/t" }), "/tmp", "..foo is a hidden dir under $HOME, not outside it");
+});
+
+test("isSnapBrowser default reader only reads the head of a real file", () => {
+  const f = path.join(os.tmpdir(), `snapw-${process.pid}.sh`);
+  fs.writeFileSync(f, "#!/bin/sh\nexec /snap/bin/chromium\n" + "x".repeat(10000));
+  try { assert.equal(isSnapBrowser(f), true); } finally { fs.rmSync(f, { force: true }); }
 });

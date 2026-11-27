@@ -82,7 +82,16 @@ export function playwrightCandidates({
 }
 
 /** True when `exe` is a snap Chromium: it lives under /snap, or it is the /usr/bin wrapper script that execs /snap/bin/chromium. */
-export function isSnapBrowser(exe, { readHead = (p) => fs.readFileSync(p).subarray(0, 4096).toString("latin1") } = {}) {
+function readFileHead(p, n = 4096) {
+  const fd = fs.openSync(p, "r");
+  try {
+    const buf = Buffer.alloc(n);
+    const got = fs.readSync(fd, buf, 0, n, 0);
+    return buf.subarray(0, got).toString("latin1");
+  } finally { fs.closeSync(fd); }
+}
+
+export function isSnapBrowser(exe, { readHead = readFileHead } = {}) {
   if (!exe) return false;
   if (exe.startsWith("/snap/")) return true;
   try { return readHead(exe).includes("/snap/bin/"); } catch { return false; }
@@ -93,10 +102,11 @@ export function isSnapBrowser(exe, { readHead = (p) => fs.readFileSync(p).subarr
  * forge service puts TMPDIR (~/.cache/vibesquad-tmp). Playwright makes its temp profile under os.tmpdir() at launch, so for
  * a snap browser with such a tmpdir return a snap-visible dir to use instead; null means leave TMPDIR alone.
  */
-export function snapSafeTmpdir({ exe, tmpdir = os.tmpdir(), home = os.homedir(), platform = process.platform, snap = isSnapBrowser(exe), fallback = "/tmp" } = {}) {
-  if (platform !== "linux" || !snap) return null;
+export function snapSafeTmpdir({ exe, tmpdir = os.tmpdir(), home = os.homedir(), platform = process.platform, snap, readHead, fallback = "/tmp" } = {}) {
+  if (platform !== "linux") return null; // never touch the browser file off Linux
+  if (!(snap ?? isSnapBrowser(exe, readHead ? { readHead } : undefined))) return null;
   const rel = path.relative(home, tmpdir);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null; // not under $HOME
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) return null; // not under $HOME
   if (!rel.split(path.sep).some((seg) => seg.startsWith("."))) return null; // no hidden segment: snap can write it
   return fallback;
 }
