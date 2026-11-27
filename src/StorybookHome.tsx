@@ -5,6 +5,8 @@ import {
   AUDIT_HELP, AUDIT_LABEL, AUDIT_SIGNALS, FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, auditCounts, changesSince, changesTotal, goneBreakdown, kindCounts, kindTab, scopeCounts, shortSha, signalCard,
   type FindingScope, type ListItem, type SbChanges, type SbEntity, type SbSnapshot,
 } from "./storybookLogic";
+import { ProgressBarRow } from "./StorybookProgress";
+import type { ProgressAreaId, ProgressTextBucket, SbProgress } from "./storybookProgress";
 
 const BUCKETS: FindingScope[] = ["problems", "story", "coverage", "text"];
 const GONE_PREVIEW_CAP = 60;
@@ -13,6 +15,7 @@ type HomeProps = {
   snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void; onSignal?: (signal: string) => void;
   changes?: SbChanges | null; onChanges?: () => void; onMarkSeen?: () => void; seenBusy?: boolean; seenError?: string | null;
   onContracts?: () => void; renderChip?: (e: SbEntity, label?: string) => React.ReactNode;
+  progress?: SbProgress | null; onProgressArea?: (area: ProgressAreaId, status?: ProgressTextBucket | null) => void;
 };
 
 /** V8: first Needs-attention card. New / changed / gone since the owner's last marked-seen session. */
@@ -56,10 +59,11 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
   );
 }
 
-export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip }: HomeProps) {
+export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip, progress, onProgressArea }: HomeProps) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const audit = useMemo(() => auditCounts(snap.audit), [snap]);
+  const progTotal = useMemo(() => (progress ? progress.areas.reduce((acc, a) => ({ ok: acc.ok + a.text.ok, total: acc.total + a.text.total }), { ok: 0, total: 0 }) : null), [progress]);
   return (
     <div className="sb-home" data-testid="sb-overview">
       <section className="sb-section">
@@ -75,6 +79,23 @@ export function StorybookHome({ snap, items, onTab, onFindings, onSignal, change
           ))}
         </div>
       </section>
+      {progress && progress.areas.length > 0 && (
+        <section className="sb-section" data-testid="sb-progress-section">
+          <h3 className="sb-h">
+            Placeholder → final progress
+            {progTotal && <span className="sb-count">{progTotal.ok}/{progTotal.total} OK</span>}
+          </h3>
+          <div className="sb-prog-list" data-testid="sb-progress-bars">
+            {progress.areas.map((area) => (
+              <ProgressBarRow
+                key={area.id}
+                entry={area}
+                onOpen={onProgressArea ? (st) => onProgressArea(area.id as ProgressAreaId, st) : undefined}
+              />
+            ))}
+          </div>
+        </section>
+      )}
       {audit && (
         <section className="sb-section">
           <h3 className="sb-h">Audit signals</h3>

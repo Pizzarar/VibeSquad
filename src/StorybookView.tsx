@@ -22,6 +22,7 @@ import { MarkBatch, MarkButtons, MarksBar, useMarks, type MarksApi } from "./Sto
 import { StorybookItems } from "./StorybookItems";
 import { StorybookGlossary } from "./StorybookGlossary";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
+import { applyLiveMarks, statusBucket, type ProgressAreaId, type ProgressTextBucket, type SbProgress } from "./storybookProgress";
 import "./storybook.css";
 
 // ── open/close store (module-level, like openOverlay) ───────────────────────────
@@ -367,8 +368,9 @@ function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, m
   );
 }
 
-function Locations({ idx, findings, sel, setSel, renderChip, onReview }: {
+function Locations({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: SbProgress | null; onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
   const locs = useMemo(() => idx.byKind("location"), [idx]);
   const loc = locs.find((l) => l.id === sel) ?? locs[0];
@@ -378,13 +380,16 @@ function Locations({ idx, findings, sel, setSel, renderChip, onReview }: {
       <div className="sb-seg" role="tablist" aria-label="Locations">
         {locs.map((l) => <button key={l.id} type="button" role="tab" aria-selected={l.id === loc.id} className="sb-seg-btn" onClick={() => setSel(l.id)}>{l.display}</button>)}
       </div>
-      <MapSheet loc={loc} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />
+      <MapSheet loc={loc} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview}
+        progress={progress?.entities[`location:${loc.id}`] ?? null}
+        onProgress={onProgressEntity ? (st) => onProgressEntity(`location:${loc.id}`, loc.display, st) : undefined} />
     </div>
   );
 }
 
-function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
+function Characters({ idx, findings, sel, setSel, renderChip, onReview, progress, onProgressEntity }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: SbProgress | null; onProgressEntity?: (entityKey: string, label: string, status?: ProgressTextBucket | null) => void;
 }) {
   const chars = useMemo(() => characterViews(idx), [idx]);
   const grouped = useMemo(() => groupCharacterViews(chars), [chars]);
@@ -439,7 +444,9 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
               })}
             </div>
             <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
-              {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+              {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview}
+                progress={progress?.entities[`enemy:${enemy.id.toLowerCase()}`] ?? null}
+                onProgress={onProgressEntity ? (st) => onProgressEntity(`enemy:${enemy.id.toLowerCase()}`, enemy.display, st) : undefined} />}
             </div>
           </>
         )
@@ -465,7 +472,9 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
               </details>
             )}
             <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
-              {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+              {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview}
+                progress={progress?.entities[ch.id] ?? null}
+                onProgress={onProgressEntity ? (st) => onProgressEntity(ch.id, ch.speaker, st) : undefined} />}
             </div>
           </>
         )
@@ -611,8 +620,25 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const card = useCard(idx, (e) => goToRef.current(e));
   const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
   const marks = useMarks(projectId, idx); // V6 owner marks
+  const liveProgress = useMemo(() => applyLiveMarks(snap?.progress, marks.state.marks), [snap, marks.state.marks]); // V12 progress with live V6 marks
   const rowEntity = useCallback((r: { kind: string; entityId: string }) => idx.get(r.kind, r.entityId), [idx]);
   const mineTest = useCallback((r: { kind: string; entityId: string }) => marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);
+  const rowStatusBucket = useCallback((r: { kind: string; entityId: string; status: string | null }): ProgressTextBucket | null => {
+    if (r.kind !== "line") return null;
+    const e = rowEntity(r);
+    const st = marks.stateOf(e);
+    if (st.kind === "ok" || st.kind === "edit") return "ok";
+    if (st.kind === "redo") return "rewrite";
+    return statusBucket(r.status, e?.production);
+  }, [marks, rowEntity]);
+  const openProgressArea = useCallback((area: ProgressAreaId, status?: ProgressTextBucket | null) => {
+    setPreset({ area, status: status ?? null, n: Date.now() });
+    setTab("review");
+  }, []);
+  const openProgressEntity = useCallback((ek: string, label: string, status?: ProgressTextBucket | null) => {
+    setPreset({ entityKey: ek, entityLabel: label, status: status ?? null, n: Date.now() });
+    setTab("review");
+  }, []);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -744,14 +770,15 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} />}
             {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
+              progress={liveProgress} rowStatusBucket={rowStatusBucket}
               header={<MarksBar m={marks} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
               renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
             {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} />}
-            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
+            {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} progress={liveProgress} onProgressEntity={openProgressEntity} />}
+            {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} progress={liveProgress} onProgressEntity={openProgressEntity} />}
+            {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} progress={liveProgress} onProgressEntity={openProgressEntity} />}
             {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => { setChecks(null); setScope((sc) => effectiveScope(sc, null)); }} />}
             {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>

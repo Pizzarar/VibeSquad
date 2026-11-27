@@ -15,6 +15,7 @@ import { buildArc } from "./unlocks.mjs";
 import { QUOTED_HOST_PATH } from "../team-worktrees.mjs";
 import { diffChanges, readSeen, seenRecord, writeSeen } from "./changes.mjs";
 import { buildGlossary } from "./glossary.mjs";
+import { buildProgress } from "./progress.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -131,6 +132,7 @@ async function buildOnce(project, { refresh, deps }) {
     }
   }
   try { snap.arc = buildArc(snap.entities); } catch (e) { snap.warnings.push(`arc failed: ${String(e?.message ?? e).slice(0, 200)}`); }
+  try { snap.progress = buildProgress(snap); } catch (e) { snap.warnings.push(`progress failed: ${String(e?.message ?? e).slice(0, 200)}`); }
   remember(project, sha, snap);
   return { snapshot: snap, fetch };
 }

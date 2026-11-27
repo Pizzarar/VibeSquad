@@ -1,4 +1,5 @@
 import { etClock, etDate } from "./etTime.ts";
+import type { SbProgress } from "./storybookProgress.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 
@@ -33,6 +34,7 @@ export type SbSnapshot = {
   audit?: { signal: string; severity: string; msg?: string }[];
   arc?: SbArc; // server/storybook/unlocks.mjs (V5)
   glossary?: SbGlossary; // server/storybook/glossary.mjs (V10)
+  progress?: SbProgress; // server/storybook/progress.mjs (V12)
 };
 
 export type SbGlossaryCanonical = {
