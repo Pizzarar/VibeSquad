@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildQualityByModel, buildQualitySummary, QUALITY_MIN_N, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type CreditRow, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { takePendingUsageScroll, costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, planScoreText, plansSummary, bugInboxCards, buildProfiles, buildQualityByModel, buildQualitySummary, QUALITY_MIN_N, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, formatCreditBalance, formatCreditThreshold, formatFamilySuffix, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, laneRoleRows, burstCellText, type BurstCohorts, planStatusLabel, shortLead, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type CreditRow, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -181,18 +181,19 @@ function CreditCard({ c, thresholdUsd, now }: { c: CreditRow; thresholdUsd: numb
   const low = ok && (c.balance as number) < thresholdUsd;
   const level = capped ? "ok" : !ok ? "warn" : low ? "hot" : "ok";
   const cur = (c.currency ?? "USD").toUpperCase();
-  const sym = cur === "USD" ? "$" : `${cur} `;
+  const stale = limitIsStale(c.checkedAt, now);
   const sampled = limitSampledText(c.checkedAt, now);
   return (
-    <div className={`usage-limit usage-${level}${capped ? " usage-limit-stale" : ""}`} data-testid="usage-credit-card" data-provider={c.provider} data-low={low ? "true" : undefined} data-capped={capped ? "true" : undefined}>
+    <div className={`usage-limit usage-${level}${capped || stale ? " usage-limit-stale" : ""}`} data-stale={stale ? "true" : undefined} data-testid="usage-credit-card" data-provider={c.provider} data-low={low ? "true" : undefined} data-capped={capped ? "true" : undefined}>
       <div className="usage-limit-head">
         <span className="usage-limit-name">{providerLabel(c.provider)}</span>
         <span className="usage-limit-win">credit</span>
+        {stale && <span className="usage-stale-tag" title="Last credit check was over 2h ago">stale</span>}
         {capped && <span className="usage-stale-tag" title="Provider is capped; low-credit alerts paused">capped</span>}
       </div>
       <div className="usage-limit-pct">
-        {ok ? `${sym}${(c.balance as number).toFixed(2)}` : c.status}
-        <small>{ok ? (capped ? "capped (alerts paused)" : low ? `below $${thresholdUsd} threshold` : `${cur} balance`) : "balance check failed"}</small>
+        {ok ? formatCreditBalance(c.balance as number, c.currency) : c.status}
+        <small>{ok ? (capped ? "capped (alerts paused)" : low ? `below ${formatCreditThreshold(thresholdUsd, c.currency)} threshold` : `${cur} balance`) : "balance check failed"}</small>
       </div>
       {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-credit-sampled" title={c.checkedAt ? etDateTime(c.checkedAt) || undefined : undefined}>{sampled}</div>}
     </div>

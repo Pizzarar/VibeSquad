@@ -13,19 +13,22 @@ import {
   fetchDeepSeekBalance,
   findDeepSeekApiKey,
   parseDeepSeekBalance,
-  redactSecret,
 } from "../runner/limits.mjs";
-import { Runner } from "../runner/runner.mjs";
+import { redactSecrets } from "../runner/log.mjs";
 import { readCredits } from "../server/limits-read.mjs";
 import {
   DEFAULT_CREDIT_THRESHOLD_USD,
   evaluateCreditAlerts,
+  formatCreditAlertFields,
   formatCreditAlertMessage,
   isDeliberateCap,
   isProviderDeliberatelyCapped,
   readCreditAlertState,
   startCreditGuardWatcher,
 } from "../server/credit-guard.mjs";
+import { NEEDS_YOU_MAX_FIELD, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
+import { openDecisions } from "../server/decisions.mjs";
+import { formatCreditBalance, formatCreditThreshold, limitIsStale } from "../src/usageHelpers.ts";
 import { setProviderCapped } from "../server/provider-failover.mjs";
 import {
   clearUsageCache,
@@ -165,7 +168,7 @@ test("fetchDeepSeekBalance: refuses real network under test runner, handles no-k
   });
   assert.deepEqual(errRes, { provider: "deepseek", balance: null, currency: null, status: "error" });
   assert.equal(JSON.stringify(errRes).includes(FAKE_KEY), false);
-  assert.equal(redactSecret(`oops ${FAKE_KEY} leaked`, FAKE_KEY), "oops [REDACTED] leaked");
+  assert.equal(redactSecrets(`oops ${FAKE_KEY} leaked`, [FAKE_KEY]), "oops [redacted] leaked");
 });
 
 test("createCreditPoller + CreditStore: caches & throttles at 30 min, persists to credits.json, handles no-key quietly", async () => {
@@ -238,33 +241,108 @@ test("createCreditPoller + CreditStore: caches & throttles at 30 min, persists t
   assert.equal(JSON.stringify(usage).includes(FAKE_KEY), false);
 });
 
-test("Runner polls credits after an opencode turn_done and persists credits.json", async () => {
-  const home = makeTmp("vs-runner-credits-");
+test("usa-69: startCreditGuardWatcher ticks 30m apart (even with early timer jitter) both fetch without refresh drift", async () => {
+  const home = makeHome();
+  let t = Date.parse("2026-11-25T10:00:00Z");
   let fetchCalls = 0;
-  const adapter = {
-    start({ emit }) {
-      setImmediate(() => emit("turn_done", {}));
-      return { send() {}, cancel() {}, kill() {} };
-    },
-  };
-  const runner = new Runner({
-    dir: path.join(home, "agents"),
-    adapters: { opencode: adapter },
-    pollCredits: true,
-    creditResolveKey: async () => FAKE_KEY,
-    creditFetch: async () => {
+  let scheduledFn = null;
+  const watcher = startCreditGuardWatcher({
+    home,
+    intervalMs: CREDIT_POLL_INTERVAL_MS,
+    resolveKey: async () => FAKE_KEY,
+    fetchImpl: async () => {
       fetchCalls++;
-      return { ok: true, json: async () => ({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "11.00" }] }) };
+      return {
+        ok: true,
+        json: async () => ({ is_available: true, balance_infos: [{ currency: "USD", total_balance: fetchCalls === 1 ? "25.00" : "22.50" }] }),
+      };
     },
+    log: async () => {},
+    now: () => t,
+    setIntervalFn: (fn) => { scheduledFn = fn; return 1; },
+    clearIntervalFn: () => {},
   });
-  runner.create({ provider: "opencode", cwd: home });
-  await new Promise((r) => setTimeout(r, 50));
-  runner.shutdown();
-  assert.equal(fetchCalls, 1);
-  assert.equal(existsSync(path.join(home, "credits.json")), true);
-  const raw = readFileSync(path.join(home, "credits.json"), "utf8");
-  assert.equal(raw.includes(FAKE_KEY), false);
-  assert.equal(JSON.parse(raw).credits.deepseek.balance, 11);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(fetchCalls, 1, "startup tick should fetch");
+
+  // Advance 30m minus 5ms (wall-clock timer jitter) and invoke the scheduled interval tick
+  t += CREDIT_POLL_INTERVAL_MS - 5;
+  assert.equal(typeof scheduledFn, "function");
+  scheduledFn();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(fetchCalls, 2, "second tick 30m later must fetch even if timer fires a few ms early");
+  assert.equal(readCredits(home)[0].balance, 22.5);
+
+  // Advance another exact 30m and invoke tick() directly
+  t += CREDIT_POLL_INTERVAL_MS;
+  await watcher.tick();
+  assert.equal(fetchCalls, 3, "third tick 30m later must also fetch");
+  watcher.stop();
+});
+
+test("usa-69: credit needs-you carries structured decides/lean/alt/kind under 240 chars for Decision Desk", async () => {
+  const home = makeHome();
+  const t = Date.parse("2026-11-25T12:00:00Z");
+  const logs = [];
+  await evaluateCreditAlerts({
+    credits: [{ provider: "deepseek", balance: 7.12, currency: "USD", checkedAt: new Date(t).toISOString(), status: "ok" }],
+    home,
+    thresholdUsd: 10,
+    now: () => t,
+    log: async (entry) => { logs.push(entry); },
+  });
+  assert.equal(logs.length, 1);
+  const entry = logs[0];
+  assert.equal(entry.text, "DeepSeek credit $7.12 < $10 threshold: top up");
+  assert.equal(entry.summary, entry.text);
+  assert.ok(entry.text.length <= NEEDS_YOU_MAX_FIELD);
+  assert.ok(entry.decides && entry.decides.length <= NEEDS_YOU_MAX_FIELD);
+  assert.ok(entry.do && entry.do.length <= NEEDS_YOU_MAX_FIELD);
+  assert.equal(entry.kind, "yesno");
+  assert.ok(Array.isArray(entry.alt) && entry.alt.length >= 1);
+
+  const validated = validateNeedsYouFields("needs-you", entry.text, entry);
+  assert.ok(validated);
+  assert.equal(validated.decides, entry.decides);
+  assert.equal(validated.do, entry.do);
+  assert.equal(validated.kind, "yesno");
+
+  const decisions = openDecisions({
+    squads: [{
+      id: "vibesquad",
+      name: "VibeSquad",
+      entries: [{ ts: new Date(t).toISOString(), agent: "vibesquad-server", lane: "usage", type: "needs-you", text: entry.text, ...validated }],
+    }],
+    now: t + 1000,
+  });
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].structured, true);
+  assert.equal(decisions[0].kind, "yesno");
+  assert.equal(decisions[0].decides, entry.decides);
+  assert.equal(decisions[0].lean, entry.do);
+  assert.deepEqual(decisions[0].alts, entry.alt);
+
+  // formatCreditAlertFields handles negative balance cleanly too
+  const negFields = formatCreditAlertFields({ provider: "deepseek", balance: -0.06, currency: "USD", thresholdUsd: 10 });
+  assert.equal(negFields.text, "DeepSeek credit -$0.06 < $10 threshold: top up");
+  assert.ok(negFields.text.length <= NEEDS_YOU_MAX_FIELD);
+});
+
+test("usa-69: CreditCard helpers format negative balances, non-USD thresholds, and 2h staleness", () => {
+  assert.equal(formatCreditBalance(-0.06, "USD"), "-$0.06");
+  assert.equal(formatCreditBalance(14.5, "USD"), "$14.50");
+  assert.equal(formatCreditBalance(-0, "USD"), "$0.00");
+  assert.equal(formatCreditBalance(-0.06, "CNY"), "-CNY 0.06");
+  assert.equal(formatCreditBalance(50, "CNY"), "CNY 50.00");
+
+  assert.equal(formatCreditThreshold(10, "USD"), "$10");
+  assert.equal(formatCreditThreshold(10, "CNY"), "CNY 10");
+  assert.equal(formatCreditThreshold(12.5, "EUR"), "EUR 12.50");
+  assert.equal(formatCreditThreshold(10, null), "$10");
+
+  const now = Date.parse("2026-11-25T15:00:00Z");
+  assert.equal(limitIsStale("2026-11-25T13:30:00Z", now), false); // 1.5h old
+  assert.equal(limitIsStale("2026-11-25T12:59:59Z", now), true);  // >2h old
 });
 
 test("credit-guard: threshold crossing fires once, dedupes across restart, re-arms above threshold, and respects settings threshold", async () => {
@@ -320,15 +398,19 @@ test("credit-guard: threshold crossing fires once, dedupes across restart, re-ar
   // 4. Simulated "server restart": fresh startCreditGuardWatcher reading persisted <home>/runner/credit-alerts.json does NOT re-fire
   assert.equal(readCreditAlertState(home).providers.deepseek.alerted, true);
   let balanceNow = 8.5;
+  let restartFetchCalls = 0;
   const watcherAfterRestart = startCreditGuardWatcher({
     home,
     intervalMs: 60_000,
     getThreshold: () => loadRunnerSettings(home).creditGuard.thresholdUsd,
     resolveKey: async () => FAKE_KEY,
-    fetchImpl: async () => ({
-      ok: true,
-      json: async () => ({ is_available: true, balance_infos: [{ currency: "USD", total_balance: String(balanceNow) }] }),
-    }),
+    fetchImpl: async () => {
+      restartFetchCalls++;
+      return {
+        ok: true,
+        json: async () => ({ is_available: true, balance_infos: [{ currency: "USD", total_balance: String(balanceNow) }] }),
+      };
+    },
     log,
     now: () => t,
     setIntervalFn: () => 1,
@@ -337,6 +419,7 @@ test("credit-guard: threshold crossing fires once, dedupes across restart, re-ar
   // Wait for initial tick from startCreditGuardWatcher
   await new Promise((r) => setTimeout(r, 30));
   watcherAfterRestart.stop();
+  assert.equal(restartFetchCalls, 1, "restart watcher's initial poll must have run");
   assert.equal(logs.length, 1, "restart must not re-fire already-alerted crossing");
 
   // 5. Error / no-key does not re-arm
@@ -548,7 +631,7 @@ test("usa-67: manual cap skips alert without persisting state; lifting cap fires
   fired = await evaluateCreditAlerts({ credits: lowReading(), home, thresholdUsd: 10, now: () => t, log });
   assert.equal(fired.length, 1);
   assert.equal(logs.length, 1);
-  assert.equal(logs[0].text, "DeepSeek credit $-0.06 < $10 threshold: top up");
+  assert.equal(logs[0].text, "DeepSeek credit -$0.06 < $10 threshold: top up");
   assert.equal(readCreditAlertState(home).providers.deepseek.alerted, true);
 
   // Second poll after firing stays deduped

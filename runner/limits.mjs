@@ -226,13 +226,6 @@ export const DEEPSEEK_BALANCE_URL = 'https://api.deepseek.com/user/balance';
 export const CREDIT_POLL_INTERVAL_MS = 30 * 60_000;
 const CREDIT_FETCH_TIMEOUT_MS = 15_000;
 
-/** Replace any occurrence of secret in text with [REDACTED] so a key never leaks into errors or logs. */
-export function redactSecret(text, secret) {
-  const s = String(text ?? '');
-  if (!secret || typeof secret !== 'string') return s;
-  return s.split(secret).join('[REDACTED]');
-}
-
 /**
  * Parse DeepSeek GET /user/balance response:
  *   { is_available: true, balance_infos: [{ currency: "USD", total_balance: "7.12", ... }] }
