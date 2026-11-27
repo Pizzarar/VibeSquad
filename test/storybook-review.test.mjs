@@ -361,6 +361,19 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
     const contractBlock = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-block-contracts")[0];
     assert.ok(contractBlock, "contracts rendered in sb-text-block-contracts");
   });
+
+  test("V7 friction 5: My marks stays outside the phone Filters toggle, and needs-you compacts to a badge on <=600px", async () => {
+    const { StorybookText } = await loadMod();
+    const rows = R.buildReviewRows(snap.entities, idx, []);
+    const m = mount(StorybookText);
+    const tree = m.render({ rows, idx, focus: null, mineTest: () => false, renderChip: (e, label) => label ?? e.display });
+    const more = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-filter-more")[0];
+    assert.equal(findAll(more, (n) => n.props?.["data-testid"] === "sb-text-mine").length, 0, "My marks must NOT be inside sb-text-filter-more");
+    assert.equal(findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-mine").length, 1, "My marks rendered outside Filters toggle");
+    const css = readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+    assert.match(css, /\.sb-needs-txt\s*\{\s*display:\s*none;\s*\}/, "needs-you text hidden on <=600px");
+    assert.doesNotMatch(css, /\.sb-head:has\(\.sb-needs\)/, "needs-you no longer forces a second header row on phone");
+  });
 });
 
 test("real EFI (if /tmp snapshot present): counts", { skip: !existsSync("/tmp/sbv3_snap.json") }, () => {

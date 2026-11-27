@@ -135,7 +135,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   }, [flash]);
 
   const toggleClass = (c: RowClass) => setClasses((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
-  const nSecFilters = (only ? 1 : 0) + classes.size + (unreviewed ? 1 : 0) + (mine ? 1 : 0) + (tooLong ? 1 : 0);
+  const nSecFilters = (only ? 1 : 0) + classes.size + (unreviewed ? 1 : 0) + (tooLong ? 1 : 0);
   const active = query !== "" || speakerFilter != null || areaFilter != null || entityFilter != null || statusFilter != null || classes.size > 0 || tooLong || unreviewed || mine || only != null;
   // V6 keys: j/k or arrows move between rows, 1/2/3 press the focused row's OK / Redo / Edit.
   const onKey = (ev: React.KeyboardEvent) => {
@@ -172,6 +172,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
         <button type="button" className="sb-fbtn sb-filter-toggle" aria-expanded={filtersOpen} data-testid="sb-text-filters-toggle" onClick={() => setFiltersOpen((v) => !v)}>
           Filters{nSecFilters > 0 && <span className="sb-count">{nSecFilters}</span>} <span aria-hidden="true">{filtersOpen ? "▾" : "▸"}</span>
         </button>
+        {mineTest && <button type="button" className="sb-fbtn" aria-pressed={mine} data-testid="sb-text-mine" title="Rows you marked OK / Redo / Edit" onClick={() => setMine((v) => !v)}>My marks <span className="sb-count">{nMine}</span></button>}
         {areaFilter && (
           <button type="button" className="sb-fbtn" aria-pressed={true} data-testid="sb-text-area-filter" title="Filter to this area (click to clear)" onClick={() => setAreaFilter(null)}>
             Area: {PROGRESS_AREA_LABEL[areaFilter]} ×
@@ -199,7 +200,6 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
             <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
           ))}
           {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
-          {mineTest && <button type="button" className="sb-fbtn" aria-pressed={mine} data-testid="sb-text-mine" title="Rows you marked OK / Redo / Edit" onClick={() => setMine((v) => !v)}>My marks <span className="sb-count">{nMine}</span></button>}
           {(nTooLong > 0 || tooLong) && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
         </span>
         {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setSpeakerFilter(null); setAreaFilter(null); setEntityFilter(null); setStatusFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setMine(false); setOnly(null); }}>Clear</button>}

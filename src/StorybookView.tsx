@@ -774,7 +774,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
         </div>
         <ProjectTabs projectId={projectId} name={name} active="storybook" />
         <div className="sb-head-right">
-          {needsYou > 0 && onNeedsYou && <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">{needsYou} need{needsYou === 1 ? "s" : ""} you</button>}
+          {needsYou > 0 && onNeedsYou && (
+            <button type="button" className="sb-btn sb-needs" data-testid="sb-needs-you" onClick={onNeedsYou} aria-label={`${needsYou} need${needsYou === 1 ? "s" : ""} you`} title="Leave Storybook and open the top Needs-you item (Ctrl+J)">
+              <span className="sb-needs-n">{needsYou}</span>
+              <span className="sb-needs-txt"> need{needsYou === 1 ? "s" : ""} you</span>
+            </button>
+          )}
           {snap && <span className="sb-sha sb-mono" title={`${snap.ref} @ ${snap.sha} · generated ${snap.generatedAt}`} data-testid="sb-sha">{snap.ref} @ {shortSha(snap.sha)}</span>}
           {checked && <span className="sb-checked" role="status" data-testid="sb-checked">{checked}</span>}
           {snap && <button type="button" className="sb-btn sb-guide-btn" data-testid="sb-guide-btn" aria-label="How to use Storybook" title="How to use Storybook" onClick={() => setGuideOpen(true)}>?</button>}
