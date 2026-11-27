@@ -351,3 +351,31 @@ test("L2 idea-1154: deliveryLogSummary preserves the end of the question by shri
   assert.ok(s3.length <= 240, `s3 <= 240 chars (got ${s3.length})`);
   assert.ok(s3.endsWith('…"'), `graceful ellipsis ending when ask must shrink: ${s3}`);
 });
+
+test("L3 idea-1159: summaryFull is uncapped (server) and the client formatter takes an uncapped max; log summary keeps its caps", () => {
+  const long = "opt ".repeat(40).trim();
+  const reply = "r".repeat(300);
+  const item = c2bItem({ alts: [long, "other"] });
+  const capped = choiceLabel(item, { choice: "alt", altIndex: 0, text: reply });
+  const full = choiceLabel(item, { choice: "alt", altIndex: 0, text: reply }, { optMax: Infinity, replyMax: Infinity });
+  assert.match(capped, /…/);
+  assert.ok(!full.includes("…") && full.includes(long) && full.includes(reply));
+  assert.equal(formatSentChoiceSummary(item, { choice: "alt:0", text: reply }, Infinity), full);
+  assert.match(formatSentChoiceSummary(item, { choice: "alt:0", text: reply }), /…/, "default stays capped");
+  assert.match(ddSrc, /summaryFull/);
+});
+
+test("L3 idea-1161: batch lean staging and auto-lean skip unresolved bare-letter leans; 'need a look' count is shown", () => {
+  const bare = c2bItem({ lean: "C", alts: ["A: x", "B: y"] });
+  assert.equal(isUnresolvedBareLean(bare), true);
+  assert.match(ddSrc, /Boolean\(i\.lean\) && !isUnresolvedBareLean\(i\) && !staged\[i\.id\]/);
+  assert.match(ddSrc, /Boolean\(i\.lean\) && !isUnresolvedBareLean\(i\) && !autoLeaned\.current\.has/);
+  assert.match(ddSrc, /need a look/);
+});
+
+test("L3 idea-1160: sent details are held in lastSent, not cleared by edits, and a quiet 'Last sent' toggle shows after editing", () => {
+  assert.match(ddSrc, /setLastSent\(okCount > 0 \? sentDetails : null\)/);
+  assert.match(ddSrc, /Last sent · \$\{lastSent\.length\}/);
+  const edits = ddSrc.slice(ddSrc.indexOf("const toggleChoice"), ddSrc.indexOf("const executeBatch"));
+  assert.ok(!/setLastSent/.test(edits), "edit handlers never clear the sent details");
+});

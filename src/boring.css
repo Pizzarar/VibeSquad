@@ -2446,6 +2446,9 @@ html[data-vibe="boring"] .boring-decision-source-body:focus-visible {
 html[data-vibe="boring"] .boring-decision-lean-hint { margin-left: 6px; font: 400 11px/14px var(--mono); color: var(--text-3); } /* C2b */
 
 /* @desk L2 (PLAN_DESK_DD_LOWS): expandable sent-answers banner disclosure */
+html[data-vibe="boring"] .boring-decision-banner-toggle.is-quiet { color: var(--text-3); font-weight: 400; } /* L3 idea-1160 */
+html[data-vibe="boring"] .boring-decision-banner-summary { min-width: 0; white-space: normal; overflow-wrap: anywhere; } /* L3 idea-1159 */
+html[data-vibe="boring"] .boring-decision-need-look { color: var(--text-3); font: 400 12px/16px var(--sans); margin-right: 8px; } /* L3 idea-1161 */
 html[data-vibe="boring"] .boring-decision-banner-wrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 html[data-vibe="boring"] .boring-decision-banner-head { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 html[data-vibe="boring"] .boring-decision-banner-toggle { padding: 2px 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text-2); font: 500 12px/16px var(--sans); cursor: pointer; }

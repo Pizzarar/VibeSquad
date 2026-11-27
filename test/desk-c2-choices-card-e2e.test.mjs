@@ -161,9 +161,10 @@ before(async () => {
           if (!item) { results.push({ id: ans.id, choice: ans.choice, status: "rejected", error: "unknown" }); continue; }
           const prompt = buildAnswerPrompt(item, ans, { ownerName: "Owner", target: item.asker?.title, via: "asker" });
           const summary = choiceLabel(item, ans);
-          state.deliveredPrompts.push({ id: ans.id, choice: ans.choice, altIndex: ans.altIndex, text: ans.text, prompt, summary });
+          const summaryFull = choiceLabel(item, ans, { optMax: Infinity, replyMax: Infinity });
+          state.deliveredPrompts.push({ id: ans.id, choice: ans.choice, altIndex: ans.altIndex, text: ans.text, prompt, summary, summaryFull });
           state.items = state.items.filter((i) => i.id !== ans.id);
-          results.push({ id: ans.id, choice: ans.choice, status: ans.choice === "dismiss" ? "dismissed" : "delivered", target: item.askerId, via: "asker", logged: true, summary });
+          results.push({ id: ans.id, choice: ans.choice, status: ans.choice === "dismiss" ? "dismissed" : "delivered", target: item.askerId, via: "asker", logged: true, summary, summaryFull });
         }
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ ok: true, results }));
@@ -319,7 +320,7 @@ for (const cfg of [
         assert.equal(await bannerToggle.getAttribute("aria-expanded"), "true");
         assert.equal(await bannerToggle.getAttribute("aria-controls"), "boring-decision-banner-details");
         const sentRow = page.locator(`[data-testid="boring-decision-banner-item-${pfId}"]`);
-        assert.match((await sentRow.textContent()) ?? "", new RegExp(delivered.summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        assert.match((await sentRow.textContent()) ?? "", new RegExp(delivered.summaryFull.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
         await page.keyboard.press("Enter");
         assert.equal(await bannerToggle.getAttribute("aria-expanded"), "false");
       }
@@ -351,3 +352,66 @@ for (const cfg of [
     }
   });
 }
+
+test("L3 e2e: Use all leans skips bare-letter leans ('need a look'); Sent list shows full text and survives typing", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  const longOpt = "Alpha: " + "ship the whole universe including delisted names and report coverage per sector ".repeat(3).trim();
+  const seed = () => {
+    resetBackend();
+    state.items.push({
+    id: "ny-00000000000000000005", source: "log", squad: "vibesquad", squadName: "VibeSquad", lane: "desk",
+    askerId: "a-vs-ld", asker: { id: "a-vs-ld", title: "Desk · Lead 2", live: true },
+    ask: "Which scope for the long option card?", decides: "L3 full-text wrap", lean: "C", alts: [longOpt, "Beta: hold"],
+    kind: "yesno", structured: true, ts: Date.now() - 2 * 60_000,
+  });
+  };
+  for (const cfg of [{ theme: "dark", width: 1920, height: 1080, dpr: 1 }, { theme: "light", width: 3200, height: 1800, dpr: 1.2 }]) {
+    seed();
+    const { context, page, errs } = await openDesk(cfg);
+    try {
+      const id5 = "ny-00000000000000000005";
+      await page.waitForSelector(`[data-testid="boring-decision-card-${id5}"]`);
+      // idea-1161: 3 sendable leans (2,3,4); the bare "C" lean (no option C) is skipped and counted separately
+      const btn = page.locator('[data-testid="boring-decision-stage-leans"]');
+      assert.equal((await btn.textContent())?.trim(), "Use all leans (3)");
+      assert.equal((await page.locator('[data-testid="boring-decision-need-look"]').textContent())?.trim(), "1 need a look");
+      await btn.click();
+      assert.equal(await page.locator('[data-testid="boring-decision-send-btn"]').textContent(), "Send 3 answers");
+      assert.equal(await page.locator('[data-testid="boring-decision-stage-leans"]').count(), 0);
+      assert.equal(await page.locator(`[data-testid="boring-decision-lean-${id5}"]`).getAttribute("aria-pressed"), "false", "bare lean not staged by the batch action");
+      // hand-clicking the card's own lean stays allowed and clears the need-a-look count
+      await page.locator(`[data-testid="boring-decision-lean-${id5}"]`).click();
+      assert.equal(await page.locator(`[data-testid="boring-decision-lean-${id5}"]`).getAttribute("aria-pressed"), "true");
+      assert.equal(await page.locator('[data-testid="boring-decision-need-look"]').count(), 0);
+      await page.locator(`[data-testid="boring-decision-lean-${id5}"]`).click(); // unstage again
+      // stage the long option plus a long reply for card 5 only: clear other staged answers by sending just a custom batch
+      await page.locator(`[data-testid="boring-decision-alt-${id5}-0"]`).click();
+      const longReply = "Reply tail: " + "wrapping-without-spaces-".repeat(12) + "THE-END";
+      await page.locator(`[data-testid="boring-decision-input-${id5}"]`).fill(longReply);
+      await page.locator('[data-testid="boring-decision-send-btn"]').click();
+      await page.locator('[data-testid="boring-decision-send-now-btn"]').click();
+      await page.waitForFunction((i) => !document.querySelector(`[data-testid="boring-decision-card-${i}"]`), id5, { timeout: 10000 });
+      await page.locator('[data-testid="boring-decision-banner-toggle"]').click();
+      const row = page.locator(`[data-testid="boring-decision-banner-item-${id5}"]`);
+      const txt = (await row.textContent()) ?? "";
+      assert.ok(txt.includes("report coverage per sector\""), `full option text, no cut: ${txt}`);
+      assert.ok(txt.includes("THE-END"), "full reply text");
+      assert.ok(!txt.includes("…"), "no ellipsis cut in the Sent list");
+      const fit = await page.locator('[data-testid="boring-decision-banner-details"]').evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, de: document.documentElement.scrollWidth, dw: document.documentElement.clientWidth }));
+      assert.ok(fit.sw <= fit.cw + 1, `list does not overflow horizontally ${JSON.stringify(fit)}`);
+      assert.ok(fit.de <= fit.dw + 1, `page does not overflow ${JSON.stringify(fit)}`);
+      // idea-1160: a keystroke in another card keeps the details behind a quiet "Last sent · N" line
+      const other = "ny-00000000000000000001";
+      await page.locator(`[data-testid="boring-decision-input-${other}"]`).fill("x");
+      assert.equal(await page.locator('[data-testid="boring-decision-banner"]').count(), 0, "banner text gone after editing");
+      assert.equal(await page.locator('[data-testid="boring-decision-banner-details"]').count(), 0, "collapsed after editing");
+      const quiet = page.locator('[data-testid="boring-decision-banner-toggle"]');
+      assert.equal((await quiet.textContent())?.trim(), "Last sent · 4 ▸");
+      await quiet.click();
+      assert.ok(((await page.locator(`[data-testid="boring-decision-banner-item-${id5}"]`).textContent()) ?? "").includes("THE-END"), "details survive a keystroke");
+      assert.deepEqual(errs, []);
+    } finally {
+      await context.close();
+    }
+  }
+});
