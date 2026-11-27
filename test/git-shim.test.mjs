@@ -10,7 +10,7 @@ import { accessSync, chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync,
 import os from 'node:os';
 import path from 'node:path';
 import { agentEnv } from '../runner/runner.mjs';
-import { applyGitShim, findViolation, GIT_GLOBAL_VALUE_OPTS, GIT_SAFE_BUILTINS, GIT_SHIM_DIR, GIT_SHIM_NODE_ENV, GIT_WRITE_VERBS, gitArgvViolation, scratchRootsOf, splitAlias } from '../runner/git-guard.mjs';
+import { applyGitShim, findViolation, GIT_GLOBAL_VALUE_OPTS, GIT_SAFE_BUILTINS, GIT_SHIM_DIR, GIT_SHIM_MARKER, GIT_SHIM_NODE_ENV, GIT_WRITE_VERBS, gitArgvViolation, isGitShimDir, scratchRootsOf, splitAlias } from '../runner/git-guard.mjs';
 
 const posix = process.platform !== 'win32';
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'vs-git-shim-')));
@@ -50,7 +50,9 @@ const passed = (r) => assert.equal(r.status, 0, `expected pass, got ${r.status}:
 
 test('agentEnv: workers get the git shim first on PATH (any provider); leads, Buddies and role-less agents do not', { skip: !posix }, () => {
   assert.equal(workerEnv.PATH.split(':')[0], GIT_SHIM_DIR);
-  assert.equal(workerEnv.PATH.split(':').slice(1).join(':'), base.PATH, 'the rest of PATH is unchanged');
+  // The suite may run inside a worker, whose PATH already holds the runtime shim copy: that one is dropped (idea-1167).
+  const baseNoShim = base.PATH.split(':').filter((d) => d && path.basename(path.resolve(d)) !== 'git-shim').join(':');
+  assert.equal(workerEnv.PATH.split(':').slice(1).join(':'), baseNoShim, 'the rest of PATH is unchanged, minus inherited shims');
   assert.equal(workerEnv[GIT_SHIM_NODE_ENV], process.execPath, 'the check runs with the runner\'s own node');
   for (const meta of [{ role: 'lead' }, { role: 'brainstorm' }, {}, { labels: { role: 'lead' } }]) {
     const e = agentEnv('rn-x', meta, workerEnv); // even when the runner's own env already carried a shim
@@ -203,6 +205,88 @@ test('leads keep current behavior: no shim, so a write in the main checkout runs
   const before = head(MAIN);
   passed(run(MAIN, ['commit', '--allow-empty', '-m', 'lead commit'], leadEnv));
   assert.notEqual(head(MAIN), before);
+});
+
+// ---- idea-1167: every VibeSquad shim copy on the inherited PATH is dropped, not only this module's ----
+
+/** A foreign shim copy (as ~/.vibesquad/runtime/runner/git-shim is to a source checkout): same file, another dir. */
+const foreignShim = (() => {
+  const d = path.join(root, 'runtime', 'runner', 'git-shim');
+  mkdirSync(d, { recursive: true });
+  copyFileSync(path.join(GIT_SHIM_DIR, 'git'), path.join(d, 'git'));
+  chmodSync(path.join(d, 'git'), 0o755);
+  return d;
+})();
+const realGitDir = posix ? path.dirname(execFileSync('sh', ['-c', 'command -v git'], {
+  encoding: 'utf8', env: { ...base, PATH: base.PATH.split(':').filter((d) => !isGitShimDir(d)).join(':') } }).trim()) : null;
+
+test('1167: the shim file carries the marker; isGitShimDir needs both the git-shim basename and the marker', { skip: !posix }, () => {
+  assert.ok(readFileSync(path.join(GIT_SHIM_DIR, 'git'), 'utf8').slice(0, 512).includes(GIT_SHIM_MARKER));
+  assert.equal(isGitShimDir(GIT_SHIM_DIR), true);
+  assert.equal(isGitShimDir(foreignShim), true);
+  assert.equal(isGitShimDir(foreignShim + '/'), true, 'trailing slash');
+  assert.equal(isGitShimDir(realGitDir), false, 'the real git dir');
+  // A marker-carrying git outside a git-shim dir is not stripped (path rule), nor is a git-shim dir with another git.
+  const elsewhere = path.join(root, 'bin-with-copy');
+  mkdirSync(elsewhere, { recursive: true });
+  copyFileSync(path.join(GIT_SHIM_DIR, 'git'), path.join(elsewhere, 'git'));
+  assert.equal(isGitShimDir(elsewhere), false);
+  const userShim = path.join(root, 'user', 'git-shim');
+  mkdirSync(userShim, { recursive: true });
+  writeFileSync(path.join(userShim, 'git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n', { mode: 0o755 });
+  assert.equal(isGitShimDir(userShim), false, 'a git-shim dir without the marker');
+  const empty = path.join(root, 'empty', 'git-shim');
+  mkdirSync(path.join(empty, 'git'), { recursive: true }); // `git` is a directory
+  assert.equal(isGitShimDir(empty), false);
+  assert.equal(isGitShimDir(path.join(root, 'missing', 'git-shim')), false);
+  assert.equal(isGitShimDir(''), false);
+});
+
+test('1167: a lead (any non-worker role) whose PATH carries a FOREIGN shim copy gets none, and its main-checkout commit runs', { skip: !posix }, () => {
+  const inherited = { ...base, PATH: [foreignShim, GIT_SHIM_DIR, ...base.PATH.split(':'), foreignShim].join(':') };
+  for (const meta of [{ role: 'lead' }, { role: 'brainstorm' }, {}, { labels: { role: 'lead' } }]) {
+    const e = agentEnv('rn-1167', meta, inherited);
+    const dirs = e.PATH.split(':');
+    assert.deepEqual(dirs.filter((d) => path.basename(path.resolve(d)) === 'git-shim'), [], `no shim for ${JSON.stringify(meta)}: ${e.PATH}`);
+    assert.ok(dirs.includes(realGitDir), 'the real git dir is kept');
+    assert.equal(e[GIT_SHIM_NODE_ENV], undefined);
+  }
+  const lead = agentEnv('rn-1167-lead', { role: 'lead' }, inherited);
+  const before = head(MAIN);
+  passed(run(MAIN, ['commit', '--allow-empty', '-m', 'lead commit under a foreign shim'], lead));
+  assert.notEqual(head(MAIN), before);
+});
+
+test('1167: a worker with a foreign copy on PATH gets exactly one shim, its own, first, and is still gated', { skip: !posix }, () => {
+  const inherited = { ...base, PATH: [foreignShim, ...base.PATH.split(':'), `${foreignShim}/`, GIT_SHIM_DIR].join(':') };
+  const e = agentEnv('rn-1167-w', { role: 'worker' }, inherited);
+  const dirs = e.PATH.split(':');
+  assert.equal(dirs[0], GIT_SHIM_DIR);
+  assert.deepEqual(dirs.filter((d) => isGitShimDir(d)), [GIT_SHIM_DIR]);
+  assert.ok(dirs.includes(realGitDir));
+  // Direct call with a foreign shimDir: that copy goes first, ours is dropped like any other inherited copy.
+  const own = applyGitShim({ PATH: [GIT_SHIM_DIR, realGitDir, foreignShim].join(':') }, { worker: true, shimDir: foreignShim }).PATH.split(':');
+  assert.deepEqual(own, [foreignShim, realGitDir]);
+  const before = head(MAIN);
+  refused(run(MAIN, ['commit', '--allow-empty', '-m', 'worker commit'], e));
+  assert.equal(head(MAIN), before);
+});
+
+test('1167: non-shim dirs holding a `git` stay on PATH, in order', { skip: !posix }, () => {
+  const userShim = path.join(root, 'user2', 'git-shim');
+  mkdirSync(userShim, { recursive: true });
+  writeFileSync(path.join(userShim, 'git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n', { mode: 0o755 });
+  const elsewhere = path.join(root, 'bin-with-copy2');
+  mkdirSync(elsewhere, { recursive: true });
+  copyFileSync(path.join(GIT_SHIM_DIR, 'git'), path.join(elsewhere, 'git'));
+  const PATH = [realGitDir, userShim, elsewhere, '/usr/bin', '/bin'].join(':');
+  assert.equal(applyGitShim({ PATH }, { worker: false }).PATH, PATH);
+  assert.equal(applyGitShim({ PATH }, { worker: true }).PATH, `${GIT_SHIM_DIR}:${PATH}`);
+});
+
+test('1167: win32 stays a no-op, even with shim dirs on PATH', () => {
+  const w = { PATH: `${foreignShim}:/usr/bin`, Path: 'C:\\x', [GIT_SHIM_NODE_ENV]: 'n' };
+  for (const worker of [true, false]) assert.deepEqual(applyGitShim({ ...w }, { worker, platform: 'win32' }), w);
 });
 
 // ---- Tier A review round 1 (rn-6a6782d25ddc): every finding, failing on 77f30d4c ----
