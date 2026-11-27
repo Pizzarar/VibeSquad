@@ -488,8 +488,8 @@ export function resolveLeanAltIndex(item) {
   if (!m) return -1;
   const letter = m[1].toUpperCase();
   return (item.alts ?? []).findIndex((a) => {
-    const am = /^\s*(?:option\s+)?\(?([A-Za-z])(?:[\s.:)\-–—]|$)/i.exec(a);
-    return Boolean(am) && am[1].toUpperCase() === letter;
+    const am = /^\s*(?:option\s+([A-Za-z])(?![A-Za-z0-9])|\(([A-Za-z])\)|([A-Za-z])(?:[.:)]|\s+[-–—]|\s*$))/i.exec(a);
+    return Boolean(am) && (am[1] ?? am[2] ?? am[3]).toUpperCase() === letter;
   });
 }
 
@@ -564,16 +564,21 @@ export function resolveAnswerTarget(item, agents, teams, pickLiveAgent) {
   return null;
 }
 
+// quoteLine cut to `max` chars, with "…" when it cut.
+const quoteShort = (s, max = 60) => {
+  const full = JSON.parse(quoteLine(s, 100000));
+  return full.length > max ? quoteLine(`${full.slice(0, max - 1)}…`, max) : JSON.stringify(full);
+};
 const choiceLabelBase = (item, ans) => {
   if (ans.choice === "lean") {
     const li = resolveLeanAltIndex(item);
-    return li >= 0 ? `lean, option ${li + 1} ${quoteLine(item.alts[li], 60)}` : `lean ${quoteLine(item.lean, 60)}`;
+    return li >= 0 ? `lean, option ${li + 1} ${quoteShort(item.alts[li])}` : `lean ${quoteShort(item.lean)}`;
   }
-  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteLine(item.alts[ans.altIndex], 60)}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteLine(ans.text, 60)}` : "dismissed";
+  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteShort(item.alts[ans.altIndex])}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteShort(ans.text)}` : "dismissed";
 };
 // C2b idea-1152: an option picked with a typed note keeps the note in the summary.
 export const choiceLabel = (item, ans) =>
-  ans.choice !== "reply" && ans.choice !== "dismiss" && ans.text ? `${choiceLabelBase(item, ans)} + reply ${quoteLine(ans.text, 60)}` : choiceLabelBase(item, ans);
+  ans.choice !== "reply" && ans.choice !== "dismiss" && ans.text ? `${choiceLabelBase(item, ans)} + reply ${quoteShort(ans.text)}` : choiceLabelBase(item, ans);
 
 // Process-wide answer state: ids being sent right now, and ids answered / dismissed by this process (a log append that
 // failed after a delivery must not reopen the item for a second send). Single server process per VIBESQUAD_HOME.

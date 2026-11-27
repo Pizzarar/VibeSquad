@@ -162,9 +162,15 @@ export function resolveLeanAlt(item: Pick<DecisionItem, "lean" | "alts">): numbe
   if (!m) return -1;
   const letter = m[1].toUpperCase();
   return (item.alts ?? []).findIndex((a) => {
-    const am = /^\s*(?:option\s+)?\(?([A-Za-z])(?:[\s.:)\-–—]|$)/i.exec(a);
-    return Boolean(am) && am![1].toUpperCase() === letter;
+    const am = /^\s*(?:option\s+([A-Za-z])(?![A-Za-z0-9])|\(([A-Za-z])\)|([A-Za-z])(?:[.:)]|\s+[-–—]|\s*$))/i.exec(a);
+    return Boolean(am) && (am![1] ?? am![2] ?? am![3]).toUpperCase() === letter;
   });
+}
+
+/** Staged choice for "go with the lean": the lettered option it names when it resolves (C2b G1), else the lean. */
+export function leanStage(item: Pick<DecisionItem, "lean" | "alts">): StagedChoice {
+  const li = resolveLeanAlt(item);
+  return li >= 0 ? { choice: `alt:${li}` } : { choice: "lean" };
 }
 
 /** True when the lean is a bare letter that no option resolves (shown as the letter, pointing to Show source). */
@@ -774,7 +780,7 @@ export function BoringDecisionDesk({
     for (const i of fresh) autoLeaned.current.add(i.id);
     setStaged((cur) => {
       const next = { ...cur };
-      for (const i of fresh) if (!next[i.id]) next[i.id] = { choice: "lean" };
+      for (const i of fresh) if (!next[i.id]) next[i.id] = leanStage(i);
       return next;
     });
   }, [feedItems]);
@@ -802,7 +808,10 @@ export function BoringDecisionDesk({
     setBanner(null);
     setStaged((cur) => {
       const next = { ...cur };
-      for (const id of unstagedLeanIds) next[id] = { choice: "lean" };
+      for (const id of unstagedLeanIds) {
+        const it = feedItems.find((i) => i.id === id);
+        next[id] = it ? leanStage(it) : { choice: "lean" };
+      }
       return next;
     });
   };
@@ -1086,13 +1095,13 @@ export function BoringDecisionDesk({
                           >
                             <span className="boring-decision-choice-tag">{sel?.choice === "lean" ? "✓ Lean" : "Lean"}</span>
                             <span>{item.lean}</span>
-                            {isUnresolvedBareLean(item) && <span className="boring-decision-lean-hint">(letter only; see Show source)</span>}
+                            {isUnresolvedBareLean(item) && <span className="boring-decision-lean-hint">{hasSourceDisclosure(item) ? "(letter only; see Show source)" : "(letter only; option not defined)"}</span>}
                           </button>
                         )}
                         {(item.alts ?? []).map((alt, idx) => {
                           const key = `alt:${idx}` as const;
-                          const on = sel?.choice === key;
                           const isLean = idx === leanAlt;
+                          const on = sel?.choice === key || (isLean && sel?.choice === "lean"); // a stale {lean} on a resolved lean is this option
                           return (
                             <button
                               key={key}
@@ -1101,7 +1110,7 @@ export function BoringDecisionDesk({
                               data-testid={`boring-decision-alt-${item.id}-${idx}`}
                               aria-pressed={on}
                               disabled={Boolean(pending) || sending}
-                              onClick={() => toggleChoice(item.id, { choice: key })}
+                              onClick={() => toggleChoice(item.id, isLean && sel?.choice === "lean" ? { choice: "lean" } : { choice: key })}
                             >
                               {isLean && <span className="boring-decision-choice-tag">{on ? "✓ Lean" : "Lean"}</span>}
                               <span>{alt}</span>
