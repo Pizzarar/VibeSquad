@@ -10,7 +10,7 @@ import {
   SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, effectiveScope, problemCount, scopeCounts, scopeItems, type FindingScope,
   entityKey, indexEntities, auditCounts, buildTextChanges, canMarkChangesSeen, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
-  EMPTY_SB_SEL, initialSbNav, isSameSbNav, nextSbNav, readSbNav, sheetBackLabel, type SbNavState, type SbQuestMode, type SbTab,
+  EMPTY_SB_SEL, initialSbNav, isSameSbNav, nextSbNav, readSbNav, sbCloseSteps, sheetBackLabel, type SbNavState, type SbQuestMode, type SbTab,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
@@ -44,6 +44,7 @@ const withSb = (projectId: string | null): string => {
 let pushed = false;
 let popped = false; // U2: the open Storybook is a ?sb= entry Back/Forward landed on (not openStorybook's push, not a cold link)
 let replaceUntil = 0;
+let stripOnPop = false; // cold close: the popstate that lands on the first Storybook entry strips ?sb= in place instead of reopening
 let backUntil = 0; // U1 r2: a close's history.back() is in flight until its popstate (bounded, in case it never arrives)
 /** After a forward-nav close ("replace"), the next URL sync should replaceState (the stripped entry is reused, so history has no duplicate). */
 export function takeStorybookReplace(): boolean {
@@ -73,8 +74,14 @@ export function closeStorybook(mode?: unknown): void {
   pushed = false;
   popped = false;
   if (replace) replaceUntil = Date.now() + 1000;
-  if (mine && !replace) { backUntil = Date.now() + 1000; if (depth > 0) history.go(-(depth + 1)); else history.back(); } // popstate finds no ?sb= and target already null: nothing more to do
-  else if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
+  const steps = sbCloseSteps(mine, depth, replace);
+  const strip = () => { if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null)); };
+  if (steps.go !== 0) {
+    backUntil = Date.now() + 1000;
+    // cold link / reload: rewind to the first Storybook entry, then strip it in place (popstate handler) so Back can't reopen a leftover ?sb= entry
+    stripOnPop = steps.strip;
+    history.go(steps.go); // popstate finds no ?sb= and target already null: nothing more to do
+  } else if (steps.strip) strip();
   emit();
 }
 if (typeof window !== "undefined") {
@@ -82,6 +89,11 @@ if (typeof window !== "undefined") {
   target = id0 ? { projectId: id0, name: id0 } : null; // reload / shared link
   window.addEventListener("popstate", () => {
     backUntil = 0;
+    if (stripOnPop) {
+      stripOnPop = false;
+      if (urlProject() || history.state?.sb) history.replaceState(null, "", withSb(null));
+      return;
+    }
     const id = urlProject();
     if (!id) { if (target) { target = null; pushed = false; popped = false; emit(); } return; }
     // U2 (idea-971): a ?sb= entry reached by Back/Forward is one of this session's entries, so Esc / Close on it goes Back, as right after
@@ -558,7 +570,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [tab, setTab] = useState<Tab>("home");
   const [sel, setSelAll] = useState<Record<Tab, string | null>>(NO_SEL);
   const [questMode, setQuestMode] = useState<QuestMode>("arcs");
-  const [fromTab, setFromTab] = useState<Tab | null>(null);
+  const [navView, setNavView] = useState<SbNavState>(initialSbNav());
   // Each findings tab keeps its own category filter (a Problems filter must not leak into Review's text rows).
   const [activeProblems, setActiveProblems] = useState<Set<SbCategory>>(new Set());
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
@@ -586,7 +598,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     setQuestMode(next.questMode);
     setScope(next.scope);
     setChecks(next.checks ? new Set(next.checks) : null);
-    setFromTab(next.fromTab);
+    setNavView(next);
     if (restoreScroll !== null) {
       pendingScrollRef.current = restoreScroll;
       setScrollTick((n) => n + 1);
@@ -614,7 +626,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
 
   useEffect(() => {
     if (typeof history === "undefined") return;
-    const saved = readSbNav(history.state);
+    const st = history.state as { sb?: unknown } | null;
+    const saved = st?.sb === projectId ? readSbNav(history.state) : null; // another project's entry must not seed this one
     if (saved) applyNav(saved, saved.scrollTop);
   }, [projectId, applyNav]);
 
@@ -622,26 +635,39 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     if (typeof window === "undefined") return;
     const onPop = () => {
       if (urlProject() !== projectId) return;
-      const restored = readSbNav(history.state) ?? initialSbNav();
+      const st = history.state as { sb?: unknown } | null;
+      const restored = (st?.sb === projectId ? readSbNav(history.state) : null) ?? initialSbNav();
       applyNav(restored, restored.scrollTop);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [projectId, applyNav]);
 
+  // Restore the pending scroll only once the snapshot content is rendered, and retry for a few frames while the page is still too short
+  // (a sheet reaching full height, a reload before the snapshot loads), then give up so a stale target never hijacks later scrolling.
+  const navReady = state.kind === "ok";
   useLayoutEffect(() => {
-    if (pendingScrollRef.current === null || !rootRef.current) return;
-    rootRef.current.scrollTop = pendingScrollRef.current;
-    pendingScrollRef.current = null;
-  }, [scrollTick, tab, questMode]);
+    if (pendingScrollRef.current === null || !navReady) return;
+    const target = pendingScrollRef.current;
+    let frames = 0;
+    let raf = 0;
+    const apply = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      el.scrollTop = target;
+      if (Math.abs(el.scrollTop - target) <= 1 || target === 0 || ++frames > 30) { if (pendingScrollRef.current === target) pendingScrollRef.current = null; return; }
+      raf = requestAnimationFrame(apply);
+    };
+    apply();
+    return () => cancelAnimationFrame(raf);
+  }, [scrollTick, tab, questMode, navReady]);
 
   const goBackFromSheet = useCallback(() => {
     if (navRef.current.depth > 0 && typeof history !== "undefined") {
       history.back();
       return;
     }
-    if (fromTab) pushNav({ tab: fromTab }, { restoreTabScroll: true });
-  }, [fromTab, pushNav]);
+  }, []);
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
   // change (or unmount) invalidates everything in flight.
@@ -849,7 +875,11 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     setTimeout(() => el.classList.remove("sb-flash"), 1800);
   }, [jump, tab, sel.quests]);
 
-  const backLabel = sheetBackLabel({ tab, fromTab });
+  const backLabel = sheetBackLabel({ tab, fromTab: navView.fromTab, fromSel: navView.fromSel, depth: navView.depth }, (t, id) => {
+    const kinds = t === "world" ? ["location"] : t === "cast" ? ["character", "enemy", "trader"] : ["item"];
+    for (const k of kinds) { const e = idx.get(k, id); if (e?.display) return e.display; }
+    return null;
+  });
 
   return (
     <div ref={rootRef} className="sb-root" data-testid="storybook-view">

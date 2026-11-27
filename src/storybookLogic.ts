@@ -933,7 +933,12 @@ export function signalCard(signal: string, items: ListItem[], audit: Record<stri
   } else {
     const inProb = matched.filter(isProblem).length;
     const inOther = matched.filter(isOtherCheck).length;
-    legend = `Counts ${inProb} in Problems + ${inOther} in Other checks.`;
+    const extras: string[] = [];
+    for (const [label, f] of [["Text to review", isTextToReview], ["Too long", isTooLong], ["Dev TODO", isDevTodo], ["Coverage", isCoverage]] as const) {
+      const c = matched.filter(f).length;
+      if (c > 0) extras.push(`${c} ${label}`);
+    }
+    legend = `Counts ${inProb} in Problems + ${inOther} in Other checks${extras.map((e) => ` + ${e}`).join("")}.`;
     action = signal === "integrity" ? "Act in Problems (Integrity filter) →" : "Act in Problems (Cohesion filter) →";
   }
   return { n, rest, note, legend, action, target: { tab: "problems", scope, category: null, checks } };
@@ -965,11 +970,12 @@ export type SbNavState = {
   checks: string[] | null;
   scrollTop: number;
   depth: number;
-  fromTab: SbTab | null;
+  fromTab: SbTab | null; // tab of the previous nav entry (what Back returns to), null at depth 0
+  fromSel: string | null; // that entry's selection in its tab (an entity id) when it is a sheet
 };
 
 export function initialSbNav(): SbNavState {
-  return { tab: "home", sel: { ...EMPTY_SB_SEL }, questMode: "arcs", scope: "problems", checks: null, scrollTop: 0, depth: 0, fromTab: null };
+  return { tab: "home", sel: { ...EMPTY_SB_SEL }, questMode: "arcs", scope: "problems", checks: null, scrollTop: 0, depth: 0, fromTab: null, fromSel: null };
 }
 
 export function isSameSbNav(a: SbNavState, b: SbNavState): boolean {
@@ -987,8 +993,7 @@ export function nextSbNav(
   const questMode = patch.questMode ?? cur.questMode;
   const scope = patch.scope ?? cur.scope;
   const checks = patch.checks !== undefined ? patch.checks : cur.checks;
-  const fromTab = tab !== cur.tab ? cur.tab : null;
-  return { tab, sel, questMode, scope, checks, scrollTop: patch.scrollTop ?? 0, depth: cur.depth + 1, fromTab };
+  return { tab, sel, questMode, scope, checks, scrollTop: patch.scrollTop ?? 0, depth: cur.depth + 1, fromTab: cur.tab, fromSel: cur.sel[cur.tab] };
 }
 
 export function readSbNav(state: unknown): SbNavState | null {
@@ -1007,13 +1012,28 @@ export function readSbNav(state: unknown): SbNavState | null {
   const checks = Array.isArray(r.checks) ? r.checks.filter((x): x is string => typeof x === "string") : null;
   const scrollTop = typeof r.scrollTop === "number" && Number.isFinite(r.scrollTop) && r.scrollTop >= 0 ? r.scrollTop : 0;
   const depth = typeof r.depth === "number" && Number.isFinite(r.depth) && r.depth >= 0 ? r.depth : 0;
-  const fromTab = typeof r.fromTab === "string" && Object.hasOwn(SB_TAB_LABEL, r.fromTab) && r.fromTab !== tab ? (r.fromTab as SbTab) : null;
-  return { tab, sel, questMode, scope, checks, scrollTop, depth, fromTab };
+  const fromTab = typeof r.fromTab === "string" && Object.hasOwn(SB_TAB_LABEL, r.fromTab) ? (r.fromTab as SbTab) : null;
+  const fromSel = typeof r.fromSel === "string" ? r.fromSel : null;
+  return { tab, sel, questMode, scope, checks, scrollTop, depth, fromTab, fromSel };
 }
 
-export function sheetBackLabel(nav: Pick<SbNavState, "tab" | "fromTab">): string | null {
-  if (!SB_SHEET_TABS.has(nav.tab) || !nav.fromTab || nav.fromTab === nav.tab) return null;
+/** Crumb label = what history.back() really returns to: the previous nav entry (its tab name, or its sheet's name on a same-tab hop).
+ * Only inside Storybook (depth > 0 means the previous entry is ours). nameOf resolves a sheet id to its display name. */
+export function sheetBackLabel(nav: Pick<SbNavState, "tab" | "fromTab" | "depth"> & { fromSel?: string | null }, nameOf?: (tab: SbTab, id: string) => string | null | undefined): string | null {
+  if (!SB_SHEET_TABS.has(nav.tab) || !nav.fromTab || nav.depth <= 0) return null;
+  if (nav.fromTab === nav.tab && nav.fromSel) return `← ${nameOf?.(nav.tab, nav.fromSel) ?? nav.fromSel}`;
   return `← ${SB_TAB_LABEL[nav.fromTab]}`;
+}
+
+/** Close math for closeStorybook: history steps to go and whether to strip ?sb= in place afterwards.
+ * - pushed/popped open (mine) + user Back: the entry under the first Storybook entry is the app's, so go -(depth+1) in one jump.
+ * - cold link / reload (not mine) + user Back: no app entry beneath; rewind -depth to the first Storybook entry, then strip it in place, so Back
+ *   after closing cannot land on a leftover ?sb= entry and reopen Storybook.
+ * - replace mode (forward navigation pushes its own entry next): synchronous strip only; an async go() would land after and undo that navigation. */
+export function sbCloseSteps(mine: boolean, depth: number, replace: boolean): { go: number; strip: boolean } {
+  if (replace) return { go: 0, strip: true };
+  if (mine) return { go: -(depth + 1), strip: false };
+  return { go: depth > 0 ? -depth : 0, strip: true };
 }
 
 // ── W3 riders: Play order titles & unordered grouping (friction 7) ──────────────

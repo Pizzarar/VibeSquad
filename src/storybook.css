@@ -341,7 +341,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-signal-rest { display: block; margin-top: 4px; font-size: 11px; color: var(--sb-text2); }
 .sb-signal-legend { display: block; margin-top: 4px; font-size: 11px; color: var(--sb-text2); }
 .sb-signal-act { display: block; margin-top: auto; padding-top: 6px; font-size: 12px; font-weight: 600; color: var(--sb-accent-text); }
-.sb-sheet-crumb { display: flex; align-items: center; margin: 0 0 8px; min-width: 0; }
+.sb-sheet-crumb { display: flex; align-items: center; margin: 0 0 8px; min-width: 0; width: fit-content; max-width: 100%; }
 .sb-crumb-btn {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   min-height: 36px; padding: 4px 12px; font: inherit; font-size: 13px; font-weight: 600;
