@@ -68,7 +68,7 @@ ${describeHits(bad)}`);
 // Always-on (needs only a local Edge/Chrome + Playwright, skips without): the two compact geometry checks fire on a
 // synthetic page and stay quiet on a compact one, at the thresholds documented in page-audit.js (scroll 2x + 1 viewport, menu 40%).
 const AUDIT_SRC = fs.readFileSync(new URL("../scripts/ui-overlap/page-audit.js", import.meta.url), "utf8");
-const pw = resolvePlaywright(), exe = findBrowser();
+const pw = resolvePlaywright({ npx: false }), exe = findBrowser();
 // Forge audit R8: a missing browser must never pass silently. Every browser-gated test carries this reason as its skip
 // (node:test counts and prints skips), a stderr line says so once, and a dedicated test below is a counted skip, or a
 // hard failure under UI_OVERLAP_REQUIRE_BROWSER=1.

@@ -263,9 +263,9 @@ export async function run() {
   const unknown = only.filter((id) => !known.has(id));
   if (unknown.length) throw new Error(`unknown --surfaces ${unknown.join(",")}; known: ${[...known].join(", ")}`);
   if (flag("rebuild")) process.env.UI_OVERLAP_REBUILD = "1";
-  const pw = E.resolvePlaywright();
+  const pw = E.resolvePlaywright({ npx: true });
   const exe = E.findBrowser();
-  if (!pw || !exe) throw new Error("Playwright or Edge/Chrome not found (PLAYWRIGHT_DIR / PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
+  if (!pw || !exe) throw new Error(!pw ? E.PLAYWRIGHT_MISSING : "No Edge/Chrome found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
   await E.ensureDist();
   const { server, baseUrl } = await E.serveDist();
   O.setBase(baseUrl);

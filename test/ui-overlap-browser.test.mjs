@@ -36,8 +36,8 @@ describe("findBrowser on Linux (R8)", () => {
 describe("browserSkipReason (R8: skips are loud, with a reason)", () => {
   it("is false when both are present and names what is missing otherwise", () => {
     assert.equal(browserSkipReason({ pw: {}, exe: "/usr/bin/chromium" }), false);
-    assert.match(browserSkipReason({ pw: null, exe: "/x" }), /no Playwright found/);
+    assert.match(browserSkipReason({ pw: null, exe: "/x" }), /no Playwright found.*npm i --prefix .*playwright-core/);
     assert.match(browserSkipReason({ pw: {}, exe: null }), /no Chromium\/Chrome\/Edge found/);
-    assert.match(browserSkipReason({ pw: null, exe: null }), /Playwright and Chromium/);
+    assert.match(browserSkipReason({ pw: null, exe: null }), /no Playwright found.*; no Chromium\/Chrome\/Edge found/);
   });
 });
