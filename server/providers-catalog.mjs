@@ -546,6 +546,8 @@ function foldEvent(st, ev) {
       if (ev.status === "queued") { if (st.queuedAt === undefined && st.firstThoughtTs === undefined && st.firstOutputTs === undefined) st.queuedAt = t; }
       else if ((ev.status === "starting" || ev.status === "running") && st.queuedAt !== undefined && st.queueEndedAt === undefined) st.queueEndedAt = t;
     }
+    if (ev.status === "parked" || ev.status === "exited") st.parkedEnd = true; // usa-70: an ended (not just idle) run
+    else if (ev.status === "running" || ev.status === "starting" || ev.status === "queued") st.parkedEnd = false;
     // working intervals run from status "running" to "idle"/"parked"/"exited"; an open interval is closed at lastTs.
     if (ev.status === "running") {
       if (st.runningSince === undefined && t !== null) st.runningSince = t;
@@ -1481,7 +1483,7 @@ function readLaneCodes(home) {
 // ---------------------------------------------------------------- usage v2 (usa-5): profiles, work/idle, cycles, fix-after-merge, spawn storms
 
 /** Per-agent whole-log summary for the v2 rollups (not day-filtered). */
-function agentV2(st, agentId) {
+function agentV2(st, agentId, archived = false) {
   const stats = zeroStats();
   for (const b of st.buckets.values()) addStats(stats, b);
   let workingMs = st.workingMs;
@@ -1520,6 +1522,7 @@ function agentV2(st, agentId) {
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
+    ended: !!st.exited || !!st.parkedEnd || (archived && !(st.queuedAt !== undefined && st.queueEndedAt === undefined)), // usa-70: exited / parked / archived (queued-then-archived never started -> cancelled, not failed)
     exitError: !!st.exitError,
     exitTs: st.exitTs ?? null,
     errors: st.errors ?? 0,
@@ -2462,32 +2465,18 @@ function buildPostHandoffCost(agentStates) {
   };
 }
 
-/** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
-function computeSpawnStorms(agents) {
-  const groups = new Map();
-  for (const a of agents) {
-    const lane = a.lane || "unknown";
-    const role = a.role || "unknown";
-    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], createdExclRespawns: [], zeroExits: [], zeroExitsExclRespawns: [] }));
-    if (a.createdAt !== null && a.createdAt !== undefined) { g.created.push(a.createdAt); if (!a.respawnOf) g.createdExclRespawns.push(a.createdAt); }
-    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) { g.zeroExits.push(a.exitTs); if (!a.respawnOf) g.zeroExitsExclRespawns.push(a.exitTs); }
-  }
-  const entries = [];
-  for (const g of groups.values()) {
-    for (const s of findStorms(g.created, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
-      const countExclRespawns = g.createdExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length; // usa-40: burst count with the one-time respawns dropped
-      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
-    }
-    for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: g.zeroExitsExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
-    }
-  }
+/** A spawn counts as failed once it has ENDED (exited / parked / archived after starting / spawn error) with 0 turns, or exited with an error.
+ * A created-only, still-running, or queued-then-archived (never started) 0-turn agent is pending/cancelled, not failed. respawnOf is not a failure: the original run is. */
+const isFailedSpawn = (a) => Boolean(a.exitError) || ((a.turns ?? 0) === 0 && Boolean(a.ended));
+
+/** Merge overlapping storm/fan-out intervals for the same (lane, role). */
+function mergeStormEntries(entries) {
   entries.sort((a, b) => a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role) || Date.parse(a.firstAt) - Date.parse(b.firstAt));
   const merged = [];
   for (const e of entries) {
     const last = merged[merged.length - 1];
     if (last && last.lane === e.lane && last.role === e.role && Date.parse(e.firstAt) <= Date.parse(last.lastAt)) {
-      last.lastAt = e.lastAt;
+      last.lastAt = Date.parse(e.lastAt) > Date.parse(last.lastAt) ? e.lastAt : last.lastAt;
       last.windowMs = Date.parse(last.lastAt) - Date.parse(last.firstAt);
       last.count = Math.max(last.count, e.count);
       last.countExclRespawns = Math.max(last.countExclRespawns ?? 0, e.countExclRespawns ?? 0);
@@ -2497,6 +2486,56 @@ function computeSpawnStorms(agents) {
     }
   }
   return merged;
+}
+
+/** Spawn-retry storms vs healthy parallel fan-out (usa-70):
+ * - Fail storm (`spawnStorms`): >=3 failed spawns (ended 0-turn or exitError) created in 2m, or >=3 zero-turn/error exits in 5m, per (lane, role).
+ * - Fan-out (`spawnFanOut`): >=3 spawns created in 2m per (lane, role) that do not overlap a fail storm (e.g. normal parallel dispatch where spawns did real work). */
+function computeSpawnStorms(agents) {
+  const groups = new Map();
+  for (const a of agents) {
+    const lane = a.lane || "unknown";
+    const role = a.role || "unknown";
+    const g = getOrSet(groups, `${lane}|${role}`, () => ({
+      lane, role,
+      created: [], createdExclRespawns: [],
+      failedCreated: [], failedCreatedExclRespawns: [],
+      zeroExits: [], zeroExitsExclRespawns: [],
+    }));
+    if (a.createdAt !== null && a.createdAt !== undefined) {
+      g.created.push(a.createdAt);
+      if (!a.respawnOf) g.createdExclRespawns.push(a.createdAt);
+      if (isFailedSpawn(a)) {
+        g.failedCreated.push(a.createdAt);
+        if (!a.respawnOf) g.failedCreatedExclRespawns.push(a.createdAt);
+      }
+    }
+    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) {
+      g.zeroExits.push(a.exitTs);
+      if (!a.respawnOf) g.zeroExitsExclRespawns.push(a.exitTs);
+    }
+  }
+  const stormEntries = [];
+  const fanOutEntries = [];
+  for (const g of groups.values()) {
+    const laneFailEntries = [];
+    for (const s of findStorms(g.failedCreated, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
+      const countExclRespawns = g.failedCreatedExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length; // usa-40: burst count with the one-time respawns dropped
+      laneFailEntries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0, kind: "fail" });
+    }
+    for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
+      laneFailEntries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: g.zeroExitsExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count, kind: "fail" });
+    }
+    const mergedFail = mergeStormEntries(laneFailEntries);
+    stormEntries.push(...mergedFail);
+    const failRanges = mergedFail.map((f) => [Date.parse(f.firstAt), Date.parse(f.lastAt)]);
+    for (const s of findStorms(g.created, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
+      if (failRanges.some(([lo, hi]) => s.firstAt <= hi && s.lastAt >= lo)) continue;
+      const countExclRespawns = g.createdExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length;
+      fanOutEntries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0, kind: "fan-out" });
+    }
+  }
+  return { spawnStorms: mergeStormEntries(stormEntries), spawnFanOut: mergeStormEntries(fanOutEntries) };
 }
 
 /** usa-50 (idea-788): index agents by (team, lane), sorted by createdAt, so each merged unit's implementer can look up its
@@ -3162,11 +3201,16 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   if (limits.length) out.push(`Limits: ${limits.map((l) => `${l.provider} ${l.window} ${l.usedPct}% (resets ${l.resetsAt ?? "?"})`).join("; ")}.`);
   const loops = u.loops?.flagged ?? [];
   if (loops.length) out.push(`Loops flagged: ${loops.map((l) => `${l.agentId} (${l.lane}/${l.role}) ${l.turns}t`).join("; ")}.`);
-  const storms = u.spawnStorms ?? [];
+  const storms = (u.spawnStorms ?? []).filter((s) => s.kind !== "fan-out");
   if (storms.length) {
     const shown = storms.slice(0, SPAWN_STORM_LIST_CAP);
     const omitted = storms.length - shown.length;
     out.push(`Spawn storms: ${shown.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}${omitted > 0 ? ` (+${omitted} more)` : ""}.`);
+  }
+  const fanOut = u.spawnFanOut ?? [];
+  if (fanOut.length) {
+    const totalSpawns = fanOut.reduce((sum, f) => sum + (f.count ?? 0), 0);
+    out.push(`Parallel dispatch fan-out (normal, not storms — do not recommend a storm cap for these): ${fanOut.length} burst${fanOut.length === 1 ? "" : "s"} (${totalSpawns} spawns).`);
   }
   const bp = u.byProfile ?? [];
   out.push("By provider/profile/role (runs | turns | costUsd | successRate (basis) | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
@@ -3742,7 +3786,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad, agentId: n.slice(0, -6) });
     if (squad && agentSquad !== squad) continue;
-    agentStates.push({ st, agentId: n.slice(0, -6), squad: agentSquad });
+    agentStates.push({ st, agentId: n.slice(0, -6), squad: agentSquad, archived });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
     la.agents += 1;
     if (st.handoff) la.handoffs += 1;
@@ -3820,7 +3864,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
 
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
-  const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
+  const agents = agentStates.map(({ st, agentId, archived }) => agentV2(st, agentId, archived));
   const workerIndex = indexWorkers(agents);
   workerIndex.mergesByName = new Map(); // usa-44: `${squad}|${unit name}` -> merges ascending by time (see attributeImplementer)
   workerIndex.mergedNames = new Set(); // lowercase names of every merged unit
@@ -4222,7 +4266,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     agents: allAgentSquads.map(({ st, squad: sq }) => { const a = agentV2(st, ""); return { squad: sq, turns: a.turns, costUsd: a.costUsd }; }),
   });
   yield;
-  const spawnStorms = computeSpawnStorms(agents);
+  const { spawnStorms, spawnFanOut } = computeSpawnStorms(agents);
   const leadLongTurns = buildLeadLongTurns(allAgentSquads, leadLongThreshold);
   const turnTriggers = buildTurnTriggers(agentStates);
   const postHandoffCost = buildPostHandoffCost(agentStates);
@@ -4268,6 +4312,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms,
+    spawnFanOut,
     leadLongTurns,
     turnTriggers,
     postHandoffCost,
