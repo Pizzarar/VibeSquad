@@ -9,7 +9,7 @@
 //  - VIBESQUAD_RUNTIME_DIR is an empty temp dir: runtimeDir() prefers it, and a test that synced with the live one would prune
 //    and overwrite the running install.
 // Tests that need their own home still set VIBESQUAD_HOME; process.env is per test file (one process each). Spawned children inherit.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { hermeticizeEnv, TEST_SCRATCH_PREFIX } from "../../scripts/test-child-env.mjs";
@@ -19,6 +19,7 @@ hermeticizeEnv(process.env);
 // lives until the whole run exits; a direct `node --test <file>` run creates its own); every mkdtemp(os.tmpdir()) in a test (and in its children) lands inside it and the
 // exit hook below removes the lot. Killed processes leave theirs for scripts/run-tests.mjs (sweepTestScratch) to age out.
 // A child that inherits its parent's scratch (TMPDIR already a vs-t- dir) reuses it: the parent owns and removes it.
+mkdirSync(tmpdir(), { recursive: true }); // VS_TEST_TMPDIR may name a dir that does not exist yet
 const inherited = basename(tmpdir()).startsWith(TEST_SCRATCH_PREFIX);
 const scratch = inherited ? null : mkdtempSync(join(tmpdir(), TEST_SCRATCH_PREFIX));
 if (scratch) {

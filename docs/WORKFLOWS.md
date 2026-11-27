@@ -44,3 +44,4 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Lane artifact as truth | "check the spec, not the chat" | STANDING_RULES `server/lessons.mjs:164` | @per |
 | Owner interrupts / queued units | "/btw", "also", "on another note" | R9 `server/profiles.mjs:40` | @hub |
 | Cross-lane principles | "cross-lane principle" | R12 `server/profiles.mjs:43` | @hub |
+| Test/worker scratch space (idea-1209, idea-1207) | "npm test dies with EDQUOT", "/tmp is full" | Worker scratch goes under `~/.cache/<name>`, never /tmp (a full /tmp tmpfs quota killed every `npm test` 11-27). `npm test` now preflights its temp dir (writable probe + 256 MB free) and exits 1 with one line naming the dir, free space and fix; `VS_TEST_TMPDIR=~/.cache/vs-test-tmp npm test` moves the suite temp (refused inside ~/.vibesquad; the suite lock stays on its fixed path). `scripts/test-child-env.mjs` (`checkTestTmp`, `testTmpdirOverride`); `scripts/run-tests.mjs` | @bug |
