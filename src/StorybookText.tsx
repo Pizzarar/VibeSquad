@@ -61,7 +61,6 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
 
   const isChanged = (r: ReviewRow) => changes != null && (changes.changedIds.has(r.id) || Object.hasOwn(changes.changed, r.id) || changes.added.has(r.id));
   const nChanged = useMemo(() => (changes ? rows.filter(isChanged).length : 0), [rows, changes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const nContracts = useMemo(() => rows.filter((r) => r.kind === "contract").length, [rows]);
   const base = useMemo(() => {
     let list = only === "changed" ? rows.filter(isChanged) : only === "contracts" ? rows.filter((r) => r.kind === "contract") : rows;
     if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
@@ -78,6 +77,14 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const searched = useMemo(() => filterRows(base, { query, speakerKey, classes: new Set(), tooLong: false, unreviewed: false }), [base, query, speakerKey]);
   const filter = useMemo(() => ({ query: "", classes, tooLong, unreviewed }), [classes, tooLong, unreviewed]);
   const filtered = useMemo(() => { const f = filterRows(searched, filter); return mine && mineTest ? f.filter(mineTest) : f; }, [searched, filter, mine, mineTest]);
+  const nContracts = useMemo(() => {
+    let list = only === "changed" ? rows.filter(isChanged) : rows;
+    if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
+    if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key, progress));
+    if (statusFilter) list = list.filter((r) => r.kind === "line" && (rowStatusBucket ? rowStatusBucket(r) : statusBucket(r.status)) === statusFilter);
+    const f = filterRows(list, { query, speakerKey, classes: new Set(), tooLong, unreviewed });
+    return (mine && mineTest ? f.filter(mineTest) : f).filter((r) => r.kind === "contract").length;
+  }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket, query, speakerKey, tooLong, unreviewed, mine, mineTest]); // eslint-disable-line react-hooks/exhaustive-deps
   const nMine = useMemo(() => (mineTest ? rows.filter(mineTest).length : 0), [rows, mineTest]);
   useEffect(() => {
     if (!preset) return;
@@ -187,8 +194,8 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
         )}
         <span className={`sb-filter-more${filtersOpen ? " sb-filter-more-open" : ""}`} data-testid="sb-text-filter-more">
           {nChanged > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "changed"} data-testid="sb-text-changed" title="New or edited since your last session" onClick={() => setOnly((v) => (v === "changed" ? null : "changed"))}>Changed <span className="sb-count">{nChanged}</span></button>}
-          {nContracts > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "contracts"} data-testid="sb-text-contracts" title="Contract titles and details as the player sees them" onClick={() => setOnly((v) => (v === "contracts" ? null : "contracts"))}>Contracts <span className="sb-count">{nContracts}</span></button>}
-          {ROW_CLASSES.filter((c) => counts[c] > 0 || classes.has(c)).map((c) => (
+          {(nContracts > 0 || only === "contracts") && <button type="button" className="sb-fbtn" aria-pressed={only === "contracts"} data-testid="sb-text-contracts" title="Contract titles and details as the player sees them" onClick={() => setOnly((v) => (v === "contracts" ? null : "contracts"))}>Contracts <span className="sb-count">{nContracts}</span></button>}
+          {ROW_CLASSES.filter((c) => c !== "contracts" && (counts[c] > 0 || classes.has(c))).map((c) => (
             <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
           ))}
           {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
