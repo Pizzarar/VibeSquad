@@ -180,7 +180,15 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-text { display: flex; flex-direction: column; gap: 8px; }
 .sb-class { margin: 0; }
 .sb-text .sb-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; position: sticky; top: 55px; z-index: 4; background: var(--sb-bg); padding: 4px 0; }
-@media (max-width: 600px) { .sb-text .sb-search { position: static; } }
+.sb-filter-toggle { display: none; }
+.sb-filter-more { display: contents; }
+@media (max-width: 600px) {
+  .sb-text { gap: 4px; }
+  .sb-text .sb-search { position: static; padding: 0; gap: 4px 8px; }
+  .sb-filter-toggle { display: inline-flex; }
+  .sb-filter-more { display: none; width: 100%; flex-wrap: wrap; gap: 6px; }
+  .sb-filter-more.sb-filter-more-open { display: flex; }
+}
 .sb-search-input { flex: 1 1 280px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
 .sb-search-input:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
 .sb-search-n { font-size: 12px; color: var(--sb-text2); }
@@ -290,8 +298,17 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-arc-actions { flex-basis: 100%; display: flex; justify-content: flex-end; }
 .sb-root .sb-marksbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; margin: 0 0 8px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; font-size: 13px; }
 .sb-root .sb-marksbar-txt { flex: 1 1 auto; color: var(--sb-text2); }
+.sb-root .sb-marksbar-short { display: none; }
 .sb-root .sb-marksbar-ok { color: #6be3a8; font-size: 12px; }
 .sb-root .sb-marksbar-err { color: var(--sb-bad); font-size: 12px; flex-basis: 100%; }
+@media (max-width: 600px) {
+  .sb-root .sb-marksbar { flex-wrap: nowrap; padding: 4px 8px; gap: 6px; margin: 0 0 4px; }
+  .sb-root .sb-marksbar:has(.sb-marksbar-ok, .sb-marksbar-err) { flex-wrap: wrap; }
+  .sb-root .sb-marksbar-full { display: none; }
+  .sb-root .sb-marksbar-short { display: inline; }
+  .sb-root .sb-marksbar-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-size: 12px; }
+  .sb-root .sb-marksbar .sb-mbtn-commit { flex-shrink: 0; white-space: nowrap; min-height: 44px; padding: 0 10px; font-size: 13px; }
+}
 @media (pointer: coarse), (max-width: 640px) {
   .sb-root .sb-mbtn { min-height: 44px; min-width: 44px; font-size: 14px; }
   .sb-root .sb-mark { justify-content: stretch; width: 100%; }

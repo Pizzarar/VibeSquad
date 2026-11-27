@@ -147,7 +147,17 @@ export function MarksBar({ m }: { m: MarksApi }) {
   return (
     <div className="sb-marksbar" data-testid="sb-marksbar" role="status">
       <span className="sb-marksbar-txt">
-        {m.state.exists ? <>Review session <span className="sb-mono">{m.state.branch}</span> · {n} marked · {m.state.pending ? `${m.state.pending} unsaved row${m.state.pending === 1 ? "" : "s"}` : "all committed"}</> : "No review session yet: your first OK / Redo / Edit starts one (an EFI branch, never main)."}
+        {m.state.exists ? (
+          <>
+            <span className="sb-marksbar-full">Review session <span className="sb-mono">{m.state.branch}</span> · {n} marked · {m.state.pending ? `${m.state.pending} unsaved row${m.state.pending === 1 ? "" : "s"}` : "all committed"}</span>
+            <span className="sb-marksbar-short">{n} marked · {m.state.pending ? `${m.state.pending} unsaved` : "committed"}</span>
+          </>
+        ) : (
+          <>
+            <span className="sb-marksbar-full">No review session yet: your first OK / Redo / Edit starts one (an EFI branch, never main).</span>
+            <span className="sb-marksbar-short">No review session yet · mark a line to start</span>
+          </>
+        )}
       </span>
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
