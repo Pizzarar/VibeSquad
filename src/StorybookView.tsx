@@ -19,6 +19,7 @@ import { StorybookText, type TextFocus } from "./StorybookText";
 import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
 import { StorybookItems } from "./StorybookItems";
+import { StorybookGlossary } from "./StorybookGlossary";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
 import "./storybook.css";
 
@@ -306,7 +307,7 @@ const TABS: { id: Tab; label: string; built: boolean }[] = [
   { id: "cast", label: "Cast", built: true }, // characters + enemies
   { id: "items", label: "Items", built: true }, // V4
   { id: "problems", label: "Problems", built: true },
-  { id: "glossary", label: "Glossary", built: false }, // V10
+  { id: "glossary", label: "Glossary", built: true }, // V10
 ];
 const NO_SEL: Record<Tab, string | null> = { home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null };
 
@@ -743,6 +744,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => setChecks(null)} />}
+            {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>
         </>
       )}

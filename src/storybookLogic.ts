@@ -32,6 +32,35 @@ export type SbSnapshot = {
   warnings: string[];
   audit?: { signal: string; severity: string; msg?: string }[];
   arc?: SbArc; // server/storybook/unlocks.mjs (V5)
+  glossary?: SbGlossary; // server/storybook/glossary.mjs (V10)
+};
+
+export type SbGlossaryCanonical = {
+  id: string;
+  term: string;
+  variants: string[];
+  note: string;
+  source?: SbSource | null;
+};
+export type SbGlossaryBanned = {
+  id: string;
+  term: string;
+  display?: string;
+  note: string;
+  source?: SbSource | null;
+};
+export type SbGlossaryRule = {
+  id: string;
+  title: string;
+  description: string;
+  source?: SbSource | null;
+};
+export type SbGlossary = {
+  source: { path: string; seeded: boolean };
+  playerWord: string;
+  canonical: SbGlossaryCanonical[];
+  banned: SbGlossaryBanned[];
+  nameStyleRules: SbGlossaryRule[];
 };
 
 export type SbArcGate = { type: string; id?: string | null; level?: number | null; unlock_order?: number; trader?: string; rep?: number };
@@ -68,12 +97,12 @@ export function indexEntities(entities: SbEntity[]): EntityIndex {
   return { get: (kind, id) => byKey.get(entityKey(kind, id)) ?? null, all: [...byKey.values()], byKind: (kind) => [...(kinds.get(kind) ?? [])] };
 }
 
-/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
+/** Owner mapping: #18 Too long (V3); #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14/#16/#17/#19 Inconsistent; #8/#15 Missing. */
 export function findingCategory(check: string): SbCategory | null {
   switch (check) {
     case "#1": case "#2": case "#5": case "#13":
       return "broken";
-    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14":
+    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14": case "#16": case "#17": case "#19":
       return "inconsistent";
     case "#8": case "#15":
       return "missing";
@@ -459,6 +488,7 @@ export const CHECK_NAME: Record<string, string> = {
   "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
   "#8": "missing piece", "#12": "lore contradiction", "#18": "too long",
   "#13": "unobtainable item", "#14": "orphan item", "#15": "item has no story",
+  "#16": "term consistency", "#17": "naming / id drift", "#19": "lore vs roster",
 };
 export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
 
@@ -482,8 +512,8 @@ export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
   all: "Everything above, together.",
 };
-/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
-export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
+/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions, #19 lore vs roster. */
+export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12", "#19"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
 /** A real problem: not a text-inventory row, not a Too-long fit note, not a dev code comment. */
 export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev;
