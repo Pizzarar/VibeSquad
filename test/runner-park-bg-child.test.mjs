@@ -5,18 +5,19 @@ import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, parkHoldMaxFromEnv, parkHoldPollFromEnv } from '../runner/runner.mjs';
 import { backgroundWork, createBackgroundProbe } from '../runner/background.mjs';
 import { killTree } from '../runner/spawn.mjs';
+import { budget } from './helpers/load-budget.mjs';
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-parkbg-')); dirs.push(d); return d; };
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await tick(10); } };
+const until = async (fn, ms = 3000) => { const end = Date.now() + budget(ms); while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await tick(10); } };
 
 // Fake agents with a pid. The probe answers from `work` (pid -> [{ pid, name, cmd }]), so a test turns a background shell on/off.
 function harness(opts = {}) {
@@ -62,7 +63,7 @@ test('park is held while a background shell lives under the agent; once it exits
   const pid = h.pidOf(id);
   h.shell(id);
   h.endTurn(id);
-  await tick(120);
+  await until(() => types(h.runner, id).includes('park-held') && h.probes.filter((p) => p === pid).length >= 2);
   assert.deepEqual(h.kills, [], 'not killed while the background shell runs');
   assert.ok(h.runner.live.has(id), 'still live');
   assert.equal(h.runner.status(id).status, 'idle');
@@ -103,8 +104,7 @@ test('max hold: a hold past parkHoldMaxMs is a logged forced park, not a silent 
   const id = h.create();
   h.shell(id);
   h.endTurn(id);
-  await tick(40);
-  assert.deepEqual(h.kills, []);
+  await until(() => types(h.runner, id).includes('park-held'));
   await until(() => h.kills.length === 1);
   const forced = h.runner.timeline(id).filter((e) => e.type === 'park-forced');
   assert.equal(forced.length, 1);
@@ -133,7 +133,7 @@ test('shutdown still kills a held agent', async () => {
   const id = h.create();
   h.shell(id);
   h.endTurn(id);
-  await tick(60);
+  await until(() => types(h.runner, id).includes('park-held'));
   assert.deepEqual(h.kills, []);
   h.runner.shutdown();
   assert.deepEqual(h.kills, [id]);
@@ -146,7 +146,7 @@ test('archive (explicit stop) still kills a held agent, session kept', async () 
   const id = h.create();
   h.shell(id);
   h.endTurn(id);
-  await tick(60);
+  await until(() => types(h.runner, id).includes('park-held'));
   h.runner.archive(id);
   assert.deepEqual(h.kills, [id]);
   await tick(60);
@@ -159,7 +159,7 @@ test('a new turn while held cancels the hold; its own idle re-checks', async () 
   const id = h.create();
   h.shell(id);
   h.endTurn(id);
-  await tick(60);
+  await until(() => types(h.runner, id).includes('park-held'));
   h.runner.send(id, 'next');
   const before = h.probes.length;
   await tick(80);
@@ -192,7 +192,7 @@ test('makeRoom never parks a held agent: the new job queues; the shell exits -> 
   const pidA = h.pidOf(a);
   h.shell(a);
   h.endTurn(a);
-  await tick(60);
+  await until(() => types(h.runner, a).includes('park-held'));
   const b = h.runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'b' });
   assert.equal(h.runner.queuePosition(b).queued, true, 'b waits for the live slot');
   assert.deepEqual(h.kills, []);
@@ -211,7 +211,8 @@ test('makeRoom probes an idle agent inside its grace before parking it for room'
   h.shell(a);
   h.endTurn(a);
   const b = h.runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'b' });
-  await tick(60);
+  await until(() => h.probes.length >= 1);
+  await tick(20);
   assert.deepEqual(h.kills, [], 'a has a background shell: not parked for room');
   assert.equal(h.runner.queuePosition(b).queued, true);
   h.runner.shutdown();
@@ -230,9 +231,8 @@ test('setConfig on a held idle agent does not kill it; after the shell exits the
   const pid = h.pidOf(id);
   h.shell(id);
   h.endTurn(id);
-  await tick(20);
   h.runner.setConfig(id, { model: 'other' });
-  await tick(60);
+  await until(() => types(h.runner, id).includes('park-held'));
   assert.deepEqual(h.kills, []);
   assert.ok(h.runner.timeline(id).some((e) => e.type === 'park-held'));
   h.clear(id, pid);
@@ -362,13 +362,15 @@ test('real process: a live shell under the agent holds the park; after the shell
   let em;
   let child;
   // The shell lives until this file exists, not for a fixed time: under load the first process probe can take longer than any fixed budget.
-  const release = path.join(tmp(), 'release');
+  const workDir = tmp();
+  const started = path.join(workDir, 'started');
+  const release = path.join(workDir, 'release');
   const adapter = {
     canPark: true,
     start({ emit }) {
       em = emit;
       // root = a node "CLI" that leaves a shell running (cmd.exe on Windows, /bin/sh elsewhere), like a background Bash
-      const shellCmd = `node -e "const f=process.argv[1],fs=require('fs');const t=setInterval(()=>{if(fs.existsSync(f))clearInterval(t)},50)" "${release}" && echo done`;
+      const shellCmd = `node -e "const fs=require('fs'),[s,f]=process.argv.slice(1);fs.writeFileSync(s,'');const t=setInterval(()=>{if(fs.existsSync(f))clearInterval(t)},50)" "${started}" "${release}" && echo done`;
       const script = `require('child_process').spawn(${JSON.stringify(shellCmd)}, { shell: true, stdio: 'ignore' }); setInterval(() => {}, 1000);`;
       child = spawn(process.execPath, ['-e', script], { stdio: 'ignore', windowsHide: true });
       return { pid: child.pid, send() { emit('status', { status: 'running' }); }, cancel() {}, kill() { kills.push(Date.now()); killTree(child); } };
@@ -377,7 +379,7 @@ test('real process: a live shell under the agent holds the park; after the shell
   const runner = new Runner({ dir: tmp(), adapters: { fake: adapter }, parkGraceMs: 0, parkHoldPollMs: 200 });
   try {
     const id = runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'x' });
-    await tick(400); // let the shell start
+    await until(() => existsSync(started), 10000); // wait until the child shell is actually running
     em('session', { sessionId: 's' }); em('turn_done', {}); em('status', { status: 'idle' });
     await until(() => runner.timeline(id).some((e) => e.type === 'park-held'), 30000);
     assert.deepEqual(kills, [], 'held, not killed');
