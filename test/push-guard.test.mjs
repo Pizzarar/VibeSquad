@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
 
-import { findLaneInRegistry } from "../server/identity.mjs";
+import { findLaneInRegistry, resolveLaneQuery } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
 import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines, readRecordedVerdicts, readRunnerVerdicts, recordedVerdicts, repoSquads, verdictHome } from "../server/push-guard.mjs";
 import { attestedVerdict, entryVerdict, evaluateMergeVerdicts, formatVerdictRefusal, isUnitMergeSubject, latestRecordedVerdict, newestVerdict, runnerRecordVerdict } from "../server/verdict.mjs";
@@ -1016,5 +1016,122 @@ describe("push-guard: idea-941 verdict gate fails closed (no rollout window)", (
     assert.match(wf, /there is no rollout window/);
     assert.doesNotMatch(wf, /vs push-guard window/);
     assert.match(wf, /PASS digests written before the server restart never get the `verdict` field retroactively/);
+  });
+});
+
+// idea-1215: Release Desk (code Rele, bumped off Rel at creation) tagged its merges @rel; Rel was still the stored code of the
+// removed Release 0.2.0 lane, so the guard sent the desk to `vs who lead --lane release-0-2-0` for its own merge.
+describe("push-guard: stale and ambiguous lane tags (idea-1215)", () => {
+  const SQUADS = [
+    {
+      id: "vibesquad",
+      name: "VibeSquad",
+      lanes: [
+        { id: "vibesquad", name: "VibeSquad", hub: true, code: "Hub" },
+        { id: "release-0-2-0", name: "Release 0.2.0", state: "removed", code: "Rel", removedAt: "2026-11-03T19:21:06.747Z" },
+        { id: "release-desk", name: "Release Desk", state: "pinned", standing: true, code: "Rele" },
+        { id: "bug-chaser", name: "Bug Chaser", state: "pinned", code: "Bug" },
+        { id: "old-tools", name: "Old Tools", state: "removed", code: "Too" },
+      ],
+    },
+    { id: "efi", name: "EFI", lanes: [{ id: "release-desk-2", name: "Release Desk", state: "pinned", standing: true, code: "Rel" }] },
+  ];
+  const reg = { teams: SQUADS, findLane: resolveLaneQuery };
+  const tagged = (tag) => [{ sha: SHA("a"), subject: `Merge branch 'unit-rel-win-suite': win32 fixes (${tag} PLAN_RELEASE_040 P3; Review-Gemini PASS)` }];
+
+  test("a removed lane's code no longer shadows the live lane: @rel from the desk is its own merge", () => {
+    const r = evaluatePush({ merges: tagged("@rel"), pusherLane: "release-desk", pusherTeam: "vibesquad", ...reg });
+    assert.equal(r.ok, true, formatRefusal(r));
+    assert.deepEqual(r.own.map((x) => x.lane), ["release-desk"]);
+    // Its stored code still works, and the pusher can be named by code too.
+    assert.equal(evaluatePush({ merges: tagged("@rele"), pusherLane: "@rele", pusherTeam: "vibesquad", ...reg }).ok, true);
+    assert.equal(findLaneInRegistry("@rel", SQUADS, "vibesquad").lane.id, "release-desk");
+    // The removed lane is still reachable by its id.
+    assert.equal(findLaneInRegistry("release-0-2-0", SQUADS, "vibesquad").lane.id, "release-0-2-0");
+  });
+
+  test("a live lane in another Squad beats the caller Squad's removed holder; the caller's own live lane still wins", () => {
+    assert.equal(findLaneInRegistry("rel", SQUADS, "efi").lane.id, "release-desk-2");
+    assert.equal(findLaneInRegistry("rel", SQUADS).lane.id, "release-desk-2");
+    const squads = [
+      { id: "s1", lanes: [{ id: "tok-old", name: "Token Checker", state: "removed", code: "Tok" }] },
+      { id: "s2", lanes: [{ id: "tok-live", name: "Token Tools", state: "pinned", code: "Tok" }] },
+    ];
+    assert.equal(findLaneInRegistry("tok", squads, "s1").lane.id, "tok-live");
+  });
+
+  test("another lane is still refused: the desk cannot push a bug lane merge, nor bug the desk's", () => {
+    const r = evaluatePush({ merges: [{ sha: SHA("b"), subject: "Merge x (@bug idea-1)" }], pusherLane: "release-desk", pusherTeam: "vibesquad", ...reg });
+    assert.deepEqual(r.refused.map((x) => [x.reason, x.lane]), [["other-lane", "bug-chaser"]]);
+    const s = evaluatePush({ merges: tagged("@rel"), pusherLane: "bug-chaser", pusherTeam: "vibesquad", ...reg });
+    assert.deepEqual(s.refused.map((x) => [x.reason, x.lane]), [["other-lane", "release-desk"]]);
+  });
+
+  test("a tag only a removed lane holds fails closed as stale-lane, with a message naming the removed lane", () => {
+    const r = evaluatePush({ merges: [{ sha: SHA("c"), subject: "Merge x (@too y)" }], pusherLane: "bug-chaser", pusherTeam: "vibesquad", ...reg });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.refused.map((x) => [x.reason, x.lane]), [["stale-lane", "old-tools"]]);
+    assert.match(formatRefusal(r), /only names removed lane old-tools/);
+  });
+
+  test("two live lanes claiming one code in the pusher's Squad fail closed (ambiguous-tag), even for one of them", () => {
+    const squads = [
+      {
+        id: "sq",
+        lanes: [
+          { id: "relay", name: "Relay", state: "pinned", code: "Rel" },
+          { id: "release-desk", name: "Release Desk", state: "pinned", code: "Rel" },
+        ],
+      },
+    ];
+    assert.equal(findLaneInRegistry("rel", squads, "sq"), null);
+    assert.deepEqual(resolveLaneQuery("@rel", squads, "sq").ambiguous.map((h) => h.lane.id), ["relay", "release-desk"]);
+    const r = evaluatePush({ merges: tagged("@rel"), pusherLane: "release-desk", pusherTeam: "sq", teams: squads, findLane: resolveLaneQuery });
+    assert.equal(r.ok, false);
+    assert.equal(r.refused[0].reason, "ambiguous-tag");
+    assert.match(formatRefusal(r), /matches several live lanes \(relay, release-desk\)/);
+    // Two live lanes both bumped past a removed lane's code are just as ambiguous.
+    const bumped = [
+      {
+        id: "sq",
+        lanes: [
+          { id: "rel-old", name: "Release Old", state: "removed", code: "Rel" },
+          { id: "release-desk", name: "Release Desk", state: "pinned", code: "Rele" },
+          { id: "relay", name: "Relay", state: "pinned", code: "Rela" },
+        ],
+      },
+    ];
+    assert.ok(resolveLaneQuery("rel", bumped, "sq").ambiguous);
+    assert.equal(evaluatePush({ merges: tagged("@rel"), pusherLane: "release-desk", pusherTeam: "sq", teams: bumped, findLane: resolveLaneQuery }).refused[0].reason, "ambiguous-tag");
+    // The id tag is never ambiguous.
+    assert.equal(evaluatePush({ merges: tagged("@release-desk"), pusherLane: "release-desk", pusherTeam: "sq", teams: bumped, findLane: resolveLaneQuery }).ok, true);
+  });
+
+  test("an unknown tag is still refused for the desk", () => {
+    const r = evaluatePush({ merges: tagged("@nosuch"), pusherLane: "release-desk", pusherTeam: "vibesquad", ...reg });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.refused.map((x) => [x.reason, x.lane]), [["other-lane", "nosuch"]]);
+  });
+
+  test("checkPush: the desk's @rel unit merge passes the lane gate but still needs a recorded verdict", async () => {
+    const tip = SHA("9");
+    const git = (args) => {
+      if (args[0] === "log") return `${SHA("a")}\x1f${SHA("0")} ${tip}\x1fMerge unit-rel-win-suite: win32 (@rel PLAN_RELEASE_040 P3)\n`;
+      throw new Error("no config");
+    };
+    const home = mkdtempSync(join(tmpdir(), "vs-pg-1215-"));
+    try {
+      const res = await checkPush({
+        updates: [{ localRef: "refs/heads/master", localSha: SHA("a"), remoteRef: "refs/heads/master", remoteSha: SHA("f") }],
+        env: { VS_LANE: "release-desk", VS_TEAM: "vibesquad" },
+        git,
+        registry: reg,
+        home,
+      });
+      assert.equal(res.results[0].result?.ok, true, res.message);
+      assert.equal(res.ok, false, "no recorded verdict for the merged tip: the verdict gate still refuses");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
