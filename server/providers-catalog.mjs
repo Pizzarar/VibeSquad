@@ -546,6 +546,8 @@ function foldEvent(st, ev) {
       if (ev.status === "queued") { if (st.queuedAt === undefined && st.firstThoughtTs === undefined && st.firstOutputTs === undefined) st.queuedAt = t; }
       else if ((ev.status === "starting" || ev.status === "running") && st.queuedAt !== undefined && st.queueEndedAt === undefined) st.queueEndedAt = t;
     }
+    if (ev.status === "parked" || ev.status === "exited") st.parkedEnd = true; // usa-70: an ended (not just idle) run
+    else if (ev.status === "running" || ev.status === "starting" || ev.status === "queued") st.parkedEnd = false;
     // working intervals run from status "running" to "idle"/"parked"/"exited"; an open interval is closed at lastTs.
     if (ev.status === "running") {
       if (st.runningSince === undefined && t !== null) st.runningSince = t;
@@ -1481,7 +1483,7 @@ function readLaneCodes(home) {
 // ---------------------------------------------------------------- usage v2 (usa-5): profiles, work/idle, cycles, fix-after-merge, spawn storms
 
 /** Per-agent whole-log summary for the v2 rollups (not day-filtered). */
-function agentV2(st, agentId) {
+function agentV2(st, agentId, archived = false) {
   const stats = zeroStats();
   for (const b of st.buckets.values()) addStats(stats, b);
   let workingMs = st.workingMs;
@@ -1520,6 +1522,7 @@ function agentV2(st, agentId) {
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
+    ended: !!st.exited || !!st.parkedEnd || archived, // usa-70: exited / parked / archived (spawn errors set exited)
     exitError: !!st.exitError,
     exitTs: st.exitTs ?? null,
     errors: st.errors ?? 0,
@@ -2462,8 +2465,9 @@ function buildPostHandoffCost(agentStates) {
   };
 }
 
-/** A spawn counts as failed when it did 0 turns, exited with an error, or was a quota/failover respawn. */
-const isFailedSpawn = (a) => (a.turns ?? 0) === 0 || Boolean(a.exitError) || Boolean(a.respawnOf);
+/** A spawn counts as failed once it has ENDED (exited / parked / archived / spawn error) with 0 turns, or exited with an error.
+ * A created-only or still-running 0-turn agent is pending, not failed. respawnOf is not a failure: the original run is. */
+const isFailedSpawn = (a) => Boolean(a.exitError) || ((a.turns ?? 0) === 0 && Boolean(a.ended));
 
 /** Merge overlapping storm/fan-out intervals for the same (lane, role). */
 function mergeStormEntries(entries) {
@@ -2485,7 +2489,7 @@ function mergeStormEntries(entries) {
 }
 
 /** Spawn-retry storms vs healthy parallel fan-out (usa-70):
- * - Fail storm (`spawnStorms`): >=3 failed spawns (0 turns, exitError, or respawnOf) created in 2m, or >=3 zero-turn/error exits in 5m, per (lane, role).
+ * - Fail storm (`spawnStorms`): >=3 failed spawns (0 turns, exitError, or ended 0-turn) created in 2m, or >=3 zero-turn/error exits in 5m, per (lane, role).
  * - Fan-out (`spawnFanOut`): >=3 spawns created in 2m per (lane, role) that do not overlap a fail storm (e.g. normal parallel dispatch where spawns did real work). */
 function computeSpawnStorms(agents) {
   const groups = new Map();
@@ -3782,7 +3786,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad, agentId: n.slice(0, -6) });
     if (squad && agentSquad !== squad) continue;
-    agentStates.push({ st, agentId: n.slice(0, -6), squad: agentSquad });
+    agentStates.push({ st, agentId: n.slice(0, -6), squad: agentSquad, archived });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
     la.agents += 1;
     if (st.handoff) la.handoffs += 1;
@@ -3860,7 +3864,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
 
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
-  const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
+  const agents = agentStates.map(({ st, agentId, archived }) => agentV2(st, agentId, archived));
   const workerIndex = indexWorkers(agents);
   workerIndex.mergesByName = new Map(); // usa-44: `${squad}|${unit name}` -> merges ascending by time (see attributeImplementer)
   workerIndex.mergedNames = new Set(); // lowercase names of every merged unit

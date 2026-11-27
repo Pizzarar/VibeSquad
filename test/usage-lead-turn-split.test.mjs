@@ -114,7 +114,7 @@ test('usa-49: lead-only fixture leaves pooled/bySquad unchanged and mirrors them
 test('spawn storms: countExclRespawns drops respawned agents, raw count unchanged', () => {
   const home = tmp();
   [0, 20_000, 40_000, 60_000].forEach((off, i) => {
-    writeAgent(home, `rn-r${i}`, [{ ts: T0 + off, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', ...(i >= 2 ? { labels: { respawnOf: 'rn-dead' } } : {}) } }]);
+    writeAgent(home, `rn-r${i}`, [{ ts: T0 + off, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', ...(i >= 2 ? { labels: { respawnOf: 'rn-dead' } } : {}) } }, { ts: T0 + off + 5000, type: 'exit', code: 0 }]);
   });
   const storm = getUsage({ home, git: noGit }).spawnStorms.find((s) => s.lane === 'usage' && s.role === 'worker');
   assert.equal(storm.count, 4);

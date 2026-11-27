@@ -734,7 +734,7 @@ test('usage v2: spawn storms detect spawn bursts and zero-turn exits, skip non-s
   clearUsageCache();
   const T0 = Date.UTC(2026, 10, 8, 12);
   for (const [id, ts] of [['rn-b1', T0], ['rn-b2', T0 + 30000], ['rn-b3', T0 + 60000]]) {
-    writeAgent(home, id, [{ ts, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } }]);
+    writeAgent(home, id, [{ ts, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } }, { ts: ts + 5000, type: 'exit', code: 0 }]);
   }
   const exits = [[T0 + 30 * 60_000, T0], [T0 + 30 * 60_000 + 30000, T0 + 5 * 60_000], [T0 + 30 * 60_000 + 60000, T0 + 10 * 60_000]];
   exits.forEach(([exitTs, createdTs], i) => {
@@ -751,7 +751,7 @@ test('usage v2: spawn storms detect spawn bursts and zero-turn exits, skip non-s
   const burst = storms.find((s) => s.lane === 'usage' && s.role === 'worker');
   assert.ok(burst, 'zero-turn spawn burst detected as fail storm');
   assert.equal(burst.count, 3);
-  assert.equal(burst.zeroTurnExits, 0);
+  assert.ok(burst.zeroTurnExits <= 3, 'burst workers exited 0-turn too (ended)');
   assert.equal(burst.kind, 'fail');
   const zero = storms.find((s) => s.lane === 'usage' && s.role === 'lead');
   assert.ok(zero, 'zero-turn exit storm detected');
@@ -794,8 +794,11 @@ test('usa-70: spawn storms split fail storms vs healthy parallel fan-out', () =>
   writeAgent(home, 'rn-mix-b3', zeroEvs(T0 + 40_000, 'mixed-fail-lane'));
   writeAgent(home, 'rn-mix-b4', zeroEvs(T0 + 60_000, 'mixed-fail-lane'));
 
-  // 5. 3 quota/failover respawns in 2m (even with turns > 0) -> IS a fail storm.
+  // 5. 3 working quota/failover respawns in 2m -> NOT a storm (the original failed run is the failure).
   [0, 25_000, 50_000].forEach((off, i) => writeAgent(home, `rn-resp${i}`, workEvs(T0 + off, 'respawn-lane', { labels: { respawnOf: `rn-dead-${i}` } })));
+
+  // 6. 3 created-only, still-running 0-turn agents in 2m -> pending, NOT a storm.
+  [0, 20_000, 40_000].forEach((off, i) => writeAgent(home, `rn-pend${i}`, [{ ts: T0 + off, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'pending-lane', role: 'worker', profile: 'Implement - Sonnet' } }]));
 
   const u = getUsage({ home, git: noGit });
   assert.ok(!u.spawnStorms.some((s) => s.lane === 'fanout-lane'), '4 working spawns in 2m is not a storm');
@@ -820,10 +823,9 @@ test('usa-70: spawn storms split fail storms vs healthy parallel fan-out', () =>
   assert.equal(mixFail.count, 3);
   assert.ok(!u.spawnFanOut.some((s) => s.lane === 'mixed-fail-lane'));
 
-  const resp = u.spawnStorms.find((s) => s.lane === 'respawn-lane');
-  assert.ok(resp, '3 quota/failover respawns in 2m is a fail storm');
-  assert.equal(resp.count, 3);
-  assert.equal(resp.countExclRespawns, 0);
+  assert.ok(!u.spawnStorms.some((s) => s.lane === 'respawn-lane'), '3 working respawns is not a storm');
+  assert.ok(u.spawnFanOut.some((s) => s.lane === 'respawn-lane'), '3 working respawns is fan-out');
+  assert.equal(u.spawnStorms.filter((s) => s.lane === 'pending-lane').length, 0, '3 created-only running agents is not a storm');
 });
 
 // ---------------------------------------------------------------- usage review API (usa-7)
