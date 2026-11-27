@@ -10,6 +10,10 @@ export interface RegistryLane {
   paths?: string[];
   aliases?: string[];
   dynamic?: boolean;
+  code?: string;
+  hidden?: boolean;
+  state?: string;
+  removedAt?: string | number | null;
 }
 
 export interface RegistryTeam {
@@ -182,27 +186,78 @@ export function topicOf(agentOrLabels: IdentityInput | Record<string, string> | 
 export function findLaneInRegistry(
   laneQuery: string | null | undefined,
   teams: RegistryTeam[] = DEFAULT_TEAMS,
+  preferTeamId = "",
 ): { team: RegistryTeam; lane: RegistryLane } | null {
-  const q = String(laneQuery ?? "").trim().toLowerCase();
+  const res = lookupLane(laneQuery, teams, preferTeamId);
+  return res && !("ambiguous" in res) ? { team: res.team, lane: res.lane } : null;
+}
+
+/** A lane `vs pin remove` retired. Mirrors server/identity.mjs isRemovedLane (idea-1215, idea-1220). */
+export function isRemovedLane(lane: RegistryLane | null | undefined): boolean {
+  return String(lane?.state ?? "").toLowerCase() === "removed" || Boolean(lane?.removedAt);
+}
+
+type LaneHit = { team: RegistryTeam; lane: RegistryLane };
+type LaneLookup = LaneHit | { ambiguous: LaneHit[] } | null;
+
+/** Mirrors lookupLane in server/identity.mjs: a live lane beats a removed one; live ambiguity in one Squad fails closed (null). */
+function lookupLane(laneQuery: string | null | undefined, teams: RegistryTeam[], preferTeamId: string): LaneLookup {
+  const q = String(laneQuery ?? "").trim().replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
+  const pref = String(preferTeamId ?? "").trim().toLowerCase();
+  const isPref = (t: RegistryTeam): boolean =>
+    Boolean(pref) && (String(t.id ?? "").toLowerCase() === pref || String(t.name ?? "").toLowerCase() === pref);
+  const orderedTeams = pref ? [...teams.filter(isPref), ...teams.filter((t) => !isPref(t))] : teams;
+  const firstLive = (match: (lane: RegistryLane) => boolean): LaneHit | null => {
+    const hits: LaneHit[] = [];
+    for (const team of orderedTeams) for (const lane of team.lanes ?? []) if (match(lane)) hits.push({ team, lane });
+    return hits.find((h) => !isRemovedLane(h.lane)) ?? hits[0] ?? null;
+  };
+  const byId =
+    firstLive(
+      (lane) =>
+        String(lane.id ?? "").toLowerCase() === q ||
+        (Array.isArray(lane.aliases) && lane.aliases.some((a) => String(a).toLowerCase() === q)),
+    ) ?? firstLive((lane) => String(lane.name ?? "").toLowerCase() === q);
+  return byId ?? resolveLaneCode(q, teams, isPref);
+}
+
+/** Mirrors resolveLaneCode in server/identity.mjs (idea-1215): `@code` handles, live first, ambiguity fails closed. */
+function resolveLaneCode(q: string, teams: RegistryTeam[], isPref: (t: RegistryTeam) => boolean): LaneLookup {
+  const holders: LaneHit[] = [];
+  const bumped: LaneHit[] = [];
   for (const team of teams) {
-    for (const lane of team.lanes ?? []) {
-      if (String(lane.id ?? "").toLowerCase() === q) {
-        return { team, lane };
+    const codes = laneCodesForTeam(team as any);
+    const holdsQ = (lane: RegistryLane): boolean =>
+      String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q;
+    const lanes = team.lanes ?? [];
+    const liveHolder = lanes.some((l) => !isRemovedLane(l) && holdsQ(l));
+    const removedHolder = lanes.some((l) => isRemovedLane(l) && holdsQ(l));
+    for (const lane of lanes) {
+      if (holdsQ(lane)) {
+        holders.push({ team, lane });
+        continue;
       }
-      if (Array.isArray(lane.aliases) && lane.aliases.some((a) => String(a).toLowerCase() === q)) {
-        return { team, lane };
-      }
+      if (liveHolder || !removedHolder || isRemovedLane(lane)) continue;
+      const cands = laneCodeCandidates(lane).map((c) => c.toLowerCase());
+      const at = cands.indexOf(q);
+      if (at >= 0 && cands.indexOf(String(codes[lane.id] ?? "").toLowerCase()) > at) bumped.push({ team, lane });
     }
   }
+  const live = holders.filter((h) => !isRemovedLane(h.lane));
+  const one = (list: LaneHit[]): LaneLookup => (list.length > 1 ? { ambiguous: list } : list[0] ?? null);
+  const own = one(live.filter((h) => isPref(h.team))) ?? one(bumped.filter((h) => isPref(h.team)));
+  if (own) return own;
+  const otherLive = live.filter((h) => !isPref(h.team));
   for (const team of teams) {
-    for (const lane of team.lanes ?? []) {
-      if (String(lane.name ?? "").toLowerCase() === q) {
-        return { team, lane };
-      }
-    }
+    const same = otherLive.filter((h) => h.team === team);
+    if (same.length > 1) return { ambiguous: same };
   }
-  return null;
+  if (otherLive.length) return otherLive.find((h) => !h.lane.hidden) ?? otherLive[0];
+  const otherBumped = one(bumped.filter((h) => !isPref(h.team)));
+  if (otherBumped) return otherBumped;
+  const stale = holders.filter((h) => isRemovedLane(h.lane));
+  return stale.find((h) => isPref(h.team)) ?? stale[0] ?? null;
 }
 
 export function findTeamInRegistry(
@@ -346,7 +401,7 @@ export function resolveAgentIdentity(
 
   // Step 1: Registry lookup on `labels.lane` (or legacy `labels.lead`)
   if (rawLane && !explicitOrphan) {
-    const regMatch = findLaneInRegistry(rawLane, teams) ?? matchDynamicPrefixedLane(rawLane, rawTeam, teams);
+    const regMatch = findLaneInRegistry(rawLane, teams, (rawTeam ? findTeamInRegistry(rawTeam, teams)?.id : "") || rawTeam) ?? matchDynamicPrefixedLane(rawLane, rawTeam, teams);
     if (regMatch) {
       const { team, lane } = regMatch;
       const callerTeamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
