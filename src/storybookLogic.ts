@@ -1,4 +1,4 @@
-import { etClock } from "./etTime.ts";
+import { etClock, etDate } from "./etTime.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 
@@ -675,4 +675,87 @@ export function enemySheetData(enemy: SbEntity, idx: EntityIndex, findings: SbFi
   const contracts = idx.byKind("contract").filter((c) => c.links.some((l) => l.kind === "enemy" && l.id === enemy.id));
   const lines = idx.byKind("line").filter((l) => l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id));
   return { enemy, look, missingDescription, spawns, drops, quests, contracts, lines, findings: entityFindings(enemy, findings) };
+}
+
+// ── V8: what changed since the owner's last session (server/storybook/changes.mjs) + Home signal/tile routing ──────────
+
+export type SbChangeRow = { id?: string; key: string; text?: string; old?: string; new?: string; file?: string; reason?: string; why?: string };
+export type SbChanges = {
+  first: boolean;
+  from: { sha: string; at: string; total: number } | null;
+  to: { sha: string; ref?: string | null; generatedAt?: string | null; total: number };
+  sameSha?: boolean;
+  counts: { new: number; changed: number; gone: number; goneBy?: Record<string, number> };
+  newIds?: string[]; changedIds?: string[];
+  new: SbChangeRow[]; changed: SbChangeRow[]; gone: SbChangeRow[];
+  capped?: number | null;
+};
+
+/** One-line "since <date, sha>" label for the Home card (ET). */
+export function changesSince(ch: SbChanges): string {
+  if (!ch.from) return "";
+  return `${etClock(ch.from.at) ? `${etDate(ch.from.at)} ${etClock(ch.from.at)}` : ""}${ch.from.sha ? `, ${shortSha(ch.from.sha)}` : ""}`.replace(/^, /, "");
+}
+export const changesTotal = (ch: SbChanges): number => ch.counts.new + ch.counts.changed + ch.counts.gone;
+/** "181 hidden dev strings, 108 merged duplicates, 0 removed in EFI": the answer to "why did my line count drop?". */
+export function goneBreakdown(ch: SbChanges): string {
+  const g = ch.counts.goneBy;
+  if (!g) return "";
+  const parts: string[] = [];
+  if (g["dev-string"]) parts.push(`${g["dev-string"]} dev/validation string${g["dev-string"] === 1 ? "" : "s"} Storybook now hides`);
+  if (g.twin) parts.push(`${g.twin} duplicate${g.twin === 1 ? "" : "s"} merged into their text_review row`);
+  if (g.efi) parts.push(`${g.efi} removed or rewritten in EFI`);
+  return parts.join(", ");
+}
+
+export type DiffSeg = { t: string; k: "same" | "del" | "add" };
+/** Word-level old -> new diff (LCS over whitespace-split tokens). Pure; capped so a pathological pair stays cheap. */
+export function wordDiff(a: string, b: string, maxTokens = 400): DiffSeg[] {
+  const x = a.split(/(\s+)/).filter((s) => s !== ""), y = b.split(/(\s+)/).filter((s) => s !== "");
+  if (x.length > maxTokens || y.length > maxTokens) return [{ t: a, k: "del" }, { t: b, k: "add" }];
+  const n = x.length, m = y.length;
+  const L: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out: DiffSeg[] = [];
+  const push = (t: string, k: DiffSeg["k"]) => { const l = out[out.length - 1]; if (l && l.k === k) l.t += t; else out.push({ t, k }); };
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { push(x[i], "same"); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) push(x[i++], "del");
+    else push(y[j++], "add");
+  }
+  while (i < n) push(x[i++], "del");
+  while (j < m) push(y[j++], "add");
+  return out;
+}
+
+/** The audit signal each check feeds (mirror of server/registry/audit.mjs CHECK_SIGNALS; #18 is shown under Too long). */
+export const SIGNAL_CHECKS: Record<string, string[]> = {
+  integrity: ["#1", "#2", "#5", "#7", "#13", "#14"],
+  cohesion: ["#3", "#4", "#6", "#9", "#10", "#11", "#12"],
+  coverage: ["#15"],
+};
+export type SignalCard = { n: number; rest: number; note: string; target: NavTarget & { checks?: string[] } };
+const SIGNAL_REST: Record<string, string> = {
+  coverage: "more are text/lore slots or art not made yet (asset lists, not Problems rows)",
+  integrity: "more are asset-level references not shown as Problems rows",
+  cohesion: "more are Too long notes (their own list under Problems)",
+  signoff: "more are placeholder or AI-draft entities (art, items), not text rows",
+};
+/**
+ * Home signal card: the number is the count of rows the click OPENS, so the card and the list agree. Anything the audit counts
+ * that is not a row in that list is shown as "+N …" with the reason, not hidden (W1/W2 friction 7: 232 vs 322, 13 vs 2, 30 vs 39, 4216 vs 3327).
+ */
+export function signalCard(signal: string, items: ListItem[], audit: Record<string, number> | null): SignalCard {
+  const total = audit?.[signal] ?? 0;
+  if (signal === "signoff") {
+    const n = items.filter(isTextToReview).length;
+    const rest = Math.max(0, total - n);
+    return { n, rest, note: rest ? `+${rest} ${SIGNAL_REST.signoff}` : "", target: { tab: "review", scope: "text", category: null } };
+  }
+  const checks = SIGNAL_CHECKS[signal] ?? [];
+  const set = new Set(checks);
+  const n = items.filter((it) => isProblem(it) && it.check != null && set.has(it.check)).length;
+  const rest = Math.max(0, total - n);
+  return { n, rest, note: rest ? `+${rest} ${SIGNAL_REST[signal] ?? "not shown as rows"}` : "", target: { tab: "problems", scope: "problems", category: null, checks } };
 }

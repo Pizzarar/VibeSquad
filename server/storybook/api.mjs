@@ -12,6 +12,7 @@ import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs
 import { makeSnapshot } from "./schema.mjs";
 import { SIGNALS } from "../registry/audit.mjs";
 import { buildArc } from "./unlocks.mjs";
+import { diffChanges, readSeen, seenRecord, writeSeen } from "./changes.mjs";
 
 /** team id -> adapter. Add a project here; never a repo path (those come from teams.json). */
 export const ADAPTERS = Object.freeze({ efi: efiAdapter });
@@ -103,8 +104,9 @@ async function buildOnce(project, { refresh, deps }) {
   const hit = cache.get(`${project}\0${sha}`);
   if (hit) return { snapshot: hit, fetch };
   const reader = makeReader(repoPath, sha);
-  const { entities, warnings } = await adapter.load(reader, sha);
+  const { entities, warnings, dropped } = await adapter.load(reader, sha);
   const snap = makeSnapshot({ project: adapter.id, ref, sha, entities, warnings: [...warnings] });
+  if (Array.isArray(dropped) && dropped.length) snap.dropped = dropped; // V8: adapter-excluded rows (changes.mjs explains 'gone' with it)
   const { runChecks, runAudit, warning } = await loadRunChecks(deps.runChecks);
   if (warning) snap.warnings.push(warning);
   if (runChecks) {
@@ -184,6 +186,48 @@ export function auditLine(snap) {
   return `[STORYBOOK] signals ${SIGNALS.map((s) => `${s}=${counts[s]}`).join(" ")}`;
 }
 
+const CHANGES_RE = /^\/api\/storybook\/([A-Za-z0-9._-]{1,64})\/changes(\/seen)?\/?$/;
+
+const sendJson = (res, status, body) => {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.end(JSON.stringify(body));
+};
+
+function readBody(req, max = 4096) {
+  return new Promise((resolve, reject) => {
+    let n = 0; const parts = [];
+    req.on("data", (c) => { n += c.length; if (n > max) { reject(new StorybookError(413, "body too large")); req.destroy?.(); } else parts.push(c); });
+    req.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** V8: GET .../changes = new/changed/gone vs the owner's last-seen session; POST .../changes/seen {sha} = "I've seen up to sha X" (explicit, never automatic). */
+function handleChangesRoute(req, res, project, isSeen, deps) {
+  const storeOpts = { home: deps.seenHome };
+  const fail = (e) => {
+    if (e instanceof StorybookError) return sendJson(res, e.status, { error: e.message });
+    console.warn(`[storybook] ${project} changes: ${e?.message ?? e}`);
+    sendJson(res, 500, { error: "storybook changes failed; see the server log" });
+  };
+  if (req.method !== (isSeen ? "POST" : "GET")) { res.setHeader("allow", isSeen ? "POST" : "GET"); sendJson(res, 405, { error: "method not allowed" }); return true; }
+  const key = project.toLowerCase();
+  (async () => {
+    const snap = await buildSnapshot(key, deps);
+    if (!isSeen) return sendJson(res, 200, diffChanges(readSeen(key, storeOpts), snap));
+    let want = "";
+    try { want = String(JSON.parse((await readBody(req)) || "{}")?.sha ?? "").trim().toLowerCase(); } catch (e) { if (e instanceof StorybookError) throw e; throw new StorybookError(400, "body must be JSON {sha}"); }
+    if (!/^[0-9a-f]{7,40}$/.test(want)) throw new StorybookError(400, "sha required (7-40 hex)");
+    if (!snap.sha.toLowerCase().startsWith(want)) throw new StorybookError(409, `Storybook moved to ${String(snap.sha).slice(0, 8)}; reload before marking seen`);
+    const rec = seenRecord(snap);
+    writeSeen(key, rec, storeOpts);
+    sendJson(res, 200, { ok: true, sha: rec.sha, at: rec.at, total: rec.total });
+  })().catch(fail);
+  return true;
+}
+
 const PROJECT_RE = /^\/api\/storybook\/([A-Za-z0-9._-]{1,64})(\/refresh)?\/?$/;
 
 /**
@@ -192,6 +236,8 @@ const PROJECT_RE = /^\/api\/storybook\/([A-Za-z0-9._-]{1,64})(\/refresh)?\/?$/;
  */
 export function handleStorybookRoute(req, res, deps = {}) {
   const p = (req.url ?? "").split("?")[0];
+  const cm = CHANGES_RE.exec(p);
+  if (cm) return handleChangesRoute(req, res, cm[1], Boolean(cm[2]), deps);
   const m = PROJECT_RE.exec(p);
   if (!m) return false;
   const send = (status, body) => {
