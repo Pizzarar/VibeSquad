@@ -250,27 +250,47 @@ test("B18b browser: real app at 1280x720 (ctx panel open) and narrow ~550px spli
   } finally { await b.close(); server.close(); }
 });
 
+// Measure only once layout is settled (fonts ready + rects unchanged across two frames), so a late font/@import/container reflow under
+// suite load can't be read mid-flight. Rows are clustered by vertical overlap (not fixed 8px buckets, which split one row whenever
+// align-items:center offsets differ by a few px), then read top-to-bottom, left-to-right.
+const probeComposer = async (extra) => {
+  const q = (s) => document.querySelector(s);
+  if (extra) document.head.appendChild(Object.assign(document.createElement("style"), { textContent: extra }));
+  const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+  const snap = () => [...document.querySelectorAll(".boring-composer-bar *")].map((e) => { const r = e.getBoundingClientRect(); return `${r.left},${r.top},${r.width},${r.height}`; }).join("|");
+  await document.fonts.ready;
+  let prev = null, same = 0, frames = 0;
+  for (; same < 2 && frames < 200; frames++) { await frame(); const cur = snap(); same = cur === prev ? same + 1 : 0; prev = cur; }
+  if (same < 2) throw new Error(`probeComposer: layout never settled (rects still changing after ${frames} frames)`);
+  const els = { actions: q(".boring-composer-actions"), cfg: q(".boring-composer-cfg"), staged: q(".boring-composer-staged"), send: q(".boring-composer-send") };
+  const present = Object.entries(els).filter(([, e]) => e);
+  const items = present.map(([k, e]) => ({ k, r: e.getBoundingClientRect() })).sort((a, b) => a.r.top - b.r.top);
+  const rows = [];
+  for (const it of items) { const row = rows.find((w) => it.r.top < w.bottom && it.r.bottom > w.top); if (row) { row.items.push(it); row.top = Math.min(row.top, it.r.top); row.bottom = Math.max(row.bottom, it.r.bottom); } else rows.push({ top: it.r.top, bottom: it.r.bottom, items: [it] }); }
+  const visual = rows.sort((a, b) => a.top - b.top).flatMap((w) => w.items.sort((a, b) => a.r.left - b.r.left).map((x) => x.k));
+  const sm = q(".boring-composer-bar > .btn.small");
+  return { visual, orders: Object.fromEntries(present.map(([k, e]) => [k, getComputedStyle(e).order])), smFont: getComputedStyle(sm).fontSize, modelGrow: getComputedStyle(q('.boring-composer-cfg select[aria-label="Model"], .boring-composer-cfg input[aria-label="Model"]')).flexGrow, cfgBasis: getComputedStyle(q(".boring-composer-cfg")).flexBasis };
+};
+
 test("B18b merge fix 2: wide composer keeps DOM order (actions, cfg, staged, send) with 12px btn.small; narrow (~456px) gets the 2-row order/11px", { skip }, async () => {
   const sw = React.createElement("button", { type: "button", className: "btn small", "data-testid": "drawer-switch-provider-btn" }, "⇄ Switch to Claude");
-  const probe = () => {
-    const q = (s) => document.querySelector(s);
-    const els = { actions: q(".boring-composer-actions"), cfg: q(".boring-composer-cfg"), staged: q(".boring-composer-staged"), send: q(".boring-composer-send") };
-    const present = Object.entries(els).filter(([, e]) => e);
-    const visual = present.map(([k, e]) => ({ k, r: e.getBoundingClientRect() })).sort((a, b) => Math.round(a.r.top / 8) - Math.round(b.r.top / 8) || a.r.left - b.r.left).map((x) => x.k);
-    const sm = q(".boring-composer-bar > .btn.small");
-    return { visual, orders: Object.fromEntries(present.map(([k, e]) => [k, getComputedStyle(e).order])), smFont: getComputedStyle(sm).fontSize, modelGrow: getComputedStyle(q('.boring-composer-cfg select[aria-label="Model"], .boring-composer-cfg input[aria-label="Model"]')).flexGrow, cfgBasis: getComputedStyle(q(".boring-composer-cfg")).flexBasis };
-  };
   const props = { isBs: false, running: true, providerSwitchBtn: sw, stagedHint: "Switching on your next message" };
-  const wide = await launch(page("dark", "boring", 1100, props), (p) => p.evaluate(probe));
+  const wide = await launch(page("dark", "boring", 1100, props), (p) => p.evaluate(probeComposer));
   assert.deepEqual(wide.visual, ["actions", "cfg", "staged", "send"], `wide visual order ${JSON.stringify(wide)}`);
   assert.ok(Object.values(wide.orders).every((o) => o === "0"), `wide order values all 0: ${JSON.stringify(wide.orders)}`);
   assert.equal(wide.smFont, "12px");
   assert.equal(wide.modelGrow, "0");
-  const narrow = await launch(page("dark", "boring", 456, props), (p) => p.evaluate(probe));
+  const narrow = await launch(page("dark", "boring", 456, props), (p) => p.evaluate(probeComposer));
   assert.equal(narrow.orders.cfg, "1");
   assert.equal(narrow.orders.actions, "2");
   assert.equal(narrow.orders.send, "4");
   assert.equal(narrow.smFont, "11px");
   assert.equal(narrow.modelGrow, "1");
   assert.equal(narrow.visual[0], "cfg", `narrow: cfg takes the first row: ${JSON.stringify(narrow.visual)}`);
+});
+
+test("B18b merge fix 2b: rows are clustered by overlap, so a few px of vertical offset inside one row can't reorder it (idea-1201)", { skip }, async () => {
+  const props = { isBs: false, running: true, providerSwitchBtn: React.createElement("button", { type: "button", className: "btn small" }, "⇄ Switch to Claude"), stagedHint: "Switching on your next message" };
+  const r = await launch(page("dark", "boring", 1100, props), (p) => p.evaluate(probeComposer, ".boring-composer-actions{margin-top:6px}"));
+  assert.deepEqual(r.visual, ["actions", "cfg", "staged", "send"], `offset row order ${JSON.stringify(r)}`);
 });

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { loadProfiles, profileMcpExtras } from "../profiles.mjs";
 import { roleMcpExtras } from "../spawn-route.mjs";
 import { RunnerClient, RunnerHttpError, readDiscovery, runnerHome } from "./runner-client.mjs";
-import { protectedMetaIn } from "../../runner/runner.mjs";
+import { HOOK_ONLY_SPAWN_LABELS, protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
@@ -993,6 +993,12 @@ export class RunnerBackend {
       try { await this.rc.requireRunning(); } finally { mark("req"); }
       // before("agent.create"): the plugin's prompt layering + spawn guard, in-process so every spawn path (UI, MCP, vs CLI) gets it.
       config = { ...config };
+      // idea-1205: vs.route is the spawn hook's own record of the route it took (HOOK_ONLY_SPAWN_LABELS); a caller's value
+      // (any path: MCP, vs CLI, UI, a respawn or successor copying old labels) is dropped here, before the hook stamps its own.
+      if (HOOK_ONLY_SPAWN_LABELS.some((k) => k in labels)) {
+        labels = { ...labels };
+        for (const k of HOOK_ONLY_SPAWN_LABELS) delete labels[k];
+      }
       if (PROVIDER_ALIASES[config.provider]) config.provider = PROVIDER_ALIASES[config.provider]; // the plugin's antigravity-cli guard keys on the canonical id
       let host;
       try { host = await this.hookHost(); } finally { mark("hh"); }

@@ -292,7 +292,8 @@ test("X1a: meta {role:lead} / {labels:{digestFor}} / handoff / vs.parent with an
     const { ids, runner } = s;
     const child = runner.create({ provider: "claude", cwd: process.cwd(), meta: { team: "sq", lane: "sq", role: "worker", labels: { "vs.parent": ids.overlord } } });
     const patches = [{ role: "lead" }, { labels: { role: "lead" } }, { lane: "sq" }, { team: "x" }, { ord: "1" }, { profile: "Lead - Claude" }, { labels: { digestFor: "rn-x" } }, { labels: { "vs.parent": ids.worker } },
-      { labels: { "vs.handoff-from": "rn-x" } }, { labels: { "handoff-flagged": "1" } }, { labels: { orphan: "" } }, { labels: { "vs.auto-archived": "" } }, { labels: { lead: ids.worker } }, { labels: { topic: "t" } }, { labels: { "paseo.parent-agent-id": "p" } }];
+      { labels: { "vs.handoff-from": "rn-x" } }, { labels: { "handoff-flagged": "1" } }, { labels: { orphan: "" } }, { labels: { "vs.auto-archived": "" } }, { labels: { lead: ids.worker } }, { labels: { topic: "t" } }, { labels: { "paseo.parent-agent-id": "p" } },
+      { labels: { "vs.route": "stakes=normal role=implement why=default" } }]; // idea-1205
     for (const patch of patches) {
       const r = await s.call(s.as(ids.overlord), "POST", `/agents/${child}/meta`, patch);
       assert.equal(r.status, 403, `${JSON.stringify(patch)} → ${r.status}`);
@@ -303,6 +304,7 @@ test("X1a: meta {role:lead} / {labels:{digestFor}} / handoff / vs.parent with an
     assert.equal(runner.status(child).meta.labels.digestFor, "rn-x");
     assert.equal(protectedMetaIn({ title: "t", labels: { job: "x" } }), null);
     assert.deepEqual(protectedMetaIn({ role: "lead", labels: { digestFor: "a", job: "x" } }), ["role", "labels.digestFor"]);
+    assert.deepEqual(protectedMetaIn({ labels: { "vs.route": "role=implement", job: "x" } }), ["labels.vs.route"]); // idea-1205
   } finally { await s.stop(); }
 });
 
@@ -737,6 +739,53 @@ test("X1a: runner-backend passes the caller through: an agent caller's spawn is 
     assert.equal(s.runner.status(s.ids.worker2).meta.labels["vs.auto-archived"], "", "marker cleared by the backend as admin");
     assert.equal(s.runner.timeline(s.ids.worker2).findLast((e) => e.type === "input").senderId, s.ids.lead);
     await assert.rejects(() => backend.sendAgentPrompt(s.ids.worker2, "x", { caller: { id: s.ids.foreign, token: s.runner.tokensById.get(s.ids.foreign) } }), (e) => e.status === 403);
+  } finally { delete process.env.VIBESQUAD_HOME; await s.stop(); }
+});
+
+test("idea-1205: vs.route is written only by the spawn hook: a caller's value is dropped before the hook, the hook's survives an agent spawn, an agent meta patch is 403", async () => {
+  const s = await squad();
+  try {
+    const home = tmp();
+    writeDiscovery(home, { port: s.port, token: ADMIN });
+    process.env.VIBESQUAD_HOME = tmp();
+    const rc = new RunnerClient({ home, env: {} });
+    const FORGED = "stakes=normal role=implement why=default";
+    const ROUTED = "stakes=normal model=m reason=default tier=mid role=review why=default";
+    const seen = [];
+    // The legit writer: before("agent.create") stamps vs.route on a routed spawn (server/hooks/agent-duties.ts ROUTE_LABEL).
+    const stamping = { before: async (_name, { request }) => { seen.push({ ...(request.labels ?? {}) }); return { ...request, labels: { ...request.labels, "vs.route": ROUTED } }; } };
+    const silent = { before: async (_name, { request }) => { seen.push({ ...(request.labels ?? {}) }); return request; } };
+    const lead = { id: s.ids.lead, token: s.runner.tokensById.get(s.ids.lead) };
+    const worker = { id: s.ids.worker, token: s.runner.tokensById.get(s.ids.worker) };
+    const mk = (hooks) => new RunnerBackend({ client: rc, hooks, buildPrefix: async () => "", whosHere: async () => {} });
+
+    // Agent caller (MCP sidecar / vs CLI shape): the forged value never reaches the hook; the hook's stamp survives the runner.
+    const routed = await mk(stamping).createAgent({ config: { provider: "claude", cwd: process.cwd(), title: "r" }, labels: { profile: "Review", "vs.route": FORGED }, caller: lead });
+    assert.equal(seen.at(-1)["vs.route"], undefined, "the hook never sees a caller-supplied vs.route");
+    assert.equal(routed.labels["vs.route"], ROUTED);
+    assert.equal(s.runner.status(routed.id).meta.labels["vs.route"], ROUTED, "the runner keeps the hook's vs.route on an agent spawn");
+
+    // A hook that does not route (no stamp): the forged value does not survive either.
+    const unrouted = await mk(silent).createAgent({ config: { provider: "claude", cwd: process.cwd(), title: "u" }, labels: { job: "j", "vs.route": FORGED }, caller: worker });
+    assert.equal(seen.at(-1)["vs.route"], undefined);
+    assert.equal(s.runner.status(unrouted.id).meta.labels["vs.route"], undefined);
+    assert.equal(s.runner.status(unrouted.id).meta.labels.job, "j", "other caller labels pass through");
+
+    // Admin spawn with the hooks off (e.g. a successor copying old labels): dropped too, nothing re-stamps it.
+    const admin = await mk(false).createAgent({ config: { provider: "claude", cwd: process.cwd(), title: "a" }, labels: { team: "sq", lane: "sq", "vs.route": FORGED } });
+    assert.equal(s.runner.status(admin.id).meta.labels["vs.route"], undefined);
+
+    // After spawn: the lead may patch its lane worker's other labels, never vs.route (backend 403 before the request, runner 403).
+    const backend = mk(false);
+    await assert.rejects(() => backend.updateAgent(routed.id, { labels: { "vs.route": FORGED } }, { caller: lead }), (e) => e instanceof RunnerHttpError && e.status === 403);
+    const direct = await s.call(s.as(s.ids.lead), "POST", `/agents/${routed.id}/meta`, { labels: { "vs.route": FORGED } });
+    assert.equal(direct.status, 403);
+    await backend.updateAgent(routed.id, { labels: { job: "k" } }, { caller: lead });
+    assert.equal(s.runner.status(routed.id).meta.labels.job, "k");
+    assert.equal(s.runner.status(routed.id).meta.labels["vs.route"], ROUTED, "vs.route unchanged after the refused patches");
+    // Admin (the VS server) is unchanged.
+    await backend.updateAgent(routed.id, { labels: { "vs.route": "stakes=high why=default" } });
+    assert.equal(s.runner.status(routed.id).meta.labels["vs.route"], "stakes=high why=default");
   } finally { delete process.env.VIBESQUAD_HOME; await s.stop(); }
 });
 
