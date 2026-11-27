@@ -1522,7 +1522,7 @@ function agentV2(st, agentId, archived = false) {
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
-    ended: !!st.exited || !!st.parkedEnd || archived, // usa-70: exited / parked / archived (spawn errors set exited)
+    ended: !!st.exited || !!st.parkedEnd || (archived && !(st.queuedAt !== undefined && st.queueEndedAt === undefined)), // usa-70: exited / parked / archived (queued-then-archived never started -> cancelled, not failed)
     exitError: !!st.exitError,
     exitTs: st.exitTs ?? null,
     errors: st.errors ?? 0,
@@ -2465,8 +2465,8 @@ function buildPostHandoffCost(agentStates) {
   };
 }
 
-/** A spawn counts as failed once it has ENDED (exited / parked / archived / spawn error) with 0 turns, or exited with an error.
- * A created-only or still-running 0-turn agent is pending, not failed. respawnOf is not a failure: the original run is. */
+/** A spawn counts as failed once it has ENDED (exited / parked / archived after starting / spawn error) with 0 turns, or exited with an error.
+ * A created-only, still-running, or queued-then-archived (never started) 0-turn agent is pending/cancelled, not failed. respawnOf is not a failure: the original run is. */
 const isFailedSpawn = (a) => Boolean(a.exitError) || ((a.turns ?? 0) === 0 && Boolean(a.ended));
 
 /** Merge overlapping storm/fan-out intervals for the same (lane, role). */
@@ -2489,7 +2489,7 @@ function mergeStormEntries(entries) {
 }
 
 /** Spawn-retry storms vs healthy parallel fan-out (usa-70):
- * - Fail storm (`spawnStorms`): >=3 failed spawns (0 turns, exitError, or ended 0-turn) created in 2m, or >=3 zero-turn/error exits in 5m, per (lane, role).
+ * - Fail storm (`spawnStorms`): >=3 failed spawns (ended 0-turn or exitError) created in 2m, or >=3 zero-turn/error exits in 5m, per (lane, role).
  * - Fan-out (`spawnFanOut`): >=3 spawns created in 2m per (lane, role) that do not overlap a fail storm (e.g. normal parallel dispatch where spawns did real work). */
 function computeSpawnStorms(agents) {
   const groups = new Map();
