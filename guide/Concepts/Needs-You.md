@@ -25,7 +25,7 @@ An agent working normally reports progress regularly. VibeSquad marks an agent a
 ### Row layout and actions
 
 Each item in the list shows:
-- A colored status dot (pink or amber for attention, red for errors, amber for stalls).
+- A colored status dot (amber for attention, pink for errors, amber ring for stalled).
 - The agent's role (such as **Lead 1** or **Brainstorm**).
 - The project and lane location (for example, `weather · Main Game`).
 - How long ago the agent flagged the request.
@@ -45,7 +45,7 @@ Clicking it expands to show up to 8 recent completions:
 - Workers and agents that finished their tasks and are waiting for you to review their results.
 - The newest completion log entries across your projects.
 
-Finished agents show a green status dot, the completion summary, where it happened, how long ago, and the same **⋯** menu to dismiss or snooze. When no completed tasks are logged, it reads "No finished work logged yet."
+Finished agents show a blue status dot, the completion summary, where it happened, how long ago, and the same **⋯** menu to dismiss or snooze. When no completed tasks are logged, it reads "No finished work logged yet."
 
 ## The Desk row
 
@@ -58,11 +58,11 @@ If an Overlord is not yet active on the project, the Desk card provides a button
 
 ## Folded worker lines
 
-When a lane or Desk has several [workers](Worker.md) running, the sidebar keeps things clean by showing only the currently selected, on-screen worker. All other workers fold into a single compact line:
+When a lane or Desk has several [workers](Worker.md) running, the sidebar keeps things clean by showing only the currently selected, on-screen worker. All other workers fold into a single compact line showing running, quiet, and idle counts:
 
-`▸ N running · M idle`
+`▸ N running · M quiet · K idle`
 
-For example, `▸ 2 running · 3 idle` (omitting any count that is zero). Clicking this line leaves the split view and opens the **Workers** tab in the right panel, where you can see every running and idle worker in detail.
+For example, `▸ 2 running · 3 idle` or `▸ 1 running · 1 quiet · 2 idle` (omitting any count that is zero). Clicking this line leaves the split view and opens the **Workers** tab in the right panel, where you can see every running, quiet, and idle worker in detail.
 
 ## Decision cards
 
