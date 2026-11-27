@@ -4,12 +4,12 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`) + `a1ef3fd8` (build-desktop win32 Path fix) + `d21f8dbf` (Rust path remap + host-path scan); re-frozen from `b219e906`, then `405779e6` |
+| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`) + `a1ef3fd8` (build-desktop win32 Path fix) + `d21f8dbf` (Rust path remap + host-path scan) + `d7ea070d` (auto-update test fix) + `62b7f10f` (storybook-marks race fix); re-frozen from `b219e906`, then `405779e6` |
 | Release commits | `a95a4f53` (version bump, record, licenses), merge of master `405779e6`, `11a2ea14` (lockfile, credits format, record), then merges of `d8881601` on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
 | Release URL | _pending (P3)_ |
-| Range | `v0.3.0..fdd0ef51` (release branch at the `a1ef3fd8` merge, before the licenses commit): 2222 commits, 771 merges |
+| Range | `v0.3.0..a7124d7f` (release branch at the `62b7f10f` merge, before this record commit): 2231 commits, 774 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only. No Android APK is built or attached.
 
@@ -30,8 +30,12 @@ _pending (P2/P3)_
 | Commit | Check | Result | Evidence |
 | --- | --- | --- | --- |
 | `d21f8dbf` | B2 Rust host-path fix (Tier A security) | PASS 0/0/3 | Review-Gemini rn-16d541524244, `vs verdict` exit 0 |
+| `d7ea070d` | auto-update source check accepts remap cargo args (test-only) | PASS 0/0/0 | Review-Sonnet rn-1f0cc1db88a0, `vs verdict` ok |
+| `62b7f10f` | storybook-marks race fix, idea-1216 (test-only) | PASS 0/0/1 | Review-Gemini rn-4086d8d7c4bc, `vs verdict` ok; Low: `pollUntil` drops the last thrown error, non-blocking |
 
 ## Findings
+- `auto-update:96` was a regression from `d21f8dbf`: the release-path test list omitted `test/auto-update.test.mjs`, so the Rust remap change was not caught. Fixed by `d7ea070d` (the source check accepts the remap cargo args). The release-path test list is now kept in `docs/lanes/release-desk/SPEC.md` (on master, not on this branch).
+- `storybook-marks:446` (idea-1216) was a test-only race: a fixed 400 ms wait against an auto-commit that takes 1.2-2.7 s on Windows (root cause rn-e906882f1a4a). Fixed by `62b7f10f` (the test polls for the auto-commit). It is no longer listed as a known flake.
 - **B2 Medium (fixed):** the Rust binary embedded about 1,001 `C:\Users\<user>\.cargo\registry` paths (build-host username in panic and debug strings). Fixed by `d21f8dbf`: release Rust builds remap host path prefixes and a fail-closed post-build scan refuses any artifact that still contains a host path. The Buddy ruled it a fix, no waiver.
 - Past public installers v0.2.0-v0.3.0 carry the same leak. Owner-only finding; no released assets were touched.
 - Windows release build regression from `bf4633ad` (Path lost, so `npm.cmd` ENOENT), fixed by `a1ef3fd8`. Review-Gemini PASS 0/0/2 rn-a10ae7fc1087 (Lows: a trailing `;` and the cargo bin dir not deduped in Path, both harmless, queued).
