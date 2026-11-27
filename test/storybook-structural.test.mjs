@@ -121,12 +121,9 @@ test("#5 flags a reach level above the room cap; at the cap is fine", async () =
   assert.equal((await run(mk(20))).by("#5").length, 0);
 });
 
-test("#7 flags id `doc` (trader + squad) and the Wrench-style display clash; clean ids stay quiet", async () => {
+test("#7 flags display clashes (Wrench / Foreman); cross-kind id `doc` moved to #17", async () => {
   const { by, findings } = await run(FILES);
-  const idHit = by("#7").filter((f) => /id "doc"/.test(f.msg));
-  assert.equal(idHit.length, 1);
-  assert.equal(idHit[0].severity, "warn");
-  assert.match(idHit[0].msg, /squad \+ trader|trader \+ squad/);
+  assert.equal(by("#7").filter((f) => /id "doc"/.test(f.msg)).length, 0); // cross-kind id collisions moved to #17 in V10
   assert.equal(by("#7").filter((f) => /id "(?!doc)/.test(f.msg)).length, 0); // item/recipe `bandage` is by design
   assert.ok(findings.length > 0);
   const items = JSON.parse(FILES["data/items.json"]); items.items.push({ id: "tool_wrench", name: "Wrench", category: "tool", tier: 1, weight: 1, base_value: 1 });

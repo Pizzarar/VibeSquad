@@ -7,18 +7,20 @@ import { MermaidView } from "./MermaidView";
 import { rootZoom } from "./pinMenuPlace";
 import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
-  SB_CATEGORY_HELP, auditSignalTarget, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
+  SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  entityKey, indexEntities, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, auditCounts, buildTextChanges, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
 import { StorybookHome } from "./StorybookHome";
+import type { TextChanges, TextPreset } from "./StorybookText";
 import { StorybookText, type TextFocus } from "./StorybookText";
 import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
 import { MarkBatch, MarkButtons, MarksBar, useMarks, type MarksApi } from "./StorybookMarks";
 import { StorybookItems } from "./StorybookItems";
+import { StorybookGlossary } from "./StorybookGlossary";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
 import "./storybook.css";
 
@@ -306,7 +308,7 @@ const TABS: { id: Tab; label: string; built: boolean }[] = [
   { id: "cast", label: "Cast", built: true }, // characters + enemies
   { id: "items", label: "Items", built: true }, // V4
   { id: "problems", label: "Problems", built: true },
-  { id: "glossary", label: "Glossary", built: false }, // V10
+  { id: "glossary", label: "Glossary", built: true }, // V10
 ];
 const NO_SEL: Record<Tab, string | null> = { home: null, review: null, quests: null, world: null, cast: null, items: null, problems: null, glossary: null };
 
@@ -385,16 +387,38 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
   idx: EntityIndex; findings: SbFinding[]; sel: string | null; setSel: (s: string) => void; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
 }) {
   const chars = useMemo(() => characterViews(idx), [idx]);
+  const grouped = useMemo(() => groupCharacterViews(chars), [chars]);
+  const ordered = useMemo(() => [...grouped.traders, ...grouped.squad, ...grouped.screens], [grouped]);
   const enemies = useMemo(() => idx.byKind("enemy").sort((a, b) => a.display.localeCompare(b.display)), [idx]);
   const isEnemySel = Boolean(sel && sel.startsWith("enemy:"));
   const [group, setGroup] = useState<"characters" | "enemies">(isEnemySel ? "enemies" : "characters");
+  const [screensOpen, setScreensOpen] = useState(false);
+  const [scrollTick, setScrollTick] = useState(0);
+  const sheetRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (sel?.startsWith("enemy:")) setGroup("enemies");
     else if (sel) setGroup("characters");
   }, [sel]);
   const enemy = isEnemySel ? enemies.find((e) => `enemy:${e.id.toLowerCase()}` === sel) ?? enemies[0] : enemies[0];
-  const ch = !isEnemySel ? chars.find((c) => c.id === sel) ?? chars[0] : chars[0];
+  const ch = !isEnemySel ? ordered.find((c) => c.id === sel) ?? ordered[0] : ordered[0];
+  const chInScreens = Boolean(ch && grouped.screens.some((s) => s.id === ch.id));
+  useEffect(() => {
+    if (chInScreens) setScreensOpen(true);
+  }, [chInScreens]);
+  useEffect(() => {
+    if (!scrollTick) return;
+    const el = sheetRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.top > window.innerHeight * 0.6) el.scrollIntoView({ block: "start" });
+  }, [scrollTick]);
+  const pickCast = (id: string) => { setSel(id); setScrollTick((n) => n + 1); };
   if (!chars.length && !enemies.length) return <p className="sb-empty">No characters or enemies in this snapshot.</p>;
+  const chipBtn = (c: typeof chars[number]) => (
+    <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => pickCast(c.id)}>
+      {c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}
+    </button>
+  );
   return (
     <div>
       <div className="sb-seg" role="group" aria-label="Cast group" data-testid="sb-cast-group">
@@ -411,19 +435,38 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
             <div className="sb-seg" role="tablist" aria-label="Enemies">
               {enemies.map((e) => {
                 const key = `enemy:${e.id.toLowerCase()}`;
-                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => setSel(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
+                return <button key={key} type="button" role="tab" aria-selected={enemy?.id === e.id} className="sb-seg-btn" onClick={() => pickCast(key)}>{e.display}{e.data?.boss ? " ★" : ""}</button>;
               })}
             </div>
-            {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {enemy && <EnemySheet enemy={enemy} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
+            </div>
           </>
         )
       ) : (
         chars.length === 0 ? <p className="sb-empty">No speakers in this snapshot.</p> : (
           <>
-            <div className="sb-seg" role="tablist" aria-label="Characters">
-              {chars.map((c) => <button key={c.id} type="button" role="tab" aria-selected={c.id === ch?.id} className="sb-seg-btn" onClick={() => setSel(c.id)}>{c.speaker}{c.lines.length > 0 && <span className="sb-count">{c.lines.length}</span>}</button>)}
+            {grouped.traders.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-traders">
+                <h4 className="sb-cast-lbl">Traders <span className="sb-count">{grouped.traders.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Traders">{grouped.traders.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.squad.length > 0 && (
+              <div className="sb-cast-sec" data-testid="sb-cast-squad">
+                <h4 className="sb-cast-lbl">Squad <span className="sb-count">{grouped.squad.length}</span></h4>
+                <div className="sb-seg" role="tablist" aria-label="Squad">{grouped.squad.map(chipBtn)}</div>
+              </div>
+            )}
+            {grouped.screens.length > 0 && (
+              <details className="sb-cast-screens" data-testid="sb-cast-screens" open={screensOpen} onToggle={(ev) => setScreensOpen(ev.currentTarget.open)}>
+                <summary className="sb-cast-lbl">Screens &amp; system <span className="sb-count">{grouped.screens.length}</span></summary>
+                <div className="sb-seg" role="tablist" aria-label="Screens and system">{grouped.screens.map(chipBtn)}</div>
+              </details>
+            )}
+            <div ref={sheetRef} className="sb-cast-sheet" data-testid="sb-cast-sheet">
+              {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
             </div>
-            {ch && <CharacterSheet ch={ch} idx={idx} findings={findings} renderChip={renderChip} onReview={onReview} />}
           </>
         )
       )}
@@ -433,8 +476,9 @@ function Characters({ idx, findings, sel, setSel, renderChip, onReview }: {
 
 const PAGE = 200; // the text inventory is thousands of rows; render a page at a time
 
-function Findings({ items, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo }: { items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
-  const scoped = useMemo(() => scopeItems(items, scope), [items, scope]);
+function Findings({ items: allItems, idx, card, active, setActive, scope, setScope, scopes: allowed, goTo, checks = null, clearChecks }: { checks?: ReadonlySet<string> | null; clearChecks?: () => void; items: ListItem[]; idx: EntityIndex; card: CardApi; active: ReadonlySet<SbCategory>; setActive: (s: Set<SbCategory>) => void; scope: FindingScope; setScope: (s: FindingScope) => void; scopes: FindingScope[]; goTo: (e: SbEntity) => void }) {
+  const items = allItems;
+  const scoped = useMemo(() => scopeItems(items, scope).filter((it) => !checks || (it.check != null && checks.has(it.check))), [items, scope, checks]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const counts = useMemo(() => countByCategory(scoped), [scoped]);
   const filtered = useMemo(() => filterItems(scoped, active), [scoped, active]);
@@ -446,7 +490,7 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
     <div>
       {allowed.length > 1 && <div className="sb-seg" role="group" aria-label="Findings scope" data-testid="sb-scope">
         {allowed.filter((s) => s === "problems" || s === "story" || scopes[s] > 0 || scope === s).map((s) => (
-          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); }}>
+          <button key={s} type="button" className="sb-seg-btn" aria-pressed={scope === s} data-testid={`sb-scope-${s}`} title={FINDING_SCOPE_HELP[s]} onClick={() => { setScope(s); setActive(new Set()); clearChecks?.(); }}>
             {FINDING_SCOPE_LABEL[s]} <span className="sb-count">{scopes[s]}</span>
           </button>
         ))}
@@ -458,7 +502,8 @@ function Findings({ items, idx, card, active, setActive, scope, setScope, scopes
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
-        {active.size > 0 && <button type="button" className="sb-fbtn sb-fclear" onClick={() => setActive(new Set())}>Clear</button>}
+        {checks && <button type="button" className="sb-fbtn" aria-pressed="true" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card (click to clear)" onClick={() => clearChecks?.()}>Checks {[...checks].join(" ")} <span className="sb-count">{scoped.length}</span></button>}
+        {(active.size > 0 || checks) && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setActive(new Set()); clearChecks?.(); }}>Clear</button>}
       </div>
       <dl className="sb-legend" data-testid="sb-legend">
         {cats.map((c) => <div key={c}><dt>{SB_CATEGORY_LABEL[c]}</dt><dd>{SB_CATEGORY_HELP[c]}</dd></div>)}
@@ -505,6 +550,11 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const [textFocus, setTextFocus] = useState<TextFocus>(null); // "→ line": the Review row to open, scroll to and flash
   const clearTextFocus = useCallback(() => setTextFocus(null), []);
   const [scope, setScope] = useState<FindingScope>("problems"); // Problems tab: problems | story
+  const [checks, setChecks] = useState<ReadonlySet<string> | null>(null); // Home signal card -> Problems filtered to that signal's checks
+  const [changes, setChanges] = useState<SbChanges | null>(null); // V8
+  const [seenBusy, setSeenBusy] = useState(false);
+  const [seenError, setSeenError] = useState<string | null>(null);
+  const [preset, setPreset] = useState<TextPreset>(null);
 
   // One request sequence shared by the initial GET and refresh(): only the newest response may write state, and a project
   // change (or unmount) invalidates everything in flight.
@@ -522,6 +572,36 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [projectId, initial]);
 
   const snap = state.kind === "ok" ? state.snap : null;
+  const changesSeq = useRef(0);
+  useEffect(() => {
+    changesSeq.current++;
+    setChanges(null);
+    setSeenError(null);
+    return () => { changesSeq.current++; };
+  }, [projectId, initial]);
+  const loadChanges = useCallback(async () => {
+    if (initial) return;
+    const my = ++changesSeq.current;
+    try {
+      const r = await call(`${api(projectId)}/changes`);
+      if (changesSeq.current !== my) return;
+      setChanges(r.status === 200 && r.body && typeof r.body === "object" && r.body.counts ? (r.body as SbChanges) : null);
+    } catch { if (changesSeq.current === my) setChanges(null); }
+  }, [projectId, initial]);
+  const snapSha = snap?.sha;
+  useEffect(() => { if (snapSha) void loadChanges(); }, [snapSha, loadChanges]);
+  // Explicit only: "I've seen up to sha X". Loading Home never marks anything seen.
+  const markSeen = useCallback(async () => {
+    if (!snapSha) return;
+    setSeenBusy(true); setSeenError(null);
+    try {
+      const r = await call(`${api(projectId)}/changes/seen`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sha: snapSha }) });
+      if (r.status !== 200) setSeenError(String(r.body?.error ?? `Could not save (HTTP ${r.status})`));
+      else await loadChanges();
+    } catch (e) { setSeenError(e instanceof Error ? e.message : String(e)); }
+    finally { setSeenBusy(false); }
+  }, [projectId, snapSha, loadChanges]);
+  const textChanges = useMemo<TextChanges>(() => buildTextChanges(changes), [changes]);
   const idx = useMemo(() => indexEntities(snap?.entities ?? []), [snap]);
   const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
   const problems = useMemo(() => problemCount(items), [items]);
@@ -588,16 +668,19 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [card, pick]);
   goToRef.current = goTo;
 
+  const clearTextPreset = useCallback(() => setPreset(null), []);
   const onSignal = useCallback((signal: string) => {
-    const nav = auditSignalTarget(signal);
+    const nav = signalCard(signal, items, null).target;
     if (nav.tab === "review") {
+      setPreset({ only: "unreviewed", n: Date.now() });
       setTab("review");
       return;
     }
     setScope(nav.scope ?? "problems");
-    setActiveProblems(nav.category ? new Set([nav.category]) : new Set());
+    setActiveProblems(new Set());
+    setChecks(nav.checks ? new Set(nav.checks) : null);
     setTab("problems");
-  }, []);
+  }, [items]);
 
   const renderChip: ChipRenderer = useCallback((e, label) => <Chip e={e} card={card} onGo={goTo} label={label} />, [card, goTo]);
 
@@ -660,15 +743,16 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
               header={<MarksBar m={marks} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
               renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
             {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} checks={checks} clearChecks={() => setChecks(null)} />}
+            {tab === "glossary" && <StorybookGlossary snap={snap} idx={idx} onGo={goTo} onReview={openReviewRow} />}
           </main>
         </>
       )}

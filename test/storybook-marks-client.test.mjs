@@ -45,7 +45,9 @@ test("M3/m2 client: End-session summary says what the owner must know", () => {
 
 test("u1: a marked row hides its origin status tag (CSS), an unmarked one keeps it", () => {
   const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
-  assert.match(css, /\.sb-row:has\(\.sb-mark:not\(\[data-mark="none"\]\)\) \.sb-row-head \.sb-status \{ display: none; \}/);
+  assert.match(css, /\.sb-row:has\(\.sb-mark:not\(\[data-mark="none"\]\)\) \.sb-row-meta \.sb-status \{ display: none; \}/);
+  const text = fs.readFileSync(new URL("../src/StorybookText.tsx", import.meta.url), "utf8");
+  assert.match(text, /<span className="sb-row-meta">[\s\S]*?className=\{`sb-status /, "V8 moved the status tag into .sb-row-meta; the rule must follow it");
   const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
   assert.match(tsx, /data-mark=\{st\.kind\}/, "the mark wrapper carries data-mark the rule keys on");
 });

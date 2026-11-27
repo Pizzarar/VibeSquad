@@ -269,6 +269,59 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
     const headsAfterReopen = findAll(tree, (n) => n.type === "button" && n.props?.className === "sb-tgroup-head");
     assert.equal(headsAfterReopen[0].props["aria-expanded"], true, "explicit re-expand works during search");
   });
+
+  test("W3 rider 4: search-aware chip counts, exact entity ranking, speaker filter, title-before-story, compact row", async () => {
+    const { StorybookText } = await loadMod();
+    // Exact entity ranking: Doc (display "Doc") ranks ahead of Saint (id "doc") and Documents
+    const ents = [
+      { id: "documents", kind: "item", display: "Documents", aliases: [], source: { path: "i.json", line: 1 }, links: [], production: null, data: {} },
+      { id: "doc", kind: "squad", display: "Saint", aliases: ["doc"], source: { path: "s.json", line: 1 }, links: [], production: null, data: {} },
+      { id: "doc", kind: "trader", display: "Doc", aliases: [], source: { path: "t.json", line: 1 }, links: [], production: null, data: {} },
+      { id: "boss_dockmaster", kind: "enemy", display: "The Dockmaster", aliases: [], source: { path: "e.json", line: 1 }, links: [], production: null, data: {} },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const ranked = R.searchEntities(localIdx, "Doc");
+    assert.deepEqual(ranked.map((e) => `${e.kind}:${e.id}`), ["trader:doc", "squad:doc", "item:documents", "enemy:boss_dockmaster"]);
+
+    // Build rows with Doc story + title (story first in input), Saint line, and a UI line mentioning Doc
+    const rawLines = [
+      { id: "l_story", kind: "line", display: "s", aliases: [], source: { path: "data/questlines.json", line: 10 }, links: [{ rel: "spoken_by", kind: "trader", id: "doc" }], production: null, data: { text: "Doc story text.", rowClass: "story", speakerKind: "trader", speakerId: "doc", origin: "csv", data_path: '["questlines", "doc", "steps", 0, "story"]', status: "DRAFT" } },
+      { id: "l_title", kind: "line", display: "t", aliases: [], source: { path: "data/questlines.json", line: 10 }, links: [{ rel: "spoken_by", kind: "trader", id: "doc" }], production: null, data: { text: "Boiled Rags", rowClass: "story", speakerKind: "trader", speakerId: "doc", origin: "csv", data_path: '["questlines", "doc", "steps", 0, "title"]', status: "DRAFT" } },
+      { id: "l_saint", kind: "line", display: "st", aliases: [], source: { path: "data/squad.json", line: 5 }, links: [{ rel: "spoken_by", kind: "squad", id: "doc" }], production: null, data: { text: "Saint checks the doc.", rowClass: "story", speakerKind: "squad", speakerId: "doc", status: "DRAFT" } },
+      { id: "l_ui", kind: "line", display: "u", aliases: [], source: { path: "scenes/ui.gd", line: 1 }, links: [], production: null, data: { text: "Open Documents", rowClass: "ui", speakerKind: "system", speakerId: "hud", group: "hud" } },
+    ];
+    const rows = R.buildReviewRows([...ents, ...rawLines], localIdx, []);
+
+    // orderStepTitlesFirst puts title before story, and groupRows ranks exact speaker "Doc" first on query "Doc"
+    const docBlocks = R.groupRows(R.filterRows(rows, { ...R.NO_FILTER, query: "Doc" }), "Doc");
+    assert.equal(docBlocks[0].groups[0].label, "Doc");
+    assert.deepEqual(docBlocks[0].groups[0].rows.map((r) => r.entityId), ["l_title", "l_story"]);
+
+    // Component: chip counts reflect search; clicking Doc entity chip filters strictly to trader:doc; speaker chip not repeated inside Doc group
+    const m = mount(StorybookText);
+    const props = { rows, idx: localIdx, focus: null, renderChip: (e, label) => ({ type: "chip", props: { id: `${e.kind}:${e.id}` }, children: [label ?? e.display] }) };
+    let tree = m.render(props);
+    const search = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-search")[0];
+    search.props.onChange({ target: { value: "Saint" } });
+    tree = m.render(props);
+    const storyChip = findAll(tree, (n) => n.props?.["data-testid"] === "sb-text-class-story")[0];
+    const storyCount = findAll(storyChip, (n) => n.props?.className === "sb-count")[0];
+    assert.equal(storyCount.children[0], 1, "Story chip count reflects search (1, not 3)");
+
+    // Search "Doc" -> click Doc entity filter chip -> only Doc's 2 rows remain (no Saint, no Documents)
+    search.props.onChange({ target: { value: "Doc" } });
+    tree = m.render(props);
+    const docBtn = findAll(tree, (n) => n.props?.["data-testid"] === "sb-ent-filter-trader-doc")[0];
+    assert.ok(docBtn, "Doc entity chip is a speaker filter button");
+    docBtn.props.onClick();
+    tree = m.render(props);
+    const renderedRows = findAll(tree, (n) => typeof n.type === "function").map((n) => n.type(n.props));
+    assert.equal(renderedRows.length, 2, "only Doc rows shown after clicking Doc chip");
+    assert.deepEqual(renderedRows.map((r) => r.props["data-sb-row"]), ["line\u0000l_title", "line\u0000l_story"]);
+    // Speaker chip is omitted inside its own speaker group
+    const chipsInRows = renderedRows.flatMap((r) => findAll(r, (n) => n.type === "chip"));
+    assert.equal(chipsInRows.length, 0, "speaker chip not repeated inside Doc group");
+  });
 });
 
 test("real EFI (if /tmp snapshot present): counts", { skip: !existsSync("/tmp/sbv3_snap.json") }, () => {
