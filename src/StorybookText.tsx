@@ -55,6 +55,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const [toggled, setToggled] = useState<Record<string, boolean>>({}); // explicit user open/collapse overrides (always win over defaults/search)
   const [more, setMore] = useState<Record<string, number>>({});
   const [only, setOnly] = useState<"changed" | "contracts" | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
@@ -127,6 +128,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   }, [flash]);
 
   const toggleClass = (c: RowClass) => setClasses((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
+  const nSecFilters = (only ? 1 : 0) + classes.size + (unreviewed ? 1 : 0) + (mine ? 1 : 0) + (tooLong ? 1 : 0);
   const active = query !== "" || speakerFilter != null || areaFilter != null || entityFilter != null || statusFilter != null || classes.size > 0 || tooLong || unreviewed || mine || only != null;
   // V6 keys: j/k or arrows move between rows, 1/2/3 press the focused row's OK / Redo / Edit.
   const onKey = (ev: React.KeyboardEvent) => {
@@ -160,6 +162,9 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
         <span className="sb-search-n" data-testid="sb-text-n" role="status">{filtered.length === denom ? `${denom} ${denomLabel}` : `${filtered.length} of ${denom} ${denomLabel}`}</span>
       </div>
       <div className="sb-filter" role="group" aria-label="Filter text" data-testid="sb-text-filter">
+        <button type="button" className="sb-fbtn sb-filter-toggle" aria-expanded={filtersOpen} data-testid="sb-text-filters-toggle" onClick={() => setFiltersOpen((v) => !v)}>
+          Filters{nSecFilters > 0 && <span className="sb-count">{nSecFilters}</span>} <span aria-hidden="true">{filtersOpen ? "▾" : "▸"}</span>
+        </button>
         {areaFilter && (
           <button type="button" className="sb-fbtn" aria-pressed={true} data-testid="sb-text-area-filter" title="Filter to this area (click to clear)" onClick={() => setAreaFilter(null)}>
             Area: {PROGRESS_AREA_LABEL[areaFilter]} ×
@@ -180,14 +185,16 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
             Speaker: {speakerFilter.label} ×
           </button>
         )}
-        {nChanged > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "changed"} data-testid="sb-text-changed" title="New or edited since your last session" onClick={() => setOnly((v) => (v === "changed" ? null : "changed"))}>Changed <span className="sb-count">{nChanged}</span></button>}
-        {nContracts > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "contracts"} data-testid="sb-text-contracts" title="Contract titles and details as the player sees them" onClick={() => setOnly((v) => (v === "contracts" ? null : "contracts"))}>Contracts <span className="sb-count">{nContracts}</span></button>}
-        {ROW_CLASSES.filter((c) => counts[c] > 0 || classes.has(c)).map((c) => (
-          <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
-        ))}
-        {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
-        {mineTest && <button type="button" className="sb-fbtn" aria-pressed={mine} data-testid="sb-text-mine" title="Rows you marked OK / Redo / Edit" onClick={() => setMine((v) => !v)}>My marks <span className="sb-count">{nMine}</span></button>}
-        {(nTooLong > 0 || tooLong) && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
+        <span className={`sb-filter-more${filtersOpen ? " sb-filter-more-open" : ""}`} data-testid="sb-text-filter-more">
+          {nChanged > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "changed"} data-testid="sb-text-changed" title="New or edited since your last session" onClick={() => setOnly((v) => (v === "changed" ? null : "changed"))}>Changed <span className="sb-count">{nChanged}</span></button>}
+          {nContracts > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "contracts"} data-testid="sb-text-contracts" title="Contract titles and details as the player sees them" onClick={() => setOnly((v) => (v === "contracts" ? null : "contracts"))}>Contracts <span className="sb-count">{nContracts}</span></button>}
+          {ROW_CLASSES.filter((c) => counts[c] > 0 || classes.has(c)).map((c) => (
+            <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
+          ))}
+          {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
+          {mineTest && <button type="button" className="sb-fbtn" aria-pressed={mine} data-testid="sb-text-mine" title="Rows you marked OK / Redo / Edit" onClick={() => setMine((v) => !v)}>My marks <span className="sb-count">{nMine}</span></button>}
+          {(nTooLong > 0 || tooLong) && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
+        </span>
         {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setSpeakerFilter(null); setAreaFilter(null); setEntityFilter(null); setStatusFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setMine(false); setOnly(null); }}>Clear</button>}
       </div>
       {ents.length > 0 && (

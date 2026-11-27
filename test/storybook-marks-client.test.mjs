@@ -51,3 +51,44 @@ test("u1: a marked row hides its origin status tag (CSS), an unmarked one keeps 
   const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
   assert.match(tsx, /data-mark=\{st\.kind\}/, "the mark wrapper carries data-mark the rule keys on");
 });
+
+test("W4 friction 1: per-contract note keeps note on its preview, does not mark sibling previews, and My marks counts CSV rows once", () => {
+  const tpl = {
+    kind: "line", id: "tpl_kill", name: "tpl_kill",
+    data: { origin: "csv", file: "scripts/systems/ContractSystem.gd", id: "contract_title", data_path: "", where_seen: "contracts", line: "42", current_text: "Eliminate %d-%d x %s for %s", status: "STORY-TODO", owner_rewrite: "" },
+  };
+  const c1 = { kind: "contract", id: "k_doc_pmc_squad", name: "k_doc_pmc_squad", data: { type: "kill" } };
+  const c2 = { kind: "contract", id: "k_fence_armored_scav", name: "k_fence_armored_scav", data: { type: "kill" } };
+  const lines = [tpl];
+  const m = server(tpl, { status: "NEEDS-REWRITE", note: "", contracts: { k_doc_pmc_squad: "too many kills" } });
+  const byKey = M.marksByKey([m]);
+
+  // c1 keeps its own contract note visible
+  const st1 = M.markState(c1, lines, byKey, true);
+  assert.equal(st1.kind, "redo");
+  assert.equal(st1.contractNote, "too many kills");
+
+  // sibling c2 is NOT marked by c1's per-contract note
+  const st2 = M.markState(c2, lines, byKey, true);
+  assert.equal(st2.kind, "none");
+
+  // My marks counts CSV rows once (template counts once; contract preview rows do not count)
+  assert.equal(M.isMarkedCsvRow(tpl, lines, byKey, true), true);
+  assert.equal(M.isMarkedCsvRow(c1, lines, byKey, true), false);
+  assert.equal(M.isMarkedCsvRow(c2, lines, byKey, true), false);
+  const rows = [tpl, c1, c2];
+  assert.equal(rows.filter((e) => M.isMarkedCsvRow(e, lines, byKey, true)).length, 1);
+
+  // Adding a second per-contract note on the same template still counts once
+  const m2 = server(tpl, { status: "NEEDS-REWRITE", note: "", contracts: { k_doc_pmc_squad: "too many kills", k_fence_armored_scav: "too low payout" } });
+  const byKey2 = M.marksByKey([m2]);
+  assert.equal(M.markState(c2, lines, byKey2, true).contractNote, "too low payout");
+  assert.equal(rows.filter((e) => M.isMarkedCsvRow(e, lines, byKey2, true)).length, 1);
+});
+
+test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft rows", () => {
+  const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+  assert.match(css, /\.sb-row-actions \{ margin-left: auto; \}/);
+  assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \{ flex: 1 1 100%; \}/);
+  assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \.sb-mark \{ width: 100%; \}/);
+});

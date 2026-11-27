@@ -423,3 +423,27 @@ test("m2: one lock per repo however spelled; auto-commit after midnight commits 
     assert.ok(marks.some((m) => m.file === "data/squad.json" && m.status === "OWNER-OK") && marks.some((m) => m.file === "data/trader_relations.json" && m.note === "warmer"), "neither write lost the other");
   } finally { fake.cleanup(); }
 }));
+
+test("W4 friction 7: OK on a DRAFT row counts as OK (not edit) in commit summary; Edit replacing the draft counts as edit", async () => withGitEnv(async () => {
+  const fake = makeFakeRepo({
+    ...FILES,
+    [SHEET]: FILES[SHEET].replace(
+      /A former paramedic\.,squad,,,verify,,,STORY-TODO,,,/,
+      "A former paramedic.,squad,,,verify,,,DRAFT,,Ex-medic who still packs a tourniquet.,",
+    ),
+  });
+  try {
+    const wtRoot = path.join(fake.root, "wt");
+    const api = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    // 1. OK (draft) keeps the pre-existing DRAFT owner_rewrite -> counts as OK, not edit
+    await api.set([{ target: BIO, action: "ok" }]);
+    const c1 = await api.commit();
+    assert.deepEqual(c1.counts, { ok: 1, redo: 0, edit: 0, cleared: 0 });
+    assert.match(c1.subject, /: 1 OK, 0 redo, 0 edit$/);
+    // 2. Edit replacing that rewrite -> counts as edit
+    await api.set([{ target: BIO, action: "edit", text: "Former field medic." }]);
+    const c2 = await api.commit();
+    assert.deepEqual(c2.counts, { ok: 0, redo: 0, edit: 1, cleared: 0 });
+    assert.match(c2.subject, /: 0 OK, 0 redo, 1 edit$/);
+  } finally { fake.cleanup(); }
+}));

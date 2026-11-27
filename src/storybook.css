@@ -180,7 +180,15 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-text { display: flex; flex-direction: column; gap: 8px; }
 .sb-class { margin: 0; }
 .sb-text .sb-search { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; position: sticky; top: 55px; z-index: 4; background: var(--sb-bg); padding: 4px 0; }
-@media (max-width: 600px) { .sb-text .sb-search { position: static; } }
+.sb-filter-toggle { display: none; }
+.sb-filter-more { display: contents; }
+@media (max-width: 600px) {
+  .sb-text { gap: 4px; }
+  .sb-text .sb-search { position: static; padding: 0; gap: 4px 8px; }
+  .sb-filter-toggle { display: inline-flex; align-items: center; gap: 4px; }
+  .sb-filter-more { display: none; width: 100%; flex-wrap: wrap; gap: 6px; }
+  .sb-filter-more.sb-filter-more-open { display: flex; }
+}
 .sb-search-input { flex: 1 1 280px; min-height: 44px; padding: 0 12px; font: inherit; color: var(--sb-text); background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
 .sb-search-input:focus { outline: 2px solid var(--sb-accent); outline-offset: 1px; }
 .sb-search-n { font-size: 12px; color: var(--sb-text2); }
@@ -200,7 +208,10 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
 .sb-row-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .sb-row-sub { font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
+.sb-row-actions { margin-left: auto; }
 .sb-row-actions:empty { display: none; } /* V6 slot: OK / Redo / Edit buttons mount here */
+.sb-row-actions:has(.sb-mark-draft, .sb-mark-form) { flex: 1 1 100%; }
+.sb-row-actions:has(.sb-mark-draft, .sb-mark-form) .sb-mark { width: 100%; }
 .sb-cat-toolong { border-color: var(--sb-warn); }
 .sb-ent-filter[aria-pressed="true"] { background: var(--sb-accent); color: var(--sb-on-accent); border-color: var(--sb-accent); }
 
@@ -279,7 +290,7 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-mark-ok { color: #6be3a8; } .sb-root .sb-mark-redo { color: var(--sb-warn); } .sb-root .sb-mark-edit { color: var(--sb-accent-text); }
 /* a marked row reads as its mark only: the sheet status it started from (STORY-TODO / DRAFT ...) steps aside */
 .sb-root .sb-row:has(.sb-mark:not([data-mark="none"])) .sb-row-meta .sb-status { display: none; }
-.sb-root .sb-mark-draft { font-size: 12px; color: var(--sb-text2); font-style: italic; flex-basis: 100%; text-align: left; }
+.sb-root .sb-mark-draft { font-size: 12px; color: var(--sb-text2); font-style: italic; flex: 1 1 240px; text-align: left; }
 .sb-root .sb-mark-hint { font-size: 12px; color: var(--sb-warn); }
 .sb-root .sb-mark-form { display: flex; flex-direction: column; gap: 6px; flex-basis: 100%; }
 .sb-root .sb-mark-input { width: 100%; box-sizing: border-box; background: var(--sb-bg); color: var(--sb-text); border: 1px solid var(--sb-line); border-radius: 6px; padding: 6px 8px; font: inherit; }
@@ -290,11 +301,22 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-root .sb-arc-actions { flex-basis: 100%; display: flex; justify-content: flex-end; }
 .sb-root .sb-marksbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; margin: 0 0 8px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; font-size: 13px; }
 .sb-root .sb-marksbar-txt { flex: 1 1 auto; color: var(--sb-text2); }
+.sb-root .sb-marksbar-short { display: none; }
 .sb-root .sb-marksbar-ok { color: #6be3a8; font-size: 12px; }
 .sb-root .sb-marksbar-err { color: var(--sb-bad); font-size: 12px; flex-basis: 100%; }
+@media (max-width: 600px) {
+  .sb-root .sb-marksbar { flex-wrap: nowrap; padding: 4px 8px; gap: 6px; margin: 0 0 4px; }
+  .sb-root .sb-marksbar:has(.sb-marksbar-ok, .sb-marksbar-err) { flex-wrap: wrap; }
+  .sb-root .sb-marksbar-full { display: none; }
+  .sb-root .sb-marksbar-short { display: inline; }
+  .sb-root .sb-marksbar-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-size: 12px; }
+  .sb-root .sb-marksbar .sb-mbtn-commit { flex-shrink: 0; white-space: nowrap; min-height: 44px; padding: 0 10px; font-size: 13px; }
+}
 @media (pointer: coarse), (max-width: 640px) {
   .sb-root .sb-mbtn { min-height: 44px; min-width: 44px; font-size: 14px; }
+  .sb-root .sb-row-actions { flex: 1 1 100%; margin-left: 0; }
   .sb-root .sb-mark { justify-content: stretch; width: 100%; }
+  .sb-root .sb-mark-draft { flex-basis: 100%; }
   .sb-root .sb-mark-btns { width: 100%; } .sb-root .sb-mark-btns .sb-mbtn { flex: 1 1 0; }
   .sb-root .sb-tgroup-extra { padding-left: 8px; }
 }

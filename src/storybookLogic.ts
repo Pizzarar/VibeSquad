@@ -509,8 +509,8 @@ export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Pr
 export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   problems: "Broken references plus story issues. Story still to write is under Coverage; doc drift and orphan items under Other checks.",
   coverage: "Story not written yet: items with no story line (#15) and STORY-TODO placeholders on entities (#8). Writing work, not breakage.",
-  other: "Checks worth a look that are not story breakage: doc vs data drift (#3), repeated templates (#6), pronoun and tone notes (#9, #10), orphan items (#14).",
-  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
+  other: "Checks worth a look that are not story breakage: doc vs data drift (#3), repeated templates (#6), low-confidence name-word overlaps (#7 info) and lexical title checks (#11), pronoun and tone notes (#9, #10), orphan items (#14).",
+  story: "Coherence checks only: speaker and voice-card rules, duplicate ids or same-kind names, and lore contradictions.",
   text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
   toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
   dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
@@ -518,20 +518,20 @@ export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
 };
 /** The Problems tab has no "All" pill: scope "all" is only valid while a signal card's checks filter is active, else it falls back to Problems (no unreviewed-text leak). */
 export const effectiveScope = (scope: FindingScope, checks: ReadonlySet<string> | null | undefined): FindingScope => (scope === "all" && !checks ? "problems" : scope);
-/** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions, #19 lore vs roster. */
-export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12", "#19"]);
+/** Story-coherence checks (J4-2, W4): #4 speaker/voice rules, #7 warn/error id/display collisions (#7 info word-subset/cross-kind noise lives in Other checks), #12 lore contradictions, #19 lore vs roster. #11 (lexical title-vs-task, low confidence) lives in Other checks. */
+export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#12", "#19"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
 /** V6: story not written yet (#8 entity STORY-TODO, #15 item with no story): Coverage, not a problem. */
 export const isCoverage = (it: ListItem): boolean => it.category === "missing" && !it.dev;
 /** V6 (lead decision): Problems = broken + story issues ONLY. Text rows, Too long, Dev TODOs and Coverage never count. */
 export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && (it.category === "broken" || isStoryIssue(it));
-/** V6: checker findings that are neither a Problem nor Coverage / Too long / Dev (doc drift #3, orphan #14, #6/#9/#10). */
+/** V6: checker findings that are neither a Problem nor Coverage / Too long / Dev (doc drift #3, orphan #14, #6/#9/#10, #11, #7 info). */
 export const isOtherCheck = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && !isProblem(it);
 export const isTooLong = (it: ListItem): boolean => it.category === "toolong";
 export const isDevTodo = (it: ListItem): boolean => it.dev === true;
 /** #8 findings with no entity are the `# STORY-TODO` comments in .gd source (V3). */
 export const isDevTodoFinding = (f: Pick<SbFinding, "check" | "entityRef">): boolean => f.check === "#8" && !f.entityRef;
-export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check);
+export const isStoryIssue = (it: ListItem): boolean => it.check != null && STORY_CHECKS.has(it.check) && !(it.check === "#7" && it.severity === "info");
 
 export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
   switch (scope) {

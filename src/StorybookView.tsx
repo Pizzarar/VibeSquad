@@ -622,7 +622,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const marks = useMarks(projectId, idx); // V6 owner marks
   const liveProgress = useMemo(() => applyLiveMarks(snap?.progress, marks.state.marks), [snap, marks.state.marks]); // V12 progress with live V6 marks
   const rowEntity = useCallback((r: { kind: string; entityId: string }) => idx.get(r.kind, r.entityId), [idx]);
-  const mineTest = useCallback((r: { kind: string; entityId: string }) => marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);
+  const mineTest = useCallback((r: { kind: string; entityId: string }) => r.kind === "line" && marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);
   const rowStatusBucket = useCallback((r: { kind: string; entityId: string; status: string | null }): ProgressTextBucket | null => {
     if (r.kind !== "line") return null;
     const e = rowEntity(r);
