@@ -102,8 +102,12 @@ test("idea-1209: a child env keeps an inherited vs-t-* scratch and drops VS_TEST
 test("idea-1209: a direct node --test run with VS_TEST_TMPDIR naming a missing dir creates it (hermetic.mjs)", () => {
   const base = join(scratch(), "missing", "tmp");
   const probe = join(scratch(), "probe.mjs");
-  writeFileSync(probe, `import ${JSON.stringify(new URL("./setup/hermetic.mjs", import.meta.url).href)}; console.log(process.env.TMPDIR || process.env.TMP);`);
-  const r = spawnSync(process.execPath, [probe], { env: { ...process.env, TMPDIR: "/tmp", VS_TEST_TMPDIR: base }, encoding: "utf8", timeout: 20000 });
+  writeFileSync(probe, `import { tmpdir } from "node:os"; import ${JSON.stringify(new URL("./setup/hermetic.mjs", import.meta.url).href)}; console.log(tmpdir());`);
+  const env = { ...process.env, VS_TEST_TMPDIR: base };
+  for (const k of Object.keys(env)) if (/^(TMPDIR|TMP|TEMP)$/i.test(k)) delete env[k];
+  if (process.platform === "win32") env.TMP = env.TEMP = path.dirname(tmpdir());
+  else env.TMPDIR = "/tmp";
+  const r = spawnSync(process.execPath, [probe], { env, encoding: "utf8", timeout: 20000 });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.trim().startsWith(path.resolve(base)), r.stdout);
   assert.ok(path.basename(r.stdout.trim()).startsWith("vs-t-"));
