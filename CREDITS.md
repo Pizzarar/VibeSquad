@@ -38,11 +38,11 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented Boring Mode B4 (Normal/Psycho first-launch picker, label rename & B2r2 4K polish) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
 - Implemented Normal Mode UX redesign (desk D1–D2: tokens, measure, NEEDS YOU attention spine) — Thanks to **Antigravity** by `Google DeepMind`
 - Implemented outbound E2EE relay hardening — Thanks to **@noble/curves** by `Paul Miller (paulmillr)`
-- Implemented runtime debug bridge — Thanks to godot-mcp-runtime by Erodenn
+- Implemented runtime debug bridge — Thanks to **godot-mcp-runtime** by `Erodenn`
+- Implemented Normal-mode self-hosted typography — Thanks to **Plus Jakarta Sans** by `Tokotype` (SIL OFL 1.1) and **IBM Plex Mono** by `IBM` (SIL OFL 1.1); woff2 + licences in `public/fonts/`
 
 ## Third-party runtime dependencies (v0.2.9)
 
 - **@noble/curves 2.4.0** by `Paul Miller` (MIT) — runtime dependency: X25519 key agreement for the E2E relay tunnel (pure-JS fallback where WebCrypto lacks it)
 - **godot-mcp-runtime** by `Erodenn` (Owen Sterling) (MIT, commit `3b8a4f31`, v4.0.1) — external dev tool: MCP server + `McpBridge` autoload used for Godot playtest debugging. Not vendored or copied into this repo. Copyright (c) 2025-2026 Owen Sterling.
 
-- Implemented Normal-mode self-hosted typography — Thanks to **Plus Jakarta Sans** by `Tokotype` (SIL OFL 1.1) and **IBM Plex Mono** by `IBM` (SIL OFL 1.1); woff2 + licences in `public/fonts/`

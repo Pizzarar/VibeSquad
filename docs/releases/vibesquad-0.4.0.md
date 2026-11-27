@@ -4,12 +4,12 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `b219e906` (master) |
-| Release commits | one `release: vibesquad 0.4.0 (stable) ...` commit on `release/vibesquad-0.4.0` (version bump, this record, licenses) |
+| Frozen commit | `405779e6` (master; re-frozen from `b219e906`) |
+| Release commits | `a95a4f53` (version bump, record, licenses), the merge of master `405779e6`, and a follow-up (lockfile version, credits format, record) on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
 | Release URL | _pending (P3)_ |
-| Range | `v0.3.0..b219e906`: 2135 commits, 738 merges |
+| Range | `v0.3.0..405779e6`: 2202 commits, 763 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only. No Android APK is built or attached.
 
@@ -39,6 +39,9 @@ Windows installer, updater-signed (minisign). Not Authenticode-signed yet, so Sm
 - Desktop remote CA pinning fails closed: a remote connection without a verified fingerprint is refused.
 - A wrong or stale `server.pid` is no longer trusted (see Desktop).
 
+- `node server/release.mjs` now validates its arguments before doing anything: `--help` prints usage and exits 0, an unknown flag, stray argument or missing value exits 2, and a bare run without `--channel` is refused.
+- The verdict gate classifies reviewers by profile and role labels (fail-closed) before falling back to the title.
+
 ### Desktop
 - The desktop app checks that `server.pid` points at a live node process before trusting it; a stale file is removed (idea-373), in both the JS and Tauri sides.
 - Remote CA pin fails closed without a verified fingerprint; duplicate constant-time compare removed from the desktop build (idea-525).
@@ -61,6 +64,7 @@ Windows installer, updater-signed (minisign). Not Authenticode-signed yet, so Sm
 - Release export gate strips the addon from shipping builds; runtime debug bridge uses godot-mcp-runtime.
 
 ### Normal mode and Decision Desk
+- New Normal-mode "Needs you" concept page and refreshed How-it-works docs (Restart runner busy gate, roles and tier ladder, Crunch mode, 70% soft line, Decision Desk); Crunch-mode and Decision Desk polish; three Normal-mode overlap and contrast fixes.
 - Normal mode redesign: new design tokens, calmer chat header, container-aware composer, sleek dashboard with Overview tabs, Cards or Map lane map, living restyle with self-hosted fonts.
 - Needs-you attention spine: one count across tab title, favicon and badges, a location line per item, stalled workers shown distinctly, single-click Interrupt.
 - Decision Desk cards show option definitions and a source excerpt; a decisions feed and batch answer API for the owner.
@@ -68,6 +72,8 @@ Windows installer, updater-signed (minisign). Not Authenticode-signed yet, so Sm
 - Owner-facing times are written in US Eastern.
 
 ### Routing, roles and usage
+- A third Implement arm (Gemini Carbon) joins the Sonnet/Neon alternation for normal-stakes work and shares the Neon cap and soft line; UX Review is its own top-tier role.
+- Credit guard refreshes every 30 minutes with a single poller; the card shows the remaining balance, currency threshold and a stale tag.
 - Roles-only routing: pick a role and stakes, the ladder picks the model; role and ladder editors, provider-grouped override, spawn results and chips show role, model and reason.
 - Per-family soft quota line (70%): above it only interruptible work runs; mechanical work routes to cheap models first.
 - Usage dashboard: burst cohort table, per-model quality table (first-try pass, fix rounds, cost per unit), limit cards show when they were last sampled, DeepSeek credit poll, cap handling that never lapses without a reset time.
@@ -80,7 +86,14 @@ Windows installer, updater-signed (minisign). Not Authenticode-signed yet, so Sm
 - Compact-first handling at each context threshold for leads and Buddies; long-turn tracking per lane and role.
 - Child ledger writes are single-writer and monotonic; digest no longer writes duplicate done entries.
 
+### Windows and tooling
+- Windows-only test and guard failures fixed for this release: the git guard keeps bash backslashes inside double quotes and maps Git Bash `/c/` and `/cygdrive/c/` paths on Windows.
+- Storybook source modules were renamed internally (`*Marks/Guide/Progress.ts` to `*Logic.ts`) so Windows no longer resolves the Storybook components to the wrong file; a guard test blocks new case clashes.
+- The runner refuses to start an agent whose worktree was removed ("worktree removed: <path>") and keeps a resumable one parked, with no provider fault or failover.
+- The Godot export gate finds the newest `godot-4.*` (template-bearing first) and honours `GODOT_BIN` / `GODOT_PATH`.
+
 ### Phone and remote
+- The Godot addon pairs with real VibeSquad installs: it loads the name-constrained CA correctly and the mesh HTTPS listener sends the leaf certificate only.
 - Phone Cockpit gains a Bugs tab and a Storybook entry; From GitHub allowed for paired remote devices.
 - Relayed worker reports keep every line and only replace host-path tokens.
 
