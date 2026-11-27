@@ -447,3 +447,46 @@ test("W4 friction 7: OK on a DRAFT row counts as OK (not edit) in commit summary
     assert.match(c2.subject, /: 0 OK, 0 redo, 1 edit$/);
   } finally { fake.cleanup(); }
 }));
+
+test("V7 friction 6: contract Redo note stays in owner_note (never owner_rewrite), survives sibling OK, and counts as redo in commit summary", async () => withGitEnv(async () => {
+  // Unit-level markRow checks
+  const tpl = rowsOf(SHEET_TEXT)[3]; // ContractSystem.gd:720 Deliver {qty} {item}
+  const r1 = markRow(tpl, { action: "redo", note: "Payout looks low", contract: "d_builder_scrap_metal" });
+  assert.equal(r1.status, "NEEDS-REWRITE");
+  assert.equal(r1.owner_note, "contract:d_builder_scrap_metal: Payout looks low");
+  assert.equal(r1.owner_rewrite, "");
+  assert.equal(r1.reviewed_hash, "");
+  // Clicking OK on a sibling contract sharing the same template must NOT clobber NEEDS-REWRITE to OWNER-OK
+  const r2 = markRow(r1, { action: "ok", contract: "d_other_deliver" });
+  assert.equal(r2.status, "NEEDS-REWRITE", "sibling OK must not clobber unresolved contract Redo");
+  assert.equal(r2.owner_note, "contract:d_builder_scrap_metal: Payout looks low");
+  assert.equal(r2.owner_rewrite, "");
+  assert.equal(r2.reviewed_hash, "");
+  // Clicking OK on the same contract clears its redo note and promotes to OWNER-OK when no other contract notes remain
+  const r3 = markRow(r2, { action: "ok", contract: "d_builder_scrap_metal" });
+  assert.equal(r3.status, "OWNER-OK");
+  assert.equal(r3.owner_note, "");
+  assert.equal(r3.owner_rewrite, "");
+  assert.equal(r3.reviewed_hash, textHash(tpl.current_text));
+
+  // End-to-end commitIn() check reproducing commit 5876c2ac
+  const contractCsvRow = `System: ContractSystem,gd,systems/ContractSystem.gd,720,,contract_title,Deliver %d × %s for %s,contract_title,,,verify,,,STORY-TODO,,,`;
+  const fake = makeFakeRepo({ ...FILES, [SHEET]: FILES[SHEET] + contractCsvRow + "\n" });
+  try {
+    const wtRoot = path.join(fake.root, "wt");
+    const api = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    const cTarget = { file: "systems/ContractSystem.gd", where_seen: "contract_title", line: "720", seen: "Deliver %d × %s for %s" };
+    await api.set([{ target: cTarget, action: "redo", note: "Payout looks low", contract: "d_builder_scrap_metal" }]);
+    await api.set([{ target: cTarget, action: "ok", contract: "d_builder_wire" }]);
+    await api.set([{ target: BIO, action: "edit", text: "Former field medic." }]);
+    const c = await api.commit();
+    assert.deepEqual(c.counts, { ok: 0, redo: 1, edit: 1, cleared: 0 });
+    assert.match(c.subject, /: 0 OK, 1 redo, 1 edit$/);
+    const wt = path.join(wtRoot, "storybook-review-2026-11-27");
+    const committed = rowsOf(fs.readFileSync(path.join(wt, SHEET), "utf8")).find((r) => r.file === "systems/ContractSystem.gd");
+    assert.equal(committed.status, "NEEDS-REWRITE");
+    assert.equal(committed.owner_note, "contract:d_builder_scrap_metal: Payout looks low");
+    assert.equal(committed.owner_rewrite, "");
+    assert.equal(committed.reviewed_hash, "");
+  } finally { fake.cleanup(); }
+}));

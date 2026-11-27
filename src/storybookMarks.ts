@@ -75,7 +75,7 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
     // a contract shows its own note; the shared template's OK/Redo shows only when the note is absent
     // and the template itself was marked (not merely set to NEEDS-REWRITE by another contract's note).
     const cn = m?.contracts?.[hit.contract] ?? "";
-    if (cn) return { kind: m?.status === "OWNER-OK" ? "ok" : "redo", note: "", rewrite: "", contractNote: cn };
+    if (cn) return { kind: "redo", note: "", rewrite: "", contractNote: cn };
     if (m && m.status !== "OWNER-OK" && !m.note && Object.keys(m.contracts ?? {}).length > 0) return none;
   }
   if (m) {

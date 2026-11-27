@@ -144,9 +144,20 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
       if (!t) throw new MarkError("edit needs text");
       r.owner_rewrite = t === cur ? "" : csvSafe(t);
     }
+    if (action === "ok" && contract) {
+      const parsed = parseNote(csvUnsafe(r.owner_note));
+      const n = clean(note);
+      if (n) parsed.contracts.set(String(contract), n.replace(/\s*\|\s*/g, "; "));
+      else parsed.contracts.delete(String(contract));
+      r.owner_note = csvSafe(joinNote(parsed));
+      // Never clobber NEEDS-REWRITE to OWNER-OK while another contract on this shared template still has a Redo note.
+      if (r.status === "NEEDS-REWRITE" && parsed.contracts.size > 0) {
+        r.reviewed_hash = "";
+        return r;
+      }
+    }
     r.status = "OWNER-OK";
     r.reviewed_hash = textHash(cur);
-    if (action === "ok" && contract && clean(note)) r.owner_note = csvSafe(withContractNote(csvUnsafe(r.owner_note), contract, clean(note)));
     return r;
   }
   if (action === "redo") {
@@ -160,11 +171,6 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
     return r;
   }
   throw new MarkError(`unknown action ${action}`);
-}
-function withContractNote(note, contract, n) {
-  const p = parseNote(note);
-  p.contracts.set(String(contract), n.replace(/\s*\|\s*/g, "; "));
-  return joinNote(p);
 }
 
 export class MarkError extends Error { constructor(m, status = 400) { super(m); this.name = "MarkError"; this.status = status; } }
@@ -412,8 +418,11 @@ async function commitIn(wt, branch, { reason = "" } = {}) {
   for (const m of after) {
     const p = prev.get(m.key);
     if (p && p.status === m.status && p.note === m.note && p.rewrite === m.rewrite && JSON.stringify(p.contracts) === JSON.stringify(m.contracts)) continue;
-    if (m.status !== "OWNER-OK") n.redo++;
-    else if (m.rewrite && m.rewrite !== (prevRewrite.get(m.key) ?? "")) n.edit++;
+    const isEdit = Boolean(m.rewrite && m.rewrite !== (prevRewrite.get(m.key) ?? ""));
+    const contractsChanged = JSON.stringify(p?.contracts ?? {}) !== JSON.stringify(m.contracts);
+    const hasContractNote = Object.keys(m.contracts ?? {}).length > 0;
+    if (m.status !== "OWNER-OK" || (contractsChanged && hasContractNote && !isEdit)) n.redo++;
+    else if (isEdit) n.edit++;
     else n.ok++;
   }
   const afterKeys = new Set(after.map((m) => m.key));

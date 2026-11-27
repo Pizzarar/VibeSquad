@@ -84,6 +84,10 @@ test("W4 friction 1: per-contract note keeps note on its preview, does not mark 
   const byKey2 = M.marksByKey([m2]);
   assert.equal(M.markState(c2, lines, byKey2, true).contractNote, "too low payout");
   assert.equal(rows.filter((e) => M.isMarkedCsvRow(e, lines, byKey2, true)).length, 1);
+
+  // V7 friction 6: a contract with a contractNote always renders as redo, never OK
+  const mOkWithNote = server(tpl, { status: "OWNER-OK", note: "", contracts: { k_doc_pmc_squad: "too many kills" } });
+  assert.equal(M.markState(c1, lines, M.marksByKey([mOkWithNote]), true).kind, "redo");
 });
 
 test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft rows", () => {
