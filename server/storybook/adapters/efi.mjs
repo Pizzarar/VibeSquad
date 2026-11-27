@@ -334,9 +334,10 @@ function inferCsvSpeaker(row, { traders, squadMembers }) {
 // ---------- V1.1: dev-only string exclusion ----------
 const DEV_FILE_RE = /^(?:scripts\/debug|tools|tests)\//i;
 const DEV_WHERE_FN_RE = /\b(?:_?validate(?:_[a-z0-9_]+)?|_[a-z0-9_]*errors?|_save_reject_reason)\(\)/i;
-const DEV_CALL_RE = /\b(?:push_error|push_warning|assert|printerr|print_debug)\s*\(|\berrors\.append\s*\(/;
-const DEV_LOADER_WHERE_RE = /\b(?:parse|_load_[a-z0-9_]+)\(\)/i;
-const DEV_LOADER_TEXT_RE = /^(?:globals:\s*invalid\b|[a-z_]+=%[ds]\s+[a-z_]+=%[ds])/i;
+const DEV_CALL_RE = /\b(?:push_error|push_warning|assert|printerr|print_debug)\s*\(|(?:\berrors|\[["']errors["']\])\.append\s*\(/;
+// Safe: requires both an internal _load_*() loader helper in where_seen and a pure snake_case=%d/%s debug log signature (never matches player prose/toasts).
+const DEV_LOADER_WHERE_RE = /\b_load_[a-z0-9_]+\(\)/i;
+const DEV_LOADER_TEXT_RE = /^(?:[a-z_]+=%[ds]\s+)+[a-z_]+=%[ds]$/i;
 
 /** Load unique .gd files referenced by CSV rows (batched, read-only via pinned reader) for call-site checks. */
 async function loadGdSourcesForCsv(reader, records) {
@@ -352,6 +353,7 @@ async function loadGdSourcesForCsv(reader, records) {
 /**
  * V1.1: true when a CSV row is a developer-only / validation / push_error / assert string rather than player-facing text.
  * Checks file path, where_seen validation/error helper name, and (for .gd files) the actual call site in the pinned source.
+ * Never falls back to the raw CSV line number when the text needle is not found (CSV line numbers can be stale vs pinned sha).
  */
 export function isDevOnlyCsvRow(row, gdSourceCache) {
   const file = String(row?.file ?? "");
@@ -364,21 +366,22 @@ export function isDevOnlyCsvRow(row, gdSourceCache) {
     const lines = gdSourceCache.get(file);
     const ln = Number(row?.line) || 0;
     const needle = text.split("\n")[0].slice(0, 40);
-    let hitIdx = -1;
-    if (needle) {
-      for (let d = 0; d <= 40; d++) {
-        for (const idx of [ln - 1 + d, ln - 1 - d]) {
-          if (idx >= 0 && idx < lines.length && lines[idx].includes(needle)) { hitIdx = idx; break; }
-        }
-        if (hitIdx >= 0) break;
+    if (needle && lines.length) {
+      const center = Math.max(0, Math.min(lines.length - 1, ln > 0 ? ln - 1 : 0));
+      const maxD = Math.max(center, lines.length - 1 - center);
+      let hitIdx = -1;
+      for (let d = 0; d <= maxD; d++) {
+        const hi = center + d;
+        if (hi < lines.length && lines[hi].includes(needle)) { hitIdx = hi; break; }
+        const lo = center - d;
+        if (d > 0 && lo >= 0 && lines[lo].includes(needle)) { hitIdx = lo; break; }
       }
-    }
-    if (hitIdx < 0 && ln >= 1 && ln <= lines.length) hitIdx = ln - 1;
-    if (hitIdx >= 0) {
-      const srcLine = lines[hitIdx];
-      const prevLine = hitIdx > 0 ? lines[hitIdx - 1] : "";
-      if (DEV_CALL_RE.test(srcLine)) return true;
-      if (DEV_CALL_RE.test(prevLine) && !/\)\s*$/.test(prevLine.trim())) return true;
+      if (hitIdx >= 0) {
+        const srcLine = lines[hitIdx];
+        const prevLine = hitIdx > 0 ? lines[hitIdx - 1] : "";
+        if (DEV_CALL_RE.test(srcLine)) return true;
+        if (DEV_CALL_RE.test(prevLine) && !/\)\s*$/.test(prevLine.trim())) return true;
+      }
     }
   }
   return false;
@@ -429,6 +432,9 @@ function linkCsvRowContext(L, row, dp, { stepCtx, locations, enemies, squadMembe
 }
 
 // ---------- V1.1: entity/csv twin deduplication ----------
+const NATIVE_TWIN_FIELDS = ["at_s", "kind", "band", "item_id", "qty", "requires", "field"];
+const SQUAD_TWIN_FIELDS = new Set(["name", "bio", "trait_text"]);
+
 function mergeLinks(target, extra) {
   const seen = new Set(target.map((l) => `${l.rel}|${l.kind}|${l.id}`));
   const hasSpokenBy = target.some((l) => l.rel === "spoken_by");
@@ -441,11 +447,16 @@ function mergeLinks(target, extra) {
 
 function attachTwinProvenance(csvEnt, nativeEnt) {
   const csvProv = { origin: "csv", id: csvEnt.id, source: { path: P.csv, line: csvEnt.data.csv_line ?? null } };
-  const natProv = { origin: nativeEnt.data.origin, id: nativeEnt.id, source: nativeEnt.source, ...(isTodo(nativeEnt.data.text) ? { text: nativeEnt.data.text } : {}) };
+  const keepNatText = isTodo(nativeEnt.data.text) || normText(nativeEnt.data.text) !== normText(csvEnt.data.text);
+  const natProv = { origin: nativeEnt.data.origin, id: nativeEnt.id, source: nativeEnt.source, ...(keepNatText ? { text: nativeEnt.data.text } : {}) };
   const existing = Array.isArray(csvEnt.data.provenance) ? csvEnt.data.provenance : [csvProv];
   if (!existing.some((p) => p.origin === natProv.origin && p.id === natProv.id)) existing.push(natProv);
   csvEnt.data.provenance = existing;
   mergeLinks(csvEnt.links, nativeEnt.links);
+  for (const k of NATIVE_TWIN_FIELDS) {
+    if (nativeEnt.data[k] !== undefined && csvEnt.data[k] === undefined) csvEnt.data[k] = nativeEnt.data[k];
+  }
+  if (nativeEnt.data.speaker != null && csvEnt.data.native_speaker === undefined) csvEnt.data.native_speaker = nativeEnt.data.speaker;
   if (csvEnt.data.speakerKind === "system" && nativeEnt.data.speakerKind && nativeEnt.data.speakerKind !== "system") {
     csvEnt.data.speakerKind = nativeEnt.data.speakerKind;
     csvEnt.data.speakerId = nativeEnt.data.speakerId;
@@ -455,42 +466,72 @@ function attachTwinProvenance(csvEnt, nativeEnt) {
 }
 
 /**
- * V1.1: dedupe native entity line rows against their CSV twins (same line from entity data and text_review.csv).
- * Keeps the CSV row as the single canonical row, merges links and keeps both sources in data.provenance.
+ * Structural twin key for a CSV line row -> matches the exact native entity id it duplicates, or null for non-structural rows.
+ * Prevents identical text across distinct entities (e.g. long_haul on two locations, or identical flaws on two squad members) from collapsing.
  */
-function dedupeLineTwins(ents) {
-  const csvByFileText = new Map();
-  const csvEncByKey = new Map();
+function csvStructuralTwinKey(e, { locations, squadMembers }) {
+  const file = e.data.file ?? e.source?.path ?? "";
+  const dp = parseDataPath(e.data.data_path);
+  if (!dp) return null;
+  if (file === P.locations && Number.isInteger(dp[0]) && dp[1] === "long_haul" && dp[2] === "text" && locations[dp[0]]) {
+    return `long_haul:${locations[dp[0]].id}`;
+  }
+  if (file === P.relations && dp[0] === "traders" && typeof dp[1] === "string") {
+    if (dp[2] === "lines" && typeof dp[3] === "string") return `rel:${dp[1]}:${dp[3]}`;
+    if (dp[2] === "encouragement" && Number.isInteger(dp[3])) return `enc:${dp[1]}:${dp[3]}`;
+  }
+  if (file === P.squad && dp[0] === "members" && Number.isInteger(dp[1]) && squadMembers[dp[1]]) {
+    const mid = squadMembers[dp[1]].id;
+    if (SQUAD_TWIN_FIELDS.has(dp[2]) && dp.length === 3) return `squad:${mid}:${dp[2]}`;
+    if ((dp[2] === "flaw" || dp[2] === "synergy") && dp[3] === "text") return `squad:${mid}:${dp[2]}`;
+  }
+  return null;
+}
+
+/**
+ * V1.1: dedupe native entity line rows against their CSV twins (same line from entity data and text_review.csv).
+ * Matches data-backed lines strictly by structural key (data_path -> native entity id) and raid_story 1-to-1 by normalized text.
+ * Keeps the CSV row as canonical, merges links + native metadata, and keeps both sources in data.provenance; unmatched natives stay separate.
+ */
+function dedupeLineTwins(ents, ctx) {
+  const csvByStructKey = new Map();
+  const csvRaidByText = new Map();
   for (const e of ents) {
     if (e.kind !== "line" || e.data.origin !== "csv") continue;
-    const key = `${e.source?.path ?? ""}\u0000${normText(e.data.text)}`;
-    if (!csvByFileText.has(key)) csvByFileText.set(key, []);
-    csvByFileText.get(key).push(e);
-    if (e.data.file === P.relations) {
-      const dp = parseDataPath(e.data.data_path);
-      if (dp?.[0] === "traders" && dp[2] === "encouragement" && Number.isInteger(dp[3])) {
-        const ek = `${dp[1]}:${dp[3]}`;
-        if (!csvEncByKey.has(ek)) csvEncByKey.set(ek, []);
-        csvEncByKey.get(ek).push(e);
-      }
+    const sk = csvStructuralTwinKey(e, ctx);
+    if (sk) {
+      if (!csvByStructKey.has(sk)) csvByStructKey.set(sk, []);
+      csvByStructKey.get(sk).push(e);
+    } else if ((e.data.file ?? e.source?.path) === P.raidStory) {
+      const tk = normText(e.data.text);
+      if (!csvRaidByText.has(tk)) csvRaidByText.set(tk, []);
+      csvRaidByText.get(tk).push(e);
     }
   }
   const dropped = new Set();
+  const claimedCsv = new Set();
   for (const e of ents) {
     if (e.kind !== "line" || e.data.origin === "csv") continue;
-    if (e.data.origin === "encouragement") {
-      const m = /^enc:([^:]+):(\d+)$/.exec(e.id);
-      const hits = m ? csvEncByKey.get(`${m[1]}:${m[2]}`) : null;
-      if (hits?.length) {
-        for (const csvEnt of hits) attachTwinProvenance(csvEnt, e);
+    if (e.data.origin === "raid_story") {
+      const hits = csvRaidByText.get(normText(e.data.text));
+      const target = hits?.find((c) => !claimedCsv.has(c));
+      if (target) {
+        claimedCsv.add(target);
+        attachTwinProvenance(target, e);
         dropped.add(e);
       }
       continue;
     }
-    const key = `${e.source?.path ?? ""}\u0000${normText(e.data.text)}`;
-    const hits = csvByFileText.get(key);
-    if (hits?.length) {
-      attachTwinProvenance(hits[0], e);
+    const candidates = csvByStructKey.get(e.id);
+    if (!candidates?.length) continue;
+    const hits = e.data.origin === "encouragement"
+      ? candidates.filter((c) => {
+          const ct = normText(c.data.text);
+          return ct && (ct === normText(e.data.title) || ct === normText(e.data.story));
+        })
+      : candidates.filter((c) => normText(c.data.text) === normText(e.data.text));
+    if (hits.length) {
+      for (const csvEnt of hits) attachTwinProvenance(csvEnt, e);
       dropped.add(e);
     }
   }
@@ -747,7 +788,7 @@ async function load(reader, sha) {
       });
     }
   }
-  const deduped = dedupeLineTwins(ents);
+  const deduped = dedupeLineTwins(ents, { locations, squadMembers });
   if (deduped !== ents) { ents.length = 0; ents.push(...deduped); }
 
   // voice cards

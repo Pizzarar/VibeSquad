@@ -1314,7 +1314,9 @@
               "line": 32
             }
           }
-        ]
+        ],
+        "band": "wary",
+        "native_speaker": "doc"
       }
     },
     {
@@ -1433,7 +1435,9 @@
             },
             "text": "STORY-TODO: A former paramedic."
           }
-        ]
+        ],
+        "field": "bio",
+        "native_speaker": "doc"
       }
     },
     {
@@ -1535,7 +1539,8 @@
               "line": 4
             }
           }
-        ]
+        ],
+        "native_speaker": "squad"
       }
     },
     {

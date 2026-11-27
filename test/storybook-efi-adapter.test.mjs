@@ -331,6 +331,39 @@ test("V1.1: dev-only / validation / push_error / assert strings excluded; player
   assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", where_seen: "SkillSystem _strike_error()", current_text: "strike is not an object" }, new Map()), true);
 });
 
+test("V1.1: stale CSV line numbers never fall back to raw line; whole-file call-site search + tightened loader filter", () => {
+  // Simulate a stale CSV line pointing at push_error() while the real player toast moved >100 lines away (SkillSystem.gd case)
+  const filler = Array.from({ length: 120 }, () => "\tpass");
+  const skillLines = [
+    "extends Node",
+    'push_error("stale line now holds a dev error")', // line 2 (stale CSV line)
+    ...filler,
+    'EventBus.show_notification.emit("%s needs more inputs in the stash" % action_id)', // line 123
+    'push_error("moved far away dev error")', // line 124
+  ];
+  const contractLines = [
+    "func parse(data):",
+    '\tout["errors"].append("globals: invalid %s" % key)',
+    '\tEventBus.show_notification.emit("globals: invalid order")',
+  ];
+  const cache = new Map([
+    ["systems/SkillSystem.gd", skillLines],
+    ["systems/ContractSystem.gd", contractLines],
+  ]);
+  // Stale line points to push_error, actual toast is >40 lines away -> kept
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "%s needs more inputs in the stash" }, cache), false);
+  // Stale line points to push_error, needle absent from file -> kept (no raw-line fallback)
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "Removed player toast" }, cache), false);
+  // Dev error moved >40 lines away -> found via whole-file scan and excluded
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "2", where_seen: "SkillSystem start_action()", current_text: "moved far away dev error" }, cache), true);
+  // out["errors"].append(...) caught by call site; player toast starting "globals:" is NOT hidden
+  assert.equal(isDevOnlyCsvRow({ file: "systems/ContractSystem.gd", line: "2", where_seen: "ContractSystem parse()", current_text: "globals: invalid %s" }, cache), true);
+  assert.equal(isDevOnlyCsvRow({ file: "systems/ContractSystem.gd", line: "3", where_seen: "ContractSystem parse()", current_text: "globals: invalid order" }, cache), false);
+  // Loader log signature only matches pure snake_case=%d/%s pairs in _load_*()
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "1", where_seen: "SkillSystem _load_mastery()", current_text: "families=%d thresholds=%s" }, new Map()), true);
+  assert.equal(isDevOnlyCsvRow({ file: "systems/SkillSystem.gd", line: "1", where_seen: "SkillSystem _load_mastery()", current_text: "globals: invalid order" }, new Map()), false);
+});
+
 test("V1.1: extended links — contracts, containers, enemies -> spawn locations, squad synergy", () => {
   // kill contract gets said_at (from enemy spawn locations) + mentions (enemy) + spoken_by (trader)
   const kc = reg.get("contract", "k_popper_scav");
@@ -363,12 +396,62 @@ test("V1.1: entity/csv twin dedupe preserves both sources as provenance (long_ha
     assert.equal(r.has("line", "long_haul:harbor_district"), false, "native long_haul deduped");
     const lh = r.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.data_path?.includes("long_haul"));
     assert.equal(lh.data.speakerKind, "narrator");
+    assert.equal(lh.data.at_s, 1800, "native at_s preserved on CSV twin");
+    assert.equal(lh.data.native_speaker, "narrator", "native speaker preserved");
     assert.ok(lh.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"));
     assert.ok(lh.data.provenance.some((p) => p.origin === "csv") && lh.data.provenance.some((p) => p.origin === "long_haul"));
     assert.equal(r.has("line", "enc:popper:0"), false, "native encouragement deduped");
     const enc = r.byKind("line").find((l) => l.data.file === "data/trader_relations.json" && l.data.data_path?.includes("encouragement"));
+    assert.equal(enc.data.item_id, "scrap_metal", "native item_id preserved");
+    assert.equal(enc.data.qty, 100, "native qty preserved");
+    assert.deepEqual(enc.data.requires, [{ skill: "scavenging", level: 30 }], "native requires preserved");
     assert.ok(enc.links.some((l) => l.rel === "wants_item" && l.kind === "item" && l.id === "scrap_metal"));
     assert.ok(enc.data.provenance.some((p) => p.origin === "encouragement" && p.id === "enc:popper:0"));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("V1.1: structural twin dedupe keeps identical text across distinct entities separate and preserves native metadata", async () => {
+  const locs = JSON.parse(FILES["data/locations.json"]);
+  locs[1].long_haul = { at_s: 2400, text: locs[0].long_haul.text, rows: [] };
+  const squad = JSON.parse(FILES["data/squad.json"]);
+  squad.members.push({ id: "prof", callsign: "Prof", name: "Patel", bio: "Analyst.", trait_text: "Fast reader", flaw: { key: "hp", size: -2, text: squad.members[0].flaw.text } });
+  // Only harbor_district (index 0) has a CSV row for long_haul; both squad members (0 and 1) have CSV rows for identical flaw text
+  const extraCsv = FILES["docs/review/text_review.csv"] +
+    'Data: locations,data,data/locations.json,5,"[0, ""long_haul"", ""text""]",,A supply drop came down nearby. The squad reached it.,raids page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,11,"[""members"", 0, ""flaw"", ""text""]",,Hauls a trauma kit,squad page,,,verify,,,DRAFT,,,\r\n' +
+    'Data: squad,data,data/squad.json,12,"[""members"", 1, ""flaw"", ""text""]",,Hauls a trauma kit,squad page,,,verify,,,DRAFT,,,\r\n';
+  const f = makeFakeRepo({
+    ...FILES,
+    "data/locations.json": JSON.stringify(locs, null, 2),
+    "data/squad.json": JSON.stringify(squad, null, 2),
+    "docs/review/text_review.csv": extraCsv,
+  });
+  try {
+    const s = await loadSnapshot(efiAdapter, makeReader(f.clone, f.sha), { ref: "origin/main" });
+    const r = makeRegistry(s.entities);
+    // harbor_district long_haul merged into [0,"long_haul","text"]; sealed_vault long_haul has no CSV row so it stays separate!
+    assert.equal(r.has("line", "long_haul:harbor_district"), false);
+    assert.equal(r.has("line", "long_haul:sealed_vault"), true, "unmatched native with same text stays separate");
+    assert.equal(r.get("line", "long_haul:sealed_vault").data.at_s, 2400);
+    const lh0 = r.byKind("line").find((l) => l.data.file === "data/locations.json" && l.data.data_path?.includes("long_haul"));
+    assert.equal(lh0.data.at_s, 1800);
+    assert.deepEqual(lh0.links.filter((l) => l.rel === "said_at").map((l) => l.id), ["harbor_district"]);
+    // Both squad members' identical flaw rows merge strictly with their own CSV twin, preserving distinct spoken_by + field
+    assert.equal(r.has("line", "squad:doc:flaw"), false);
+    assert.equal(r.has("line", "squad:prof:flaw"), false);
+    const flaws = r.byKind("line").filter((l) => l.data.file === "data/squad.json" && l.data.data_path?.includes('"flaw"'));
+    assert.equal(flaws.length, 2);
+    const bySp = new Map(flaws.map((l) => [l.data.speakerId, l]));
+    assert.ok(bySp.get("doc").links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "doc"));
+    assert.ok(bySp.get("prof").links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "prof"));
+    assert.equal(bySp.get("doc").data.field, "flaw");
+    assert.equal(bySp.get("prof").data.field, "flaw");
+    assert.equal(bySp.get("prof").data.native_speaker, "prof");
+    // Trader relations twin preserves band
+    const docWary = r.byKind("line").find((l) => l.data.file === "data/trader_relations.json" && l.data.data_path?.includes("wary"));
+    assert.equal(docWary.data.band, "wary");
   } finally {
     f.cleanup();
   }
