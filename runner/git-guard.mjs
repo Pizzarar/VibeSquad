@@ -221,7 +221,7 @@ export function tokenize(src, { env = process.env, vars = {}, powershell = false
 
 /** Walk up from `dir`: the first `.git` decides. 'main' = a directory (the shared checkout), 'linked' = a gitfile. */
 export function repoKind(dir, { stat = statSync } = {}) {
-  let d = path.resolve(dir);
+  let d = resolveHost(dir);
   for (;;) {
     let st = null;
     try { st = stat(path.join(d, '.git')); } catch { /* none here */ }
@@ -533,7 +533,7 @@ export function findViolation(command, { cwd = process.cwd(), env = process.env,
   }
   segs.push({ words: cur, op: null });
 
-  let dir = cwd ? path.resolve(cwd) : UNKNOWN;
+  let dir = cwd ? resolveHost(cwd) : UNKNOWN;
   const resolveDir = (base, w) => {
     if (!w || w === UNKNOWN || w.dynamic) return UNKNOWN;
     if (path.isAbsolute(w.text)) return resolveHost(w.text);
@@ -789,7 +789,7 @@ const within = (p, root) => { const r = path.relative(root, p); return r === '' 
 /** Temp dirs whose main checkouts are scratch repos (tests, scripts), not a shared checkout: os.tmpdir() for `env`, plus its realpath. */
 export function scratchRootsOf(env = process.env) {
   const t = env?.TMPDIR || env?.TMP || env?.TEMP || os.tmpdir();
-  const roots = new Set([path.resolve(t)]);
+  const roots = new Set([resolveHost(t)]);
   try { roots.add(realpathSync(t)); } catch { /* missing temp dir: the literal path only */ }
   return [...roots].filter((r) => path.dirname(r) !== r); // never `/`: TMPDIR=/ must not exempt every repo
 }
@@ -801,7 +801,7 @@ export function scratchRootsOf(env = process.env) {
  */
 export function gitArgvViolation(argv, { cwd = process.cwd(), env = process.env, scratchRoots = scratchRootsOf(env), git = 'git' } = {}) {
   const words = (argv ?? []).map((text) => ({ text: String(text), dynamic: false, quoted: true }));
-  const at = path.resolve(cwd);
+  const at = resolveHost(cwd);
   const lookup = (globals, sub) => gitAliasLookup(globals, sub, { cwd: at, env, git });
   const { label, g } = classifyGit(words, at, { workTree: env?.GIT_WORK_TREE || null, gitDir: env?.GIT_DIR || null }, { lookup });
   const v = label ? judgeGit(label, g) : null;

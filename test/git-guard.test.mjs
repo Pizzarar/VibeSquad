@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { findViolation, gitGuardDecision, msysToWin, repoKind, tokenize } from '../runner/git-guard.mjs';
+import { findViolation, gitArgvViolation, gitGuardDecision, msysToWin, repoKind, tokenize } from '../runner/git-guard.mjs';
 import { createClaudeAdapter, drainHookSettings, DRAIN_HOOK_SCRIPT, isWorkerAgent } from '../runner/adapters/claude.mjs';
 
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'vs-git-guard-')));
@@ -334,6 +334,30 @@ test('win32: Git Bash spellings of the main checkout are refused ("C:\\...", C:/
   }
   // still bash: an unquoted C:\... loses its backslashes, so that cd fails and nothing runs in the main checkout
   assert.equal(findViolation(`cd ${MAIN} && git reset --hard`, { cwd: WT, env }), null);
+});
+
+test('win32: an MSYS cwd (/c/..., /cygdrive/c/...) resolves like its C:\\ form (findViolation, gitArgvViolation, repoKind seeds)', () => {
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  const msys = (p) => `/${p[0].toLowerCase()}${p.slice(2).replace(/\\/g, '/')}`;
+  try {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    // repoKind seed: the first path stat'd is the drive path, not <cwd drive>:\c\...
+    for (const c of ['/c/repo/sub', '/cygdrive/c/repo/sub']) {
+      const seen = [];
+      repoKind(c, { stat: (p) => { seen.push(p); throw new Error('ENOENT'); } });
+      assert.match(seen[0], /(^|[\\/])C:[\\/]+repo[\\/]+sub[\\/]+\.git$/i, `${c} -> ${seen[0]}`);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', real);
+  }
+  if (process.platform === 'win32') {
+    for (const c of [msys(MAIN), `/cygdrive${msys(MAIN)}`]) {
+      const v = findViolation('git reset --hard', { cwd: c, env });
+      assert.ok(v, `expected refusal for cwd ${c}`);
+      assert.equal(v.root.toLowerCase(), MAIN.toLowerCase());
+      assert.ok(gitArgvViolation(['reset', '--hard'], { cwd: c, env }), `argv cwd ${c}`);
+    }
+  }
 });
 
 test('gitGuardDecision: Bash and PowerShell only, refusal names vs worktree create + cd', () => {
