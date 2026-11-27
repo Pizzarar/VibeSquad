@@ -6,7 +6,7 @@ import {
   type FindingScope, type ListItem, type SbChanges, type SbEntity, type SbSnapshot,
 } from "./storybookLogic";
 
-const BUCKETS: FindingScope[] = ["problems", "story", "text"];
+const BUCKETS: FindingScope[] = ["problems", "story", "coverage", "text"];
 const GONE_PREVIEW_CAP = 60;
 
 type HomeProps = {

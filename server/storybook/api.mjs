@@ -12,6 +12,7 @@ import { defaultBranch, fetchRepo, makeReader, resolveRef } from "./git-read.mjs
 import { makeSnapshot } from "./schema.mjs";
 import { SIGNALS } from "../registry/audit.mjs";
 import { buildArc } from "./unlocks.mjs";
+import { QUOTED_HOST_PATH } from "../team-worktrees.mjs";
 import { diffChanges, readSeen, seenRecord, writeSeen } from "./changes.mjs";
 import { buildGlossary } from "./glossary.mjs";
 
@@ -266,5 +267,74 @@ export function handleStorybookRoute(req, res, deps = {}) {
       send(500, { error: "storybook build failed; see the server log" });
     },
   );
+  return true;
+}
+
+// ── V6 owner marks: GET /api/storybook/:p/marks, POST /api/storybook/:p/marks, POST /api/storybook/:p/marks/commit ──
+const MARKS_RE = /^\/api\/storybook\/([A-Za-z0-9._-]{1,64})\/marks(\/commit)?\/?$/;
+const MARKS_BODY_MAX = 2 * 1024 * 1024;
+const marksApis = new Map(); // repoPath -> marksFor(repo)
+
+function readJsonBody(req, limit = MARKS_BODY_MAX) {
+  return new Promise((ok, fail) => {
+    if (req.body !== undefined) return ok(typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body);
+    let body = "", size = 0, done = false;
+    req.on("data", (c) => { if (done) return; size += c.length; if (size > limit) { done = true; fail(new StorybookError(413, "payload too large")); return; } body += c; });
+    req.on("end", () => { if (done) return; try { ok(JSON.parse(body.replace(/^﻿/, "") || "{}")); } catch { fail(new StorybookError(400, "bad json")); } });
+    req.on("error", fail);
+  });
+}
+
+// An unquoted absolute path (POSIX /a/b, Windows C:\a or C:/a, UNC \\host\share) not glued to a word, `~` or a placeholder.
+const BARE_HOST_PATH = /(?<![\w~.<>/\\-])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))[^\s'"<>]*/g;
+/** Both slash spellings of a host path (git prints C:/x on Windows where env vars hold C:\x), longest first. */
+const spellings = (p) => [...new Set([p, p.replace(/\\/g, "/"), p.replace(/\//g, "\\")])].filter((x) => x.length > 1).sort((a, b) => b.length - a.length);
+/**
+ * No host paths in a response: the repo path, VIBESQUAD_HOME and the home dir become placeholders (either slash style),
+ * then any other quoted or bare absolute path becomes <path> (QUOTED_HOST_PATH is the git-stderr masking of team-worktrees).
+ */
+export function scrubPaths(msg, repoPath, env = process.env) {
+  let s = String(msg ?? "");
+  const named = [[repoPath, "<repo>"], [env.VIBESQUAD_HOME, "<vs-home>"], [env.HOME, "~"], [env.USERPROFILE, "~"]];
+  for (const [p, ph] of named) if (p) for (const v of spellings(String(p).replace(/[\\/]+$/, ""))) s = s.split(v).join(ph);
+  return s.replace(QUOTED_HOST_PATH, "'<path>'").replace(BARE_HOST_PATH, "<path>");
+}
+
+/**
+ * HTTP handler for the V6 marks routes. Returns false when the path is not ours. Owner writes (POST) go through the same
+ * VS API guard as /refresh (mounted behind it in vibesquad-api.mjs; agents are not on the write allowlist).
+ * deps.marksFor(repoPath) is injectable for tests.
+ */
+export function handleStorybookMarksRoute(req, res, deps = {}) {
+  const p = (req.url ?? "").split("?")[0];
+  const m = MARKS_RE.exec(p);
+  if (!m) return false;
+  const send = (status, body) => {
+    res.statusCode = status;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.end(JSON.stringify(body));
+  };
+  const isCommit = Boolean(m[2]);
+  const allowed = isCommit ? ["POST"] : ["GET", "POST"];
+  if (!allowed.includes(req.method)) { res.setHeader("allow", allowed.join(", ")); send(405, { error: "method not allowed" }); return true; }
+  let repoPath = null;
+  (async () => {
+    const proj = await resolveProject(m[1], deps);
+    if (!proj) throw new StorybookError(404, `unknown storybook project: ${m[1]}`);
+    repoPath = proj.repoPath;
+    const { marksFor } = await import("./marks.mjs");
+    const make = deps.marksFor ?? marksFor;
+    let api = marksApis.get(repoPath);
+    if (!api || deps.marksFor) { api = make(repoPath); if (!deps.marksFor) marksApis.set(repoPath, api); }
+    if (req.method === "GET") return api.get();
+    if (isCommit) return api.commit();
+    const body = await readJsonBody(req);
+    return api.set(body?.marks);
+  })().then((out) => send(200, out), (e) => {
+    const status = Number.isInteger(e?.status) && e.status >= 400 && e.status < 600 ? e.status : 500;
+    if (status >= 500) console.warn(`[storybook] marks ${m[1]}: ${e?.message ?? e}`);
+    send(status, { error: scrubPaths(e?.message ?? e, repoPath) });
+  });
   return true;
 }
