@@ -7,7 +7,7 @@
 import "./setup/hermetic.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect } from "node:tls";
@@ -71,16 +71,76 @@ test("a client pinned to the CA still verifies the leaf-only chain (RFC 8446 4.4
   assert.equal(authorized, true);
 });
 
+const CMD_SPECIAL = /[\s"&()<>^|;,=%!]/;
+function quoteCmdArg(arg) {
+  const s = String(arg);
+  if (s && !CMD_SPECIAL.test(s)) return s;
+  return `"${s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")}"`;
+}
+
+// .cmd/.bat shims (or bare `godot` resolving to godot.cmd on PATH) need cmd.exe on Windows; .exe and POSIX spawn directly.
+// Explicit quoting + outer quotes after /c + windowsVerbatimArguments keep cmd from stripping inner quotes when both bin and args have spaces.
+function godotCmd(bin, args, { win = process.platform === "win32", comSpec = process.env.ComSpec || process.env.COMSPEC } = {}) {
+  if (!win || /\.exe$/i.test(bin)) return [bin, args, {}];
+  const line = [bin, ...args].map(quoteCmdArg).join(" ");
+  return [comSpec || "cmd.exe", ["/d", "/s", "/c", `"${line}"`], { windowsVerbatimArguments: true }];
+}
+
+test("godotCmd quotes Windows .cmd shims and args across spaces, plain paths, & and ^ while leaving POSIX/.exe direct", () => {
+  const tricky = ["--path", "C:\\My Repo & ^Test\\godot", "--", "C:\\tmp\\ca&1^2.crt"];
+  assert.deepEqual(godotCmd("/opt/my godot/godot", tricky, { win: false }), ["/opt/my godot/godot", tricky, {}]);
+  assert.deepEqual(godotCmd("C:\\My Tools\\godot.cmd", tricky, { win: false }), ["C:\\My Tools\\godot.cmd", tricky, {}]);
+  assert.deepEqual(godotCmd("C:\\Program Files\\Godot\\Godot_console.exe", tricky, { win: true }), ["C:\\Program Files\\Godot\\Godot_console.exe", tricky, {}]);
+  assert.deepEqual(godotCmd("C:\\Tools\\GODOT.EXE", ["--version"], { win: true }), ["C:\\Tools\\GODOT.EXE", ["--version"], {}]);
+
+  assert.deepEqual(godotCmd("C:\\Tools\\godot.cmd", ["--headless", "--path", "C:\\repo\\godot"], { win: true, comSpec: "C:\\Windows\\System32\\cmd.exe" }), [
+    "C:\\Windows\\System32\\cmd.exe",
+    ["/d", "/s", "/c", '"C:\\Tools\\godot.cmd --headless --path C:\\repo\\godot"'],
+    { windowsVerbatimArguments: true },
+  ]);
+
+  assert.deepEqual(
+    godotCmd("C:\\Users\\My User\\Temp\\godot space\\godot.cmd", ["--headless", "--path", "C:\\Users\\My User\\My Repo\\godot", "--", "C:\\Users\\My User\\ca.crt"], {
+      win: true,
+      comSpec: "",
+    }),
+    [
+      "cmd.exe",
+      ["/d", "/s", "/c", '""C:\\Users\\My User\\Temp\\godot space\\godot.cmd" --headless --path "C:\\Users\\My User\\My Repo\\godot" -- "C:\\Users\\My User\\ca.crt""'],
+      { windowsVerbatimArguments: true },
+    ],
+  );
+
+  assert.deepEqual(
+    godotCmd("C:\\a&b^c\\godot.cmd", ["plain", "C:\\no_space&amp\\x", "C:\\no_space^caret\\y", "C:\\sp & ^both\\z", "C:\\my trail\\", ""], { win: true, comSpec: "cmd.exe" }),
+    [
+      "cmd.exe",
+      ["/d", "/s", "/c", '""C:\\a&b^c\\godot.cmd" plain "C:\\no_space&amp\\x" "C:\\no_space^caret\\y" "C:\\sp & ^both\\z" "C:\\my trail\\\\" """'],
+      { windowsVerbatimArguments: true },
+    ],
+  );
+
+  if (process.platform === "win32") {
+    const dir = join(home, "shim & ^space");
+    mkdirSync(dir, { recursive: true });
+    const shim = join(dir, "echo-args.cmd");
+    writeFileSync(shim, `@echo off\r\n"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.argv.slice(1)))" %*\r\n`);
+    const sample = ["C:\\plain\\path", "C:\\with spaces\\repo", "C:\\amp&nospace", "C:\\caret^nospace", "C:\\both & ^spaces\\ca.crt", "C:\\my trail\\"];
+    const [c, a, o] = godotCmd(shim, sample);
+    const r = spawnSync(c, a, { windowsHide: true, encoding: "utf8", ...o });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), sample);
+  }
+});
+
 const win = process.platform === "win32";
 const godot = process.env.GODOT_BIN || (win && (process.env.GODOT_PATH || process.env.GODOT)) || "godot";
-// .cmd/.bat shims (or bare `godot` resolving to godot.cmd on PATH) need cmd.exe on Windows; .exe and POSIX spawn directly.
-const godotCmd = (args) => (win && !/\.exe$/i.test(godot) ? [process.env.ComSpec || "cmd.exe", ["/d", "/c", godot, ...args]] : [godot, args]);
-const [probeCmd, probeArgs] = godotCmd(["--version"]);
-const hasGodot = spawnSync(probeCmd, probeArgs, { windowsHide: true }).status === 0;
+const [probeCmd, probeArgs, probeOpts] = godotCmd(godot, ["--version"]);
+const hasGodot = spawnSync(probeCmd, probeArgs, { windowsHide: true, ...probeOpts }).status === 0;
 test("Godot addon: pinned HTTPRequest to the listener succeeds (result 0, HTTP 200)", { skip: !hasGodot && "godot not on PATH (set GODOT_BIN)", timeout: 180000 }, async () => {
   const proj = resolve(import.meta.dirname, "..", "godot");
   // Connect to 127.0.0.1 directly (mux binds 127.0.0.1 only; on Windows `localhost` resolves ::1 first and times out).
-  const [cmd, args] = godotCmd(["--headless", "--path", proj, "-s", "tests/pinned_https_probe.gd", "--", caFile, `https://127.0.0.1:${port}/ca.crt`]);
-  const out = await run(cmd, args, 120000);
+  const [cmd, args, opts] = godotCmd(godot, ["--headless", "--path", proj, "-s", "tests/pinned_https_probe.gd", "--", caFile, `https://127.0.0.1:${port}/ca.crt`]);
+  const out = await run(cmd, args, 120000, opts);
   assert.match(out, /PROBE result=0 http=200/, out);
 });
