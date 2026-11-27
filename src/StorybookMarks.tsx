@@ -2,7 +2,7 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, openContractsHint, progress, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, nextSiblingOks, openContractsHint, progress, siblingOkHint, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -11,6 +11,8 @@ export type MarksApi = {
   error: MarksError | null;
   /** Clear the error (transient: dismiss; session: retry, re-reading the session from the server). */
   dismissError: () => void;
+  /** Re-read the session from the server (clears autoCommitError when the server no longer reports it). */
+  retrySession: () => Promise<void>;
   lines: SbEntity[];
   byKey: Map<string, ServerMark>;
   stateOf: (e: SbEntity | null | undefined) => MarkState;
@@ -28,6 +30,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const [error, setErrorState] = useState<MarksError | null>(null);
   const setError = useCallback((msg: string | null, session = false) => setErrorState(msg ? { msg, session } : null), []);
   const [lastCommit, setLastCommit] = useState<string | null>(null);
+  const [siblingOks, setSiblingOks] = useState<Set<string>>(() => new Set());
   // The project this hook is bound to right now: a response for a project the owner has since switched away from is dropped.
   const cur = useRef(url);
   cur.current = url;
@@ -43,12 +46,12 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   }, []);
   useEffect(() => {
     // project switch: nothing of the previous project's session may show while this one loads
-    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false);
+    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false); setSiblingOks(new Set());
     void reload(url);
   }, [url, reload]);
   const lines = useMemo(() => allLines(idx), [idx]);
   const byKey = useMemo(() => marksByKey(state.marks), [state.marks]);
-  const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists), [lines, byKey, state.exists]);
+  const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists, siblingOks), [lines, byKey, state.exists, siblingOks]);
   const mark = useCallback(async (marks: Mark[]) => {
     if (!marks.length) return true;
     setBusy(true); setError(null);
@@ -58,6 +61,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       if (cur.current !== url) return false;
       if (!r.ok) { setError(b?.error ?? `mark failed (${r.status})`, isSessionStatus(r.status)); return false; }
       setState((s) => ({ ...s, exists: true, branch: b.branch, pending: b.pending, marks: b.marks, autoCommitError: undefined }));
+      setSiblingOks((prev) => nextSiblingOks(prev, marks, b.results));
       const bad = (b.results as { ok: boolean; error?: string }[]).filter((x) => !x.ok);
       if (bad.length) setError(`${bad.length} of ${marks.length} not saved: ${bad[0].error}${bad[0].error?.startsWith("stale") ? " (Refresh to see the current text)" : ""}`);
       else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`, true);
@@ -82,7 +86,11 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
     setError(null);
     if (wasSession) void reload(url);
   }, [error, url, reload, setError]);
-  return { state, busy, error, dismissError, lines, byKey, stateOf, mark, commit, lastCommit };
+  const retrySession = useCallback(async () => {
+    setBusy(true);
+    try { await reload(url); } finally { if (cur.current === url) setBusy(false); }
+  }, [url, reload]);
+  return { state, busy, error, dismissError, retrySession, lines, byKey, stateOf, mark, commit, lastCommit };
 }
 
 
@@ -109,7 +117,12 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
       {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
       {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
       {st.kind === "redo" && st.openContracts && st.rewrite && st.rewrite !== drafted ? <span className="sb-mark-draft" title="Your rewrite (stored; the row stays Redo while contract notes are open)">→ {st.rewrite}</span> : null}
-      {st.openContracts ? <span className="sb-mark-hint" data-testid="sb-open-contracts">{openContractsHint(st)}</span> : null}
+      {!st.siblingOk && st.openContracts ? <span className="sb-mark-hint" data-testid="sb-open-contracts">{openContractsHint(st)}</span> : null}
+      {st.siblingOk && st.openContracts ? (
+        <span className="sb-mark-state sb-mark-sibling-ok" data-testid="sb-sibling-ok" title="This contract has no open note; the shared template stays NEEDS-REWRITE until the other contract notes are resolved">
+          {siblingOkHint(st)}
+        </span>
+      ) : null}
       {st.kind !== "none" && (
         <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || markLabel(st)}>
           {markLabel(st)}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}
@@ -182,7 +195,14 @@ export function MarksBar({ m }: { m: MarksApi }) {
       </span>
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
-      {m.state.autoCommitError && <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">Auto-commit failed: {m.state.autoCommitError}</span>}
+      {m.state.autoCommitError && (
+        <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">
+          Auto-commit failed: {m.state.autoCommitError}
+          <button type="button" className="sb-mbtn sb-marksbar-dismiss" data-testid="sb-autocommit-retry" disabled={m.busy}
+            title="Retry: re-read the review session (clears once the auto-commit error is resolved)"
+            aria-label="Retry review session" onClick={() => void m.retrySession()}>Retry</button>
+        </span>
+      )}
       {m.error && (
         <span className="sb-marksbar-err" role="alert" data-testid="sb-marks-error" data-session={m.error.session ? "1" : "0"}>
           {m.error.msg}

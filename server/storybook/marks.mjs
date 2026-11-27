@@ -476,9 +476,15 @@ export function marksFor(repo, { now = () => new Date(), autoCommitMs = AUTO_COM
   return {
     get: () => locked(repo, async () => {
       const ses = await ensureSession(repo, { ...o, now: now(), create: false });
-      if (!ses.path) return { branch: ses.branch, exists: false, head: null, pending: 0, marks: [] };
+      const s = session();
+      if (!ses.path) {
+        if (s) s.autoError = null;
+        return { branch: ses.branch, exists: false, head: null, pending: 0, marks: [] };
+      }
+      const pending = await pendingRows(ses.path);
+      if (!pending && s) s.autoError = null;
       const ae = autoError();
-      return { branch: ses.branch, exists: true, head: await git(ses.path, ["rev-parse", "HEAD"]), pending: await pendingRows(ses.path), marks: listMarks(readSheet(ses.path)), ...(ae ? { autoCommitError: ae } : {}) };
+      return { branch: ses.branch, exists: true, head: await git(ses.path, ["rev-parse", "HEAD"]), pending, marks: listMarks(readSheet(ses.path)), ...(ae ? { autoCommitError: ae } : {}) };
     }),
     set: (marks) => {
       if (!Array.isArray(marks) || !marks.length) return Promise.reject(new MarkError("marks must be a non-empty array"));
@@ -497,14 +503,16 @@ export function marksFor(repo, { now = () => new Date(), autoCommitMs = AUTO_COM
         }
         const res = applyMarks(text, marks, { baseText });
         if (res.changed) fs.writeFileSync(file, res.text, "utf8");
+        const s = session();
+        if (s) s.autoError = null;
         schedule();
         return { branch: ses.branch, results: res.results, changed: res.changed, pending: await pendingRows(ses.path), marks: listMarks(res.text), created: ses.created, baseline: ses.baseline ?? null };
       });
     },
     commit: () => locked(repo, async () => {
       const ses = await ensureSession(repo, { ...o, now: now(), create: false });
-      if (!ses.path) return { branch: ses.branch, committed: null, pending: 0 };
       const s = session();
+      if (!ses.path) { if (s) s.autoError = null; return { branch: ses.branch, committed: null, pending: 0 }; }
       clearTimeout(s?.timer);
       const out = { branch: ses.branch, ...(await commitIn(ses.path, ses.branch)) };
       if (s) s.autoError = null;

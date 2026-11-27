@@ -400,6 +400,18 @@ test("M3: a failed review_pack --write is never committed; marks stay, half-writ
     const after = await auto.get();
     assert.match(after.autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
     assert.equal(git(wt, "rev-parse", "HEAD"), head);
+    // idea-1170: once pending drops to 0 (e.g. committed/reverted externally), get() clears autoError so marking cannot stay stuck
+    git(wt, "checkout", "HEAD", "--", SHEET);
+    const cleared = await auto.get();
+    assert.equal(cleared.pending, 0);
+    assert.equal(cleared.autoCommitError, undefined, "get() must clear stale autoCommitError when pending === 0");
+    // idea-1170: a subsequent successful set() also clears autoError on the server
+    await auto.set([{ target: WARY, action: "redo", note: "trigger auto-fail again" }]);
+    await new Promise((r) => setTimeout(r, 400));
+    assert.match((await auto.get()).autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
+    const noAuto = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
+    await noAuto.set([{ target: BIO, action: "ok" }]);
+    assert.equal((await noAuto.get()).autoCommitError, undefined, "successful set() clears stale autoError");
   } finally { fake.cleanup(); }
 }));
 
