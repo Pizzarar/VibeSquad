@@ -765,3 +765,33 @@ test('K2b opencode: the opencode/compaction completed marker -> one compacted (n
   await settle();
   assert.equal(r3.timeline(id3).filter((e) => e.type === 'compacted').length, 0);
 });
+
+// --- usa-71: dated pricing tiers + gemini-4-carbon ---
+test('usa-71: gemini-4-carbon dated tiers before and after 2026-12-01, variant/prefix resolution, flat entries unchanged', () => {
+  const before = Date.parse('2026-11-30T23:59:59.999Z');
+  const onBoundary = Date.parse('2026-12-01T00:00:00.000Z');
+  const after = Date.parse('2026-12-15T12:00:00.000Z');
+
+  // Intro price through 2026-11-30
+  assert.deepEqual(priceFor('gemini-4-carbon', before), { input: 2, output: 10, cachedRead: 0.1 });
+  // GA price from 2026-12-01T00:00Z
+  assert.deepEqual(priceFor('gemini-4-carbon', onBoundary), { from: '2026-12-01T00:00:00Z', input: 4, output: 20, cachedRead: 0.2 });
+  assert.deepEqual(priceFor('gemini-4-carbon', after), { from: '2026-12-01T00:00:00Z', input: 4, output: 20, cachedRead: 0.2 });
+
+  // Variant suffix and provider prefix still resolve for dated entries
+  assert.equal(priceFor('gemini-4-carbon-high', before).input, 2);
+  assert.equal(priceFor('google/gemini-4-carbon-medium', before).output, 10);
+  assert.equal(priceFor('google/gemini-4-carbon-high', onBoundary).input, 4);
+  assert.equal(priceFor('antigravity/gemini-4-carbon-low', after).cachedRead, 0.2);
+
+  // estimateCostUsd uses the active tier
+  const tokens = { inputTokens: 1_500_000, cachedReadTokens: 500_000, outputTokens: 200_000 }; // 1M fresh, 0.5M cache read, 0.2M output
+  assert.ok(Math.abs(estimateCostUsd('gemini-4-carbon-medium', tokens, before) - (2 + 0.05 + 2)) < 1e-9);
+  assert.ok(Math.abs(estimateCostUsd('google/gemini-4-carbon-high', tokens, onBoundary) - (4 + 0.1 + 4)) < 1e-9);
+
+  // Flat entries remain unchanged across dates
+  assert.deepEqual(priceFor('gemini-4-neon', before), { input: 3, output: 15, cachedRead: 0.15 });
+  assert.deepEqual(priceFor('gemini-4-neon', after), { input: 3, output: 15, cachedRead: 0.15 });
+  assert.deepEqual(priceFor('deepseek/deepseek-v4-pro', after), { input: 0.55, output: 2.2, cachedRead: 0.055 });
+  assert.equal(priceFor('unknown-model', after), null);
+});
