@@ -272,13 +272,13 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookItems = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/import "\.\/storybook\.css";\n?/, "")
     .replace(/from "react"/g, `from "./react.mjs"`)
-    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome)"/g, `from "./stub.mjs"`);
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookItems|\.\/StorybookSheet)"/g, `from "./stub.mjs"`);
   writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
 
   let mod;
@@ -524,12 +524,33 @@ describe("V2 Home + findings split", () => {
     assert.deepEqual(L.auditCounts([{ signal: "coverage" }, { signal: "coverage" }, { signal: "bogus" }]), { coverage: 2, integrity: 0, cohesion: 0, signoff: 0 });
     assert.equal(L.kindTab("location"), "world");
     assert.equal(L.kindTab("trader"), "cast");
-    assert.equal(L.kindTab("enemy"), null);
+    assert.equal(L.kindTab("enemy"), "cast");
+    assert.equal(L.kindTab("item"), "items");
+    assert.equal(L.kindTab("line"), "review");
+    assert.equal(L.kindTab("unknown_kind"), null);
+
+    // V4: mermaidLabel preserves apostrophes
+    assert.equal(L.mermaidLabel("Someone Else's Gear"), "Someone Else's Gear");
+
+    // V4: #13/#14/#15 categories
+    assert.equal(L.findingCategory("#13"), "broken");
+    assert.equal(L.findingCategory("#14"), "inconsistent");
+    assert.equal(L.findingCategory("#15"), "missing");
+
+    // V4: entityNavTarget & auditSignalTarget
+    const mk = (id, kind) => ({ id, kind, display: id, aliases: [], source: { path: "x.json", line: 1 }, links: [], production: null, data: {} });
+    assert.deepEqual(L.entityNavTarget(mk("harbor", "location")), { tab: "world", sel: "harbor" });
+    assert.deepEqual(L.entityNavTarget(mk("scav", "enemy")), { tab: "cast", sel: "enemy:scav" });
+    assert.deepEqual(L.entityNavTarget(mk("casing", "item")), { tab: "items", sel: "casing" });
+    assert.deepEqual(L.auditSignalTarget("integrity"), { tab: "problems", scope: "problems", category: "broken" });
+    assert.deepEqual(L.auditSignalTarget("cohesion"), { tab: "problems", scope: "problems", category: "inconsistent" });
+    assert.deepEqual(L.auditSignalTarget("coverage"), { tab: "problems", scope: "problems", category: "missing" });
+    assert.deepEqual(L.auditSignalTarget("signoff"), { tab: "review", scope: "text", category: null });
   });
   test("shell: fixed tab slots, Home default, unbuilt slots hidden", () => {
     const v = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
     const ids = [...v.matchAll(/\{ id: "(\w+)", label: "[^"]+", built: (true|false) \}/g)].map((m) => `${m[1]}:${m[2]}`);
-    assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:false", "problems:true", "glossary:false"]);
+    assert.deepEqual(ids, ["home:true", "review:true", "quests:true", "world:true", "cast:true", "items:true", "problems:true", "glossary:false"]);
     assert.match(v, /useState<Tab>\("home"\)/);
     // regression: Problems and Review keep separate category filters (a shared Set made Review show "No findings match")
     assert.match(v, /active=\{activeReview\} setActive=\{setActiveReview\} scope="text"/);
