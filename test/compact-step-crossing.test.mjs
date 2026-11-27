@@ -13,8 +13,10 @@ import {
   COMPACT_LIFE_CAP,
   COMPACT_STAGE_LABEL,
   COMPACTED_AT,
+  compactPending,
   createCrossingTracker,
 } from "../server/compact-crossing.mjs";
+import { budget, until } from "./helpers/load-budget.mjs";
 import {
   createLeadHandoffCoordinator,
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -88,22 +90,35 @@ function setup(mode = "ok", { compactor } = {}) {
   process.env.VIBESQUAD_ROOT = dir;
   process.env.VIBESQUAD_HOME = join(dir, "home");
   const r = makeRunner(mode);
+  let compactLogCount = 0;
   const c = compactor ?? createCompactor({
-    runner: r, timeoutMs: 120, settleMs: 20,
-    log: ({ agent, text, teamId, laneId }) => appendVsLogEntry({ teamId, laneId, agent, type: "metric", text }),
+    runner: r, timeoutMs: budget(2000), settleMs: 20,
+    log: ({ agent, text, teamId, laneId }) => {
+      compactLogCount += 1;
+      return appendVsLogEntry({ teamId, laneId, agent, type: "metric", text });
+    },
   });
   const restarts = [];
   const w = startTokenWatcher({ runner: r, rootDir: dir, baseHome: join(dir, "home"), compactor: c, restartBuddy: async (b) => { restarts.push(b); } });
   const laneLog = () => { const p = join(dir, "home", "logs", "t--l.jsonl"); return existsSync(p) ? readFileSync(p, "utf8") : ""; };
-  return { r, w, restarts, laneLog };
+  return { r, w, restarts, laneLog, compactLogs: () => compactLogCount };
 }
 
 const buddy = (id, extra = {}) => ({ id, provider: "claude", title: "Buddy", status: "idle", labels: { role: "brainstorm", team: "t", lane: "l", [WARN_LABEL]: "1", ...extra } });
 const lead = (id, extra = {}) => ({ id, provider: "claude", title: "★ L1", status: "idle", cwd: "/x", labels: { role: "lead", team: "t", lane: "l", ord: "1", ...extra } });
 const compacts = (r) => r.sent.filter((s) => s.text.startsWith("/compact"));
 const texts = (r) => r.sent.map((s) => (s.text.startsWith("/compact") ? "/compact" : s.text === SOFT_FLAG_NUDGE ? "nudge" : s.text === WRITE_HANDOFF_PROMPT ? "packet" : s.text));
-/** Settle one usage upsert (its evaluation, the compaction and its settle). */
-async function step(r, id, tokens, ms = 120) { r.usage(id, tokens); await tick(ms); }
+/** Emit a usage upsert and wait on an observed condition (preferred) or a short flush tick for no-op checks. */
+async function step(r, id, tokens, wait = 120) {
+  r.usage(id, tokens);
+  if (typeof wait === "function") {
+    const ok = await until(wait, 3000);
+    assert.ok(ok, `step(${id}, ${tokens}) timed out waiting for condition`);
+    await tick(0); // let token-watch's runEvaluate().finally(busy.delete) flush before the next usage event
+  } else {
+    await tick(wait);
+  }
+}
 
 // ---- pure tracker ----
 
@@ -150,14 +165,14 @@ test("tracker: pre-K2c label (vs.compacted-at only) reads as one attempt at the 
 // ---- lead ladder ----
 
 test("lead: re-armed after the meter drops; the second crossing compacts again (no nudge, same id)", async () => {
-  const { r, w } = setup("ok");
+  const { r, w, compactLogs } = setup("ok");
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 250);
+  await step(r, "rn-l", FLAG + 5, () => compactLogs() >= 1 && !compactPending.has("rn-l"));
   assert.equal(r.agents.get("rn-l").labels[COMPACT_COUNT_LABEL], "1");
-  await step(r, "rn-l", 40_000); // the next turn's upsert, under the re-arm line
+  await step(r, "rn-l", 40_000, () => r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL] === ""); // the next turn's upsert, under the re-arm line
   const l = r.agents.get("rn-l").labels;
   assert.deepEqual([l[COMPACTED_AT], l[COMPACT_STAGE_LABEL], l[COMPACT_COUNT_LABEL]], ["", "", "1"]);
-  await step(r, "rn-l", FLAG + 7, 250);
+  await step(r, "rn-l", FLAG + 7, () => compactLogs() >= 2 && !compactPending.has("rn-l"));
   assert.deepEqual(texts(r), ["/compact", "/compact"]);
   assert.equal(r.agents.get("rn-l").labels[COMPACT_COUNT_LABEL], "2");
   assert.ok(r.agents.get("rn-l").labels[COMPACTED_AT]);
@@ -166,12 +181,12 @@ test("lead: re-armed after the meter drops; the second crossing compacts again (
 });
 
 test("lead: a compaction that lands inside the hysteresis band is not re-armed: the next crossing nudges", async () => {
-  const { r, w } = setup("ok");
+  const { r, w, compactLogs } = setup("ok");
   r.okAfter = 140_000;
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 250);
+  await step(r, "rn-l", FLAG + 5, () => compactLogs() >= 1 && !compactPending.has("rn-l"));
   await step(r, "rn-l", 140_000);
-  await step(r, "rn-l", FLAG + 7);
+  await step(r, "rn-l", FLAG + 7, () => texts(r).at(-1) === "nudge");
   assert.deepEqual(texts(r), ["/compact", "nudge"]);
   w.stop();
 });
@@ -179,11 +194,11 @@ test("lead: a compaction that lands inside the hysteresis band is not re-armed: 
 test("lead: a compaction attempt comes before each soft stage (150k nudge, 250k packet); each stage tried once per crossing", async () => {
   const { r, w } = setup("over");
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 250);
+  await step(r, "rn-l", FLAG + 5, () => texts(r).includes("nudge") && !compactPending.has("rn-l"));
   assert.deepEqual(texts(r), ["/compact", "nudge"]);
   await step(r, "rn-l", FLAG + 9); // same crossing, same stage: no second attempt (loop guard)
   assert.deepEqual(texts(r), ["/compact", "nudge"]);
-  await step(r, "rn-l", AUTO + 5, 250);
+  await step(r, "rn-l", AUTO + 5, () => texts(r).includes("packet") && !compactPending.has("rn-l"));
   assert.deepEqual(texts(r), ["/compact", "nudge", "/compact", "packet"]);
   assert.equal(r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL], String(AUTO));
   await step(r, "rn-l", AUTO + 9);
@@ -194,7 +209,7 @@ test("lead: a compaction attempt comes before each soft stage (150k nudge, 250k 
 test("lead: an ok compaction at the 250k stage skips the packet stage", async () => {
   const { r, w } = setup("over");
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 250); // still over -> nudge
+  await step(r, "rn-l", FLAG + 5, () => texts(r).includes("nudge") && !compactPending.has("rn-l")); // still over -> nudge
   r.mode = "ok";
   r.okAfter = 200_000;
   r.agents.get("rn-l").lastUsage = { contextWindowUsedTokens: AUTO + 5, inputTokens: AUTO + 5 };
@@ -207,7 +222,7 @@ test("lead: an ok compaction at the 250k stage skips the packet stage", async ()
 test("lead: a failed compaction falls through to the unchanged nudge; not retried in the same crossing", async () => {
   const { r, w } = setup("fail");
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 200);
+  await step(r, "rn-l", FLAG + 5, () => texts(r).includes("nudge") && !compactPending.has("rn-l"));
   assert.deepEqual(texts(r), ["/compact", "nudge"]);
   await step(r, "rn-l", FLAG + 6);
   await step(r, "rn-l", FLAG + 7);
@@ -217,14 +232,14 @@ test("lead: a failed compaction falls through to the unchanged nudge; not retrie
 });
 
 test("lead: life cap -> hand off instead of a 6th compaction, logged reason=life-cap (not as a compact-step attempt)", async () => {
-  const { r, w, laneLog } = setup("ok");
+  const { r, w, laneLog, compactLogs } = setup("ok");
   r.agents.set("rn-l", lead("rn-l"));
   for (let i = 0; i < COMPACT_LIFE_CAP; i++) {
-    await step(r, "rn-l", FLAG + 5, 250);
-    await step(r, "rn-l", 40_000, 60);
+    await step(r, "rn-l", FLAG + 5, () => compactLogs() >= i + 1 && !compactPending.has("rn-l"));
+    await step(r, "rn-l", 40_000, () => r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL] === "");
   }
   assert.equal(compacts(r).length, COMPACT_LIFE_CAP);
-  await step(r, "rn-l", FLAG + 5);
+  await step(r, "rn-l", FLAG + 5, () => texts(r).at(-1) === "nudge");
   await step(r, "rn-l", FLAG + 6);
   assert.equal(compacts(r).length, COMPACT_LIFE_CAP);
   assert.equal(texts(r).at(-1), "nudge");
@@ -260,7 +275,7 @@ test("lead: the hard cap stays immediate on the raw meter, also when the crossin
   const compactor = { tried: new Set(), run: async () => ({ outcome: "skipped", reason: "busy" }) };
   const { r, w } = setup("ok", { compactor });
   r.agents.set("rn-l", { ...lead("rn-l"), status: "running" });
-  await step(r, "rn-l", LEAD_HARD_CAP_DEFAULT + 1, 200);
+  await step(r, "rn-l", LEAD_HARD_CAP_DEFAULT + 1, () => r.created.length === 1);
   assert.equal(r.created.length, 1);
   assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
   w.stop();
@@ -277,7 +292,7 @@ test("lead: a handoff already under way (packet prompted) is not compacted", asy
 test("lead: the stage write after a failed attempt keeps the attempt labels (runner merges labels; no stale clear)", async () => {
   const { r, w } = setup("fail");
   r.agents.set("rn-l", lead("rn-l", { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "", [COMPACT_COUNT_LABEL]: "2" }));
-  await step(r, "rn-l", FLAG + 5, 200);
+  await step(r, "rn-l", FLAG + 5, () => r.agents.get("rn-l").labels["handoff-nudged"] === "1" && !compactPending.has("rn-l"));
   const l = r.agents.get("rn-l").labels;
   assert.ok(l[COMPACTED_AT]);
   assert.equal(l[COMPACT_STAGE_LABEL], String(FLAG));
@@ -289,30 +304,30 @@ test("lead: the stage write after a failed attempt keeps the attempt labels (run
 // ---- Buddy path ----
 
 test("buddy: re-armed after the meter drops (warn re-armed too); the second crossing updates the brief, then compacts, no restart", async () => {
-  const { r, w, restarts } = setup("ok");
+  const { r, w, restarts, compactLogs } = setup("ok");
   r.agents.set("rn-b", buddy("rn-b"));
-  await step(r, "rn-b", BUDDY_CAP + 1, 250);
-  await step(r, "rn-b", 40_000);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => compactLogs() >= 1 && !compactPending.has("rn-b"));
+  await step(r, "rn-b", 40_000, () => r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL] === "");
   const l = r.agents.get("rn-b").labels;
   assert.deepEqual([l[COMPACT_STAGE_LABEL], l[WARN_LABEL]], ["", ""]);
   const rearmWrite = r.labelWrites.at(-1);
   assert.deepEqual(rearmWrite.labels, { [COMPACTED_AT]: "", [COMPACT_STAGE_LABEL]: "", [WARN_LABEL]: "" }); // a patch, no snapshot spread
-  await step(r, "rn-b", BUDDY_CAP + 2, 100);
+  await step(r, "rn-b", BUDDY_CAP + 2, () => texts(r).at(-1) === BRAINSTORM_WARN_NUDGE);
   assert.deepEqual(texts(r), ["/compact", BRAINSTORM_WARN_NUDGE]); // the brief is updated before this crossing's compaction
   r.emit({ kind: "turn_ended", agentId: "rn-b", agent: { ...r.agents.get("rn-b") } }); // the brief turn ends
-  await step(r, "rn-b", BUDDY_CAP + 3, 250);
+  await step(r, "rn-b", BUDDY_CAP + 3, () => compactLogs() >= 2 && !compactPending.has("rn-b"));
   assert.equal(compacts(r).length, 2);
   assert.equal(restarts.length, 0);
   w.stop();
 });
 
 test("buddy: no re-arm inside the hysteresis band -> the next crossing restarts", async () => {
-  const { r, w, restarts } = setup("ok");
+  const { r, w, restarts, compactLogs } = setup("ok");
   r.okAfter = 140_000;
   r.agents.set("rn-b", buddy("rn-b"));
-  await step(r, "rn-b", BUDDY_CAP + 1, 250);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => compactLogs() >= 1 && !compactPending.has("rn-b"));
   await step(r, "rn-b", 140_000);
-  await step(r, "rn-b", BUDDY_CAP + 2);
+  await step(r, "rn-b", BUDDY_CAP + 2, () => restarts.length === 1);
   assert.equal(compacts(r).length, 1);
   assert.equal(restarts.length, 1);
   w.stop();
@@ -326,33 +341,33 @@ const estimate = (r, id, tokens) => {
   r.emit({ kind: "agent", agent: { ...a, labels: { ...a.labels } } });
 };
 test("K2b r1: agy Buddy: the post-compact estimate does not re-arm; a still-over real reading restarts (no 2nd /compact)", async () => {
-  const { r, w, restarts } = setup("ok");
+  const { r, w, restarts, compactLogs } = setup("ok");
   r.okAfter = 4_000;
   r.agents.set("rn-b", { ...buddy("rn-b"), provider: "antigravity-cli" });
-  await step(r, "rn-b", BUDDY_CAP + 1, 250);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => compactLogs() >= 1 && !compactPending.has("rn-b"));
   assert.equal(compacts(r).length, 1);
   const writes = r.labelWrites.length;
   estimate(r, "rn-b", 4_000);
   await tick(100);
   assert.equal(r.labelWrites.length, writes, "no re-arm write on the estimate");
   assert.equal(r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL], String(BUDDY_CAP));
-  await step(r, "rn-b", BUDDY_CAP + 2);
+  await step(r, "rn-b", BUDDY_CAP + 2, () => restarts.length === 1);
   assert.equal(compacts(r).length, 1, "this crossing was tried: no second /compact");
   assert.equal(restarts.length, 1);
   w.stop();
 });
 
 test("K2b r1: agy lead: the post-compact estimate does not re-arm; a still-over real reading nudges (no 2nd /compact)", async () => {
-  const { r, w } = setup("ok");
+  const { r, w, compactLogs } = setup("ok");
   r.okAfter = 4_000;
   r.agents.set("rn-l", { ...lead("rn-l"), provider: "antigravity-cli" });
   const AGY = 35_000; // lead-handoff PROVIDER_PREAMBLE_TOKENS: the agy lead ladder runs on working tokens
-  await step(r, "rn-l", FLAG + AGY + 5, 250);
+  await step(r, "rn-l", FLAG + AGY + 5, () => compactLogs() >= 1 && !compactPending.has("rn-l"));
   assert.equal(compacts(r).length, 1);
   estimate(r, "rn-l", 4_000);
   await tick(100);
   assert.equal(r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL], String(FLAG), "not re-armed on the estimate");
-  await step(r, "rn-l", FLAG + AGY + 7, 250);
+  await step(r, "rn-l", FLAG + AGY + 7, () => texts(r).at(-1) === "nudge");
   assert.deepEqual(texts(r), ["/compact", "nudge"]);
   w.stop();
 });
@@ -360,7 +375,7 @@ test("K2b r1: agy lead: the post-compact estimate does not re-arm; a still-over 
 test("buddy: a failed compaction falls through to the restart; not retried", async () => {
   const { r, w, restarts } = setup("fail");
   r.agents.set("rn-b", buddy("rn-b"));
-  await step(r, "rn-b", BUDDY_CAP + 1, 200);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => restarts.length === 1 && !compactPending.has("rn-b"));
   assert.equal(compacts(r).length, 1);
   assert.equal(restarts.length, 1);
   w.stop();
@@ -369,7 +384,7 @@ test("buddy: a failed compaction falls through to the restart; not retried", asy
 test("buddy: life cap -> restart, logged reason=life-cap", async () => {
   const { r, w, restarts, laneLog } = setup("ok");
   r.agents.set("rn-b", buddy("rn-b", { [COMPACT_COUNT_LABEL]: String(COMPACT_LIFE_CAP) }));
-  await step(r, "rn-b", BUDDY_CAP + 1);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => restarts.length === 1);
   assert.equal(compacts(r).length, 0);
   assert.equal(restarts.length, 1);
   assert.match(laneLog(), new RegExp(`compact-life-cap buddy agent=rn-b count=${COMPACT_LIFE_CAP} cap=${BUDDY_CAP}.*reason=life-cap`));
@@ -382,9 +397,9 @@ test("buddy: a busy skip defers (no restart, not counted); the next idle compact
   const compactor = { tried: new Set(), run: async (_agent, opts) => { calls.push({ ...opts.labels }); return outcomes.shift(); } };
   const { r, w, restarts } = setup("ok", { compactor });
   r.agents.set("rn-b", buddy("rn-b"));
-  await step(r, "rn-b", BUDDY_CAP + 1);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => calls.length === 1);
   assert.equal(restarts.length, 0);
-  await step(r, "rn-b", BUDDY_CAP + 2);
+  await step(r, "rn-b", BUDDY_CAP + 2, () => calls.length === 2);
   assert.equal(restarts.length, 0);
   assert.equal(calls.length, 2);
   assert.equal(calls[1][COMPACT_COUNT_LABEL], "1");
@@ -405,18 +420,18 @@ test("tracker: re-arm needs a real drop -- 25% under the tried stage as well as 
 });
 
 test("lead: an ok compaction clears the stale 150k soft flag (needs-you trio, handoff-nudged/-flagged, flagged150); the next crossing nudges again", async () => {
-  const { r, w } = setup("over");
+  const { r, w, compactLogs } = setup("over");
   r.agents.set("rn-l", lead("rn-l"));
-  await step(r, "rn-l", FLAG + 5, 250); // still over -> nudge + needs-you
+  await step(r, "rn-l", FLAG + 5, () => texts(r).includes("nudge") && !compactPending.has("rn-l")); // still over -> nudge + needs-you
   assert.equal(r.agents.get("rn-l").labels["needs-you"], SOFT_FLAG_REASON);
   r.mode = "ok";
-  await step(r, "rn-l", AUTO + 5, 250); // 250k stage compacts ok
+  await step(r, "rn-l", AUTO + 5, () => compactLogs() >= 2 && r.agents.get("rn-l").labels["handoff-nudged"] === "" && !compactPending.has("rn-l")); // 250k stage compacts ok
   let l = r.agents.get("rn-l").labels;
   assert.deepEqual([l["needs-you"], l["needs-you-reason"], l["needs-you-at"], l["handoff-nudged"], l["handoff-flagged"]], ["", "", "", "", ""]);
   assert.equal(w.coordinator.state.flagged150.has("rn-l"), false);
-  await step(r, "rn-l", 40_000); // re-arm
+  await step(r, "rn-l", 40_000, () => r.agents.get("rn-l").labels[COMPACT_STAGE_LABEL] === ""); // re-arm
   r.mode = "over";
-  await step(r, "rn-l", FLAG + 7, 250);
+  await step(r, "rn-l", FLAG + 7, () => texts(r).length === 5 && !compactPending.has("rn-l"));
   assert.deepEqual(texts(r), ["/compact", "nudge", "/compact", "/compact", "nudge"]);
   w.stop();
 });
@@ -425,8 +440,8 @@ test("lead: re-arm clears the soft flag too, but never an owner-facing needs-you
   const { r, w } = setup("ok");
   r.agents.set("rn-l", lead("rn-l", { [COMPACT_STAGE_LABEL]: String(FLAG), [COMPACT_COUNT_LABEL]: "1", "handoff-nudged": "1", "needs-you": SOFT_FLAG_REASON, "needs-you-reason": SOFT_FLAG_REASON }));
   r.agents.set("rn-m", lead("rn-m", { [COMPACT_STAGE_LABEL]: String(FLAG), [COMPACT_COUNT_LABEL]: "1", "handoff-nudged": "1", "needs-you": "pick a schema", ord: "2" }));
-  await step(r, "rn-l", 40_000);
-  await step(r, "rn-m", 40_000);
+  await step(r, "rn-l", 40_000, () => r.agents.get("rn-l").labels["handoff-nudged"] === "");
+  await step(r, "rn-m", 40_000, () => r.agents.get("rn-m").labels["handoff-nudged"] === "");
   assert.deepEqual([r.agents.get("rn-l").labels["needs-you"], r.agents.get("rn-l").labels["handoff-nudged"]], ["", ""]);
   assert.deepEqual([r.agents.get("rn-m").labels["needs-you"], r.agents.get("rn-m").labels["handoff-nudged"]], ["pick a schema", ""]);
   const rearm = r.labelWrites.find((x) => x.id === "rn-m").labels;
@@ -488,11 +503,11 @@ test("lead: a compaction stopped at the hard cap (reason=hard-cap) hands off in 
 test("life cap: vs.compact-stage persisted, so a server restart does not log the same crossing's life-cap line again", async () => {
   const { r, w, restarts, laneLog } = setup("ok");
   r.agents.set("rn-b", buddy("rn-b", { [COMPACT_COUNT_LABEL]: String(COMPACT_LIFE_CAP) }));
-  await step(r, "rn-b", BUDDY_CAP + 1);
+  await step(r, "rn-b", BUDDY_CAP + 1, () => restarts.length === 1);
   assert.equal(r.agents.get("rn-b").labels[COMPACT_STAGE_LABEL], String(BUDDY_CAP));
   w.stop();
   const w2 = startTokenWatcher({ runner: r, rootDir: process.env.VIBESQUAD_ROOT, baseHome: process.env.VIBESQUAD_HOME, compactor: createCompactor({ runner: r }), restartBuddy: async (b) => { restarts.push(b); } });
-  await step(r, "rn-b", BUDDY_CAP + 2);
+  await step(r, "rn-b", BUDDY_CAP + 2, () => restarts.length === 2);
   assert.equal(laneLog().split("\n").filter((x) => x.includes("reason=life-cap")).length, 1);
   w2.stop();
 });
