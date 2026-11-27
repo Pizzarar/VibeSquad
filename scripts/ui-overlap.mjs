@@ -396,7 +396,7 @@ export async function run(opts = {}) {
   if (flag("rebuild")) process.env.UI_OVERLAP_REBUILD = "1";
   NEEDS_QUERY = "&shortrole=1";
 
-  const pw = E.resolvePlaywright();
+  const pw = E.resolvePlaywright({ npx: true });
   const exe = E.findBrowser();
   if (!pw || !exe) throw new Error(!pw ? E.PLAYWRIGHT_MISSING : "No Edge/Chrome found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)");
   await E.ensureDist();

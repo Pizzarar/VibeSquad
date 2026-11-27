@@ -41,7 +41,7 @@ function fakeFs({ npxDirs = [], noPw = [], winDirs = [], winThrows = false, mtim
 }
 
 test("candidate order: PLAYWRIGHT_DIR, require resolution, durable dir, then the npx scan", () => {
-  const c = playwrightCandidates({
+  const c = playwrightCandidates({ npx: true,
     home: HOME,
     env: { PLAYWRIGHT_DIR: PW_DIR },
     resolveLocal: (n) => path.join(REPO_NM, n),
@@ -58,7 +58,7 @@ test("candidate order: PLAYWRIGHT_DIR, require resolution, durable dir, then the
 });
 
 test("npx scan: only dirs with a playwright-core package.json, newest first", () => {
-  const c = playwrightCandidates({
+  const c = playwrightCandidates({ npx: true,
     home: HOME, env: {}, resolveLocal: noLocal,
     ...fakeFs({ npxDirs: ["old", "new"], noPw: ["nopw"], mtimes: { old: 100, new: 900 } }),
   });
@@ -68,18 +68,18 @@ test("npx scan: only dirs with a playwright-core package.json, newest first", ()
 
 test("npx scan is bounded: at most 50 cache entries are considered", () => {
   const dirs = Array.from({ length: 120 }, (_, i) => `h${String(i).padStart(3, "0")}`);
-  const c = playwrightCandidates({ home: HOME, env: {}, resolveLocal: noLocal, ...fakeFs({ npxDirs: dirs }) });
+  const c = playwrightCandidates({ npx: true, home: HOME, env: {}, resolveLocal: noLocal, ...fakeFs({ npxDirs: dirs }) });
   assert.equal(c.filter((p) => p.startsWith(NPX)).length, 50);
 });
 
 test("a missing ~/.npm/_npx and a missing durable dir yield no candidates and no throw", () => {
-  const c = playwrightCandidates({ home: HOME, env: {}, resolveLocal: noLocal, readdir: () => { throw new Error("ENOENT"); }, exists: () => false, mtime: () => 0 });
+  const c = playwrightCandidates({ npx: true, home: HOME, env: {}, resolveLocal: noLocal, readdir: () => { throw new Error("ENOENT"); }, exists: () => false, mtime: () => 0 });
   assert.ok(c.every((p) => !p.startsWith(NPX)));
   assert.deepEqual(c, [path.join(DURABLE, "playwright-core"), path.join(DURABLE, "playwright")]);
 });
 
 test("LOCALAPPDATA set: the Windows npm cache is scanned too, merged with the home cache by mtime", () => {
-  const c = playwrightCandidates({
+  const c = playwrightCandidates({ npx: true,
     home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal,
     ...fakeFs({ npxDirs: ["posix"], winDirs: ["win"], mtimes: { posix: 100, win: 900 } }),
   });
@@ -89,7 +89,7 @@ test("LOCALAPPDATA set: the Windows npm cache is scanned too, merged with the ho
 
 test("LOCALAPPDATA unset: the Windows npm cache is never read", () => {
   const reads = [];
-  const c = playwrightCandidates({
+  const c = playwrightCandidates({ npx: true,
     home: HOME, env: {}, resolveLocal: noLocal,
     readdir: (p) => { reads.push(p); return []; }, exists: () => false, mtime: () => 0,
   });
@@ -98,7 +98,7 @@ test("LOCALAPPDATA unset: the Windows npm cache is never read", () => {
 });
 
 test("LOCALAPPDATA cache unreadable: caught, the home npx cache and the durable dir still come through", () => {
-  const c = playwrightCandidates({
+  const c = playwrightCandidates({ npx: true,
     home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal,
     ...fakeFs({ npxDirs: ["posix"], winDirs: ["win"], winThrows: true }),
   });
@@ -109,7 +109,7 @@ test("LOCALAPPDATA cache unreadable: caught, the home npx cache and the durable 
 
 test("the npx bound applies per cache root: 120 Windows entries still contribute at most 50", () => {
   const dirs = Array.from({ length: 120 }, (_, i) => `w${String(i).padStart(3, "0")}`);
-  const c = playwrightCandidates({ home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal, ...fakeFs({ winDirs: dirs }) });
+  const c = playwrightCandidates({ npx: true, home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal, ...fakeFs({ winDirs: dirs }) });
   assert.equal(c.filter((p) => p.startsWith(WIN_NPX)).length, 50);
 });
 
@@ -120,7 +120,7 @@ test("resolvePlaywrightInfo tries candidates in order and returns the first that
     if (c === path.join(DURABLE, "playwright-core")) return { chromium: "durable" };
     throw new Error("cannot load");
   };
-  const info = resolvePlaywrightInfo({
+  const info = resolvePlaywrightInfo({ npx: true,
     home: HOME, env: { PLAYWRIGHT_DIR: PW_DIR }, resolveLocal: noLocal, load,
     ...fakeFs({ npxDirs: ["abc"] }),
   });
@@ -129,7 +129,7 @@ test("resolvePlaywrightInfo tries candidates in order and returns the first that
 });
 
 test("PLAYWRIGHT_DIR beats the durable dir when both load", () => {
-  const info = resolvePlaywrightInfo({
+  const info = resolvePlaywrightInfo({ npx: true,
     home: HOME, env: { PLAYWRIGHT_DIR: PW_DIR }, resolveLocal: noLocal,
     load: (c) => ({ from: c }), ...fakeFs(),
   });
@@ -138,7 +138,7 @@ test("PLAYWRIGHT_DIR beats the durable dir when both load", () => {
 
 test("falls through to the npx scan when the durable dir is absent", () => {
   const npxCore = path.join(NPX, "abc", "node_modules", "playwright-core");
-  const info = resolvePlaywrightInfo({
+  const info = resolvePlaywrightInfo({ npx: true,
     home: HOME, env: {}, resolveLocal: noLocal,
     load: (c) => { if (c === npxCore) return { chromium: "npx" }; throw new Error("missing"); },
     ...fakeFs({ npxDirs: ["abc"] }),
@@ -146,15 +146,15 @@ test("falls through to the npx scan when the durable dir is absent", () => {
   assert.equal(info.from, npxCore);
 });
 
-test("npx:false (the test suite) skips the npx scan on both roots but keeps the durable dir", () => {
+test("default (no npx option, as the test suite calls it) skips the npx scan on both roots but keeps the durable dir", () => {
   const c = playwrightCandidates({
-    home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal, npx: false,
+    home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal,
     ...fakeFs({ npxDirs: ["posix"], winDirs: ["win"] }),
   });
   assert.deepEqual(c.filter((p) => p.startsWith(NPX) || p.startsWith(WIN_NPX)), []);
   assert.ok(c.some((p) => p.includes(path.join(".vibesquad", "tools", "playwright"))));
   const npxCore = path.join(NPX, "abc", "node_modules", "playwright-core");
-  assert.equal(resolvePlaywrightInfo({ home: HOME, env: {}, resolveLocal: noLocal, npx: false, load: (x) => { if (x === npxCore) return {}; throw new Error("m"); }, ...fakeFs({ npxDirs: ["abc"] }) }), null);
+  assert.equal(resolvePlaywrightInfo({ home: HOME, env: {}, resolveLocal: noLocal, load: (x) => { if (x === npxCore) return {}; throw new Error("m"); }, ...fakeFs({ npxDirs: ["abc"] }) }), null);
 });
 
 test("shellQuote: a home dir with spaces stays one argument; POSIX escapes $ and quotes; cmd.exe takes it as-is", () => {
@@ -164,7 +164,7 @@ test("shellQuote: a home dir with spaces stays one argument; POSIX escapes $ and
 });
 
 test("nothing resolves: null, and the missing-Playwright message names the exact quoted durable install command", () => {
-  assert.equal(resolvePlaywrightInfo({ home: HOME, env: {}, resolveLocal: noLocal, load: () => { throw new Error("x"); }, ...fakeFs() }), null);
+  assert.equal(resolvePlaywrightInfo({ npx: true, home: HOME, env: {}, resolveLocal: noLocal, load: () => { throw new Error("x"); }, ...fakeFs() }), null);
   assert.equal(PLAYWRIGHT_INSTALL_CMD, `npm i --prefix ${shellQuote(path.join(os.homedir(), ".vibesquad", "tools", "playwright"))} playwright-core`);
   assert.equal(DURABLE_TOOLS_DIR, path.join(os.homedir(), ".vibesquad", "tools", "playwright"));
   assert.ok(PLAYWRIGHT_MISSING.includes(PLAYWRIGHT_INSTALL_CMD));

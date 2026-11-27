@@ -46,7 +46,7 @@ const NPX_SCAN_LIMIT = 50; // bounded: at most this many ~/.npm/_npx entries are
 export function playwrightCandidates({
   env = process.env, home = os.homedir(), resolveLocal = (n) => require2.resolve(n),
   readdir = fs.readdirSync, exists = fs.existsSync, mtime = (p) => fs.statSync(p).mtimeMs,
-  npx = true, // false: skip the npx-cache scan (the test suite passes this, see resolvePlaywright)
+  npx = false, // true: also scan the npx caches (scripts/agents opt in, see resolvePlaywright)
 } = {}) {
   const out = [];
   if (env.PLAYWRIGHT_DIR) out.push(path.join(env.PLAYWRIGHT_DIR, "playwright-core"));
@@ -90,9 +90,10 @@ export function resolvePlaywrightInfo({ load = (c) => require2(c), ...opts } = {
 }
 
 /**
- * Scripts (ui-clicks, ui-overlap) and agents take the default, which includes the npx-cache scan. The test suite passes
- * `{ npx: false }`: a stray npx cache must not flip browser-gated tests from skip to run (a snap Chromium cannot launch
- * in our tmp profile dirs and fails them). Tests still run when PLAYWRIGHT_DIR, repo node_modules or the durable dir has it.
+ * The npx-cache scan is opt-in (`{ npx: true }`): scripts (ui-clicks, ui-overlap) and agents pass it. The default, used
+ * by the test suite, excludes it so a stray npx cache cannot flip browser-gated tests from skip to run (a snap Chromium
+ * cannot launch in our tmp profile dirs and fails them). Tests still run when PLAYWRIGHT_DIR, repo node_modules or the
+ * durable dir has Playwright.
  */
 export function resolvePlaywright(opts) {
   return resolvePlaywrightInfo(opts)?.mod ?? null;
