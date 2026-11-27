@@ -108,7 +108,10 @@ describe("auto-update config & release helpers", () => {
     // get `env`, built by withoutUpdaterKeyPassword (env shapes unit-tested in secrets.test.mjs).
     assert.match(buildDesktopSrc, /const env = withoutUpdaterKeyPassword\(baseEnv\);/);
     assert.match(buildDesktopSrc, /"npm\.cmd run build"\] : \["run", "build"\], \{\s*cwd: rootDir,\s*env,\s/);
-    assert.match(buildDesktopSrc, /"build", "--bundles", "nsis", \.\.\.tauriConfigArgs\], \{\s*cwd: rootDir,\s*env: tauriEnv,/);
+    assert.match(
+      buildDesktopSrc,
+      /"build", "--bundles", "nsis", \.\.\.tauriConfigArgs(?:, \.\.\.\(remap\.cargoArgs\.length \? \["--", \.\.\.remap\.cargoArgs\] : \[\]\))?\], \{\s*cwd: rootDir,\s*env: tauriEnv,/,
+    );
     assert.match(buildDesktopSrc, /"signer", "sign", "-f", signingKeyPath, destInstaller\], \{\s*cwd: rootDir,\s*env: signerEnv,/);
     assert.doesNotMatch(buildDesktopSrc, /env\.TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)? =/);
     assert.match(buildDesktopSrc, /"signer",\s*"sign",\s*"-f"/);
