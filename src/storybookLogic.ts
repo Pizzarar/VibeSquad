@@ -60,14 +60,14 @@ export function indexEntities(entities: SbEntity[]): EntityIndex {
   return { get: (kind, id) => byKey.get(entityKey(kind, id)) ?? null, all: [...byKey.values()], byKind: (kind) => [...(kinds.get(kind) ?? [])] };
 }
 
-/** Owner mapping: #1/#2/#5 Broken; #3/#4/#6/#7/#9/#10/#11 Inconsistent; #8 Missing. #12 (lore contradictions, v1.1) is Inconsistent. */
+/** Owner mapping: #1/#2/#5/#13 Broken; #3/#4/#6/#7/#9/#10/#11/#12/#14 Inconsistent; #8/#15 Missing. */
 export function findingCategory(check: string): SbCategory | null {
   switch (check) {
-    case "#1": case "#2": case "#5":
+    case "#1": case "#2": case "#5": case "#13":
       return "broken";
-    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12":
+    case "#3": case "#4": case "#6": case "#7": case "#9": case "#10": case "#11": case "#12": case "#14":
       return "inconsistent";
-    case "#8":
+    case "#8": case "#15":
       return "missing";
     default:
       return null;
@@ -167,9 +167,9 @@ const NODE_SHAPE: Record<string, (label: string) => string> = {
   skill: (l) => `("${l}")`,
 };
 
-/** Mermaid-safe label: no quotes/brackets/pipes/newlines, bounded length. */
+/** Mermaid-safe label: no quotes/brackets/pipes/newlines, bounded length (preserves apostrophes). */
 export function mermaidLabel(s: string, max = 38): string {
-  return truncate(s.replace(/["'`<>[\]{}()|#;&%\\\r\n]/g, " "), max) || "?";
+  return truncate(s.replace(/["`<>[\]{}()|#;&%\\\r\n]/g, " "), max) || "?";
 }
 
 /** Chains longer than this lay out top-down so the web stays readable (a 16-step LR strip fits to ~40px tall). */
@@ -427,6 +427,7 @@ export const CHECK_NAME: Record<string, string> = {
   "#1": "dangling reference", "#2": "dangling reference", "#5": "dangling reference",
   "#3": "mismatch", "#4": "mismatch", "#6": "mismatch", "#7": "mismatch", "#9": "mismatch", "#10": "mismatch", "#11": "mismatch",
   "#8": "missing piece", "#12": "lore contradiction",
+  "#13": "unobtainable item", "#14": "orphan item", "#15": "item has no story",
 };
 export const checkLabel = (c: string): string => CHECK_NAME[c] ?? c;
 
@@ -500,8 +501,156 @@ export function auditCounts(audit: SbSnapshot["audit"]): Record<string, number> 
 
 /** Which tab shows a kind, if any (Overview kind chips link there). */
 export function kindTab(kind: string): string | null {
-  if (kind === "quest_step") return "quests";
-  if (kind === "location") return "world";
-  if (kind === "trader" || kind === "squad" || kind === "voice_card" || kind === "line") return "cast";
+  if (kind === "quest_step" || kind === "contract" || kind === "skill") return "quests";
+  if (kind === "location" || kind === "lore" || kind === "room") return "world";
+  if (kind === "trader" || kind === "squad" || kind === "voice_card" || kind === "enemy" || kind === "art_slot") return "cast";
+  if (kind === "item" || kind === "recipe") return "items";
+  if (kind === "line") return "review";
   return null;
+}
+
+// ── V4: navigation, entity sheets, items ────────────────────────────────────────
+
+export type ItemFilter = "all" | "orphan" | "no-story" | "unobtainable";
+export const ITEM_FILTERS: ItemFilter[] = ["all", "unobtainable", "orphan", "no-story"];
+export const ITEM_FILTER_LABEL: Record<ItemFilter, string> = {
+  all: "All items",
+  unobtainable: "Unobtainable (#13)",
+  orphan: "Orphan (#14)",
+  "no-story": "No story (#15)",
+};
+
+export type NavTarget = {
+  tab: "home" | "review" | "quests" | "world" | "cast" | "items" | "problems";
+  sel?: string;
+  jump?: string;
+  scope?: FindingScope;
+  category?: SbCategory | null;
+  itemFilter?: ItemFilter;
+};
+
+/** Resolve any entity chip / RefPopover / finding target to its destination tab + sheet selection. */
+export function entityNavTarget(e: SbEntity): NavTarget | null {
+  if (e.kind === "location") return { tab: "world", sel: e.id };
+  if (e.kind === "quest_step") return { tab: "quests", sel: String(e.data?.trader ?? e.id), jump: entityKey(e.kind, e.id) };
+  if (e.kind === "trader" || e.kind === "squad" || e.kind === "voice_card") return { tab: "cast", sel: speakerKeyOf(e) ?? "system:system" };
+  if (e.kind === "enemy") return { tab: "cast", sel: `enemy:${e.id.toLowerCase()}` };
+  if (e.kind === "item") return { tab: "items", sel: e.id };
+  if (e.kind === "line") return { tab: "review", sel: e.id, jump: entityKey(e.kind, e.id) };
+  if (e.kind === "contract") {
+    const tid = typeof e.data?.trader === "string" && e.data.trader ? e.data.trader : e.links.find((l) => l.kind === "trader")?.id;
+    return tid ? { tab: "cast", sel: `trader:${tid.toLowerCase()}` } : { tab: "quests" };
+  }
+  if (e.kind === "recipe") {
+    const outId = typeof e.data?.result_id === "string" && e.data.result_id ? e.data.result_id : e.links.find((l) => l.rel === "produces" && l.kind === "item")?.id;
+    return outId ? { tab: "items", sel: outId } : { tab: "items" };
+  }
+  if (e.kind === "lore") {
+    const loc = e.links.find((l) => l.kind === "location");
+    if (loc) return { tab: "world", sel: loc.id };
+    const en = e.links.find((l) => l.kind === "enemy");
+    if (en) return { tab: "cast", sel: `enemy:${en.id.toLowerCase()}` };
+    return { tab: "world" };
+  }
+  if (e.kind === "room") return { tab: "world" };
+  if (e.kind === "skill") return { tab: "quests" };
+  return null;
+}
+
+/** Map an F2 audit signal card on Home to the filtered Problems / Review view it counts. */
+export function auditSignalTarget(signal: string): NavTarget {
+  switch (signal) {
+    case "integrity": return { tab: "problems", scope: "problems", category: "broken" };
+    case "cohesion": return { tab: "problems", scope: "problems", category: "inconsistent" };
+    case "coverage": return { tab: "problems", scope: "problems", category: "missing" };
+    case "signoff": return { tab: "review", scope: "text", category: null };
+    default: return { tab: "problems", scope: "problems", category: null };
+  }
+}
+
+/** Findings directly targeting one entity. */
+export function entityFindings(e: SbEntity, findings: SbFinding[]): SbFinding[] {
+  return findings.filter((f) => f.entityRef && f.entityRef.kind === e.kind && f.entityRef.id === e.id);
+}
+
+const ITEM_SOURCE_RELS = new Set([
+  "drops", "sells", "produces",
+  "first_clear_unique", "kill_valuable", "key_drop", "locked_room_loot", "container_loot", "long_haul_loot",
+]);
+const ITEM_USE_RELS = new Set(["wants_item", "item", "ingredient", "upgrade_material"]);
+
+export type ItemLinkRow = { kind: string; id: string; rel: string; label: string; entity: SbEntity | null };
+export type ItemSheetData = {
+  item: SbEntity;
+  hasDescription: boolean;
+  sources: ItemLinkRow[];
+  uses: ItemLinkRow[];
+  lines: SbEntity[];
+  findings: SbFinding[];
+  isOrphan: boolean;
+  isNoStory: boolean;
+  isUnobtainable: boolean;
+};
+
+/** Full sheet derivation for one item: sources, uses, text lines, findings, and #13/#14/#15 flags. */
+export function itemSheetData(item: SbEntity, idx: EntityIndex, findings: SbFinding[]): ItemSheetData {
+  const sources: ItemLinkRow[] = [];
+  const uses: ItemLinkRow[] = [];
+  const lines: SbEntity[] = [];
+  let required = false;
+
+  for (const ns of Array.isArray(item.data?.node_sources) ? item.data.node_sources : []) {
+    sources.push({ kind: String(ns.kind ?? "node"), id: String(ns.id ?? ""), rel: String(ns.kind ?? "node"), label: String(ns.label ?? ns.id ?? ""), entity: null });
+  }
+  for (const eu of Array.isArray(item.data?.extra_uses) ? item.data.extra_uses : []) {
+    uses.push({ kind: String(eu.kind ?? "use"), id: String(eu.id ?? ""), rel: String(eu.kind ?? "use"), label: String(eu.label ?? eu.id ?? ""), entity: null });
+  }
+  for (const e of idx.all) {
+    for (const l of e.links) {
+      if (l.kind !== "item" || l.id !== item.id) continue;
+      if (ITEM_SOURCE_RELS.has(l.rel)) {
+        sources.push({ kind: e.kind, id: e.id, rel: l.rel, label: e.display, entity: e });
+      }
+      if (ITEM_USE_RELS.has(l.rel)) {
+        uses.push({ kind: e.kind, id: e.id, rel: l.rel, label: e.display, entity: e });
+        if ((e.kind === "quest_step" && l.rel === "wants_item") || (e.kind === "contract" && l.rel === "item")) required = true;
+      }
+      if (e.kind === "line") lines.push(e);
+    }
+  }
+  const ownFindings = entityFindings(item, findings);
+  const hasDescription = typeof item.data?.description === "string" && item.data.description.trim().length > 0;
+  const isUnobtainable = ownFindings.some((f) => f.check === "#13") || (required && sources.length === 0);
+  const isOrphan = ownFindings.some((f) => f.check === "#14") || (sources.length === 0 && uses.length === 0);
+  const isNoStory = ownFindings.some((f) => f.check === "#15") || (!hasDescription && !ownFindings.length && lines.length === 0 && !uses.some((u) => u.kind === "quest_step"));
+  return { item, hasDescription, sources, uses, lines, findings: ownFindings, isOrphan, isNoStory, isUnobtainable };
+}
+
+export type EnemySheetData = {
+  enemy: SbEntity;
+  look: SbEntity | null;
+  missingDescription: boolean;
+  spawns: { location: SbEntity; minS: number | null; maxS: number | null; boss: boolean }[];
+  drops: SbEntity[];
+  quests: SbEntity[];
+  contracts: SbEntity[];
+  lines: SbEntity[];
+  findings: SbFinding[];
+};
+
+/** Full sheet derivation for one enemy: CONTENT_BREADTH look line, missing-description flag, spawns, drops, quests/contracts, findings. */
+export function enemySheetData(enemy: SbEntity, idx: EntityIndex, findings: SbFinding[]): EnemySheetData {
+  const look = idx.byKind("lore").find((l) => l.data?.lore_kind === "enemy_look" && l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id)) ?? null;
+  const missingDescription = !(typeof enemy.data?.description === "string" && enemy.data.description.trim().length > 0);
+  const spawns: EnemySheetData["spawns"] = [];
+  for (const loc of idx.byKind("location")) {
+    const pool = Array.isArray(loc.data?.enemy_pool) ? loc.data.enemy_pool : [];
+    for (const p of pool) if (String(p.id) === enemy.id) spawns.push({ location: loc, minS: numOrNull(p.min_time_seconds), maxS: numOrNull(p.max_time_seconds), boss: false });
+    if (loc.data?.boss?.enemy_id === enemy.id) spawns.push({ location: loc, minS: numOrNull(loc.data.boss.at_seconds), maxS: null, boss: true });
+  }
+  const drops = enemy.links.filter((l) => l.rel === "drops" && l.kind === "item").map((l) => idx.get("item", l.id)).filter((x): x is SbEntity => x !== null);
+  const quests = idx.byKind("quest_step").filter((q) => q.links.some((l) => l.kind === "enemy" && l.id === enemy.id)).sort(byIndexThenId);
+  const contracts = idx.byKind("contract").filter((c) => c.links.some((l) => l.kind === "enemy" && l.id === enemy.id));
+  const lines = idx.byKind("line").filter((l) => l.links.some((lk) => lk.kind === "enemy" && lk.id === enemy.id));
+  return { enemy, look, missingDescription, spawns, drops, quests, contracts, lines, findings: entityFindings(enemy, findings) };
 }
