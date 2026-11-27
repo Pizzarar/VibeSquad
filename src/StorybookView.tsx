@@ -723,6 +723,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     setGuideOpen(false);
     setGuideDismissed(projectId);
   }, [projectId]);
+  const [guideFlash, setGuideFlash] = useState<{ testId: string; fallback?: string; highlight?: boolean; n: number } | null>(null);
   const onGuideShowMe = useCallback((step: GuideStep) => {
     const t = step.target;
     if (t.tab === "review") setPreset({ only: t.presetOnly ?? null, n: Date.now() });
@@ -730,12 +731,24 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     if (t.questMode) setQuestModeReq({ mode: t.questMode, n: Date.now() });
     setTab(t.tab);
     closeGuide();
-    if (t.scrollTestId) {
-      requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>(`[data-testid="${t.scrollTestId}"]`)?.scrollIntoView({ block: "center" });
-      });
-    }
+    if (t.scrollTestId) setGuideFlash({ testId: t.scrollTestId, fallback: t.fallbackScrollTestId, highlight: t.highlight, n: Date.now() });
   }, [closeGuide]);
+
+  useEffect(() => {
+    if (!guideFlash) return;
+    const { testId, fallback, highlight } = guideFlash;
+    setGuideFlash(null);
+    const el = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)
+      ?? (fallback ? document.querySelector<HTMLElement>(`[data-testid="${fallback}"]`) : null);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    if (highlight) {
+      el.classList.remove("sb-flash");
+      void el.offsetWidth;
+      el.classList.add("sb-flash");
+      setTimeout(() => el.classList.remove("sb-flash"), 1800);
+    }
+  }, [guideFlash, tab]);
 
   // Esc = Back (UX R19 M3). Capture phase + preventDefault so App's Esc → Squads Home handler skips it; an open card takes Esc first.
   const cardOpen = card.node != null;

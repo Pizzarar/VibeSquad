@@ -20,6 +20,10 @@ export type GuideTarget = {
   questMode?: GuideQuestMode;
   /** Optional element data-testid to scroll into view after navigating. */
   scrollTestId?: string;
+  /** Optional fallback data-testid when scrollTestId is not mounted (e.g. End session before first mark). */
+  fallbackScrollTestId?: string;
+  /** Briefly highlight the scrolled target with .sb-flash. */
+  highlight?: boolean;
 };
 
 export type GuideStep = {
@@ -61,7 +65,7 @@ export const GUIDE_STEPS: readonly GuideStep[] = [
     title: "End your session safely",
     body: "End session commits your marks to a separate EFI review branch—it never touches EFI main, and merging is always your call.",
     cta: "Show me",
-    target: { tab: "review", scrollTestId: "sb-marksbar" },
+    target: { tab: "review", scrollTestId: "sb-end-session", fallbackScrollTestId: "sb-marksbar", highlight: true },
   },
   {
     id: "contracts",
