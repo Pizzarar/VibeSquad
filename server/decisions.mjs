@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { linesFromEnd } from "./log-tail.mjs";
 import { isLiveAgent, loadTeamsRegistry, resolveAgentIdentity } from "./identity.mjs";
-import { isNeedsYouType } from "./needs-you-fields.mjs";
+import { findLeanAltIndex, isNeedsYouType } from "./needs-you-fields.mjs";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, LEGACY_USER_TYPE, loadUserSettings } from "./user-settings.mjs";
 import { createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { createDecisionAssistant } from "./decision-assistant.mjs";
@@ -351,9 +351,10 @@ export function createContextSource({
   maxCache = CONTEXT_CACHE_MAX,
   now = () => Date.now(),
 } = {}) {
-  const cache = new Map(); // item id -> { text } | { text: "", until }
-  const reads = new Map(); // asker id -> Promise (one read in flight per asker)
+  const cache = new Map(); // item id -> { text } | { text: "", until } (Map insertion order = LRU)
+  const reads = new Map(); // asker id -> { promise, itemIds, queued, backend, nextPromise, resolveNext }
   let fetches = 0;
+  let generation = 0;
 
   const put = (id, v) => {
     cache.delete(id);
@@ -364,31 +365,67 @@ export function createContextSource({
     const v = cache.get(id);
     if (!v) return null;
     if (!v.text && now() >= v.until) { cache.delete(id); return null; }
+    // LRU: refresh entry to most-recently-used.
+    cache.delete(id);
+    cache.set(id, v);
     return v;
   };
 
-  function read(backend, askerId, items) {
-    if (reads.has(askerId)) return reads.get(askerId);
+  function startRead(backend, askerId, items, gen) {
     fetches++;
     let timer;
     const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("timeline read timed out")), fetchTimeoutMs); timer.unref?.(); });
+    const entry = {
+      itemIds: new Set(items.map((i) => i.id)),
+      queued: new Map(),
+      backend,
+      promise: null,
+      nextPromise: null,
+      resolveNext: null,
+    };
     const p = Promise.race([Promise.resolve().then(() => backend.fetchAgentTimeline(askerId, { direction: "tail", limit: CONTEXT_TAIL })), timeout])
       .then((tl) => {
+        if (gen !== generation) return;
         for (const i of items) {
           const text = contextFromTimeline(tl, { atOrBefore: i.source === "log" ? i.ts : null });
           put(i.id, text ? { text } : { text: "", until: now() + noneRetryMs });
         }
       })
       .catch((e) => {
+        if (gen !== generation) return;
         console.warn(`[vibesquad] decisions: asker context for ${askerId} unavailable (${e?.message ?? e}); showing the card without it`);
         for (const i of items) put(i.id, { text: "", until: now() + noneRetryMs });
       })
       .finally(() => {
         clearTimeout(timer);
-        reads.delete(askerId);
+        if (reads.get(askerId) === entry) reads.delete(askerId);
+        if (gen === generation && entry.queued.size > 0) {
+          const nextItems = [...entry.queued.values()].filter((i) => !hit(i.id));
+          if (nextItems.length > 0) {
+            const next = startRead(entry.backend, askerId, nextItems, gen);
+            next.finally(() => entry.resolveNext?.());
+            return;
+          }
+        }
+        entry.resolveNext?.();
       });
-    reads.set(askerId, p);
+    entry.promise = p;
+    reads.set(askerId, entry);
     return p;
+  }
+
+  function read(backend, askerId, items) {
+    const existing = reads.get(askerId);
+    if (!existing) return startRead(backend, askerId, items, generation);
+    for (const i of items) {
+      if (!existing.itemIds.has(i.id) && !existing.queued.has(i.id)) {
+        existing.queued.set(i.id, i);
+        existing.backend = backend;
+      }
+    }
+    if (!items.some((i) => existing.queued.has(i.id))) return existing.promise;
+    if (!existing.nextPromise) existing.nextPromise = new Promise((r) => { existing.resolveNext = r; });
+    return existing.nextPromise;
   }
 
   async function attach(items, { agents = [], teams = [], backend } = {}) {
@@ -425,9 +462,15 @@ export function createContextSource({
   return {
     attach,
     fetches: () => fetches,
-    idle: () => Promise.allSettled([...reads.values()]),
+    async idle() {
+      while (reads.size > 0) {
+        await Promise.allSettled([...reads.values()].map((e) => e.nextPromise ?? e.promise));
+      }
+    },
     reset() {
+      generation++;
       cache.clear();
+      for (const e of reads.values()) e.resolveNext?.();
       reads.clear();
       fetches = 0;
     },
@@ -482,15 +525,9 @@ export function headerField(s, max = 80) {
     .trim();
 }
 
-/** C2b: option index a bare-letter lean ("B", "(b)", "Option B") names among lettered alts ("A: …", "B) …"), else -1. */
+/** C2b: option index a bare-letter lean ("B", "(b)", "Option B", "B.", "B:", "B)", "B -") names among lettered alts ("A: …", "B) …"), else -1. */
 export function resolveLeanAltIndex(item) {
-  const m = /^\s*(?:option\s+)?\(?([A-Za-z])\)?[.:]?\s*$/i.exec(item.lean ?? "");
-  if (!m) return -1;
-  const letter = m[1].toUpperCase();
-  return (item.alts ?? []).findIndex((a) => {
-    const am = /^\s*(?:option\s+([A-Za-z])(?![A-Za-z0-9])|\(([A-Za-z])\)|([A-Za-z])(?:[.:)]|\s+[-–—]|\s*$))/i.exec(a);
-    return Boolean(am) && (am[1] ?? am[2] ?? am[3]).toUpperCase() === letter;
-  });
+  return findLeanAltIndex(item?.lean, item?.alts);
 }
 
 /** C2b: distinct options on an item (a lean naming a lettered option is that option, not another). */

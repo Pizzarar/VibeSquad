@@ -378,6 +378,19 @@ test('report needs-you: lettered options without alts warn (idea-1142); alts pre
   assert.equal(r3.warning, undefined);
 });
 
+test('report needs-you: bare-letter lean without a matching alt warns (idea-1155) and still logs', async () => {
+  const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
+  for (const lean of ['B', '(b)', 'Option B', 'B.', 'B:', 'B)', 'B -']) {
+    const r = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: lean, alt: ['A: fast'] });
+    assert.match(r.warning, /bare letter/, lean);
+    assert.equal(r.logged, true, lean);
+  }
+  const ok = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: 'Option B', alt: ['A: fast', 'B: slow'] });
+  assert.equal(ok.warning, undefined);
+  const spelled = await callTool(ctx, 'report', { type: 'needs-you', text: 'Which policy?', do: 'B: slow', alt: ['A: fast'] });
+  assert.equal(spelled.warning, undefined);
+});
+
 test('report needs-you carries validated structured fields (D1); fields on other types are refused', async () => {
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   await callTool(ctx, 'report', { type: 'needs-you', text: 'Pick a db', decides: 'storage engine', do: 'sqlite', alt: ['postgres', 'sqlite'], kind: 'answer' });

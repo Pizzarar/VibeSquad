@@ -23,6 +23,7 @@ const NEGATIVE = [
   "A new lane is needed", "Is a or b better here", "Plan B if this fails?", "Ship it now?",
   "A decision is needed: push master?", "Use option 2 of the config", "Ship the (a) footnote only",
   "Vitamin A, the B-side, and C++ are unrelated", "Reply A-OK", "Needs a ruling on the S/N ratio",
+  "A/B test", "A/B testing", "Run an A/B test on the banner?", "C/C++", "B/C++", "A/A",
 ];
 
 test("namesLetteredOptions flags lettered options", () => {
@@ -64,4 +65,33 @@ test("idea-1142: phone cockpit vs:decision rule says each alt defines its option
   const { HUB_LEAD_RULES } = await import("../server/hooks/agent-duties.ts");
   assert.match(HUB_LEAD_RULES, /alt: <label>: <what it means, one line>/);
   assert.match(HUB_LEAD_RULES, /`do:` names and defines the lean/);
+});
+
+test("idea-1155: bare-letter lean without a matching lettered alt warns (helper + CLI) and still logs", async () => {
+  const { isUnmatchedBareLean } = await import("../server/needs-you-fields.mjs");
+  for (const lean of ["B", "(b)", "Option B", "B.", "B:", "B)", "B -"]) {
+    assert.equal(isUnmatchedBareLean(lean, []), true, `${lean} with no alts`);
+    assert.equal(isUnmatchedBareLean(lean, ["A: first", "Bold move"]), true, `${lean} with unmatched alts`);
+    assert.equal(isUnmatchedBareLean(lean, ["A: first", "B: second"]), false, `${lean} with matching alt`);
+    assert.equal(isUnmatchedBareLean(lean, ["Option B: second"]), false, `${lean} with Option B alt`);
+  }
+  assert.equal(isUnmatchedBareLean("B: keep partial", ["A: cancel"]), false, "spelled-out lean is not bare");
+  assert.equal(isUnmatchedBareLean("Ship it", []), false, "word lean is not bare");
+
+  const rWarn = run(["Which cache policy?", "--lean", "B", "--alt", "A: LRU"]);
+  assert.equal(rWarn.status, 0, rWarn.stderr);
+  assert.match(rWarn.stderr, /warning:.*bare letter/);
+  assert.equal(JSON.parse(rWarn.stdout.trim()).type, "needs-you");
+
+  const rDash = run(["Which cache policy?", "--lean", "B -", "--alt", "A: LRU"]);
+  assert.equal(rDash.status, 0, rDash.stderr);
+  assert.match(rDash.stderr, /warning:.*bare letter/);
+
+  const rOk = run(["Which cache policy?", "--lean", "Option B", "--alt", "A: LRU", "--alt", "B: LFU"]);
+  assert.equal(rOk.status, 0, rOk.stderr);
+  assert.doesNotMatch(rOk.stderr, /warning/);
+
+  const rSpelled = run(["Which cache policy?", "--lean", "B: LFU", "--alt", "A: LRU"]);
+  assert.equal(rSpelled.status, 0, rSpelled.stderr);
+  assert.doesNotMatch(rSpelled.stderr, /warning/);
 });

@@ -389,3 +389,74 @@ test("C1 cost: many items and askers -> at most one read per asker, capped per r
   await src.attach(items, { agents, teams: TEAMS, backend: b });
   assert.equal(reads, 12, "cached: 0 reads");
 });
+
+test("idea-1146: a newly arrived item for an asker with an in-flight read still gets its context", async () => {
+  let releaseFirst;
+  let callNum = 0;
+  const b = {
+    async fetchAgentTimeline() {
+      callNum++;
+      if (callNum === 1) {
+        await new Promise((r) => { releaseFirst = r; });
+        return { entries: [am(10, "A) first option")] };
+      }
+      return { entries: [am(10, "A) first option"), am(2, "B) second option")] };
+    },
+  };
+  const a = agent("rn-busy", "alpha", "trade", "lead");
+  const item1 = { id: "ny-in-flight-1", source: "log", squad: "alpha", askerId: a.id, structured: false, alts: [], ts: NOW - 5 * 60_000 };
+  const item2 = { id: "ny-in-flight-2", source: "log", squad: "alpha", askerId: a.id, structured: false, alts: [], ts: NOW - 1 * 60_000 };
+  const src = dec.createContextSource({ waitMs: 2000, fetchTimeoutMs: 2000 });
+
+  // First refresh starts reading for item1.
+  const p1 = src.attach([item1], { agents: [a], teams: TEAMS, backend: b });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(callNum, 1);
+
+  // While read 1 is in flight, a second refresh arrives with item1 + newly arrived item2.
+  const p2 = src.attach([item1, item2], { agents: [a], teams: TEAMS, backend: b });
+  releaseFirst();
+
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.equal(r1.items[0].context, "A) first option");
+  assert.equal(r1.hold.size, 0);
+  assert.equal(r2.items.find((i) => i.id === item1.id).context, "A) first option");
+  assert.equal(r2.items.find((i) => i.id === item2.id).context, "B) second option");
+  assert.equal(r2.hold.size, 0, "newly arrived item is not dropped or left held");
+  assert.equal(callNum, 2, "chained one follow-up read for the new item");
+  await src.idle();
+});
+
+test("idea-1146: context cache evicts LRU (not FIFO) at maxCache", async () => {
+  const fetched = [];
+  const b = {
+    async fetchAgentTimeline(id) {
+      fetched.push(id);
+      return { entries: [am(1, `ctx for ${id}`)] };
+    },
+  };
+  const agents = ["rn-u1", "rn-u2", "rn-u3"].map((id) => agent(id, "alpha", "trade", "worker"));
+  const mk = (id) => ({ id: `ny-${id}`, source: "label", squad: "alpha", askerId: id, structured: false, alts: [], ts: NOW });
+  const [i1, i2, i3] = agents.map((a) => mk(a.id));
+  const src = dec.createContextSource({ maxCache: 2, waitMs: 1000 });
+
+  // Fill cache with [i1, i2] (order: i1 oldest, i2 newest).
+  await src.attach([i1], { agents, teams: TEAMS, backend: b });
+  await src.attach([i2], { agents, teams: TEAMS, backend: b });
+  assert.deepEqual(fetched, ["rn-u1", "rn-u2"]);
+
+  // Touch i1 (cache hit): LRU order becomes [i2 oldest, i1 newest].
+  const hit1 = await src.attach([i1], { agents, teams: TEAMS, backend: b });
+  assert.equal(hit1.items[0].context, "ctx for rn-u1");
+  assert.deepEqual(fetched, ["rn-u1", "rn-u2"], "i1 came from cache");
+
+  // Insert i3: evicts i2 (LRU), keeps i1.
+  await src.attach([i3], { agents, teams: TEAMS, backend: b });
+  assert.deepEqual(fetched, ["rn-u1", "rn-u2", "rn-u3"]);
+
+  // i1 must still be cached (0 new fetches); i2 must have been evicted (triggers a fetch).
+  await src.attach([i1], { agents, teams: TEAMS, backend: b });
+  assert.deepEqual(fetched, ["rn-u1", "rn-u2", "rn-u3"], "i1 stayed cached");
+  await src.attach([i2], { agents, teams: TEAMS, backend: b });
+  assert.deepEqual(fetched, ["rn-u1", "rn-u2", "rn-u3", "rn-u2"], "i2 was evicted as LRU");
+});
