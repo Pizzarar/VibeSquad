@@ -329,7 +329,10 @@ export function handleStorybookMarksRoute(req, res, deps = {}) {
     const make = deps.marksFor ?? marksFor;
     let api = marksApis.get(repoPath);
     if (!api || deps.marksFor) { api = make(repoPath); if (!deps.marksFor) marksApis.set(repoPath, api); }
-    if (req.method === "GET") return api.get();
+    if (req.method === "GET") {
+      const out = await api.get();
+      return out?.autoCommitError ? { ...out, autoCommitError: scrubPaths(out.autoCommitError, repoPath) } : out;
+    }
     if (isCommit) return api.commit();
     const body = await readJsonBody(req);
     return api.set(body?.marks);

@@ -213,3 +213,12 @@ test("idea-1169: OK on a sibling contract preview shows muted feedback without c
   const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
   assert.match(css, /\.sb-root \.sb-mark-sibling-ok\b/);
 });
+
+test("idea-1170: sb-autocommit-error offers Retry to re-read the session and unlock when server clears autoCommitError", () => {
+  assert.equal(M.hasSessionError(null, { autoCommitError: "review_pack --write failed" }), true);
+  assert.equal(M.hasSessionError(null, { autoCommitError: undefined }), false);
+  assert.equal(M.hasSessionError(null, {}), false);
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /data-testid="sb-autocommit-error"[\s\S]*?data-testid="sb-autocommit-retry"[\s\S]*?onClick=\{\(\) => void m\.retrySession\(\)\}>Retry<\/button>/);
+  assert.match(tsx, /const retrySession = useCallback\(async \(\) => \{[\s\S]*?await reload\(url\);/);
+});

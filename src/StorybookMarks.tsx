@@ -11,6 +11,8 @@ export type MarksApi = {
   error: MarksError | null;
   /** Clear the error (transient: dismiss; session: retry, re-reading the session from the server). */
   dismissError: () => void;
+  /** Re-read the session from the server (clears autoCommitError when the server no longer reports it). */
+  retrySession: () => Promise<void>;
   lines: SbEntity[];
   byKey: Map<string, ServerMark>;
   stateOf: (e: SbEntity | null | undefined) => MarkState;
@@ -84,7 +86,11 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
     setError(null);
     if (wasSession) void reload(url);
   }, [error, url, reload, setError]);
-  return { state, busy, error, dismissError, lines, byKey, stateOf, mark, commit, lastCommit };
+  const retrySession = useCallback(async () => {
+    setBusy(true);
+    try { await reload(url); } finally { if (cur.current === url) setBusy(false); }
+  }, [url, reload]);
+  return { state, busy, error, dismissError, retrySession, lines, byKey, stateOf, mark, commit, lastCommit };
 }
 
 
@@ -189,7 +195,14 @@ export function MarksBar({ m }: { m: MarksApi }) {
       </span>
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
-      {m.state.autoCommitError && <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">Auto-commit failed: {m.state.autoCommitError}</span>}
+      {m.state.autoCommitError && (
+        <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">
+          Auto-commit failed: {m.state.autoCommitError}
+          <button type="button" className="sb-mbtn sb-marksbar-dismiss" data-testid="sb-autocommit-retry" disabled={m.busy}
+            title="Retry: re-read the review session (clears once the auto-commit error is resolved)"
+            aria-label="Retry review session" onClick={() => void m.retrySession()}>Retry</button>
+        </span>
+      )}
       {m.error && (
         <span className="sb-marksbar-err" role="alert" data-testid="sb-marks-error" data-session={m.error.session ? "1" : "0"}>
           {m.error.msg}
