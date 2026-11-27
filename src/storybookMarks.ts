@@ -73,8 +73,10 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
   const m = byKey.get(targetKey(hit.target));
   if (hit.contract) {
     // a contract shows its own note; the shared template's OK/Redo shows only when the note is absent
+    // and the template itself was marked (not merely set to NEEDS-REWRITE by another contract's note).
     const cn = m?.contracts?.[hit.contract] ?? "";
     if (cn) return { kind: m?.status === "OWNER-OK" ? "ok" : "redo", note: "", rewrite: "", contractNote: cn };
+    if (m && m.status !== "OWNER-OK" && !m.note && Object.keys(m.contracts ?? {}).length > 0) return none;
   }
   if (m) {
     if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "" };
@@ -124,6 +126,15 @@ export function batchMarks(entities: SbEntity[], lines: SbEntity[], byKey: Map<s
     out.push({ target: hit.target, action, ...(note ? { note } : {}), ...(hit.contract ? { contract: hit.contract } : {}) });
   }
   return out;
+}
+
+/**
+ * Whether a Review row counts in "My marks" (W4 friction 1): counted per CSV row, never per contract preview.
+ * A template CSV row with per-contract notes counts once; contract preview rows don't each count as marked.
+ */
+export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[], byKey: Map<string, ServerMark>, exists: boolean): boolean {
+  if (!e || e.kind !== "line") return false;
+  return markState(e, lines, byKey, exists).kind !== "none";
 }
 
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");
