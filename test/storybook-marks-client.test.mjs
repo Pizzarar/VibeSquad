@@ -222,3 +222,17 @@ test("idea-1170: sb-autocommit-error offers Retry to re-read the session and unl
   assert.match(tsx, /data-testid="sb-autocommit-error"[\s\S]*?data-testid="sb-autocommit-retry"[\s\S]*?onClick=\{\(\) => void m\.retrySession\(\)\}>Retry<\/button>/);
   assert.match(tsx, /const retrySession = useCallback\(async \(\) => \{[\s\S]*?await reload\(url\);/);
 });
+
+test("V7 minor 5: first mark of a session shows 'Starting session…' on MarksBar and keeps clicked button busy", () => {
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /const \[starting, setStarting\] = useState\(false\);/);
+  assert.match(tsx, /if \(!existsRef\.current\) setStarting\(true\);/);
+  assert.match(tsx, /data-testid="sb-marksbar-starting"[^>]*aria-busy="true"/);
+  assert.match(tsx, /Starting session…/);
+  assert.match(tsx, /const \[busyAction, setBusyAction\] = useState<[^>]+>\(null\);/);
+  assert.match(tsx, /aria-busy=\{busyAction === "ok" \|\| undefined\}/);
+  assert.match(tsx, /busyAction === "ok" \? "OK…" : "OK"/);
+  const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+  assert.match(css, /\.sb-root \.sb-mbtn\.sb-mbtn-busy\b/);
+  assert.match(css, /\.sb-root \.sb-marksbar-starting\b/);
+});

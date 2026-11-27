@@ -1,5 +1,5 @@
 import { etClock, etDate } from "./etTime.ts";
-import type { SbProgress } from "./storybookProgress.ts";
+import { liveLineBucket, type SbProgress } from "./storybookProgress.ts";
 // Storybook view logic (SB5): pure, no React / DOM, so it is unit-testable (test/storybook-view-logic.test.mjs).
 // Data contract: the SB1 snapshot (server/storybook/schema.mjs). Read-only: nothing here writes anything.
 
@@ -115,12 +115,10 @@ export function findingCategory(check: string): SbCategory | null {
   }
 }
 
-/** A text row is Unreviewed when it came from text_review.csv (has a `status`) and that status is not OWNER-OK. */
-export function isUnreviewedLine(e: SbEntity): boolean {
+/** A text line is Unreviewed when its live bucket is not "ok" (same rule as V12 progress bars: OWNER-OK / Edit = ok; Redo / draft / todo / non-CSV line = unreviewed). */
+export function isUnreviewedLine(e: SbEntity, markKind: "ok" | "redo" | "edit" | "none" = "none"): boolean {
   if (e.kind !== "line") return false;
-  const st = e.data?.status;
-  if (typeof st !== "string") return false;
-  return st.trim().toUpperCase() !== "OWNER-OK";
+  return liveLineBucket(markKind, e.data?.status, e.production) !== "ok";
 }
 
 export type ListItem = {
@@ -135,8 +133,8 @@ export type ListItem = {
   dev?: boolean;
 };
 
-/** Checker findings plus one Unreviewed item per non-OWNER-OK csv text row. Unmapped checks are dropped. */
-export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">): ListItem[] {
+/** Checker findings plus one Unreviewed item per non-OK text line (using live V6 marks when `markKindOf` is supplied). Unmapped checks are dropped. */
+export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">, markKindOf?: (e: SbEntity) => "ok" | "redo" | "edit" | "none"): ListItem[] {
   const out: ListItem[] = [];
   snap.findings.forEach((f, i) => {
     const category = findingCategory(f.check);
@@ -144,14 +142,15 @@ export function buildListItems(snap: Pick<SbSnapshot, "entities" | "findings">):
     out.push({ key: `f${i}`, category, check: f.check, severity: f.severity, msg: f.msg, entityRef: f.entityRef, source: f.source, ...(isDevTodoFinding(f) ? { dev: true } : {}) });
   });
   for (const e of snap.entities) {
-    if (!isUnreviewedLine(e)) continue;
-    const st = String(e.data.status || "(no status)");
+    const mk = markKindOf ? markKindOf(e) : "none";
+    if (!isUnreviewedLine(e, mk)) continue;
+    const st = String(e.data?.status || (mk === "redo" ? "NEEDS-REWRITE" : "(no status)"));
     out.push({
       key: `u${entityKey(e.kind, e.id)}`,
       category: "unreviewed",
       check: null,
       severity: "info",
-      msg: `${st}: ${truncate(String(e.data.text ?? e.display), 90)}`,
+      msg: `${st}: ${truncate(String(e.data?.text ?? e.display), 90)}`,
       entityRef: { kind: e.kind, id: e.id },
       source: e.source,
     });
@@ -534,7 +533,7 @@ export const SB_CATEGORY_HELP: Record<SbCategory, string> = {
   broken: "A reference points at something that does not exist, or a required link is missing.",
   inconsistent: "Two places disagree: order, ownership, values or wording do not line up.",
   missing: "Something that should exist is not there yet.",
-  unreviewed: "A text row from text_review.csv that the owner has not marked OWNER-OK.",
+  unreviewed: "A text line that has not been marked OWNER-OK yet.",
   toolong: "Player-facing text longer than its screen budget (check #18): it will not fit.",
 };
 
@@ -564,7 +563,7 @@ export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
   coverage: "Story not written yet: items with no story line (#15) and STORY-TODO placeholders on entities (#8). Writing work, not breakage.",
   other: "Checks worth a look that are not story breakage: doc vs data drift (#3), repeated templates (#6), low-confidence name-word overlaps (#7 info) and lexical title checks (#11), pronoun and tone notes (#9, #10), orphan items (#14).",
   story: "Coherence checks only: speaker and voice-card rules, duplicate ids or same-kind names, and lore contradictions.",
-  text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
+  text: "The text inventory: lines not yet marked OWNER-OK. Not problems, just lines to read.",
   toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
   dev: "STORY-TODO comments left in the game code (.gd). Notes for developers, not story problems.",
   all: "Everything above, together.",
@@ -809,6 +808,21 @@ export function changesSince(ch: SbChanges): string {
   return `${etClock(ch.from.at) ? `${etDate(ch.from.at)} ${etClock(ch.from.at)}` : ""}${ch.from.sha ? `, ${shortSha(ch.from.sha)}` : ""}`.replace(/^, /, "");
 }
 export const changesTotal = (ch: SbChanges): number => ch.counts.new + ch.counts.changed + ch.counts.gone;
+
+/** V7 minor 3: Home changes-card copy when no seen baseline exists yet (distinguish truly first visit vs after a review session). */
+export function firstSessionCopy(hasReviewSession: boolean, total: number, sha: string): { title: string; sub: string } {
+  const s = shortSha(sha);
+  if (hasReviewSession) {
+    return { title: "No seen baseline yet", sub: `${total} text rows at ${s}. Mark seen to track what changes in EFI after this commit.` };
+  }
+  return { title: "First session: everything is new", sub: `${total} text rows at ${s}. Nothing is marked seen yet.` };
+}
+
+/** Whether "Mark seen" is useful for the current V8 changes state (no baseline yet, non-zero diff, or moved sha). */
+export function canMarkChangesSeen(ch: SbChanges | null | undefined): boolean {
+  if (!ch) return false;
+  return ch.first || changesTotal(ch) > 0 || ch.from?.sha !== ch.to.sha;
+}
 
 /** V8: Review-tab changed/added row lookup. `changed` holds old text for the capped sample; `changedIds` holds every changed row id. */
 export type TextChanges = { changed: Record<string, string>; changedIds: ReadonlySet<string>; added: ReadonlySet<string> } | null;

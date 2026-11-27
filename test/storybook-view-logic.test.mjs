@@ -37,24 +37,29 @@ describe("storybookLogic", () => {
     assert.equal(idx.get("squad", "doc").display, "Saint");
   });
 
-  test("list items: sample finding is Broken, non-OWNER-OK csv rows Unreviewed", () => {
+  test("list items: sample finding is Broken, non-OK text lines Unreviewed (matches progress bars)", () => {
     const items = L.buildListItems(snap);
     const broken = items.filter((i) => i.category === "broken");
     assert.equal(broken.length, 1);
     assert.deepEqual(broken[0].entityRef, { kind: "quest_step", id: "popper_2" });
     const unrev = items.filter((i) => i.category === "unreviewed");
-    const csvRows = snap.entities.filter((e) => e.kind === "line" && typeof e.data.status === "string");
-    assert.equal(unrev.length, csvRows.filter((e) => e.data.status.trim().toUpperCase() !== "OWNER-OK").length);
+    const lines = snap.entities.filter((e) => e.kind === "line");
+    assert.equal(unrev.length, lines.filter((e) => L.isUnreviewedLine(e)).length);
     assert.ok(unrev.length > 0);
     assert.ok(!unrev.some((i) => /^OWNER-OK/.test(i.msg)));
   });
 
-  test("OWNER-OK rows are not unreviewed; non-csv lines never are", () => {
-    const mk = (status) => ({ kind: "line", id: "x", display: "t", data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
+  test("OWNER-OK / final rows are not unreviewed; non-OK and non-csv lines are", () => {
+    const mk = (status, production = null) => ({ kind: "line", id: "x", display: "t", production, data: { status, text: "t" }, links: [], source: { path: "a", line: 1 } });
     assert.equal(L.isUnreviewedLine(mk("OWNER-OK")), false);
     assert.equal(L.isUnreviewedLine(mk("owner-ok ")), false);
     assert.equal(L.isUnreviewedLine(mk("DRAFT")), true);
-    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined), data: { text: "t" } }), true);
+    assert.equal(L.isUnreviewedLine({ ...mk(undefined, "final"), data: { text: "t" } }), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "ok"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "edit"), false);
+    assert.equal(L.isUnreviewedLine(mk("DRAFT"), "redo"), true);
+    assert.equal(L.isUnreviewedLine(mk("OWNER-OK"), "redo"), true);
   });
 
   test("filter: empty = all, toggle adds/removes, counts", () => {
@@ -274,7 +279,7 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }), state: { marks: [] } }); export const applyLiveMarks = (p) => p; export const statusBucket = () => "todo"; export const liveLineBucket = () => "todo"; export const StorybookGuide = () => null; export const setGuideDismissed = () => {}; export const shouldAutoOpenGuide = () => false;`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const canMarkChangesSeen = () => false; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookGlossary = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => []; export const effectiveScope = (s) => s; export const MarkBatch = () => null; export const MarkButtons = () => null; export const MarksBar = () => null; export const useMarks = () => ({ stateOf: () => ({ kind: "none" }), state: { marks: [] } }); export const applyLiveMarks = (p) => p; export const statusBucket = () => "todo"; export const liveLineBucket = () => "todo"; export const StorybookGuide = () => null; export const setGuideDismissed = () => {}; export const shouldAutoOpenGuide = () => false;`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
