@@ -47,6 +47,9 @@ test("contracts: placed after the step that reaches rep_req; unplaceable ones ar
   assert.ok(gapIds.includes("c_high") && gapIds.includes("c_ghost"));
   assert.ok(gapIds.includes("mech")); // non-level_0 trader: unlock rule not in data
   assert.equal(a.playOrder.find((x) => x.id === "c_loc").stage, 3);
+  // W3 rider 3: contract label prefers data.rendered.title over raw id
+  const withRendered = buildArc([...ents, con("c_ren", "popper", 0, { rendered: { title: "Deliver 5 × Scrap for Popper" } })]);
+  assert.equal(withRendered.playOrder.find((x) => x.id === "c_ren").label, "Deliver 5 × Scrap for Popper");
 });
 
 test("maps listed by unlock_order with key gate; play order is sorted and numbered", () => {
