@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 import { packagedStamp } from "./stale-runtime.mjs";
-import { detachUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
+import { appendPathEntry, detachUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -13,10 +13,8 @@ const cargoBin = join(homedir(), ".cargo", "bin");
 // Before any child runs: take the updater key password out of process.env (release.mjs passes it in), so nothing
 // spawned here or in imported helpers (ensureTls -> openssl/icacls) inherits it by default.
 const inheritedEnv = detachUpdaterKeyPassword();
-const baseEnv = {
-  ...inheritedEnv,
-  PATH: `${inheritedEnv.PATH || ""};${cargoBin}`,
-};
+// The snapshot is a plain object: on win32 its key is "Path", so appendPathEntry folds every case variant into one PATH.
+const baseEnv = appendPathEntry(inheritedEnv, cargoBin);
 // Every child (npm, git, taskkill) gets `env` explicitly, which never carries the password. Only `tauri build`
 // (tauriEnv) and `tauri signer sign` (signerEnv) below get it.
 const env = withoutUpdaterKeyPassword(baseEnv);

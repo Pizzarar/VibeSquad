@@ -105,6 +105,29 @@ export function detachUpdaterKeyPassword(procEnv = process.env) {
   return snapshot;
 }
 
+/**
+ * Copy of `env` with `dir` appended to its search path. The snapshot from detachUpdaterKeyPassword is a plain object,
+ * so on win32 its key keeps the OS case ("Path") and `env.PATH` misses it: every case variant is read and dropped
+ * here, and exactly one PATH key carries original + dir. POSIX: only the exact PATH key, joined with ":".
+ * The delimiter follows `platform` (= path.delimiter on the real one), so tests can model win32 anywhere.
+ */
+export function appendPathEntry(env, dir, { platform = process.platform } = {}) {
+  const out = { ...env };
+  const win = platform === "win32";
+  let original = "";
+  if (win) {
+    for (const key of Object.keys(out)) {
+      if (key.toUpperCase() !== "PATH") continue;
+      if (!original && out[key]) original = out[key];
+      delete out[key];
+    }
+  } else {
+    original = out.PATH || "";
+  }
+  out.PATH = original ? `${original}${win ? ";" : ":"}${dir}` : dir;
+  return out;
+}
+
 /** Copy of env without the updater key password: for every child except `tauri build` and `tauri signer sign`. */
 export function withoutUpdaterKeyPassword(env) {
   const out = { ...env };
