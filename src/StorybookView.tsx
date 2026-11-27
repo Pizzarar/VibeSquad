@@ -57,6 +57,7 @@ export function openStorybook(projectId: string, name?: string): void {
   history.pushState({ sb: projectId }, "", withSb(projectId));
   pushed = true;
   popped = false;
+  stripOnPop = false;
   emit();
 }
 /**
@@ -80,7 +81,9 @@ export function closeStorybook(mode?: unknown): void {
     backUntil = Date.now() + 1000;
     // cold link / reload: rewind to the first Storybook entry, then strip it in place (popstate handler) so Back can't reopen a leftover ?sb= entry
     stripOnPop = steps.strip;
-    history.go(steps.go); // popstate finds no ?sb= and target already null: nothing more to do
+    // Single-step rewind uses history.back() directly (Desk nav-history R33 M1 / idea-971 contract); deeper rewinds jump with history.go().
+    if (steps.go === -1) history.back();
+    else history.go(steps.go); // popstate finds no ?sb= and target already null: nothing more to do
   } else if (steps.strip) strip();
   emit();
 }

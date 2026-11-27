@@ -689,15 +689,17 @@ describe("V2 Home + findings split", () => {
     const v = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
     assert.ok(v.includes("history.pushState({ sb: projectId, sbNav: next }"), "pushes real history entries for in-Storybook nav");
     assert.ok(v.includes('data-testid="sb-sheet-crumb"') && v.includes('data-testid="sb-sheet-back"'), "renders sheet breadcrumb");
-    assert.ok(v.includes("sbCloseSteps(mine, depth, replace)") && v.includes("history.go(steps.go)"), "closeStorybook exits Storybook cleanly from nested depth");
+    assert.ok(v.includes("sbCloseSteps(mine, depth, replace)") && v.includes("if (steps.go === -1) history.back();") && v.includes("history.go(steps.go)"), "closeStorybook uses history.back() for 1-step rewind and history.go() for nested depth");
   });
 
   test("V7 review fix: closeStorybook history math (pushed open, cold link, reload, replace mode)", () => {
     // pushed open: one jump past every Storybook entry (depth nav entries + the open entry) to the app's entry
     assert.deepEqual(L.sbCloseSteps(true, 0, false), { go: -1, strip: false });
+    assert.deepEqual(L.sbCloseSteps(true, 1, false), { go: -2, strip: false });
     assert.deepEqual(L.sbCloseSteps(true, 3, false), { go: -4, strip: false });
     // cold deep link: no app entry beneath; rewind depth steps to the first Storybook entry, then strip it
     assert.deepEqual(L.sbCloseSteps(false, 0, false), { go: 0, strip: true });
+    assert.deepEqual(L.sbCloseSteps(false, 1, false), { go: -1, strip: true });
     assert.deepEqual(L.sbCloseSteps(false, 3, false), { go: -3, strip: true });
     // reload mid-session is the same shape as a cold link (module state lost, depth from history.state)
     assert.deepEqual(L.sbCloseSteps(false, 2, false), { go: -2, strip: true });
