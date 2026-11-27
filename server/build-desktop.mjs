@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 import { packagedStamp } from "./stale-runtime.mjs";
 import { appendPathEntry, detachUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
+import { hostPathHits, hostPathPrefixes, rustRemapChildEnv } from "./rust-path-remap.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -105,7 +106,7 @@ const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
 const signingKeyPath = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
 const hasSigningKey = Boolean(signingKeyPath && existsSync(signingKeyPath));
 // Same resolver as release.mjs; the value the desk passed (even "" = no password) wins, so no second store read.
-const { tauri: tauriEnv, signer: signerEnv } = updaterKeyChildEnvs(baseEnv, { keyPath: hasSigningKey ? signingKeyPath : "" });
+const { tauri: tauriKeyEnv, signer: signerEnv } = updaterKeyChildEnvs(baseEnv, { keyPath: hasSigningKey ? signingKeyPath : "" });
 if (hasSigningKey) {
   console.log(`[build:desktop] Using Tauri updater signing key path ${signingKeyPath}`);
 }
@@ -114,11 +115,30 @@ console.log("[build:desktop] 3/4 Building Tauri 2 NSIS installer...");
 const cfgAt = process.argv.indexOf("--config");
 const tauriConfigArgs = cfgAt > 0 && process.argv[cfgAt + 1] ? ["--config", process.argv[cfgAt + 1]] : [];
 const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
-execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis", ...tauriConfigArgs], {
+// Privacy (audit rn-31b210f0dd49): remap host paths (home, CARGO_HOME, RUSTUP_HOME, repo) out of the Rust binary.
+// Only the `tauri build` child gets the remap: tauriEnv is tauriKeyEnv (updater-key handling unchanged) with only the
+// rustflags keys changed. The flags themselves name the username, so they are never logged.
+const remapPrefixes = hostPathPrefixes({ env: baseEnv, home: homedir(), repoRoots: [...new Set([rootDir, realpathSync(rootDir)])] });
+const remap = rustRemapChildEnv(tauriKeyEnv, remapPrefixes);
+const tauriEnv = remap.env;
+console.log(`[build:desktop] remapping ${remapPrefixes.length} host path prefixes (${[...new Set(remapPrefixes.map((p) => p.role))].join(", ")}) via ${remap.via}`);
+execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis", ...tauriConfigArgs, ...(remap.cargoArgs.length ? ["--", ...remap.cargoArgs] : [])], {
   cwd: rootDir,
   env: tauriEnv,
   stdio: "inherit",
 });
+// Fail closed before the installer is copied to dist-desktop/: the built app binary must carry no host path.
+const appExe = join(rootDir, "src-tauri", "target", "release", process.platform === "win32" ? "VibeSquad.exe" : "VibeSquad");
+if (!existsSync(appExe)) throw new Error(`build-desktop: built app binary not found for the host-path scan (src-tauri/target/release/${basename(appExe)})`);
+const leaks = hostPathHits(readFileSync(appExe), remapPrefixes);
+if (Object.keys(leaks).length) {
+  throw new Error(
+    `build-desktop: the built app binary still contains host paths (hits by prefix: ${JSON.stringify(leaks)}); ` +
+      "either the --remap-path-prefix flags did not reach rustc (a target.*.rustflags cargo config wins over build.rustflags) " +
+      "or a crate embeds a path remapping cannot rewrite (env!(\"CARGO_MANIFEST_DIR\") / OUT_DIR as a string).",
+  );
+}
+console.log("[build:desktop] host-path scan of the app binary: 0 hits");
 
 const nsisDir = join(rootDir, "src-tauri", "target", "release", "bundle", "nsis");
 if (!existsSync(nsisDir)) {
