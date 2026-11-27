@@ -202,9 +202,9 @@ test("D4 lastLaneLogEvent & buildStatusStrip: matches newest done/decision per l
   assert.equal(deskLane?.lastEventType, "decision");
 });
 
-test("D4 demoDecisionItems: 12 items across 3 Squads with all 3 row types and optional D3 inferred/grouped fields", () => {
+test("D4 demoDecisionItems: 14 items across 3 Squads with all 3 row types and optional D3/C2 fields", () => {
   const items = demoDecisionItems(Date.parse("2026-11-25T12:00:00Z"));
-  assert.equal(items.length, 12);
+  assert.equal(items.length, 14);
   assert.equal(new Set(items.map((i) => i.squad)).size, 3);
   assert.ok(items.some((i) => classifyDecisionRow(i) === "yesno"));
   assert.ok(items.some((i) => classifyDecisionRow(i) === "answer"));

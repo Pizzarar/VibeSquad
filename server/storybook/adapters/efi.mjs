@@ -253,6 +253,97 @@ function parseRaidStory(text) {
   return out;
 }
 
+// ---------- V1: speaker (kind,id) identity ----------
+// A speaker is identified by (kind,id), never by id alone: squad member `doc` (Saint) is not trader `doc` (Doc).
+// kinds: trader | squad (a squad member id) | system (UI / toast / screen text) | party (the raid-log "Squad" / callsign voice) | narrator.
+// speakerSource: 'explicit' = the data/CSV names the speaker; 'inferred' = guessed from the source path (UI can show it as a guess).
+const NON_ENTITY_SPEAKERS = { system: "system", squad: "party", narrator: "narrator" }; // lowercase CSV/data speaker name -> kind (id = same word, party id = "squad")
+const SPEAKER_SYSTEM = { kind: "system", id: "system" };
+const SPEAKER_PARTY = { kind: "party", id: "squad" };
+
+/** name -> [{kind,id}] over traders (display or id) and squad members (callsign / name only; never the id, which collides with traders). */
+function speakerNameIndex(traders, squadMembers) {
+  const m = new Map();
+  const add = (n, kind, id) => {
+    const k = clean(n).toLowerCase();
+    if (!k) return;
+    const arr = m.get(k) ?? m.set(k, []).get(k);
+    if (!arr.some((x) => x.kind === kind && x.id === id)) arr.push({ kind, id });
+  };
+  for (const [id, t] of Object.entries(traders)) { add(id, "trader", id); add(t.display_name ?? titleCase(id), "trader", id); }
+  for (const s of squadMembers) { add(s.callsign, "squad", s.id); add(s.name, "squad", s.id); }
+  return m;
+}
+
+/** Explicit speaker name ("Popper", "Saint", "Squad", "System") -> {kind,id}, or null when empty / unknown / ambiguous. */
+function resolveSpeakerName(name, nameIndex) {
+  const k = clean(name).toLowerCase();
+  if (!k) return null;
+  if (k === "squad") return SPEAKER_PARTY;
+  if (Object.hasOwn(NON_ENTITY_SPEAKERS, k)) return { kind: NON_ENTITY_SPEAKERS[k], id: k };
+  const c = nameIndex.get(k) ?? [];
+  return c.length === 1 ? c[0] : null;
+}
+
+/** CSV data_path is a JSON-array string like ["traders","popper","lines","wary"] or ["members",0,"bio"]; null when absent/unparsable. */
+function parseDataPath(s) {
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : null; } catch { return null; }
+}
+
+/**
+ * Speaker of a speakerless CSV row, inferred from where it lives: trader/questline data -> that trader, squad.json -> that member,
+ * raid_story.gd -> the party (callsign) voice, everything else (toasts, UI, system text) -> System. Always {source:'inferred'}.
+ */
+function inferCsvSpeaker(row, { traders, squadMembers }) {
+  const dp = parseDataPath(row.data_path);
+  if (dp && (dp[0] === "traders" || dp[0] === "questlines") && typeof dp[1] === "string" && Object.hasOwn(traders, dp[1])) return { kind: "trader", id: dp[1] };
+  if (dp && dp[0] === "members" && Number.isInteger(dp[1]) && squadMembers[dp[1]]) return { kind: "squad", id: squadMembers[dp[1]].id };
+  if (row.file === P.raidStory) return SPEAKER_PARTY;
+  return SPEAKER_SYSTEM;
+}
+
+/**
+ * V1 review priority class of a text line: 'story' (read first) | 'flavor' | 'ui' (bulk-OK by group later).
+ * First matching rule wins; table order matters. `line` = { origin, file, dataPath(array|null) }.
+ */
+const ROW_CLASS_RULES = [
+  [(l) => ["trader_relations", "raid_story", "long_haul"].includes(l.origin), "story"],
+  [(l) => l.origin === "squad" && ["bio", "name"].includes(l.field), "story"],
+  [(l) => l.origin === "squad", "ui"],
+  [(l) => l.origin === "encouragement" || (l.file === P.relations && l.dataPath?.[2] === "encouragement"), "flavor"],
+  [(l) => l.file === P.questlines || l.file === P.relations || l.file === P.raidStory || l.file === P.squad && ["bio", "name"].includes(String(l.dataPath?.at(-1))), "story"],
+  [(l) => l.file === P.squad && l.dataPath?.[0] === "members", "ui"],
+  [(l) => l.file === P.contracts || l.file === P.traders || l.file === P.enemies || l.file === P.recipes || l.file === P.items, "flavor"],
+  [(l) => /^(?:docs\/|data\/lore|scenes\/title\/)/.test(l.file ?? ""), "story"],
+  [(l) => /(?:^|\/)(?:dialogue|dialog|cutscene|intro|credits)[\w.]*$/i.test(l.file ?? ""), "story"],
+  [(l) => /^(?:systems|autoloads)\//.test(l.file ?? ""), "flavor"],
+];
+function rowClass(line) {
+  for (const [test, cls] of ROW_CLASS_RULES) if (test(line)) return cls;
+  return "ui";
+}
+
+/** data fields for a resolved identity; `speakerKind/speakerId/speakerSource` are what the UI keys on. */
+function speakerData(who, source) {
+  return who ? { speakerKind: who.kind, speakerId: who.id, speakerSource: source } : { speakerKind: null, speakerId: null, speakerSource: null };
+}
+
+/** spoken_by link only for speakers that are registry entities (trader / squad); system/party/narrator have no entity to link. */
+function linkSpeaker(L, who) {
+  if (who && (who.kind === "trader" || who.kind === "squad")) L("spoken_by", who.kind, who.id);
+  return L;
+}
+
+/** quest step (by trader + 0-based index) -> its location id, from the at_location link; used for said_at on questline CSV rows. */
+function questStepLocations(ents) {
+  const m = new Map();
+  for (const e of ents) if (e.kind === "quest_step") {
+    const loc = e.links.find((l) => l.rel === "at_location");
+    if (loc) m.set(`${e.data.trader}:${e.data.index - 1}`, loc.id);
+  }
+  return m;
+}
+
 // ---------- the adapter ----------
 async function load(reader, sha) {
   const warnings = [];
@@ -335,7 +426,7 @@ async function load(reader, sha) {
       const lhLine = lo.f.key("long_haul", line ? line - 1 : 0);
       E({
         id: `long_haul:${l.id}`, kind: "line", display: t.slice(0, 60), source: src(P.locations, lhLine), links: linker()("said_at", "location", l.id).links,
-        production: isTodo(t) ? "placeholder" : null, data: { text: t, origin: "long_haul", speaker: "narrator", at_s: l.long_haul.at_s ?? null, kind: l.long_haul.kind ?? null },
+        production: isTodo(t) ? "placeholder" : null, data: { text: t, origin: "long_haul", speaker: "narrator", ...speakerData({ kind: "narrator", id: "narrator" }, "explicit"), rowClass: rowClass({ origin: "long_haul" }), at_s: l.long_haul.at_s ?? null, kind: l.long_haul.kind ?? null },
       });
     }
   }
@@ -372,6 +463,7 @@ async function load(reader, sha) {
   const ctx = co.json?.templates ?? [];
   for (const c of ctx) {
     const L = linker();
+    L("spoken_by", "trader", c.trader); L("said_at", "location", c.location); // V1: who offers it, where
     L("trader", "trader", c.trader); L("item", "item", c.item); L("enemy", "enemy", c.enemy); L("location", "location", c.location);
     for (const r of c.requires ? (Array.isArray(c.requires) ? c.requires : [c.requires]) : []) L("requires_skill", "skill", r?.skill);
     const { id, ...rest } = c;
@@ -393,8 +485,10 @@ async function load(reader, sha) {
   for (const [traderId, chain] of Object.entries(ql.json?.questlines ?? {})) {
     (chain.steps ?? []).forEach((s, idx) => {
       const L = linker();
-      L("trader", "trader", traderId);
+      L("trader", "trader", traderId); L("spoken_by", "trader", traderId); // V1
       const t = s.task ?? {};
+      const stepLoc = s.task?.type === "extract" || s.task?.type === "kill" ? s.task.location : null;
+      L("said_at", "location", stepLoc);
       if (t.type === "deliver") L("wants_item", "item", t.item_id);
       if (t.type === "extract") L("at_location", "location", t.location);
       if (t.type === "kill") { L("targets_enemy", "enemy", t.enemy_id); L("at_location", "location", t.location); }
@@ -411,13 +505,13 @@ async function load(reader, sha) {
     const start = rel.f.key(tid) ?? 1;
     for (const [k, text] of Object.entries(r.lines ?? {})) {
       const L = linker(); L("spoken_by", "trader", tid);
-      E({ id: `rel:${tid}:${k}`, kind: "line", display: text.slice(0, 60), source: src(P.relations, rel.f.key(k, start - 1)), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "trader_relations", speaker: tid, band: k } });
+      E({ id: `rel:${tid}:${k}`, kind: "line", display: text.slice(0, 60), source: src(P.relations, rel.f.key(k, start - 1)), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "trader_relations", speaker: tid, ...speakerData({ kind: "trader", id: tid }, "explicit"), rowClass: rowClass({ origin: "trader_relations" }), band: k } });
     }
     (r.encouragement ?? []).forEach((e, i) => {
       const L = linker(); L("spoken_by", "trader", tid); L("wants_item", "item", e.item_id);
       for (const q of e.requires ?? []) L("requires_skill", "skill", q?.skill);
       const text = `${e.title ?? ""}: ${e.story ?? ""}`;
-      E({ id: `enc:${tid}:${i}`, kind: "line", display: (e.title ?? "") + (e.story ? ` — ${e.story.slice(0, 40)}` : ""), source: src(P.relations, rel.f.find(/"encouragement"/, start - 1)), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, title: e.title ?? "", story: e.story ?? "", origin: "encouragement", speaker: tid, item_id: e.item_id ?? null, qty: e.qty ?? null, requires: e.requires ?? [] } });
+      E({ id: `enc:${tid}:${i}`, kind: "line", display: (e.title ?? "") + (e.story ? ` — ${e.story.slice(0, 40)}` : ""), source: src(P.relations, rel.f.find(/"encouragement"/, start - 1)), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, title: e.title ?? "", story: e.story ?? "", origin: "encouragement", speaker: tid, ...speakerData({ kind: "trader", id: tid }, "explicit"), rowClass: rowClass({ origin: "encouragement" }), item_id: e.item_id ?? null, qty: e.qty ?? null, requires: e.requires ?? [] } });
     });
   }
   // narrative lines: squad texts
@@ -426,35 +520,35 @@ async function load(reader, sha) {
     for (const [field, text] of [["name", m.name], ["bio", m.bio], ["trait_text", m.trait_text], ["flaw", m.flaw?.text], ["synergy", m.synergy?.text]]) {
       if (!text) continue;
       const L = linker(); L("spoken_by", "squad", m.id);
-      E({ id: `squad:${m.id}:${field}`, kind: "line", display: clean(text).slice(0, 60), source: src(P.squad, sline), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "squad", speaker: m.id, field } });
+      E({ id: `squad:${m.id}:${field}`, kind: "line", display: clean(text).slice(0, 60), source: src(P.squad, sline), links: L.links, production: isTodo(text) ? "placeholder" : null, data: { text, origin: "squad", speaker: m.id, ...speakerData({ kind: "squad", id: m.id }, "explicit"), rowClass: rowClass({ origin: "squad", field }), field } });
     }
   }
   // narrative lines: raid_story templates
   parseRaidStory(raidStoryText ?? "").forEach((t, i) => {
-    E({ id: `raid_story:${i + 1}`, kind: "line", display: t.text.slice(0, 60), source: src(P.raidStory, t.line), production: null, data: { text: t.text, origin: "raid_story", speaker: t.speaker } });
+    // actor/we/medic/victim name the sentence subject, not who speaks: the whole log is the squad's callsign voice (inferred)
+    E({ id: `raid_story:${i + 1}`, kind: "line", display: t.text.slice(0, 60), source: src(P.raidStory, t.line), production: null, data: { text: t.text, origin: "raid_story", speaker: t.speaker, ...speakerData(SPEAKER_PARTY, "inferred"), rowClass: rowClass({ origin: "raid_story" }) } });
   });
 
   // CSV rows as is
-  const speakerLookup = () => {
-    const m = new Map();
-    for (const e of ents) if ((e.kind === "trader" || e.kind === "squad")) for (const n of [e.display, ...e.aliases]) { const k = n.toLowerCase(); (m.get(k) ?? m.set(k, []).get(k)).push(e); }
-    return m;
-  };
+  const stepLocs = questStepLocations(ents);
   if (csvText != null) {
     const { header, records } = parseCsvObjects(csvText);
     if (!header.includes("current_text")) warnings.push(`${P.csv}: no current_text column, ${records.length} rows imported with empty text`);
-    const spk = speakerLookup();
+    const nameIndex = speakerNameIndex(traders, squadMembers);
     const seen = new Map();
     for (const { row, line } of records) {
       const base = `csv:${row.file}:${row.line}:${row.data_path}`;
       const n = (seen.get(base) ?? 0) + 1; seen.set(base, n);
       const L = linker();
-      const cands = row.speaker ? (spk.get(row.speaker.trim().toLowerCase()) ?? []) : [];
-      if (cands.length === 1) L("spoken_by", cands[0].kind, cands[0].id);
+      const named = resolveSpeakerName(row.speaker, nameIndex);
+      const who = named ?? inferCsvSpeaker(row, { traders, squadMembers });
+      linkSpeaker(L, who);
+      const dp = parseDataPath(row.data_path);
+      if (row.file === P.questlines && dp?.[0] === "questlines" && dp[2] === "steps") L("said_at", "location", stepLocs.get(`${dp[1]}:${dp[3]}`));
       E({
         id: n === 1 ? base : `${base}#${n}`, kind: "line", display: (row.current_text ?? "").replace(/\s+/g, " ").slice(0, 60),
         source: src(row.file || P.csv, Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : null), links: L.links, production: csvProduction(row.status),
-        data: { ...row, text: row.current_text ?? "", origin: "csv", csv_line: line },
+        data: { ...row, text: row.current_text ?? "", origin: "csv", csv_line: line, ...speakerData(who, named ? "explicit" : "inferred"), screen: row.group || null, rowClass: rowClass({ origin: "csv", file: row.file, dataPath: dp }) },
       });
     }
   }

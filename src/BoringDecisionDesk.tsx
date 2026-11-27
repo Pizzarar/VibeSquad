@@ -79,6 +79,8 @@ export type DecisionItem = {
   sourceIds?: string[];
   groupSize?: number;
   rawText?: string;
+  /** C1: plain-text excerpt of the asker's defining message (max 1500 chars, \n kept). Render as plain text ONLY. */
+  context?: string;
   ts: number;
   at?: string;
   ageMs?: number;
@@ -87,9 +89,9 @@ export type DecisionItem = {
 export type DecisionRowType = "yesno" | "answer" | "offscreen";
 
 export type StagedChoice =
-  | { choice: "lean" }
-  | { choice: `alt:${number}` }
-  | { choice: "not" }
+  | { choice: "lean"; text?: string }
+  | { choice: `alt:${number}`; text?: string }
+  | { choice: "not"; text?: string }
   | { choice: "reply"; text: string }
   | { choice: "dismiss" };
 
@@ -143,6 +145,65 @@ export function classifyDecisionRow(item: Pick<DecisionItem, "kind" | "lean">): 
   return item.lean && item.lean.trim() ? "yesno" : "answer";
 }
 
+/** True when a non-offscreen card has option buttons to show alongside the reply box (C2). */
+export function hasDecisionOptions(item: Pick<DecisionItem, "kind" | "lean" | "alts">): boolean {
+  const rowType = classifyDecisionRow(item);
+  if (rowType === "offscreen") return false;
+  if (rowType === "yesno") return true;
+  return Boolean(item.lean && item.lean.trim()) || (Array.isArray(item.alts) && item.alts.length > 0);
+}
+
+/** True when a card should show the `Show source ▾` disclosure: every inferred card, and any card with context (C2). */
+export function hasSourceDisclosure(item: Pick<DecisionItem, "inferred" | "context">): boolean {
+  return Boolean(item.inferred || (typeof item.context === "string" && item.context.trim().length > 0));
+}
+
+/** Plain-text excerpt rendered inside the `Show source` disclosure (never markdown or HTML). */
+export function sourceExcerptText(item: Pick<DecisionItem, "context" | "rawText">): string {
+  if (typeof item.context === "string" && item.context.trim().length > 0) return item.context;
+  if (typeof item.rawText === "string" && item.rawText.trim().length > 0) return item.rawText;
+  return "No source message excerpt available.";
+}
+
+function SourceDisclosure({
+  item,
+  open: isSourceOpen,
+  onToggle,
+}: {
+  item: DecisionItem;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!hasSourceDisclosure(item)) return null;
+  const bodyId = `boring-decision-source-body-${item.id}`;
+  return (
+    <div className="boring-decision-source" data-testid={`boring-decision-source-${item.id}`}>
+      <button
+        type="button"
+        className="boring-decision-source-toggle"
+        data-testid={`boring-decision-source-toggle-${item.id}`}
+        aria-expanded={isSourceOpen}
+        aria-controls={bodyId}
+        onClick={onToggle}
+      >
+        {isSourceOpen ? "Hide source ▴" : "Show source ▾"}
+      </button>
+      {isSourceOpen && (
+        <div
+          id={bodyId}
+          className="boring-decision-source-body"
+          data-testid={bodyId}
+          role="region"
+          aria-label={`Source excerpt for ${item.ask}`}
+          tabIndex={0}
+        >
+          {sourceExcerptText(item)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Group open feed items (excluding offscreen) by Squad, preserving oldest-first order inside each Squad and across Squads. */
 export function groupFeedBySquad(items: DecisionItem[]): { squad: string; squadName: string; items: DecisionItem[] }[] {
   const sorted = [...items].sort((a, b) => a.ts - b.ts);
@@ -176,11 +237,51 @@ export function buildAnswerBatch(items: DecisionItem[], staged: Readonly<Record<
       const text = sel.text.trim();
       if (!text) continue;
       out.push({ id: item.id, choice: "reply", text });
+    } else if (sel.choice === "dismiss") {
+      out.push({ id: item.id, choice: "dismiss" });
     } else {
-      out.push({ id: item.id, choice: sel.choice });
+      const text = typeof sel.text === "string" ? sel.text.trim() : "";
+      out.push(text ? { id: item.id, choice: sel.choice, text } : { id: item.id, choice: sel.choice });
     }
   }
   return out;
+}
+
+/** Pure state transition for toggling an option/dismiss choice while preserving any typed reply on mixed asks (C2). */
+export function applyChoiceToggle(cur: Readonly<Record<string, StagedChoice>>, id: string, next: StagedChoice): Record<string, StagedChoice> {
+  const prev = cur[id];
+  if (next.choice === "dismiss" || next.choice === "reply") {
+    if (prev && prev.choice === next.choice && (prev.choice !== "reply" || (next.choice === "reply" && prev.text === next.text))) {
+      const copy = { ...cur };
+      delete copy[id];
+      return copy;
+    }
+    return { ...cur, [id]: next };
+  }
+  const existingText = prev && prev.choice !== "dismiss" ? prev.text : undefined;
+  if (prev && prev.choice === next.choice) {
+    if (existingText && existingText.trim()) return { ...cur, [id]: { choice: "reply", text: existingText } };
+    const copy = { ...cur };
+    delete copy[id];
+    return copy;
+  }
+  const mergedText = next.text ?? existingText;
+  return { ...cur, [id]: mergedText ? { choice: next.choice, text: mergedText } : { choice: next.choice } };
+}
+
+/** Pure state transition for editing a card's reply input while preserving any selected option on mixed asks (C2). */
+export function applyReplyText(cur: Readonly<Record<string, StagedChoice>>, id: string, text: string): Record<string, StagedChoice> {
+  const prev = cur[id];
+  if (prev && prev.choice !== "reply" && prev.choice !== "dismiss") {
+    return { ...cur, [id]: text ? { choice: prev.choice, text } : { choice: prev.choice } };
+  }
+  if (!text.trim()) {
+    if (!prev || prev.choice === "dismiss") return cur as Record<string, StagedChoice>;
+    const copy = { ...cur };
+    delete copy[id];
+    return copy;
+  }
+  return { ...cur, [id]: { choice: "reply", text } };
 }
 
 /** Match the newest `done` or `decision` log entry for a lane (matches by laneId, `@code`, or code). */
@@ -339,6 +440,59 @@ export function demoDecisionItems(now = Date.now()): DecisionItem[] {
     { id: "ny-00000000000000000010", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "importer", askerId: "demo-im-ld", asker: { id: "demo-im-ld", title: "Importer · Lead 1", live: true }, ask: "Allow non-power-of-two textures in dev builds?", decides: "Relaxes asset import validation outside release builds", lean: "Warn in dev, error in release", alts: ["Error everywhere"], kind: "yesno", structured: true, ts: m(19) },
     { id: "ny-00000000000000000011", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "ci", askerId: "demo-ci-ld", asker: { id: "demo-ci-ld", title: "CI · Lead 1", live: true }, ask: "Which artifact retention window (days) do we want for nightly builds?", decides: "Sets storage cleanup policy on the build bucket", lean: "", alts: [], kind: "answer", structured: true, ts: m(12) },
     { id: "ny-00000000000000000012", source: "log", squad: "studio-tools", squadName: "Studio Tools", lane: "billing", askerId: "demo-bi-ld", asker: { id: "demo-bi-ld", title: "Billing · Lead 1", live: true }, ask: "Approve the $20/mo build-cache storage upgrade", decides: "Increases remote cache quota for CI runners", lean: "", alts: [], kind: "offscreen", structured: true, ts: m(6) },
+    {
+      id: "ny-00000000000000000013",
+      source: "log",
+      squad: "vibesquad",
+      squadName: "VibeSquad",
+      lane: "desk",
+      askerId: "demo-desk-ld",
+      asker: { id: "demo-desk-ld", title: "Overlord", live: true },
+      ask: "Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?",
+      decides: "A spec change for partial-fill entries, plus whether the owner can veto the check-5 block",
+      lean: "",
+      alts: [
+        "A: fill-or-kill at entry — cancel the order unless it fills completely",
+        "B: keep the partial fill and resize the stop to the filled size",
+        "C: top up the remainder at the next bar's open",
+      ],
+      kind: "yesno",
+      structured: false,
+      inferred: true,
+      context: [
+        "Partial fills are the last open question on the entry path.",
+        "A) fill-or-kill at entry: cancel the order unless it fills completely",
+        "B) keep the partial fill and resize the stop to the filled size",
+        "C) top up the remainder at the next bar's open",
+        "Separately: should I add a 30s veto window on the check-5 same-ticker block?",
+      ].join("\n"),
+      ts: m(4),
+    },
+    {
+      id: "ny-00000000000000000014",
+      source: "label",
+      squad: "studio-tools",
+      squadName: "Studio Tools",
+      lane: "ci",
+      askerId: "demo-ci-ld",
+      asker: { id: "demo-ci-ld", title: "CI · Lead 1", live: true },
+      ask: "U11 survivorship: (a) survivor-only with coverage %, or (b) stop at A1?",
+      decides: "Sets U11 scope and whether delisted rows are deferred",
+      lean: "",
+      alts: [
+        "a: survivor-only — keep only listed tickers and report coverage %",
+        "b: stop at A1 — ship the A1 universe and defer delisted data",
+      ],
+      kind: "yesno",
+      structured: false,
+      inferred: true,
+      context: [
+        "U11 needs a call on survivorship before we freeze the dataset.",
+        "(a) survivor-only: keep only listed tickers and report coverage %",
+        "(b) stop at A1: ship the A1 universe and defer delisted data",
+      ].join("\n"),
+      ts: m(2),
+    },
   ];
 }
 
@@ -512,6 +666,7 @@ export function BoringDecisionDesk({
   const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const wide = useWideRail();
   const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
+  const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -600,29 +755,13 @@ export function BoringDecisionDesk({
   const toggleChoice = (id: string, next: StagedChoice) => {
     if (pending || sending) return;
     setBanner(null);
-    setStaged((cur) => {
-      const prev = cur[id];
-      if (prev && prev.choice === next.choice && (prev.choice !== "reply" || (next.choice === "reply" && prev.text === next.text))) {
-        const copy = { ...cur };
-        delete copy[id];
-        return copy;
-      }
-      return { ...cur, [id]: next };
-    });
+    setStaged((cur) => applyChoiceToggle(cur, id, next));
   };
 
   const setReplyText = (id: string, text: string) => {
     if (pending || sending) return;
     setBanner(null);
-    setStaged((cur) => {
-      if (!text.trim()) {
-        if (!(id in cur)) return cur;
-        const copy = { ...cur };
-        delete copy[id];
-        return copy;
-      }
-      return { ...cur, [id]: { choice: "reply", text } };
-    });
+    setStaged((cur) => applyReplyText(cur, id, text));
   };
 
   const stageAllLeans = () => {
@@ -852,12 +991,14 @@ export function BoringDecisionDesk({
             <div className="boring-decision-cards">
               {grp.items.map((item) => {
                 const rowType = classifyDecisionRow(item);
+                const hasOptions = hasDecisionOptions(item);
                 const sel = staged[item.id];
                 const isStaged = Boolean(sel);
                 const age = formatAge(item.ts, now);
                 const askerLabel = item.asker?.title ? cleanTitle(item.asker.title) : item.askerId || "";
                 const groupCount = item.groupSize && item.groupSize > 1 ? item.groupSize : Array.isArray(item.sourceIds) && item.sourceIds.length > 1 ? item.sourceIds.length : 0;
                 const leanStaged = sel?.choice === "lean";
+                const replyValue = sel && sel.choice !== "dismiss" ? (sel.text ?? "") : "";
                 return (
                   <article
                     key={item.id}
@@ -892,7 +1033,13 @@ export function BoringDecisionDesk({
                       </div>
                     )}
 
-                    {rowType === "yesno" ? (
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
+
+                    {hasOptions && (
                       <div className="boring-decision-choices" role="group" aria-label={`Options for ${item.ask}`}>
                         {item.lean && (
                           <button
@@ -924,29 +1071,33 @@ export function BoringDecisionDesk({
                             </button>
                           );
                         })}
-                        <button
-                          type="button"
-                          className={`boring-decision-choice is-not${sel?.choice === "not" ? " selected staged" : ""}`}
-                          data-testid={`boring-decision-not-${item.id}`}
-                          aria-pressed={sel?.choice === "not"}
-                          disabled={Boolean(pending) || sending}
-                          onClick={() => toggleChoice(item.id, { choice: "not" })}
-                        >
-                          Not that
-                        </button>
+                        {rowType === "yesno" && (
+                          <button
+                            type="button"
+                            className={`boring-decision-choice is-not${sel?.choice === "not" ? " selected staged" : ""}`}
+                            data-testid={`boring-decision-not-${item.id}`}
+                            aria-pressed={sel?.choice === "not"}
+                            disabled={Boolean(pending) || sending}
+                            onClick={() => toggleChoice(item.id, { choice: "not" })}
+                          >
+                            Not that
+                          </button>
+                        )}
                       </div>
-                    ) : (
-                      <div className="boring-decision-answer-row">
-                        <input
-                          type="text"
-                          className="boring-decision-input"
-                          data-testid={`boring-decision-input-${item.id}`}
-                          aria-label={`Answer for ${item.ask}`}
-                          placeholder="One-line answer…"
-                          disabled={Boolean(pending) || sending}
-                          value={sel?.choice === "reply" ? sel.text : ""}
-                          onChange={(e) => setReplyText(item.id, e.target.value)}
-                        />
+                    )}
+
+                    <div className="boring-decision-answer-row">
+                      <input
+                        type="text"
+                        className="boring-decision-input"
+                        data-testid={`boring-decision-input-${item.id}`}
+                        aria-label={`Answer for ${item.ask}`}
+                        placeholder={hasOptions ? "Add a note or reply…" : "One-line answer…"}
+                        disabled={Boolean(pending) || sending}
+                        value={replyValue}
+                        onChange={(e) => setReplyText(item.id, e.target.value)}
+                      />
+                      {rowType !== "yesno" && (
                         <button
                           type="button"
                           className={`boring-decision-dismiss${sel?.choice === "dismiss" ? " staged" : ""}`}
@@ -956,8 +1107,8 @@ export function BoringDecisionDesk({
                         >
                           {sel?.choice === "dismiss" ? "✓ Dismiss" : "Dismiss"}
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {rowErrors[item.id] && (
                       <div className="boring-decision-row-err" role="alert">
@@ -1002,6 +1153,11 @@ export function BoringDecisionDesk({
                         <span className="boring-decision-decides-label">Decides:</span> {item.decides}
                       </div>
                     )}
+                    <SourceDisclosure
+                      item={item}
+                      open={Boolean(sourceOpen[item.id])}
+                      onToggle={() => setSourceOpen((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}
+                    />
                   </div>
                   <div className="boring-decision-offscreen-actions">
                     <button

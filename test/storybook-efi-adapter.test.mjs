@@ -78,7 +78,7 @@ test("registries: enemy boss flag via locations[].boss, location pool, line numb
 test("narrative units: quest steps with task links, relations, squad text, long_haul, raid_story", () => {
   const k = reg.get("quest_step", "popper_2");
   assert.equal(k.data.trader, "popper");
-  assert.deepEqual(k.links.filter((l) => l.rel !== "trader").map((l) => `${l.rel}:${l.kind}:${l.id}`).sort(), ["at_location:location:harbor_district", "targets_enemy:enemy:scav"]);
+  assert.deepEqual(k.links.filter((l) => !["trader", "spoken_by", "said_at"].includes(l.rel)).map((l) => `${l.rel}:${l.kind}:${l.id}`).sort(), ["at_location:location:harbor_district", "targets_enemy:enemy:scav"]);
   assert.equal(k.production, null);
   assert.equal(reg.get("quest_step", "popper_1").production, "placeholder");
   assert.equal(reg.get("quest_step", "popper_1").display, "Spent Brass");
@@ -95,8 +95,8 @@ test("narrative units: quest steps with task links, relations, squad text, long_
 
 test("text_review.csv imported as is, quoted newline kept, status -> production, speaker linked", () => {
   const rows = reg.byKind("line").filter((l) => l.data.origin === "csv");
-  assert.equal(rows.length, 3);
-  const q = rows.find((r) => r.data.group === "Trader questlines");
+  assert.equal(rows.length, 7);
+  const q = rows.find((r) => r.data.group === "Trader questlines" && r.data.speaker === "Popper");
   assert.equal(q.data.current_text, 'Bring thirty casings,\nand "he\'ll" know you.');
   for (const col of ["group", "file", "line", "data_path", "current_text", "status", "speaker", "owner_rewrite", "owner_note", "reviewed_hash"]) assert.ok(col in q.data, col);
   assert.equal(q.data.owner_rewrite, "Bring me thirty clean casings.");
@@ -250,4 +250,59 @@ test("fixture efi-mini.json: matches the adapter output (+1 hand-made finding), 
   const kinds = new Set(fx.entities.map((e) => e.kind));
   for (const k of Object.keys(KINDS)) assert.ok(kinds.has(k), `fixture has ${k}`);
   assert.deepEqual({ ...fx, sha: "x" }, { ...generated, sha: "x" }, "regenerate with UPDATE_FIXTURE=1 node --test test/storybook-efi-adapter.test.mjs");
+});
+
+test("V1: speaker identity is (kind,id): Saint (squad doc) != Doc (trader doc); every line has a speaker; inferred is marked", () => {
+  const lines = reg.byKind("line");
+  for (const l of lines) {
+    assert.ok(l.data.speakerKind && l.data.speakerId, `${l.id} has a speaker`);
+    assert.ok(["explicit", "inferred"].includes(l.data.speakerSource), l.id);
+  }
+  const saint = lines.filter((l) => l.data.speakerKind === "squad" && l.data.speakerId === "doc");
+  const doc = lines.filter((l) => l.data.speakerKind === "trader" && l.data.speakerId === "doc");
+  assert.ok(saint.length >= 1 && doc.length >= 1);
+  for (const l of saint) assert.ok(!l.links.some((x) => x.rel === "spoken_by" && x.kind === "trader"), l.id);
+  const sys = lines.filter((l) => l.data.speakerKind === "system");
+  assert.ok(sys.length >= 1);
+  assert.ok(sys.every((l) => l.data.speakerSource === "inferred" || l.data.speaker?.toLowerCase() === "system"));
+  for (const l of lines.filter((x) => x.data.origin === "raid_story")) assert.deepEqual([l.data.speakerKind, l.data.speakerId, l.data.speakerSource], ["party", "squad", "inferred"]);
+});
+
+test("V1: quest steps and contracts carry spoken_by / said_at", () => {
+  const q = reg.get("quest_step", "popper_2");
+  assert.ok(q.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "popper"));
+  assert.ok(q.links.some((l) => l.rel === "said_at" && l.kind === "location"), "kill step has a location");
+  const c = reg.get("contract", "d_popper_scrap_metal");
+  assert.ok(c.links.some((l) => l.rel === "spoken_by" && l.kind === "trader"));
+});
+
+test("V1: every line has a rowClass; story/flavor/ui rules by origin and path", () => {
+  const lines = reg.byKind("line");
+  for (const l of lines) assert.ok(["story", "flavor", "ui"].includes(l.data.rowClass), l.id);
+  for (const l of lines.filter((x) => x.data.origin === "raid_story" || x.data.origin === "trader_relations")) assert.equal(l.data.rowClass, "story");
+  for (const l of lines.filter((x) => x.data.origin === "encouragement")) assert.equal(l.data.rowClass, "flavor");
+  for (const l of lines.filter((x) => x.data.origin === "csv" && x.data.file === "data/questlines.json")) assert.equal(l.data.rowClass, "story");
+});
+
+test("V1: speakerless CSV rows infer from the JSON-array data_path / file; CSV said_at; contract said_at; squad.json rowClass", () => {
+  const csv = reg.byKind("line").filter((l) => l.data.origin === "csv");
+  const by = (file, pred = () => true) => csv.find((l) => l.data.file === file && !l.data.speaker && pred(l));
+  const title = by("data/questlines.json");
+  assert.deepEqual([title.data.speakerKind, title.data.speakerId, title.data.speakerSource], ["trader", "popper", "inferred"]);
+  assert.ok(title.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "popper"));
+  assert.ok(title.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "harbor_district"), "step 1 kill location");
+  assert.equal(title.data.rowClass, "story");
+  const bio = by("data/squad.json", (l) => l.data.data_path.includes("bio"));
+  assert.deepEqual([bio.data.speakerKind, bio.data.speakerId, bio.data.speakerSource, bio.data.rowClass], ["squad", "doc", "inferred", "story"]);
+  assert.ok(bio.links.some((l) => l.rel === "spoken_by" && l.kind === "squad" && l.id === "doc"));
+  assert.ok(!bio.links.some((l) => l.kind === "trader"), "Saint is not Doc");
+  const trait = by("data/squad.json", (l) => l.data.data_path.includes("trait_text"));
+  assert.equal(trait.data.rowClass, "ui");
+  const rs = by("scenes/raids/corridor/raid_story.gd");
+  assert.deepEqual([rs.data.speakerKind, rs.data.speakerId, rs.data.speakerSource], ["party", "squad", "inferred"]);
+  const ui = by("scenes/armory/armory_view.gd");
+  assert.deepEqual([ui.data.speakerKind, ui.data.speakerSource, ui.data.rowClass], ["system", "inferred", "ui"]);
+  const ex = reg.get("contract", "x_doc_vault");
+  assert.ok(ex.links.some((l) => l.rel === "said_at" && l.kind === "location" && l.id === "sealed_vault"));
+  assert.ok(ex.links.some((l) => l.rel === "spoken_by" && l.kind === "trader" && l.id === "doc"));
 });

@@ -9,6 +9,7 @@ import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -24,13 +25,20 @@ function seed(dir) {
       .map((l) => JSON.stringify(l)).join('\n') + '\n');
 }
 
+// idea-1144: these tests are about the guard's stat/identity logic, not real inotify. A real fs.watch fails with EMFILE/ENOSPC
+// when the per-user inotify instance budget (max_user_instances, 128) is exhausted — which happens in the full suite — and
+// the runner records that as a permanent failure, leaving `_rosterWatch` null. Inject a fake watcher so no inotify is used.
+const fakeWatchFactory = () => Object.assign(new EventEmitter(), { close() {} });
+
 // A fresh runner on a temp agents dir, seeded, with a fast guard interval.
 function mkRunner() {
   const home = tmp();
   const dir = path.join(home, 'agents');
   mkdirSync(dir, { recursive: true });
   seed(dir);
-  return { home, dir, r: new Runner({ dir, adapters: {}, rosterWatchGuardMs: 25 }) };
+  const r = new Runner({ dir, adapters: {}, rosterWatchGuardMs: 25 });
+  r.rosterWatchFactory = fakeWatchFactory;
+  return { home, dir, r };
 }
 
 const enoent = () => { const e = new Error('ENOENT: no such file or directory'); e.code = 'ENOENT'; return e; };
@@ -51,7 +59,7 @@ test('L1: a pending reopen keeps the reopen flag armed when the dir vanishes bef
 test('L1: a replaced dir keeps the guard armed when the reopen races the dir away', async () => {
   const { dir, r } = mkRunner();
   try {
-    r.statusAll(); // opens a real watch and captures its identity
+    r.statusAll(); // opens the (fake) watch and captures its identity
     assert.ok(r._rosterWatch, 'watch is open');
     r.rosterWatchStat = async () => ({ ino: 999n, birthtimeMs: 999n }); // the dir looks replaced (new identity)
     rmSync(dir, { recursive: true, force: true }); // ...but it is gone before the reopen
@@ -97,5 +105,149 @@ test('a permanent factory failure during a pending reopen still stops the guard 
     assert.equal(r._rosterWatchFailed, true, 'a non-ENOENT factory error is permanent');
     assert.equal(r._rosterWatch, null);
     assert.equal(r._rosterWatchGuard, null, 'the guard does not reschedule after a permanent failure');
+  } finally { r.shutdown(); }
+});
+
+// idea-1144 (P5): EMFILE/ENOSPC (inotify budget exhausted) is transient: keep retrying on the guard with a backoff; other
+// codes stay permanent. Injected factory, no real inotify.
+const coded = (code) => { const e = new Error(`${code}: inotify`); e.code = code; return e; };
+const until = async (fn, ms = 3000) => {
+  const t = Date.now();
+  while (!fn()) { if (Date.now() - t > ms) assert.fail('timed out'); await new Promise((r) => setTimeout(r, 10)); }
+};
+
+for (const code of ['EMFILE', 'ENOSPC']) {
+  test(`P5: ${code} on the initial open is transient: the guard retries and then opens`, async () => {
+    const { r } = mkRunner();
+    try {
+      let calls = 0;
+      r.rosterWatchFactory = () => { if (++calls <= 2) throw coded(code); return fakeWatchFactory(); };
+      r.statusAll(); // first attempt throws
+      assert.equal(r._rosterWatchFailed, false, 'not a permanent failure');
+      assert.equal(r._rosterWatch, null);
+      assert.equal(r._rosterWatchReopen, true, 'a reopen is pending');
+      assert.ok(r._rosterWatchGuard, 'the guard is armed to retry');
+      await until(() => !!r._rosterWatch);
+      assert.equal(calls, 3, 'retried through two failures, then opened');
+      assert.equal(r._rosterWatchBackoff, 0, 'a successful open resets the backoff');
+      assert.equal(r._rosterWatchReopen, false);
+    } finally { r.shutdown(); }
+  });
+}
+
+test('P5: scans inside the backoff window do not hammer the factory', async () => {
+  const { r } = mkRunner();
+  try {
+    let calls = 0;
+    r.rosterWatchFactory = () => { calls++; throw coded('EMFILE'); };
+    r.statusAll(); r.statusAll(); r.statusAll();
+    assert.equal(calls, 1, 'only the first scan tried to open; the rest are inside the backoff');
+    assert.ok(r._rosterWatchBackoffMs() >= 25);
+  } finally { r.shutdown(); }
+});
+
+test('P5: the backoff grows and is capped', () => {
+  const { r } = mkRunner();
+  try {
+    r._rosterWatchBackoff = 1; const a = r._rosterWatchBackoffMs();
+    r._rosterWatchBackoff = 3; const b = r._rosterWatchBackoffMs();
+    r._rosterWatchBackoff = 10; const c = r._rosterWatchBackoffMs();
+    assert.ok(b > a, 'grows');
+    assert.ok(c <= 60_000, 'capped');
+  } finally { r.shutdown(); }
+});
+
+test("P5: an EMFILE from the watcher 'error' event retries and reopens", async () => {
+  const { r } = mkRunner();
+  try {
+    const first = fakeWatchFactory();
+    let calls = 0;
+    r.rosterWatchFactory = () => (++calls === 1 ? first : fakeWatchFactory());
+    r.statusAll();
+    assert.equal(r._rosterWatch, first);
+    first.emit('error', coded('EMFILE'));
+    assert.equal(r._rosterWatchFailed, false, 'not permanent');
+    assert.equal(r._rosterWatch, null, 'the dead handle is dropped');
+    assert.equal(r._rosterWatchReopen, true);
+    await until(() => !!r._rosterWatch && r._rosterWatch !== first);
+    assert.equal(r._rosterWatchFailed, false);
+  } finally { r.shutdown(); }
+});
+
+test("P5: a non-transient watcher 'error' is still permanent and stops the guard", async () => {
+  const { r } = mkRunner();
+  try {
+    r.statusAll();
+    r._rosterWatch.emit('error', coded('EPERM'));
+    assert.equal(r._rosterWatchFailed, true);
+    assert.equal(r._rosterWatchGuard, null);
+    assert.equal(r._rosterWatch, null);
+  } finally { r.shutdown(); }
+});
+
+test('P5: a non-transient factory code (EACCES) is still permanent', async () => {
+  const { r } = mkRunner();
+  try {
+    r.rosterWatchFactory = () => { throw coded('EACCES'); };
+    r.statusAll();
+    assert.equal(r._rosterWatchFailed, true);
+    assert.equal(r._rosterWatchGuard, null);
+  } finally { r.shutdown(); }
+});
+
+test('P5: shutdown during the backoff leaves no watcher, timer, or later open', async () => {
+  const { r } = mkRunner();
+  let calls = 0;
+  r.rosterWatchFactory = () => { calls++; throw coded('EMFILE'); };
+  r.statusAll();
+  assert.ok(r._rosterWatchGuard, 'backoff timer pending');
+  r.shutdown();
+  assert.equal(r._rosterWatchGuard, null);
+  assert.equal(r._rosterWatch, null);
+  const before = calls;
+  await new Promise((res) => setTimeout(res, 150));
+  assert.equal(calls, before, 'no retry after shutdown');
+  assert.equal(r._rosterWatchGuard, null);
+});
+
+test("P5 review: a stale handle's late errors (transient or not) leave the live watch open and not failed", async () => {
+  const { r } = mkRunner();
+  try {
+    const first = fakeWatchFactory();
+    const second = fakeWatchFactory();
+    let calls = 0;
+    r.rosterWatchFactory = () => (++calls === 1 ? first : second);
+    r.statusAll();
+    first.emit('error', coded('EMFILE')); // transient: drops `first`, schedules a retry
+    await until(() => r._rosterWatch === second);
+    first.emit('error', coded('EMFILE'));
+    first.emit('error', coded('EPERM'));
+    assert.equal(r._rosterWatch, second, 'the live watcher is untouched');
+    assert.equal(r._rosterWatchFailed, false);
+    assert.ok(r._rosterWatchGuard, 'the guard is still running');
+  } finally { r.shutdown(); }
+});
+
+test('P5 review: a late non-transient error after shutdown does not set the failed flag', async () => {
+  const { r } = mkRunner();
+  const w = fakeWatchFactory();
+  r.rosterWatchFactory = () => w;
+  r.statusAll();
+  r.shutdown();
+  w.emit('error', coded('EPERM'));
+  assert.equal(r._rosterWatchFailed, false);
+});
+
+test('P5 review: the guard tick clears the retry gate so a ~1ms-early timer still reopens (no doubled backoff)', async () => {
+  const { r } = mkRunner();
+  try {
+    let calls = 0;
+    r.rosterWatchFactory = () => (++calls === 1 ? (() => { throw coded('EMFILE'); })() : fakeWatchFactory());
+    r.statusAll();
+    assert.equal(r._rosterWatchBackoff, 1);
+    r._rosterWatchRetryAt = Date.now() + 60_000; // the wall-clock gate still looks closed when the timer fires
+    await until(() => !!r._rosterWatch);
+    assert.equal(r._rosterWatchBackoff, 0, 'opened on the first scheduled retry; the backoff was not doubled');
+    assert.equal(calls, 2);
   } finally { r.shutdown(); }
 });

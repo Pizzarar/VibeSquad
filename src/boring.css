@@ -2388,6 +2388,61 @@ html[data-vibe="boring"] .is-wide .boring-decision-code {
 /* P2b r3: tag chip keeps rail lines a uniform height */
 html[data-vibe="boring"] .is-wide .boring-decision-strip-event .boring-decision-ev-tag { line-height: 16px; }
 
+/* @desk C2 (PLAN_DESK_DD_CHOICES): wrapping option definitions, Show source disclosure, mixed-ask reply */
+html[data-vibe="boring"] .boring-decision-choice {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+html[data-vibe="boring"] .boring-decision-choice-tag {
+  flex-shrink: 0;
+}
+html[data-vibe="boring"] .boring-decision-source {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+html[data-vibe="boring"] .boring-decision-source-toggle {
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  font: 500 12px/16px var(--sans);
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-decision-source-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+  border-color: var(--border);
+}
+html[data-vibe="boring"] .boring-decision-source-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+html[data-vibe="boring"] .boring-decision-source-body {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--text-2);
+  font: 400 12px/18px var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: calc(12 * 18px + 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+html[data-vibe="boring"] .boring-decision-source-body:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 /* @desk F1 (PLAN_DESK_DD_FILTER): Decision Desk project filter pills */
 html[data-vibe="boring"] .boring-decision-pills { flex: 1 0 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding-top: 2px; }
 html[data-vibe="boring"] .boring-decision-pill-presets { display: inline-flex; align-items: center; gap: 4px; padding-right: 10px; border-right: 1px solid var(--border); }
