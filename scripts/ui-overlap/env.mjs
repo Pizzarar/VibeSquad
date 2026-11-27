@@ -10,6 +10,22 @@ import { fileURLToPath } from "node:url";
 const require2 = createRequire(import.meta.url);
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// Screenshot output for e2e tests: a fresh temp dir by default, the tracked docs/shots/<name> only with UPDATE_SHOTS=1.
+// The dir is fixed at call time (before resolvePlaywright's snap TMPDIR switch); that works today.
+// cleanupShotsDir only removes dirs this function created (allow-list), so it can never delete tracked paths.
+const createdShotsDirs = new Set();
+export function shotsDir(name) {
+  if (process.env.UPDATE_SHOTS === "1") return path.join(REPO_ROOT, "docs", "shots", name);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-shots-${name}-`));
+  createdShotsDirs.add(dir);
+  return dir;
+}
+export function cleanupShotsDir(dir) {
+  if (!createdShotsDirs.has(dir)) return;
+  createdShotsDirs.delete(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 export const TEAMS_REGISTRY = {
   revision: "ui-overlap-guard",
   teams: [

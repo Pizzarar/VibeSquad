@@ -7,10 +7,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
+import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, browserSkipReason, shotsDir, cleanupShotsDir } from "../scripts/ui-overlap/env.mjs";
 
 let pw, exe, server, baseUrl, browser, unavailable;
-const SHOTS_DIR = path.join(REPO_ROOT, "docs", "shots", "desk-d4");
+const SHOTS_DIR = shotsDir("desk-d4");
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml" };
 
 const HISTORY_WRAP = `(() => {
@@ -127,6 +127,7 @@ before(async () => {
 });
 
 after(async () => {
+  cleanupShotsDir(SHOTS_DIR);
   await browser?.close();
   await new Promise((r) => (server ? server.close(r) : r()));
 });
