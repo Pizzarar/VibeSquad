@@ -1,0 +1,1382 @@
+{
+ "dark-1920": {
+  "cards": {
+   "1": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-201-0",
+      "text": "A: keep JSONL files per squad, rotated nightly",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-201-1",
+      "text": "LEAN ⏎ B: SQLite in the server process with WAL mode",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-alt-201-2",
+      "text": "C: DuckDB read replicas built on demand",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-201",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000201-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "2": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-202-0",
+      "text": "a: survivor-only — keep only listed tickers and report coverage %",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-202-1",
+      "text": "LEAN ⏎ b: stop at A1 — ship the A1 universe and defer delisted data",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-not-202",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000202-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "3": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-203-0",
+      "text": "A: retry 3x with backoff",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-203-1",
+      "text": "LEAN ⏎ B: fail fast and surface the error",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-not-203",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000203-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "4": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-204",
+      "text": "LEAN ⏎ B ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-alt-204-0",
+      "text": "Keep shelf packer",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-204-1",
+      "text": "Switch to maxrects",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-204",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000204",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "5": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-205",
+      "text": "LEAN ⏎ C ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-alt-205-0",
+      "text": "A: in-memory only",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-205-1",
+      "text": "B: Redis sidecar",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-205",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000205",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "6": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-206-0",
+      "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-206-1",
+      "text": "B: keep the partial fill and resize the stop to the filled size",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-alt-206-2",
+      "text": "C: top up the remainder at the next bar's open",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-206",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": []
+   },
+   "7": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-207-0",
+      "text": "Keep beta",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-207",
+      "text": "Not that",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": []
+   },
+   "8": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-208",
+      "text": "LEAN ⏎ Merge after green suite",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(155, 114, 232)"
+     },
+     {
+      "tid": "boring-decision-alt-208-0",
+      "text": "Hold for D4 bundle",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     },
+     {
+      "tid": "boring-decision-not-208",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(29, 29, 38)",
+      "bc": "rgb(57, 57, 74)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(243, 241, 247)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000208",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "9": {
+    "h": 144,
+    "buttons": [],
+    "tags": []
+   }
+  },
+  "click1": "boring-decision-alt-ny-00000000000000000201-1",
+  "click8": "boring-decision-lean-ny-00000000000000000208",
+  "click3": "boring-decision-alt-ny-00000000000000000203-1",
+  "send": "Send 6 answers",
+  "pending": "Sending 6 answers in 5s…",
+  "delivered": [
+   {
+    "id": "01",
+    "ans": {
+     "id": "ny-00000000000000000201",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": "Yes, and keep JSONL export for one release"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000201, vibesquad › desk, asked by a1 at 2026-11-26T23:46:17.568Z.",
+     "Owner's answer: Go with option 2: \"B: SQLite in the server process with WAL mode\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: keep JSONL files per squad, rotated nightly\"",
+     "option 2: \"B: SQLite in the server process with WAL mode\"",
+     "option 3: \"C: DuckDB read replicas built on demand\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "02",
+    "ans": {
+     "id": "ny-00000000000000000202",
+     "choice": "alt",
+     "altIndex": 0,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000202, vibesquad › desk, asked by a2 at 2026-11-26T23:47:57.568Z.",
+     "Owner's answer: Go with option 1: \"a: survivor-only — keep only listed tickers and report coverage %\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"a: survivor-only — keep only listed tickers and report coverage %\"",
+     "option 2: \"b: stop at A1 — ship the A1 universe and defer delisted data\""
+    ]
+   },
+   {
+    "id": "03",
+    "ans": {
+     "id": "ny-00000000000000000203",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000203, vibesquad › desk, asked by a3 at 2026-11-26T23:49:37.568Z.",
+     "Owner's answer: Go with option 2: \"B: fail fast and surface the error\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: retry 3x with backoff\"",
+     "option 2: \"B: fail fast and surface the error\""
+    ]
+   },
+   {
+    "id": "06",
+    "ans": {
+     "id": "ny-00000000000000000206",
+     "choice": "not",
+     "altIndex": null,
+     "text": "Neither: reject partials and log them"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000206, vibesquad › desk, asked by a6 at 2026-11-26T23:54:37.568Z.",
+     "Owner's answer: None of these: do NOT go with any of the options listed below.",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: fill-or-kill at entry — cancel the order unless it fills completely\"",
+     "option 2: \"B: keep the partial fill and resize the stop to the filled size\"",
+     "option 3: \"C: top up the remainder at the next bar's open\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "08",
+    "ans": {
+     "id": "ny-00000000000000000208",
+     "choice": "lean",
+     "altIndex": null,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000208, vibesquad › desk, asked by a8 at 2026-11-26T23:57:57.568Z.",
+     "Owner's answer: Go with your lean: \"Merge after green suite\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"Hold for D4 bundle\""
+    ]
+   },
+   {
+    "id": "09",
+    "ans": {
+     "id": "ny-00000000000000000209",
+     "choice": "reply",
+     "altIndex": null,
+     "text": "45000"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000209, vibesquad › desk, asked by a9 at 2026-11-26T23:59:37.568Z.",
+     "Owner's answer: See the owner's reply below.",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   }
+  ],
+  "summary": [
+   "boring-decision-bar: Sent 6 answers.\nUse all leans (2)\nSend 0 answers",
+   "status: Sent 6 answers.",
+   "boring-decision-banner: Sent 6 answers."
+  ],
+  "mainTop": "3 open · 3 here · 0 off-screen\nRefresh\nActive\nAll\nVibeSquad\n3\nDECISIONS\nOldest first · 3\nVibeSquad\n3\n@desk\nDesk · Lead 2\n10m\nAtlas packer?\nDecides: VRAM and manifests\nLEAN\nB\n(letter only; see Show source)\nKeep shelf packer\nSwitch to maxrects\nNone of these\n@desk\nDesk · Lead 2\n8m\nCache tier: A, B or C?\nDecides: Cache cost\nLEAN\nC\n(letter only; see Show source)\nA: in-memory only\nB: Redis sidecar\nNone of these\n@desk\nDesk · Lead 2\n5m\nRename the beta channel to preview?\nDecides: Updater channel name\nKeep beta\nNot that\nLIVE STATUS\n2 lanes\nVibeSquad\nDesk\nwaiting · 3\nNo recent done/decision\nnow\nDesk lane\n@desk\nwaiting · 3\nNo recent done/decision\nSent 6 answers.\nUse all leans (2)\nSend 0 answers",
+  "errs": []
+ },
+ "light-1920": {
+  "cards": {
+   "1": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-201-0",
+      "text": "A: keep JSONL files per squad, rotated nightly",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-201-1",
+      "text": "LEAN ⏎ B: SQLite in the server process with WAL mode",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-201-2",
+      "text": "C: DuckDB read replicas built on demand",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-201",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000201-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "2": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-202-0",
+      "text": "a: survivor-only — keep only listed tickers and report coverage %",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-202-1",
+      "text": "LEAN ⏎ b: stop at A1 — ship the A1 universe and defer delisted data",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-not-202",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000202-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "3": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-203-0",
+      "text": "A: retry 3x with backoff",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-203-1",
+      "text": "LEAN ⏎ B: fail fast and surface the error",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-not-203",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000203-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "4": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-204",
+      "text": "LEAN ⏎ B ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-204-0",
+      "text": "Keep shelf packer",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-204-1",
+      "text": "Switch to maxrects",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-204",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000204",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "5": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-205",
+      "text": "LEAN ⏎ C ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-205-0",
+      "text": "A: in-memory only",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-205-1",
+      "text": "B: Redis sidecar",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-205",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000205",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "6": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-206-0",
+      "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-206-1",
+      "text": "B: keep the partial fill and resize the stop to the filled size",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-206-2",
+      "text": "C: top up the remainder at the next bar's open",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-206",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": []
+   },
+   "7": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-207-0",
+      "text": "Keep beta",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-207",
+      "text": "Not that",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": []
+   },
+   "8": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-208",
+      "text": "LEAN ⏎ Merge after green suite",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-208-0",
+      "text": "Hold for D4 bundle",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-208",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000208",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "9": {
+    "h": 144,
+    "buttons": [],
+    "tags": []
+   }
+  },
+  "click1": "boring-decision-alt-ny-00000000000000000201-1",
+  "click8": "boring-decision-lean-ny-00000000000000000208",
+  "click3": "boring-decision-alt-ny-00000000000000000203-1",
+  "send": "Send 6 answers",
+  "pending": "Sending 6 answers in 5s…",
+  "delivered": [
+   {
+    "id": "01",
+    "ans": {
+     "id": "ny-00000000000000000201",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": "Yes, and keep JSONL export for one release"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000201, vibesquad › desk, asked by a1 at 2026-11-26T23:46:22.150Z.",
+     "Owner's answer: Go with option 2: \"B: SQLite in the server process with WAL mode\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: keep JSONL files per squad, rotated nightly\"",
+     "option 2: \"B: SQLite in the server process with WAL mode\"",
+     "option 3: \"C: DuckDB read replicas built on demand\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "02",
+    "ans": {
+     "id": "ny-00000000000000000202",
+     "choice": "alt",
+     "altIndex": 0,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000202, vibesquad › desk, asked by a2 at 2026-11-26T23:48:02.150Z.",
+     "Owner's answer: Go with option 1: \"a: survivor-only — keep only listed tickers and report coverage %\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"a: survivor-only — keep only listed tickers and report coverage %\"",
+     "option 2: \"b: stop at A1 — ship the A1 universe and defer delisted data\""
+    ]
+   },
+   {
+    "id": "03",
+    "ans": {
+     "id": "ny-00000000000000000203",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000203, vibesquad › desk, asked by a3 at 2026-11-26T23:49:42.150Z.",
+     "Owner's answer: Go with option 2: \"B: fail fast and surface the error\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: retry 3x with backoff\"",
+     "option 2: \"B: fail fast and surface the error\""
+    ]
+   },
+   {
+    "id": "06",
+    "ans": {
+     "id": "ny-00000000000000000206",
+     "choice": "not",
+     "altIndex": null,
+     "text": "Neither: reject partials and log them"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000206, vibesquad › desk, asked by a6 at 2026-11-26T23:54:42.150Z.",
+     "Owner's answer: None of these: do NOT go with any of the options listed below.",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: fill-or-kill at entry — cancel the order unless it fills completely\"",
+     "option 2: \"B: keep the partial fill and resize the stop to the filled size\"",
+     "option 3: \"C: top up the remainder at the next bar's open\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "08",
+    "ans": {
+     "id": "ny-00000000000000000208",
+     "choice": "lean",
+     "altIndex": null,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000208, vibesquad › desk, asked by a8 at 2026-11-26T23:58:02.150Z.",
+     "Owner's answer: Go with your lean: \"Merge after green suite\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"Hold for D4 bundle\""
+    ]
+   },
+   {
+    "id": "09",
+    "ans": {
+     "id": "ny-00000000000000000209",
+     "choice": "reply",
+     "altIndex": null,
+     "text": "45000"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000209, vibesquad › desk, asked by a9 at 2026-11-26T23:59:42.150Z.",
+     "Owner's answer: See the owner's reply below.",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   }
+  ],
+  "summary": [
+   "boring-decision-bar: Sent 6 answers.\nUse all leans (2)\nSend 0 answers",
+   "status: Sent 6 answers.",
+   "boring-decision-banner: Sent 6 answers."
+  ],
+  "mainTop": "3 open · 3 here · 0 off-screen\nRefresh\nActive\nAll\nVibeSquad\n3\nDECISIONS\nOldest first · 3\nVibeSquad\n3\n@desk\nDesk · Lead 2\n10m\nAtlas packer?\nDecides: VRAM and manifests\nLEAN\nB\n(letter only; see Show source)\nKeep shelf packer\nSwitch to maxrects\nNone of these\n@desk\nDesk · Lead 2\n8m\nCache tier: A, B or C?\nDecides: Cache cost\nLEAN\nC\n(letter only; see Show source)\nA: in-memory only\nB: Redis sidecar\nNone of these\n@desk\nDesk · Lead 2\n5m\nRename the beta channel to preview?\nDecides: Updater channel name\nKeep beta\nNot that\nLIVE STATUS\n2 lanes\nVibeSquad\nDesk\nwaiting · 3\nNo recent done/decision\nnow\nDesk lane\n@desk\nwaiting · 3\nNo recent done/decision\nSent 6 answers.\nUse all leans (2)\nSend 0 answers",
+  "errs": []
+ },
+ "light-3200": {
+  "cards": {
+   "1": {
+    "h": 216,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-201-0",
+      "text": "A: keep JSONL files per squad, rotated nightly",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-201-1",
+      "text": "LEAN ⏎ B: SQLite in the server process with WAL mode",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-201-2",
+      "text": "C: DuckDB read replicas built on demand",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-201",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000201-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "2": {
+    "h": 216,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-202-0",
+      "text": "a: survivor-only — keep only listed tickers and report coverage %",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-202-1",
+      "text": "LEAN ⏎ b: stop at A1 — ship the A1 universe and defer delisted data",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-not-202",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000202-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "3": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-203-0",
+      "text": "A: retry 3x with backoff",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-203-1",
+      "text": "LEAN ⏎ B: fail fast and surface the error",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-not-203",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-alt-ny-00000000000000000203-1",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "4": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-204",
+      "text": "LEAN ⏎ B ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-204-0",
+      "text": "Keep shelf packer",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-204-1",
+      "text": "Switch to maxrects",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-204",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000204",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "5": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-205",
+      "text": "LEAN ⏎ C ⏎ (letter only; see Show source)",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-205-0",
+      "text": "A: in-memory only",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-205-1",
+      "text": "B: Redis sidecar",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-205",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000205",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "6": {
+    "h": 256,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-206-0",
+      "text": "A: fill-or-kill at entry — cancel the order unless it fills completely",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-206-1",
+      "text": "B: keep the partial fill and resize the stop to the filled size",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-alt-206-2",
+      "text": "C: top up the remainder at the next bar's open",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-206",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": []
+   },
+   "7": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-alt-207-0",
+      "text": "Keep beta",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-207",
+      "text": "Not that",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": []
+   },
+   "8": {
+    "h": 184,
+    "buttons": [
+     {
+      "tid": "boring-decision-lean-208",
+      "text": "LEAN ⏎ Merge after green suite",
+      "aria": null,
+      "title": "",
+      "bg": "rgba(0, 0, 0, 0)",
+      "bc": "rgb(109, 75, 201)"
+     },
+     {
+      "tid": "boring-decision-alt-208-0",
+      "text": "Hold for D4 bundle",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     },
+     {
+      "tid": "boring-decision-not-208",
+      "text": "None of these",
+      "aria": null,
+      "title": "",
+      "bg": "rgb(240, 238, 234)",
+      "bc": "rgb(194, 189, 178)"
+     }
+    ],
+    "tags": [
+     {
+      "tag": "SPAN",
+      "cls": "boring-decision-choice-tag",
+      "fs": "11px",
+      "fw": "700",
+      "color": "rgb(29, 26, 36)",
+      "bg": "rgba(0, 0, 0, 0)",
+      "tt": "uppercase",
+      "parent": "boring-decision-lean-ny-00000000000000000208",
+      "ariaHidden": null
+     }
+    ]
+   },
+   "9": {
+    "h": 144,
+    "buttons": [],
+    "tags": []
+   }
+  },
+  "click1": "boring-decision-alt-ny-00000000000000000201-1",
+  "click8": "boring-decision-lean-ny-00000000000000000208",
+  "click3": "boring-decision-alt-ny-00000000000000000203-1",
+  "send": "Send 6 answers",
+  "pending": "Sending 6 answers in 5s…",
+  "delivered": [
+   {
+    "id": "01",
+    "ans": {
+     "id": "ny-00000000000000000201",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": "Yes, and keep JSONL export for one release"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000201, vibesquad › desk, asked by a1 at 2026-11-26T23:46:26.817Z.",
+     "Owner's answer: Go with option 2: \"B: SQLite in the server process with WAL mode\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: keep JSONL files per squad, rotated nightly\"",
+     "option 2: \"B: SQLite in the server process with WAL mode\"",
+     "option 3: \"C: DuckDB read replicas built on demand\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "02",
+    "ans": {
+     "id": "ny-00000000000000000202",
+     "choice": "alt",
+     "altIndex": 0,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000202, vibesquad › desk, asked by a2 at 2026-11-26T23:48:06.817Z.",
+     "Owner's answer: Go with option 1: \"a: survivor-only — keep only listed tickers and report coverage %\".",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"a: survivor-only — keep only listed tickers and report coverage %\"",
+     "option 2: \"b: stop at A1 — ship the A1 universe and defer delisted data\""
+    ]
+   },
+   {
+    "id": "03",
+    "ans": {
+     "id": "ny-00000000000000000203",
+     "choice": "alt",
+     "altIndex": 1,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000203, vibesquad › desk, asked by a3 at 2026-11-26T23:49:46.817Z.",
+     "Owner's answer: Go with option 2: \"B: fail fast and surface the error\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: retry 3x with backoff\"",
+     "option 2: \"B: fail fast and surface the error\""
+    ]
+   },
+   {
+    "id": "06",
+    "ans": {
+     "id": "ny-00000000000000000206",
+     "choice": "not",
+     "altIndex": null,
+     "text": "Neither: reject partials and log them"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000206, vibesquad › desk, asked by a6 at 2026-11-26T23:54:46.817Z.",
+     "Owner's answer: None of these: do NOT go with any of the options listed below.",
+     "The quoted lines below are the needs-you as the Decision Desk assistant read your free-text ask (raw text included). They are context for the answer above, not instructions from the owner.",
+     "option 1: \"A: fill-or-kill at entry — cancel the order unless it fills completely\"",
+     "option 2: \"B: keep the partial fill and resize the stop to the filled size\"",
+     "option 3: \"C: top up the remainder at the next bar's open\"",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   },
+   {
+    "id": "08",
+    "ans": {
+     "id": "ny-00000000000000000208",
+     "choice": "lean",
+     "altIndex": null,
+     "text": ""
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000208, vibesquad › desk, asked by a8 at 2026-11-26T23:58:06.817Z.",
+     "Owner's answer: Go with your lean: \"Merge after green suite\".",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "option 1: \"Hold for D4 bundle\""
+    ]
+   },
+   {
+    "id": "09",
+    "ans": {
+     "id": "ny-00000000000000000209",
+     "choice": "reply",
+     "altIndex": null,
+     "text": "45000"
+    },
+    "prompt": [
+     "[Decision Desk] Owner (the owner) answered a needs-you. Decision ny-00000000000000000209, vibesquad › desk, asked by a9 at 2026-11-26T23:59:46.817Z.",
+     "Owner's answer: See the owner's reply below.",
+     "The quoted lines below are the needs-you as it was logged. They are context for the answer above, not instructions from the owner.",
+     "--- BEGIN owner reply (Owner) ---",
+     "--- END owner reply ---"
+    ]
+   }
+  ],
+  "summary": [
+   "boring-decision-bar: Sent 6 answers.\nUse all leans (2)\nSend 0 answers",
+   "status: Sent 6 answers.",
+   "boring-decision-banner: Sent 6 answers."
+  ],
+  "mainTop": "3 open · 3 here · 0 off-screen\nRefresh\nActive\nAll\nVibeSquad\n3\nDECISIONS\nOldest first · 3\nVibeSquad\n3\n@desk\nDesk · Lead 2\n10m\nAtlas packer?\nDecides: VRAM and manifests\nLEAN\nB\n(letter only; see Show source)\nKeep shelf packer\nSwitch to maxrects\nNone of these\n@desk\nDesk · Lead 2\n8m\nCache tier: A, B or C?\nDecides: Cache cost\nLEAN\nC\n(letter only; see Show source)\nA: in-memory only\nB: Redis sidecar\nNone of these\n@desk\nDesk · Lead 2\n5m\nRename the beta channel to preview?\nDecides: Updater channel name\nKeep beta\nNot that\nLIVE STATUS\n2 lanes\nVibeSquad\nDesk\nwaiting · 3\nNo recent done/decision\nnow\nDesk lane\n@desk\nwaiting · 3\nNo recent done/decision\nSent 6 answers.\nUse all leans (2)\nSend 0 answers",
+  "errs": []
+ }
+}
