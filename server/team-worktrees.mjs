@@ -27,15 +27,15 @@ export function defaultGit(args, cwd, { env, input, buffer = false, timeoutMs } 
   let out;
   try {
     out = execFileSync("git", args, {
-    cwd,
-    ...(detached ? { detached: true } : {}),
-    ...(buffer ? {} : { encoding: "utf8" }), // no encoding = Buffer out; "buffer" would also be used to encode a string `input` (ERR_UNKNOWN_ENCODING)
-    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    ...(input === undefined ? {} : { input }),
-    ...(env ? { env: { ...process.env, ...env } } : {}),
-    windowsHide: true,
-    timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.min(base, Math.ceil(timeoutMs))) : base,
-    maxBuffer: buffer ? 2 ** 31 : 64 << 20, // not `2 << 30`: that overflows int32 to a negative (ERR_OUT_OF_RANGE)
+      cwd,
+      ...(detached ? { detached: true } : {}),
+      ...(buffer ? {} : { encoding: "utf8" }), // no encoding = Buffer out; "buffer" would also be used to encode a string `input` (ERR_UNKNOWN_ENCODING)
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      ...(input === undefined ? {} : { input }),
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+      windowsHide: true,
+      timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.max(1, Math.min(base, Math.ceil(timeoutMs))) : base,
+      maxBuffer: buffer ? 2 ** 31 : 64 << 20, // not `2 << 30`: that overflows int32 to a negative (ERR_OUT_OF_RANGE)
     });
   } catch (e) {
     if (detached && e?.code === "ETIMEDOUT" && Number.isInteger(e.pid)) killTree(e.pid, { sync: true });
