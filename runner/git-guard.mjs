@@ -35,7 +35,7 @@
 // still covers Claude workers there). git's own children (hooks, `pull` -> merge, an external git-<x>) get git's exec-path
 // first on PATH, so they bypass the shim; only the outer command is judged.
 import { spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, closeSync, constants as fsConstants, openSync, readSync, statSync, realpathSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants as fsConstants, fstatSync, openSync, readSync, statSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -724,7 +724,7 @@ export const GIT_SHIM_MARKER = 'VibeSquad worker git gate';
 /**
  * Is PATH entry `dir` a VibeSquad git-shim dir, of ANY copy (this module's, the runtime's, an older checkout's)? Two tests,
  * both required: the cheap path rule first (basename `git-shim`, the same rule the shim uses to skip shims when it looks
- * for the real git), then the content rule (its `git` is a regular file whose first 512 bytes hold GIT_SHIM_MARKER). The
+ * for the real git), then the content rule (its `git` opens, following symlinks, to a regular file whose first 512 bytes hold GIT_SHIM_MARKER). The
  * path rule keeps the cost at zero I/O for ordinary entries; the content rule keeps a user's own `git-shim` dir that holds
  * some other git (or none) on PATH. A dir like /usr/bin is never even opened. Unreadable or missing `git`: not a shim.
  */
@@ -732,9 +732,11 @@ export function isGitShimDir(dir) {
   if (!dir || path.basename(path.resolve(dir)) !== 'git-shim') return false;
   let fd;
   try {
-    const file = path.join(dir, 'git');
-    if (!statSync(file).isFile()) return false;
-    fd = openSync(file, 'r');
+    // One open, then fstat and read on that same fd: no stat/open TOCTOU (Gemini Tier A low on d7f115fe). O_NONBLOCK so a
+    // FIFO named `git` fails the isFile check instead of hanging the open. Symlinks are followed (no O_NOFOLLOW): the fd is
+    // what gets checked, and a `git` that links to a real shim IS a shim; not stripping it would re-gate leads (idea-1167).
+    fd = openSync(path.join(dir, 'git'), fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+    if (!fstatSync(fd).isFile()) return false;
     const buf = Buffer.alloc(512);
     const n = readSync(fd, buf, 0, buf.length, 0);
     return buf.toString('utf8', 0, n).includes(GIT_SHIM_MARKER);

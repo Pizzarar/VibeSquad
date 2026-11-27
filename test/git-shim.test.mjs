@@ -6,7 +6,7 @@ import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { accessSync, chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { agentEnv } from '../runner/runner.mjs';
@@ -51,7 +51,7 @@ const passed = (r) => assert.equal(r.status, 0, `expected pass, got ${r.status}:
 test('agentEnv: workers get the git shim first on PATH (any provider); leads, Buddies and role-less agents do not', { skip: !posix }, () => {
   assert.equal(workerEnv.PATH.split(':')[0], GIT_SHIM_DIR);
   // The suite may run inside a worker, whose PATH already holds the runtime shim copy: that one is dropped (idea-1167).
-  const baseNoShim = base.PATH.split(':').filter((d) => d && path.basename(path.resolve(d)) !== 'git-shim').join(':');
+  const baseNoShim = base.PATH.split(':').filter((d) => d && !isGitShimDir(d)).join(':'); // production's rule (applyGitShim)
   assert.equal(workerEnv.PATH.split(':').slice(1).join(':'), baseNoShim, 'the rest of PATH is unchanged, minus inherited shims');
   assert.equal(workerEnv[GIT_SHIM_NODE_ENV], process.execPath, 'the check runs with the runner\'s own node');
   for (const meta of [{ role: 'lead' }, { role: 'brainstorm' }, {}, { labels: { role: 'lead' } }]) {
@@ -240,6 +240,33 @@ test('1167: the shim file carries the marker; isGitShimDir needs both the git-sh
   assert.equal(isGitShimDir(empty), false);
   assert.equal(isGitShimDir(path.join(root, 'missing', 'git-shim')), false);
   assert.equal(isGitShimDir(''), false);
+});
+
+test('1127T T2: isGitShimDir opens `git` once and checks that fd: dir, symlinks, FIFO and unreadable files', { skip: !posix }, () => {
+  const mk = (name) => { const d = path.join(root, 't2', name, 'git-shim'); mkdirSync(d, { recursive: true }); return d; };
+  const target = path.join(foreignShim, 'git');
+  const linked = mk('link-to-shim'); // a symlinked shim is followed: it IS a shim
+  symlinkSync(target, path.join(linked, 'git'));
+  assert.equal(isGitShimDir(linked), true, 'symlink to a real shim');
+  const linkedDir = mk('link-to-dir');
+  mkdirSync(path.join(root, 't2', 'some-dir'), { recursive: true });
+  symlinkSync(path.join(root, 't2', 'some-dir'), path.join(linkedDir, 'git'));
+  assert.equal(isGitShimDir(linkedDir), false, 'symlink to a directory');
+  const linkedOther = mk('link-to-other');
+  symlinkSync('/bin/sh', path.join(linkedOther, 'git'));
+  assert.equal(isGitShimDir(linkedOther), false, 'symlink to a file without the marker');
+  const dangling = mk('dangling');
+  symlinkSync(path.join(root, 't2', 'nowhere'), path.join(dangling, 'git'));
+  assert.equal(isGitShimDir(dangling), false, 'dangling symlink');
+  const fifo = mk('fifo');
+  execFileSync('mkfifo', [path.join(fifo, 'git')]);
+  assert.equal(isGitShimDir(fifo), false, 'a FIFO fails fast (O_NONBLOCK), never hangs the open');
+  const unreadable = mk('unreadable');
+  copyFileSync(target, path.join(unreadable, 'git'));
+  chmodSync(path.join(unreadable, 'git'), 0o000);
+  if (process.getuid?.() !== 0) assert.equal(isGitShimDir(unreadable), false, 'an unreadable shim file');
+  chmodSync(path.join(unreadable, 'git'), 0o755);
+  assert.equal(isGitShimDir(unreadable), true, 'the same file once readable');
 });
 
 test('1167: a lead (any non-worker role) whose PATH carries a FOREIGN shim copy gets none, and its main-checkout commit runs', { skip: !posix }, () => {
