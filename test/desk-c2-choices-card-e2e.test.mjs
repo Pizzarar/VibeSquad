@@ -74,7 +74,7 @@ function resetBackend() {
         asker: { id: "a-ld-1", title: "Data · Lead 1", live: true },
         ask: "U11 survivorship: (a) survivor-only with coverage %, or (b) stop at A1?",
         decides: "Sets U11 scope and whether delisted rows are deferred.",
-        lean: "",
+        lean: "b",
         alts: [
           "a: survivor-only — keep only listed tickers and report coverage %",
           "b: stop at A1 — ship the A1 universe and defer delisted data",
@@ -211,7 +211,15 @@ for (const cfg of [
       const svA = page.locator(`[data-testid="boring-decision-alt-${svId}-0"]`);
       const svB = page.locator(`[data-testid="boring-decision-alt-${svId}-1"]`);
       assert.equal(await svA.textContent(), "a: survivor-only — keep only listed tickers and report coverage %");
-      assert.equal(await svB.textContent(), "b: stop at A1 — ship the A1 universe and defer delisted data");
+      assert.equal(await svB.textContent(), "Leanb: stop at A1 — ship the A1 universe and defer delisted data");
+
+      // C2b: the bare-letter lean "b" shows option b's definition (no "Lean b" button, no duplicate answer)
+      assert.equal(await page.locator(`[data-testid="boring-decision-lean-${svId}"]`).count(), 0, "no separate lean button");
+      assert.match((await svB.textContent()) ?? "", /^Lean\s*b: stop at A1/);
+      assert.match(await svB.getAttribute("class"), /is-lean/);
+      // C2b: 2+ options -> "None of these"; one lean + one alt is also 2 options
+      assert.equal((await page.locator(`[data-testid="boring-decision-not-${pfId}"]`).textContent())?.trim(), "None of these");
+      assert.equal((await page.locator(`[data-testid="boring-decision-not-${svId}"]`).textContent())?.trim(), "None of these");
 
       // Plain structured card without context has no Show source toggle
       assert.equal(await page.locator(`[data-testid="boring-decision-source-toggle-${plainId}"]`).count(), 0);
@@ -278,6 +286,20 @@ for (const cfg of [
         assert.equal(delivered.text, "Yes, add a 30s veto window");
         assert.match(delivered.prompt, /Owner's answer: Go with option 2: "B: keep the partial fill and resize the stop to the filled size"\./);
         assert.match(delivered.prompt, /--- BEGIN owner reply \(Owner\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
+      }
+
+      if (cfg.fullDrive) {
+        // C2b: picking the lean-marked option b sends the option's definition, with the reply note kept
+        const sv = page.locator(`[data-testid="boring-decision-alt-${svId}-1"]`);
+        await sv.click();
+        await page.locator(`[data-testid="boring-decision-input-${svId}"]`).fill("go");
+        await page.locator('[data-testid="boring-decision-send-btn"]').click();
+        await page.waitForSelector('[data-testid="boring-decision-send-now-btn"]', { timeout: 5000 });
+        await page.locator('[data-testid="boring-decision-send-now-btn"]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-testid="boring-decision-card-ny-00000000000000000002"]'), { timeout: 10000 });
+        const d2 = state.deliveredPrompts.find((d) => d.id === svId);
+        assert.equal(d2.choice, "alt");
+        assert.match(d2.prompt, /Go with option 2: "b: stop at A1/);
       }
 
       assert.deepEqual(errs, [], `no pageerrors: ${errs.join("; ")}`);

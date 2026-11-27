@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 import { transformSync } from "rolldown/utils";
-import { buildAnswerPrompt, validateAnswerBatch } from "../server/decisions.mjs";
+import { buildAnswerPrompt, choiceLabel, resolveLeanAltIndex, validateAnswerBatch } from "../server/decisions.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const dir = mkdtempSync(join(tmpdir(), "vs-desk-c2-"));
@@ -54,6 +54,11 @@ const {
   applyReplyText,
   buildAnswerBatch,
   demoDecisionItems,
+  resolveLeanAlt,
+  leanStage,
+  isUnresolvedBareLean,
+  notChoiceLabel,
+  decisionOptionCount,
 } = await import(pathToFileURL(join(dir, "BoringDecisionDesk.mjs")).href);
 const F = await import(pathToFileURL(join(dir, "decisionFilter.mjs")).href);
 
@@ -181,4 +186,89 @@ test("C2 contracts: plain-text rendering only, aria-expanded disclosure, leans o
   }
   assert.match(c2Css, /\.boring-decision-choice\s*\{[^}]*white-space:\s*normal;/, "option buttons wrap instead of truncating");
   assert.match(c2Css, /\.boring-decision-source-body\s*\{[^}]*white-space:\s*pre-wrap;[^}]*overflow-y:\s*auto;/s, "source excerpt is pre-wrap and scrollable");
+});
+
+// ---- C2b (PLAN_DESK_DD_C2B B1) ----
+const c2bItem = (over = {}) => ({
+  id: "ny-00000000000000000090", source: "log", squad: "vibesquad", squadName: "VibeSquad", lane: "desk", askerId: "a-1",
+  ask: "Pick one", lean: "B", alts: ["A: first thing", "B: second thing", "C: third thing"], kind: "yesno", ts: Date.UTC(2026, 10, 26), ...over,
+});
+
+test("C2b idea-1149: a bare-letter lean resolves to its lettered option and sends one consistent answer", () => {
+  for (const lean of ["B", "b", "(b)", "Option B", "B."]) assert.equal(resolveLeanAlt(c2bItem({ lean })), 1, lean);
+  assert.equal(resolveLeanAlt(c2bItem({ lean: "Z" })), -1, "no such option");
+  assert.equal(resolveLeanAlt(c2bItem({ lean: "Ship it" })), -1, "not a bare letter");
+  const item = c2bItem();
+  // A staged lean goes out as the option it names, never as a second answer meaning the same thing.
+  assert.deepEqual(buildAnswerBatch([item], { [item.id]: { choice: "lean" } }), [{ id: item.id, choice: "alt:1" }]);
+  assert.deepEqual(buildAnswerBatch([item], { [item.id]: { choice: "alt:1" } }), [{ id: item.id, choice: "alt:1" }]);
+  // A real-text lean stays a lean.
+  const real = c2bItem({ lean: "Ship it" });
+  assert.deepEqual(buildAnswerBatch([real], { [real.id]: { choice: "lean" } }), [{ id: real.id, choice: "lean" }]);
+  // The server resolves the same way: the prompt names the definition.
+  const p = buildAnswerPrompt(item, { id: item.id, choice: "lean" }, { ownerName: "Owner" });
+  assert.match(p, /Owner's answer: Go with your lean, option 2: "B: second thing"\./);
+  assert.match(choiceLabel(item, { choice: "lean" }), /^lean, option 2 "B: second thing"$/);
+  // Unresolved bare letter: the letter is kept as the lean.
+  assert.match(buildAnswerPrompt(c2bItem({ lean: "Z" }), { id: "x", choice: "lean" }, { ownerName: "Owner" }), /Go with your lean: "Z"\./);
+});
+
+test("C2b idea-1151: None of these on 2+ options, with matching prompt wording; Not that stays for one lean", () => {
+  assert.equal(notChoiceLabel(c2bItem()), "None of these");
+  assert.equal(decisionOptionCount(c2bItem()), 3);
+  assert.equal(notChoiceLabel(c2bItem({ lean: "", alts: ["A: x", "B: y"] })), "None of these");
+  assert.equal(notChoiceLabel(c2bItem({ lean: "Ship it", alts: ["Hold"] })), "None of these", "lean + 1 alt = 2 options");
+  assert.equal(notChoiceLabel(c2bItem({ lean: "Ship it", alts: [] })), "Not that");
+  const many = buildAnswerPrompt(c2bItem(), { id: "x", choice: "not" }, { ownerName: "Owner" });
+  assert.match(many, /None of these: do NOT go with any of the options/);
+  assert.doesNotMatch(many, /do not go ahead/);
+  const one = c2bItem({ lean: "Ship it", alts: [] });
+  assert.match(buildAnswerPrompt(one, { id: "x", choice: "not" }, { ownerName: "Owner" }), /Not that: do NOT go with your lean "Ship it"\./);
+  assert.match(buildAnswerPrompt(c2bItem({ lean: "", alts: [] }), { id: "x", choice: "not" }, { ownerName: "Owner" }), /Not that: no, do not go ahead\./);
+  assert.equal(choiceLabel(c2bItem(), { choice: "not" }), "none of these");
+  assert.equal(choiceLabel(one, { choice: "not" }), "not that");
+});
+
+test("C2b idea-1152: the delivery summary keeps the typed reply note when an option is picked", () => {
+  const item = c2bItem();
+  assert.equal(choiceLabel(item, { choice: "alt", altIndex: 2, text: "but add a veto" }), 'option 3 "C: third thing" + reply "but add a veto"');
+  assert.match(choiceLabel(item, { choice: "lean", text: "yes" }), /^lean, option 2 .* \+ reply "yes"$/);
+  assert.equal(choiceLabel(item, { choice: "reply", text: "hi" }), 'reply "hi"');
+  assert.equal(choiceLabel(item, { choice: "alt", altIndex: 0 }), 'option 1 "A: first thing"');
+});
+
+test("C2b fix G1: staging a lean that resolves picks the lettered option (one consistent selection)", () => {
+  assert.deepEqual(leanStage(c2bItem()), { choice: "alt:1" });
+  assert.deepEqual(leanStage(c2bItem({ lean: "Ship it" })), { choice: "lean" });
+  // a stale {lean} on a resolved card still sends the option, and one toggle unstages it
+  const item = c2bItem();
+  assert.deepEqual(applyChoiceToggle({ [item.id]: { choice: "lean" } }, item.id, { choice: "lean" }), {});
+});
+
+test("C2b fix G2: a letter needs an explicit label marker; unlettered alts never match (client and server agree)", () => {
+  const neg = c2bItem({ lean: "A", alts: ["A quick fix", "Keep current"] });
+  assert.equal(resolveLeanAlt(neg), -1);
+  assert.equal(resolveLeanAltIndex(neg), -1);
+  for (const alt of ["Option B", "Option B: x", "(b) x", "B. x", "b: x", "B) x", "B - x", "B – x", "B — x", "B"]) {
+    const it = c2bItem({ lean: "b", alts: ["Z other", alt] });
+    assert.equal(resolveLeanAlt(it), 1, alt);
+    assert.equal(resolveLeanAltIndex(it), 1, alt);
+  }
+  assert.equal(resolveLeanAlt(c2bItem({ lean: "B", alts: ["Bold move", "A: x"] })), -1);
+});
+
+test("C2b fix G3: the bare-letter hint points to Show source only when there is a source to show", () => {
+  const withCtx = c2bItem({ lean: "Z", context: "the source" });
+  const noCtx = c2bItem({ lean: "Z" });
+  assert.equal(isUnresolvedBareLean(withCtx), true);
+  assert.equal(hasSourceDisclosure(withCtx), true);
+  assert.equal(hasSourceDisclosure(noCtx), false);
+  assert.match(ddSrc, /hasSourceDisclosure\(item\) \? "\(letter only; see Show source\)" : "\(letter only; option not defined\)"/);
+});
+
+test("C2b fix: choiceLabel marks a truncated quote with an ellipsis", () => {
+  const long = "x".repeat(100);
+  const out = choiceLabel(c2bItem(), { choice: "reply", text: long });
+  assert.match(out, /^reply "x{59}…"$/);
+  assert.equal(choiceLabel(c2bItem(), { choice: "reply", text: "short" }), 'reply "short"');
 });
