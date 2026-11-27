@@ -195,7 +195,7 @@ export const STANDING_RULES = [
   `Run unit work in \`${sanctuaryRuleDir()}${process.platform === "win32" ? "\\<repo>\\<unit>" : "/<repo>/<unit>"}\`; never \`git worktree add ../<repo>-<unit>\` into \`projects/\`.`,
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
   "Never end a turn on a background task with nothing armed: leads/Buddies arm `vs watch add ...`; workers use `vs wait <id> --timeout <s>`.",
-  "Route by role name (Implement, Review, Planner, Pre-check, Lead, Brainstorm, Art Director, Art Painter; `vs profiles`): stakes picks the model + effort from the tier ladder; provider/model only to override; a cap beats an explicit model; failover walks the role's provider chain. Judge picks by first-try PASS, then fix-after-merge, then fit; $ only breaks ties.",
+  "Route by role name (Implement, Review, UX Review, Planner, Pre-check, Lead, Brainstorm, Art Director, Art Painter; `vs profiles`): stakes picks the model + effort from the tier ladder; provider/model only to override; a cap beats an explicit model; failover walks the role's provider chain. Judge picks by first-try PASS, then fix-after-merge, then fit; $ only breaks ties.",
   "Detach live children before archiving a Paseo-backed agent (Paseo cascades archives to its children; the runner has no such cascade, so this applies only to Paseo-backed lanes).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",
   "Every master merge commit carries Live-Needs: none|frontend-reload|build|server-restart|runner-restart in the final trailer block, with Co-Authored-By; sync-runtime reads it.",
@@ -204,7 +204,7 @@ export const STANDING_RULES = [
   "Merge only on the reviewer's own first-line verdict PASS|FAIL H/M/L <tip-hash>, never a digest summary; the hash must match the branch tip.",
   "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb (vs handoff --judgment-file/--judgment -, vs log, vs inbox, vs task).",
   "Shared-machine actions (vs restart, full-suite slot, runtime sync): ask the holders' leads to drain, wait for each `drained`, act, then log `<action>-done`. No timer retries; `--kill-background` only with the owner's per-run OK. Overlord: `vs restart request <tip>` (manual = fallback).",
-  "A plan phase touching Normal-mode UI (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) isn't done while UX Reviewer - Opus has a critical or major finding open for its area, unless the owner overrides; a lane Buddy's own look check doesn't count; findings go to the owning lane as inbox cards.",
+  "A plan phase touching Normal-mode UI (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) isn't done while UX Review has a critical or major finding open for its area, unless the owner overrides; a lane Buddy's own look check doesn't count; findings go to the owning lane as inbox cards.",
   "When the last block of a plan passes (review PASS + merged), the lead logs `vs log done \"plan <PLAN_x> PASS\" --plan docs/PLAN_x.md --pass` (PLAN_x = the docs/PLAN_x.md name); the Buddy logs `vs log handoff \"<note>\" --plan docs/PLAN_x.md` when it hands the plan to the lead (a spawn/send naming the path auto-logs it); @usage scores from the plan= field.",
 ];
 

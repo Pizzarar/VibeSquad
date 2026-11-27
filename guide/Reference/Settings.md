@@ -2,7 +2,7 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** and **Legacy: Psycho mode** (off = Normal, the default; see [Normal and Psycho](../Concepts/Modes.md)) are on **About**. The screenshot below is the **App** tab, which opens first.
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME**, **Crunch mode**, and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** and **Legacy: Psycho mode** (off = Normal, the default; see [Normal and Psycho](../Concepts/Modes.md)) are on **About**. The screenshot below is the **App** tab, which opens first.
 
 ![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
@@ -62,9 +62,13 @@ If the server itself restarted, an agent turn that finished while it was down is
 
 ![The Profiles tab: the AGENT PROFILES list (Lead, Brainstorm and Worker profiles with provider, model, mode and thinking) and the profile editor below it](../assets/screenshots/07e-settings-profiles.png)
 
-**AGENT PROFILES** is the list of ready-made agent setups. Every way of starting an agent (New Agent, Handoff, a Buddy restart, an Inbox topic, Digest) reads from it. Pick one in the **PROFILE** dropdown, edit it, then press **Save profile**. A profile marked "(install …)" needs its provider installed first.
+The **Profiles** tab configures how agents are dispatched across roles and provider models. It has three sections:
 
-The fields:
+1. **ROLES**: The Role Editor. Agents are dispatched by role (Lead, Brainstorm, Implement, Planner, Review, Pre-check, Art Director, Art Painter) rather than rigid profile names. The Planner role creates precise work orders; internal helper roles like Work Order are hidden. Each role defines its tier (`top`, `mid`, `cheap`), provider preference order, per-provider modes and thinking effort, prompt layers, and tool permissions.
+2. **TIER LADDER**: The Tier Ladder Editor. Maps tiers (`top`, `mid`, `cheap`) to specific models and thinking effort per provider family (Claude, Gemini, OpenCode).
+3. **LEGACY AGENT PROFILES**: Shows existing profiles from `~/.vibesquad/profiles.json`. Pickers across the app (New Agent, Buddy start) list roles with tier-ladder routing and optional model overrides (`<provider> · ladder model` or `<provider> · <model>`). Spawns requesting an old profile name still work, but saving a role makes legacy profiles read-only.
+
+The legacy profile fields:
 
 - **PROVIDER**: which tool runs the agent, for example Claude Code or Codex.
 - **MODEL**: which model that provider uses. See [Cheapest capable model](../Concepts/Cheapest-Capable-Model.md).
@@ -73,8 +77,17 @@ The fields:
 - **FEATURE VALUES (JSON)**: extra provider options as JSON. Leave it alone unless a guide tells you what to put there.
 - **NOTES (PROJECT-NEUTRAL SYSTEM PROMPT LAYER)**: standing instructions added to every agent that uses this profile. Keep them general, not about one project. If a note looks project-specific, a warning appears under the box.
 
-- **Change it when:** you want a cheaper model for simple jobs, or a stricter mode for risky ones.
-- **Safe default:** keep the profiles VibeSquad gave you and change one field at a time.
+- **Change it when:** you want to adjust tier-ladder model assignments or customize role prompts and thinking effort.
+- **Safe default:** keep the default roles and tier ladder, and change one field at a time.
+
+## Crunch mode
+
+On the **Team** tab, each Squad editor includes a **Crunch mode** checkbox. When enabled, lanes in that Squad act on their leans end-to-end until there is a tryable build, stopping only for deletes, releases, money, and outward actions. Quality gates (review, test suite, UX review) still apply in full.
+
+Crunch mode can also be toggled from the top bar in Normal mode, the Host drawer on paired phones, or via the Command Palette (`Ctrl` + `K`).
+
+- **Change it when:** you want the Squad to run fast without stopping to ask for approval on each routine step.
+- **Safe default:** off. Turn on during active build sprints.
 
 ## Token thresholds (squad editor)
 
@@ -115,9 +128,11 @@ The runner is the background program that actually runs your agents. This tab li
 - **Change it when:** a provider you installed isn't offered, or you want a model that isn't in the list.
 - **Safe default:** leave everything as found. Untick **Enabled** only for a provider you never want offered.
 
-### Quota alert banner
+### Quota alert banner and 70% soft quota line
 
 When a provider's usage window is nearly used up, a red, dismissible banner appears across the app, for example "Claude 5h: 8% left. Resets in 1h 20m. Spend a reset now?". **Open Usage** jumps to the Usage dashboard; **✕** dismisses that alert.
+
+VibeSquad enforces a **70% per-family soft quota line**. At or above 70% family quota usage (>= 70%), only interruptible work (`docs`, `audit`, `spike`, `pre-check`, and `mechanical` stakes) routes to that family, while non-interruptible work routes to the next family under its soft limit. If all candidate families exceed soft limits, routing falls back to the first family under hard quota limits (95% general, 85% for Claude via Antigravity).
 
 ## Remote Control
 
@@ -142,7 +157,7 @@ The window scrolls, so on a small screen you can reach everything; the header an
 
 **Revoking a device.** If a phone is lost or you no longer trust it, open **PAIRED DEVICES** and press **Revoke** next to its name. That device is signed out right away, including any live connection it had open, and has to pair again with a new code to come back. **↻ Refresh** reloads the list.
 
-**Phone Cockpit.** On a paired phone, opening the Host drawer shows a **PROVIDER** switch (**✶ Claude** / **◆ Gemini**) for the default provider, the pinned **TEAMS** list (tap to open or start a Buddy), and **⚙ Settings**.
+**Phone Cockpit.** On a paired phone, opening the Host drawer shows a health line, the per-Squad **Crunch mode** toggle, a **PROVIDER** switch (**✶ Claude** / **◆ Gemini**) for the default provider, the pinned **TEAMS** list (tap to open or start a Buddy), and **⚙ Settings**.
 
 **Relay pairing link.** Only if an opt-in `wss://` `relay.endpoint` has been hand-edited into `~/.vibesquad/settings.json` (off by default; no hosted relay ships), the window also shows **RELAY PAIRING LINK (AWAY FROM LAN & MESHNET · END-TO-END ENCRYPTED)**. It carries the one-time code in the link's `#fragment`, and the phone pins the PC's relay key on first use. `vs host-key show` prints the key id and fingerprint; `vs host-key rotate` replaces it and revokes every paired device unless you add `--keep-devices`. `vs devices list` and `vs devices revoke` manage devices either way.
 

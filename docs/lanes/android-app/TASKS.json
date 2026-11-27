@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-25T21:10:02.892Z",
+  "updatedAt": "2026-11-27T17:28:46.500Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -539,6 +539,19 @@
       "status": "done",
       "branch": "unit-and-meshnet-ca-69",
       "commit": "e61e08c2"
+    },
+    {
+      "id": "unit-and-restart-ref-913",
+      "goal": "RestartHost stamps hostKey via ref at setReq time; align restartRequest.id to string|null (idea-913)",
+      "files": [
+        "src/PhoneCockpit.tsx",
+        "src/phoneCockpitLogic.ts",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs test/phone-restart-host.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-restart-ref-913",
+      "commit": "3c3f522d"
     }
   ]
 }

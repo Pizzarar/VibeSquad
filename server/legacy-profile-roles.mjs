@@ -25,7 +25,7 @@ export const LEGACY_PROFILE_ROLES = Object.freeze({
   "Mechanical - DSF": "work-order",
   "Review - Gemini": "review",
   "Review - Sonnet": "review",
-  "UX Reviewer - Opus": "review",
+  "UX Reviewer - Opus": "ux-review",
   "Pre-check - Flash": "pre-check",
   "Check - Haiku": "pre-check",
   "Audit - DSF": "pre-check",

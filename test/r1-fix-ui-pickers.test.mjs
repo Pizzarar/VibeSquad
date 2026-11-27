@@ -20,7 +20,7 @@ test("LEGACY_HEAD_ROLE agrees with the server LEGACY_PROFILE_ROLES for the heads
   }
   assert.equal(head.mechanical, "Work Order");
   assert.equal(head.audit, "Pre-check");
-  assert.equal(head["ux reviewer"], "Review");
+  assert.equal(head["ux reviewer"], "UX Review", "R1 fu: the old UX profile maps onto its own role");
 });
 
 test("pickers use role rows and no model-named profile text", () => {

@@ -33,6 +33,8 @@ Short notes on the words used.
 - [Working with Squads](../Concepts/Squads.md)
 - [Naming](../Concepts/Naming.md)
 - [Notebook](../Concepts/Notebook.md)
+- [Needs You](../Concepts/Needs-You.md)
+- [Normal and Psycho](../Concepts/Modes.md)
 
 ## Reference
 

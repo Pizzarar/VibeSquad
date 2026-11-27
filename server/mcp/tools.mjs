@@ -1195,7 +1195,7 @@ const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
-    description: "Start a worker agent in your lane. profile = a role name (Implement, Review, Planner, Pre-check, Art Director, Art Painter; see `vs profiles`). stakes picks the model + effort from the role's tier ladder (tierA-security | tierA-invariant | normal | mechanical; same as labels.stakes, labels.stakes wins if both); pass provider/model only to override. Returns {id, title}.",
+    description: "Start a worker agent in your lane. profile = a role name (Implement, Review, UX Review, Planner, Pre-check, Art Director, Art Painter; see `vs profiles`). stakes picks the model + effort from the role's tier ladder (tierA-security | tierA-invariant | normal | mechanical; same as labels.stakes, labels.stakes wins if both); pass provider/model only to override. Returns {id, title}.",
     inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM, kind: KIND_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },

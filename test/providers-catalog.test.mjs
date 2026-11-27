@@ -3033,6 +3033,18 @@ test('UX Reviewer profile classifies as reviewer regardless of title (not scout)
   assert.deepEqual(rows.map((p) => [p.jobKind, p.runs]), [['reviewer', 2]], 'both titles land in one reviewer row');
 });
 
+test('R1 fu: a role spawn labelled "UX Review" classifies as reviewer (title without review words)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 27, 12);
+  writeAgent(home, 'rn-uxr', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-opus-5-5', cwd: '/w/rn-uxr', meta: { lane: 'usage', role: 'worker', profile: 'UX Review', title: 'UX pass · phase 2' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const u = getUsage({ home, git: noGit });
+  assert.deepEqual(u.byProfile.filter((p) => p.model === 'claude-opus-5-5').map((p) => [p.jobKind, p.runs]), [['reviewer', 1]]);
+});
+
 test('idea-677: a "review" word in the unit part of the title does not make an implementer a reviewer', () => {
   const home = tmp();
   clearUsageCache();

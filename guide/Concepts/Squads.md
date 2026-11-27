@@ -36,6 +36,16 @@ It shows what changed since you last looked, across every lane in the Squad: dec
 
 A `needs-you` flag means an agent is stuck on something only you can decide. Answer it in that agent's chat and the lane moves again. Do this first when you sit down.
 
+In Normal mode, the **Decision Desk** gives a cross-Squad view of open `needs-you` flags. Project filter pills across the top let you filter by project (projects in asleep folders default off, and your overrides save in local storage). Each card attaches asker context and option definitions extracted from the agent's message so you can decide with full context directly from the feed.
+
+## Crunch mode
+
+When you want a Squad to move fast without stopping to ask questions on every step, turn on **Crunch mode**.
+
+- **What it changes:** live Leads and Buddies act on their leans end-to-end (planning, dispatching workers, reviewing and merging) until the lane has a tryable build. Each automated choice is logged as `(auto)`.
+- **What still stops for you:** destructive actions (deletes), releases, spending money, or outward/public actions. These are batched into a `needs-you` card. Quality gates (code review, test suites, UX review) still run in full: Crunch mode skips asking for permission, not checking quality.
+- **Where to toggle it:** per-Squad in the top bar (Normal mode), the Host drawer on paired phones, Settings > Team, or via the Command Palette (`Ctrl` + `K`).
+
 ## Project folders (Active / Asleep)
 
 In Normal mode the sidebar can group Squads into folders. Each folder has an **Active** / **Asleep** toggle. Putting a folder **Asleep** pauses automated wake-ups for its projects, mutes their badges, and shows a 💤. Opening an asleep project shows "Asleep · Automated wake-ups paused" with a **Wake project** button that moves just that Squad back to Active; the other projects in the folder stay asleep.

@@ -79,19 +79,33 @@ function formatMoney(amount, currency = "USD") {
   const cur = String(currency || "USD").toUpperCase();
   const sym = cur === "USD" ? "$" : `${cur} `;
   const n = Number(amount);
-  const formatted = Number.isInteger(n) ? String(n) : n.toFixed(2);
-  return `${sym}${formatted}`;
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  const formatted = Number.isInteger(abs) ? String(abs) : abs.toFixed(2);
+  return `${sign}${sym}${formatted}`;
 }
 
 function formatBalance(amount, currency = "USD") {
   const cur = String(currency || "USD").toUpperCase();
   const sym = cur === "USD" ? "$" : `${cur} `;
-  return `${sym}${Number(amount).toFixed(2)}`;
+  const n = Number(amount);
+  const sign = n < 0 ? "-" : "";
+  return `${sign}${sym}${Math.abs(n).toFixed(2)}`;
 }
 
 /** Build the owner-facing needs-you message (e.g. "DeepSeek credit $7.12 < $10 threshold: top up"). */
 export function formatCreditAlertMessage({ provider, balance, currency = "USD", thresholdUsd = DEFAULT_CREDIT_THRESHOLD_USD }) {
   return `${providerDisplayName(provider)} credit ${formatBalance(balance, currency)} < ${formatMoney(thresholdUsd, currency)} threshold: top up`;
+}
+
+/** Build structured needs-you fields (summary/decides/do/alt/kind) so Decision Desk renders this as a yes/no decision. */
+export function formatCreditAlertFields({ provider, balance, currency = "USD", thresholdUsd = DEFAULT_CREDIT_THRESHOLD_USD }) {
+  const name = providerDisplayName(provider);
+  const text = formatCreditAlertMessage({ provider, balance, currency, thresholdUsd });
+  const decides = `Whether to top up ${name} prepaid credit now or keep it paused/capped`;
+  const lean = `Top up ${name} above ${formatMoney(thresholdUsd, currency)}`;
+  const alt = [`Cap ${name} until ready to top up`];
+  return { text, summary: text, decides, do: lean, alt, kind: "yesno" };
 }
 
 function statePath(home) {
@@ -138,7 +152,19 @@ export async function evaluateCreditAlerts({
   readCaps,
   thresholdUsd = DEFAULT_CREDIT_THRESHOLD_USD,
   now = Date.now,
-  log = ({ text }) => appendVsLogEntry({ teamId: CREDIT_GUARD_TEAM, laneId: CREDIT_GUARD_LANE, agent: "vibesquad-server", type: "needs-you", text }),
+  log = ({ text, summary, decides, do: leanDo, alt, kind }) =>
+    appendVsLogEntry({
+      teamId: CREDIT_GUARD_TEAM,
+      laneId: CREDIT_GUARD_LANE,
+      agent: "vibesquad-server",
+      type: "needs-you",
+      text,
+      summary,
+      decides,
+      do: leanDo,
+      alt,
+      kind,
+    }),
 } = {}) {
   const threshold = Number.isFinite(Number(thresholdUsd)) && Number(thresholdUsd) >= 0 ? Number(thresholdUsd) : DEFAULT_CREDIT_THRESHOLD_USD;
   const nowMs = now();
@@ -158,8 +184,9 @@ export async function evaluateCreditAlerts({
 
     if (!alerted && c.balance < threshold) {
       if (isProviderDeliberatelyCapped(provider, liveCaps)) continue;
-      const text = formatCreditAlertMessage({ provider, balance: c.balance, currency: c.currency || "USD", thresholdUsd: threshold });
-      await log({ provider, balance: c.balance, currency: c.currency || "USD", thresholdUsd: threshold, text });
+      const currency = c.currency || "USD";
+      const fields = formatCreditAlertFields({ provider, balance: c.balance, currency, thresholdUsd: threshold });
+      await log({ provider, balance: c.balance, currency, thresholdUsd: threshold, ...fields });
       state.providers[provider] = {
         alerted: true,
         alertedAt: nowIso,
@@ -168,7 +195,7 @@ export async function evaluateCreditAlerts({
       };
       writeCreditAlertState(home, state);
       dirty = false;
-      fired.push({ provider, balance: c.balance, currency: c.currency || "USD", thresholdUsd: threshold, alertedAt: nowIso, text });
+      fired.push({ provider, balance: c.balance, currency, thresholdUsd: threshold, alertedAt: nowIso, text: fields.text });
     } else if (alerted && c.balance > threshold) {
       state.providers[provider] = {
         alerted: false,
@@ -215,7 +242,7 @@ export function startCreditGuardWatcher({
     if (stopped || busy) return [];
     busy = true;
     try {
-      const credits = await poll();
+      const credits = await poll({ force: true });
       if (stopped) return [];
       const thresholdUsd = typeof getThreshold === "function" ? getThreshold() : DEFAULT_CREDIT_THRESHOLD_USD;
       return await evaluateCreditAlerts({

@@ -7,9 +7,11 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { resolvePlaywright, findBrowser, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
+import { budget } from "./helpers/load-budget.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (...p) => readFileSync(join(root, ...p), "utf8");
+const WAIT = budget(8000);
 
 test("B18e static: Back to split pill, clearRightPane, Shift+click dormant Desk/Bugs", () => {
   const ade = read("src", "BoringAde.tsx");
@@ -32,11 +34,45 @@ async function openSplitApp(b, E, baseUrl, w, h, theme) {
   await ctx.addInitScript(init(theme));
   await E.installRoutes(ctx);
   const page = await ctx.newPage();
-  await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded" });
-  await page.locator('[data-testid="boring-worker-demo-aud"]').click({ timeout: 15000 });
+  page.setDefaultTimeout(WAIT);
+  await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: WAIT });
+  await page.locator('[data-testid="boring-worker-demo-aud"]').click();
   await page.locator('[data-testid="boring-chat-column"]').waitFor();
-  await page.waitForTimeout(400);
+  await page.waitForFunction(() => {
+    const hdr = document.querySelector('[data-testid="boring-agent-header"]');
+    const splitBtn = document.querySelector('[data-testid="boring-split-toggle"]');
+    return !!hdr?.getAttribute("data-agent-id") && !!splitBtn;
+  }, null, { timeout: WAIT });
   return { ctx, page };
+}
+
+async function pickRightAgentByFilter(page, query) {
+  const f = page.locator('[data-testid="boring-pp-filter"]');
+  await f.waitFor();
+  await f.fill(query);
+  await page.waitForFunction(
+    (q) => {
+      const inp = document.querySelector('[data-testid="boring-pp-filter"]');
+      if (!inp || inp.value !== q) return false;
+      const body = document.querySelector(".boring-pp-body");
+      return !!body && body.textContent.toLowerCase().includes(q.toLowerCase());
+    },
+    query,
+    { timeout: WAIT },
+  );
+  await f.press("Enter");
+  const rightHdr = page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]');
+  await rightHdr.waitFor();
+  return rightHdr;
+}
+
+async function waitRightCardLane(page, expectedLane) {
+  await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]').waitFor();
+  await page.waitForFunction(
+    (lane) => document.querySelector('[data-testid="boring-pp-empty"] [data-testid="boring-empty-lane"]')?.textContent?.trim() === lane,
+    expectedLane,
+    { timeout: WAIT },
+  );
 }
 
 test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dormant Bugs/Desk opens right-pane card", { skip, timeout: 240000 }, async () => {
@@ -52,16 +88,14 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
       await page.locator('[data-testid="boring-split-toggle"]').click();
       await page.locator('[data-testid="boring-split-empty"]').waitFor();
       // Open a live agent in the right pane via the picker filter
-      const f = page.locator('[data-testid="boring-pp-filter"]');
-      await f.fill("ui bois");
-      await f.press("Enter");
-      await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').waitFor({ timeout: 5000 });
-      const rightBefore = await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id");
+      const rightHdr = await pickRightAgentByFilter(page, "ui bois");
+      const rightBefore = await rightHdr.getAttribute("data-agent-id");
       assert.ok(leftBefore && rightBefore && leftBefore !== rightBefore, `both panes open: ${leftBefore} vs ${rightBefore}`);
 
       // Plain click dormant Bugs -> full-screen dormant card with "◫ Back to split"
       await page.locator('[data-testid="boring-core-bugs"]').click();
-      await page.locator('[data-testid="boring-empty-card"]').waitFor({ timeout: 5000 });
+      await page.locator('[data-testid="boring-empty-card"]').waitFor();
+      await page.locator('[data-testid="boring-chat-split"]').waitFor({ state: "detached" });
       assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 0, "m1: full-screen dormant card replaces split view");
       const btn = page.locator('[data-testid="boring-split-toggle"]');
       assert.equal((await btn.innerText()).trim(), "◫ Back to split", "m1: button reads Back to split");
@@ -69,7 +103,9 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
 
       // Click Back to split -> restores BOTH panes intact
       await btn.click();
-      await page.locator('[data-testid="boring-chat-split"]').waitFor({ timeout: 5000 });
+      await page.locator('[data-testid="boring-chat-split"]').waitFor();
+      await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').waitFor();
+      await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').waitFor();
       assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftBefore, "m1: left pane restored");
       assert.equal(await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), rightBefore, "m1: right pane restored");
       assert.equal((await btn.innerText()).trim(), "◫ Unsplit", "m1: toggle returns to Unsplit");
@@ -84,12 +120,19 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
       await page.locator('[data-testid="boring-split-toggle"]').click();
       await page.locator('[data-testid="boring-split-empty"]').waitFor();
       await page.locator('[data-testid="boring-pane-left"]').click({ position: { x: 20, y: 20 } });
+      await page.waitForFunction(
+        () => document.querySelector('[data-testid="boring-pane-left"]')?.classList.contains("boring-pane-active"),
+        null,
+        { timeout: WAIT },
+      );
       await page.locator('[data-testid="boring-core-overlord"]').click();
-      await page.locator('[data-testid="boring-empty-card"]').waitFor({ timeout: 5000 });
+      await page.locator('[data-testid="boring-empty-card"]').waitFor();
       const btn = page.locator('[data-testid="boring-split-toggle"]');
       assert.equal((await btn.innerText()).trim(), "◫ Back to split");
       await btn.click();
-      await page.locator('[data-testid="boring-chat-split"]').waitFor({ timeout: 5000 });
+      await page.locator('[data-testid="boring-chat-split"]').waitFor();
+      await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').waitFor();
+      await page.locator('[data-testid="boring-split-empty"]').waitFor();
       assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftBefore, "m1 picker: left pane intact");
       assert.equal(await page.locator('[data-testid="boring-split-empty"]').count(), 1, "m1 picker: right picker intact");
       await ctx.close();
@@ -104,7 +147,7 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
 
       // 3a) Right pane on picker -> Shift+click dormant Bugs -> B17 right card opens, left pane untouched, no ?slot=
       await page.locator('[data-testid="boring-core-bugs"]').click({ modifiers: ["Shift"] });
-      await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]').waitFor({ timeout: 5000 });
+      await waitRightCardLane(page, "Bugs");
       assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 1, "m2 (picker): split stays open");
       assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftBefore, "m2 (picker): left pane untouched");
       assert.equal((await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-lane"]').innerText()).trim(), "Bugs");
@@ -112,12 +155,9 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
 
       // 3b) Open a live agent in the right pane, then Shift+click dormant Overlord -> clears right tab without collapsing split, opens Overlord right card
       await page.locator('[data-testid="boring-pp-back"]').click();
-      const f = page.locator('[data-testid="boring-pp-filter"]');
-      await f.fill("ui bois");
-      await f.press("Enter");
-      await page.locator('[data-testid="boring-pane-right"] [data-testid="boring-agent-header"]').waitFor({ timeout: 5000 });
+      await pickRightAgentByFilter(page, "ui bois");
       await page.locator('[data-testid="boring-core-overlord"]').click({ modifiers: ["Shift"] });
-      await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-card"]').waitFor({ timeout: 5000 });
+      await waitRightCardLane(page, "Overlord");
       assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 1, "m2 (live right): split stays open");
       assert.equal(await page.locator('[data-testid="boring-pane-left"] [data-testid="boring-agent-header"]').getAttribute("data-agent-id"), leftBefore, "m2 (live right): left pane untouched");
       assert.equal((await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-lane"]').innerText()).trim(), "Overlord");
@@ -125,7 +165,7 @@ test("browser B18e m1 + m2: Back to split restores parked split; Shift+click dor
 
       // 3c) Shift+click dormant Bugs while Overlord right card is open -> swaps right card to Bugs
       await page.locator('[data-testid="boring-core-bugs"]').click({ modifiers: ["Shift"] });
-      await page.waitForTimeout(200);
+      await waitRightCardLane(page, "Bugs");
       assert.equal(await page.locator('[data-testid="boring-chat-split"]').count(), 1, "m2 (swap card): split stays open");
       assert.equal((await page.locator('[data-testid="boring-pp-empty"] [data-testid="boring-empty-lane"]').innerText()).trim(), "Bugs");
       await ctx.close();

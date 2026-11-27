@@ -370,3 +370,26 @@ test("usa-57 R1: cold ?focus=usage opens the phone view, safe-area top, dialog a
   assert.match(v, /prev\.focus\(\)/);
   assert.match(v, /<QuotaAlertBanner canOpenUsage=\{false\} \/>/);
 });
+
+test("idea-913 hostRestartKey: null id / null request are stable and collision-free", () => {
+  assert.equal(hostRestartKey(null), "");
+  assert.equal(hostRestartKey(undefined), "");
+  assert.notEqual(hostRestartKey({ id: null, state: "queued" }), hostRestartKey({ id: "null", state: "queued" }));
+  assert.equal(hostRestartKey({ id: null, state: "queued" }), hostRestartKey({ state: "queued" }));
+  assert.notEqual(hostRestartKey({ id: "", state: "queued" }), hostRestartKey({ id: null, state: "queued" }));
+});
+
+test("idea-913 pickLiveRestart: null ids", () => {
+  const prop = { id: null, state: "queued" };
+  const local = { req: { id: null, state: "draining" }, hostKey: hostRestartKey(prop) };
+  assert.deepEqual(pickLiveRestart(local, prop), { id: null, state: "draining" });
+  assert.deepEqual(pickLiveRestart(local, { id: null, state: "done" }), { id: null, state: "done" });
+  assert.deepEqual(pickLiveRestart(local, { id: "null", state: "queued" }), { id: "null", state: "queued" });
+});
+
+test("idea-913 RestartHost stamps local requests via the latest-key ref", () => {
+  const src = readFileSync(new URL("../src/PhoneCockpit.tsx", import.meta.url), "utf8");
+  assert.match(src, /hostKeyRef\.current = hostKey/);
+  assert.match(src, /setLocal\(\{ req: r, hostKey: hostKeyRef\.current \}\)/);
+  assert.doesNotMatch(src, /setLocal\(\{ req: r, hostKey \}\)/);
+});

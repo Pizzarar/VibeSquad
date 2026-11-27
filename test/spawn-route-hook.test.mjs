@@ -551,7 +551,7 @@ test("spawn-route units: roleNameHit, roleProfileLabel, cappedFamilies", () => {
   assert.equal(roleNameHit("No Such Thing"), null);
 
   const labels = Object.keys(ROLE_TABLE).map((k) => roleProfileLabel(k));
-  assert.deepEqual(labels, ["lead", "brainstorm", "Planner", "Implement", "Work Order", "Review", "Pre-check", "Art Director", "Art Painter"]);
+  assert.deepEqual(labels, ["lead", "brainstorm", "Planner", "Implement", "Work Order", "Review", "UX Review", "Pre-check", "Art Director", "Art Painter"]);
   for (const [i, k] of Object.keys(ROLE_TABLE).entries()) assert.equal(roleNameHit(labels[i])?.key, k, `label ${labels[i]} reads back as ${k}`);
 
   assert.deepEqual(cappedFamilies([]), []);
