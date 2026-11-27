@@ -27,7 +27,7 @@ export type Profile = {
  */
 export type Tier = "top" | "mid" | "cheap";
 
-/** The 8 shipped roles (server/role-route.mjs ROLE_TABLE). `Role` above stays the coarse lead/brainstorm/worker label. */
+/** The 10 shipped roles (server/role-route.mjs ROLE_TABLE). `Role` above stays the coarse lead/brainstorm/worker label. */
 export type RoleKey =
   | "lead"
   | "brainstorm"
@@ -35,6 +35,7 @@ export type RoleKey =
   | "planner"
   | "work-order"
   | "review"
+  | "ux-review"
   | "pre-check"
   | "art-director"
   | "art-painter";
@@ -130,7 +131,7 @@ const ART_BRIEF = BRIEF("Art direction: palette, references, screenshots at 1440
 export function defaultBriefFor(name: string, role: Role): string {
   if (role === "lead") return LEAD_BRIEF;
   if (role === "brainstorm") return BRAINSTORM_BRIEF;
-  if (/^Review\b|^Check\b|^UX Reviewer\b/i.test(name)) return REVIEW_BRIEF;
+  if (/^Review\b|^Check\b|^UX Review(?:er)?\b/i.test(name)) return REVIEW_BRIEF;
   if (/^Art\b/i.test(name)) return ART_BRIEF;
   if (/^Spec\b/i.test(name)) return BRIEF("Output: a spec doc, no code.");
   if (/^Planner\b/i.test(name)) return BRIEF("Output: unit split with file scopes and done-checks.");
@@ -176,7 +177,7 @@ const LEAD_NOTE_BODY = [
   "Blocked on an owner decision → flag it (`vs log needs-you \"<ask>\" --decides \"<what it changes>\" --lean \"<option>\" [--alt \"<opt>\"] [--kind yesno|answer|offscreen]`; workers put it in the final message) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats aren't needed while a `vs watch` is armed.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to a Pre-check worker and read only the result.",
-  "Routing: spawn by role name (`vs profiles`); stakes picks the model and effort from the tier ladder, provider/model only to override. Code → Implement. Work orders and specs → Planner. Read-only checks, lookups and censuses → Pre-check. Art work → Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) also go to UX Reviewer - Opus at phase end, and are not done while it has a critical or major finding open.",
+  "Routing: spawn by role name (`vs profiles`); stakes picks the model and effort from the tier ladder, provider/model only to override. Code → Implement. Work orders and specs → Planner. Read-only checks, lookups and censuses → Pre-check. Art work → Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) also go to UX Review at phase end, and are not done while it has a critical or major finding open.",
   "Every spawn states `stakes=`: tierA-security for auth/crypto/relay/remote-proxy, tierA-invariant for state machines/locks/data migrations, mechanical for renames/copy/docs; otherwise normal.",
   "Review: spawn Review on a different provider family than the writer. Claude work → Review (Gemini; Tier A waits if Gemini is capped; Tier B falls back to Review with provider=claude unless Sonnet wrote it). Gemini work → Review with provider=claude. DeepSeek work → Review (Gemini); if capped, Pre-check with provider=claude, then Review with provider=claude only on a FAIL or doubt.",
   "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover walks each role's provider chain, see `vs profiles`).",
@@ -610,6 +611,7 @@ export const DEMO_ROLES: RolesMap = {
   planner: demoRole("Planner", "mid", CAO, "Turn one block into an exact work order: file scopes, quoted lines, done-checks. Never edit source."),
   "work-order": demoRole("Work Order", "mid", ["opencode", "claude", "antigravity-cli"], "Clean work order in, small diff out."),
   review: demoRole("Review", "mid", ACO, "Review the diff only; report findings, do not edit."),
+  "ux-review": demoRole("UX Review", "top", ["claude", "antigravity-cli"], "Judge the whole window after UI merges; write docs/UX_REVIEW_<lane>_R<n>.md only.", ["playwright"]),
   "pre-check": demoRole("Pre-check", "cheap", ACO, "Cheap mechanical checks before a human looks."),
   "art-director": demoRole("Art Director", "mid", ACO, "Palette, references, 1440x900 screenshots.", ["playwright"]),
   "art-painter": demoRole("Art Painter", "top", CAO, "Paint the approved direction.", ["playwright"]),
@@ -795,7 +797,7 @@ const LEGACY_HEAD_ROLE: Record<string, string> = {
   "senior reasoning": "Implement",
   check: "Pre-check",
   scout: "Pre-check",
-  "ux reviewer": "Review",
+  "ux reviewer": "UX Review",
 };
 
 /** Role a saved profile name belongs to ("Implement - Sonnet" -> "Implement"); null when unknown. */

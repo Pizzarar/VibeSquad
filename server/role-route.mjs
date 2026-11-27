@@ -101,7 +101,7 @@ export const ROLE_TABLE = deepFreeze({
     providers: roleChain("ux-review"),
     modes: {
       claude: { modeId: "auto", effort: "medium" }, // UX Reviewer - Opus
-      "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // writes docs/UX_REVIEW_*.md + screenshots
+      "antigravity-cli": { modeId: "accept-edits", effort: "medium" }, // Art Director - Gemini (writes its UX_REVIEW doc + shots)
     },
   },
   "pre-check": {

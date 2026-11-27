@@ -204,7 +204,7 @@ describe("UX Reviewer phase gate standing rule (UX_REVIEW_PROCESS 3B)", () => {
     const rule = STANDING_RULES.find((r) => r.startsWith("A plan phase touching Normal-mode UI"));
     assert.ok(rule, "rule present");
     for (const f of ["src/Boring*.tsx", "src/boring*.ts", "src/boring.css", "src/Timeline.tsx", "src/PermissionCard.tsx", "src/BoringContextPanel.tsx"]) assert.ok(rule.includes(f), f);
-    assert.match(rule, /UX Reviewer - Opus/);
+    assert.match(rule, /while UX Review has a critical/);
     assert.match(rule, /critical or major finding open/);
     assert.match(rule, /unless the owner overrides/);
     assert.match(rule, /Buddy's own look check doesn't count/);

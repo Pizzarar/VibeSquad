@@ -53,8 +53,9 @@ export const ROLE_MODE_SOURCES = deepFreeze({
   },
   "work-order": { opencode: ["Work Order - DSP"], claude: ["Implement - Sonnet"], "antigravity-cli": ["Lead - Gemini"] },
   review: { "antigravity-cli": ["Review - Gemini"], claude: ["Review - Sonnet"], opencode: ["Work Order - DSP"] },
-  // R1 fu: no Gemini UX profile ships, so the Gemini mode comes from ROLE_TABLE and the prompt is the role's (the UX brief).
-  "ux-review": { claude: ["UX Reviewer - Opus"], "antigravity-cli": [] },
+  // R1 fu: no Gemini UX profile ships; the Gemini mode is the visual-judging Art Director's (a cross-role hop, so the
+  // prompt stays the role's own UX brief).
+  "ux-review": { claude: ["UX Reviewer - Opus"], "antigravity-cli": ["Art Director - Gemini"] },
   "pre-check": { "antigravity-cli": ["Pre-check - Flash"], claude: ["Check - Haiku"], opencode: ["Audit - DSF"] },
   "art-director": {
     "antigravity-cli": ["Art Director - Gemini"],
