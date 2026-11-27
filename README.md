@@ -23,7 +23,9 @@ The VibeSquad **agent runner** (`runner/`) manages agent sessions; the VS server
 
 - `vs` CLI: team log, `vs who`, `vs whoami`, `vs handoff`, `vs inbox`, `vs profiles`, `vs restart`
 - Agent duties hook module (`server/hooks/agent-duties.ts`, hosted by the VS server): prompt layering, auto-labelling, digest routing, lead handoff
-- Web UI (`src/`): roster view, team settings, idea inbox, profile management, Pair a Device modal. **Normal** (a plain layout with a sidebar, chat and project cards) is the default; **Psycho** (the pixel-art Vibespace office) is a legacy option: turn on **Legacy: Psycho mode** in Settings > About
+- Role-tier routing (`server/spawn-route.mjs`): agent spawns route via role-tier ladders (Lead, Brainstorm, Implement, Planner, Review, Pre-check, Art Director, Art Painter) with 70% soft quota failover across providers, rather than fixed profile names
+- Crunch mode (`server/crunch-toggle.mjs`): per-Squad mode where lanes act on their leans end-to-end until there is a tryable build, stopping only for deletes, releases, money, and outward actions
+- Web UI (`src/`): roster view, team settings, idea inbox, role-tier profiles and ladder editor, Decision Desk, Pair a Device modal, per-Squad Crunch mode toggle. **Normal** (a plain layout with a sidebar, chat and project cards) is the default; **Psycho** (the pixel-art Vibespace office) is a legacy option: turn on **Legacy: Psycho mode** in Settings > About
 - Push server (`server/push.mjs`): Web Push notifications for agent attention events
 
 ## Where it runs

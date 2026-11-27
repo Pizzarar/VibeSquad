@@ -17,9 +17,9 @@ A [Buddy](../Concepts/Buddy.md) is a chat for thinking.
 
 In VibeSquad, click **+ New squad** at the bottom of the left column. A [Squad](../Concepts/Squads.md) is one product, and this window creates it.
 
-![The New Squad window: Folder path, Squad name, Start a Buddy with BRAINSTORM - CLAUDE and BRAINSTORM - GEMINI chips, and Cancel and Create buttons](../assets/screenshots/02-new-squad-modal.png)
+![The New Squad window: Folder path, Squad name, Start a Buddy with Brainstorm - Claude and Brainstorm - Gemini chips, and Cancel and Create buttons](../assets/screenshots/02-new-squad-modal.png)
 
-Type your project folder in **Folder path**. Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **BRAINSTORM - CLAUDE** or **BRAINSTORM - GEMINI**, and click **Create**. The Buddy's chat opens as "TALK HERE". Use a **new, empty project folder** for this. Leave the `guide` squad alone: it is only for the setup chat.
+Type your project folder in **Folder path**. Give it a **Squad name**. Leave **Start a Buddy** ticked, pick **Brainstorm - Claude** or **Brainstorm - Gemini**, and click **Create**. The Buddy's chat opens as "TALK HERE". Use a **new, empty project folder** for this. Leave the `guide` squad alone: it is only for the setup chat.
 
 Already have a Squad and want a new feature? Click **+ TEAM** in the Squad's header, or the **New idea** card, and a fresh Buddy starts for it. Either way, type:
 
