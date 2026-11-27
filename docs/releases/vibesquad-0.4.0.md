@@ -4,7 +4,7 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`) + `a1ef3fd8` (build-desktop win32 Path fix); re-frozen from `b219e906`, then `405779e6` |
+| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`) + `a1ef3fd8` (build-desktop win32 Path fix) + `d21f8dbf` (Rust path remap + host-path scan); re-frozen from `b219e906`, then `405779e6` |
 | Release commits | `a95a4f53` (version bump, record, licenses), merge of master `405779e6`, `11a2ea14` (lockfile, credits format, record), then merges of `d8881601` on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
@@ -27,7 +27,13 @@ _pending (P2/P3)_
 ## Audit B1-B9
 _pending (P2/P3)_
 
+| Commit | Check | Result | Evidence |
+| --- | --- | --- | --- |
+| `d21f8dbf` | B2 Rust host-path fix (Tier A security) | PASS 0/0/3 | Review-Gemini rn-16d541524244, `vs verdict` exit 0 |
+
 ## Findings
+- **B2 Medium (fixed):** the Rust binary embedded about 1,001 `C:\Users\<user>\.cargo\registry` paths (build-host username in panic and debug strings). Fixed by `d21f8dbf`: release Rust builds remap host path prefixes and a fail-closed post-build scan refuses any artifact that still contains a host path. The Buddy ruled it a fix, no waiver.
+- Past public installers v0.2.0-v0.3.0 carry the same leak. Owner-only finding; no released assets were touched.
 - Windows release build regression from `bf4633ad` (Path lost, so `npm.cmd` ENOENT), fixed by `a1ef3fd8`. Review-Gemini PASS 0/0/2 rn-a10ae7fc1087 (Lows: a trailing `;` and the cargo bin dir not deduped in Path, both harmless, queued).
 - Licenses file: Windows-generated (`public/THIRD-PARTY-LICENSES.txt`, 101679 bytes, no CRLF, sha256 `2bcb8a72...6471`). Privacy grep clean (only the crate names signal-hook-registry and windows-registry match). Same 596 unique package@version as before (0 dropped, 0 added), 11 duplicate headers collapsed, 158 bare headers now licensed. credits-attribution, public-release and one-stop-installer 37/37 with it (pre-check rn-4be985923903). Determinism follow-up: idea-1234.
 - `d6c23109` audit: Review-Sonnet PASS 0/0/0 rn-172769f01a2f. Delta `d8881601..d6c23109` = 1 file, `test/test-tmp-preflight.test.mjs` +6/-2, nothing shipped (Buddy-verified).
