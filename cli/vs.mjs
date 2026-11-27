@@ -30,7 +30,7 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { validatePlanPath } from "../server/plan-log.mjs";
-import { isNeedsYouType, namesLetteredOptions, NEEDS_YOU_LETTERED_WARNING, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
+import { isNeedsYouType, namesLetteredOptions, needsYouWarnings, validateNeedsYouFields } from "../server/needs-you-fields.mjs";
 
 export { namesLetteredOptions };
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
@@ -656,8 +656,8 @@ async function commandLog(flags) {
   const needsYou = hasNeedsYouFlags
     ? validateNeedsYouFields(type, text, { decides: flags.decides, do: flags.lean, alt: flags.alt.length ? flags.alt : undefined, kind: flags.kind })
     : null;
-  if (type === "needs-you" && namesLetteredOptions(text) && flags.alt.length === 0) {
-    process.stderr.write(`warning: ${NEEDS_YOU_LETTERED_WARNING} (logged anyway)\n`);
+  for (const w of needsYouWarnings(type, text, needsYou)) {
+    process.stderr.write(`warning: ${w} (logged anyway)\n`);
   }
   const entry = await ctx.writeLog({
     type: who.type,
