@@ -297,8 +297,20 @@ export function publishRelease({
 
 export const RELEASE_STAGES = ["stage", "build", "sign", "publish"];
 
+export const USAGE = `Usage:
+  node server/release.mjs <stage|build|sign|publish> [--channel beta|stable] [--commit <sha>] [--version <v>] [--project <name>] [--repo <owner/repo>]
+                          [--requester <who>] [--approval <ref>] [--changelog <text>] [--unsigned | --no-authenticode] [--with-android]
+  node server/release.mjs --channel <beta|stable> [--stage-only] [--skip-build] [--commit <sha>] [--version <v>] [--with-android] ...
+  node server/release.mjs --help | -h
+
+A run needs a subcommand or an explicit --channel. Unknown flags are refused.`;
+
+export class UsageError extends Error {}
+
 export function parseArgs(argv) {
   const out = {
+    help: false,
+    channelExplicit: false,
     stage: "",
     channel: "beta",
     version: "",
@@ -315,18 +327,30 @@ export function parseArgs(argv) {
     withAndroid: false,
   };
   const valued = { "--channel": "channel", "--version": "version", "--commit": "commit", "--project": "project", "--repo": "repo", "--requester": "requester", "--approval": "approval", "--changelog": "changelog" };
+  if (argv.some((a) => a === "--help" || a === "-h")) {
+    out.help = true;
+    return out;
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const eq = a.indexOf("=");
     const flag = eq > 0 ? a.slice(0, eq) : a;
     if (i === 0 && RELEASE_STAGES.includes(a)) out.stage = a;
-    else if (valued[flag]) out[valued[flag]] = eq > 0 ? a.slice(eq + 1) : (argv[++i] ?? "");
+    else if (valued[flag]) {
+      const value = eq > 0 ? a.slice(eq + 1) : argv[++i];
+      if (value === undefined || value === "") throw new UsageError(`${flag} needs a value.`);
+      out[valued[flag]] = value;
+    }
     else if (a === "--stage-only") out.stageOnly = true;
     else if (a === "--unsigned") out.unsigned = true;
     else if (a === "--no-authenticode") out.noAuthenticode = true;
     else if (a === "--skip-build") out.skipBuild = true;
     else if (a === "--with-android") out.withAndroid = true;
+    else throw new UsageError(`Unknown argument: ${a}`);
   }
+  out.channelExplicit = argv.some((a) => a === "--channel" || a.startsWith("--channel="));
+  if (out.channelExplicit && out.channel !== "beta" && out.channel !== "stable") throw new UsageError(`--channel must be beta or stable, got "${out.channel}".`);
+  if (!out.stage && !out.channelExplicit) throw new UsageError("Pass a subcommand (stage|build|sign|publish) or an explicit --channel; a bare run no longer defaults to beta.");
   if (out.unsigned && out.noAuthenticode) throw new Error("--unsigned and --no-authenticode cannot be combined: --unsigned is a test build, --no-authenticode an owner-approved release.");
   out.version = out.version.replace(/^v/, "");
   return out;
@@ -434,6 +458,10 @@ export function writeReleaseRecord({ dir = rootDir, project, repo, version, chan
 
 export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync, env = process.env, log = console.log, resolveTauriCli = () => require.resolve("@tauri-apps/cli/tauri.js"), readSecret = readCredential } = {}) {
   const opts = parseArgs(argv);
+  if (opts.help) {
+    log(USAGE);
+    return { help: true };
+  }
   if (opts.commit) opts.commit = canonicalizeCommit(opts.commit, exec, root);
   const channel = opts.channel === "stable" ? "stable" : "beta";
   const repo = opts.repo || DEFAULT_RELEASE_REPO;
@@ -567,6 +595,19 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
+  // Validate arguments before any side effect (env detach, version bump, git, signing).
+  let parsed;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`${err.message}\n\n${USAGE}`);
+    process.exit(2);
+  }
+  if (parsed.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   // git/gh children here inherit process.env: take the updater key password out of it first. runRelease gets the
   // snapshot and hands the password only to tauri build (build-desktop.mjs) and tauri signer sign.
   const env = detachUpdaterKeyPassword();
