@@ -9,7 +9,7 @@ import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
   SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, problemCount, scopeCounts, scopeItems, type FindingScope,
-  entityKey, indexEntities, auditCounts, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, auditCounts, buildTextChanges, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
@@ -457,7 +457,7 @@ function Findings({ items: allItems, idx, card, active, setActive, scope, setSco
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
-        {checks && <span className="sb-fbtn" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card">Checks {[...checks].join(" ")} <span className="sb-count">{scoped.length}</span></span>}
+        {checks && <button type="button" className="sb-fbtn" aria-pressed="true" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card (click to clear)" onClick={() => clearChecks?.()}>Checks {[...checks].join(" ")} <span className="sb-count">{scoped.length}</span></button>}
         {(active.size > 0 || checks) && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setActive(new Set()); clearChecks?.(); }}>Clear</button>}
       </div>
       <dl className="sb-legend" data-testid="sb-legend">
@@ -527,12 +527,21 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [projectId, initial]);
 
   const snap = state.kind === "ok" ? state.snap : null;
+  const changesSeq = useRef(0);
+  useEffect(() => {
+    changesSeq.current++;
+    setChanges(null);
+    setSeenError(null);
+    return () => { changesSeq.current++; };
+  }, [projectId, initial]);
   const loadChanges = useCallback(async () => {
     if (initial) return;
+    const my = ++changesSeq.current;
     try {
       const r = await call(`${api(projectId)}/changes`);
+      if (changesSeq.current !== my) return;
       setChanges(r.status === 200 && r.body && typeof r.body === "object" && r.body.counts ? (r.body as SbChanges) : null);
-    } catch { setChanges(null); }
+    } catch { if (changesSeq.current === my) setChanges(null); }
   }, [projectId, initial]);
   const snapSha = snap?.sha;
   useEffect(() => { if (snapSha) void loadChanges(); }, [snapSha, loadChanges]);
@@ -547,14 +556,7 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
     } catch (e) { setSeenError(e instanceof Error ? e.message : String(e)); }
     finally { setSeenBusy(false); }
   }, [projectId, snapSha, loadChanges]);
-  const textChanges = useMemo<TextChanges>(() => {
-    if (!changes || changes.first) return null;
-    const changed: Record<string, string> = {};
-    const idsOf = new Set(changes.changedIds ?? []);
-    for (const c of changes.changed) if (c.id) changed[entityKey("line", c.id)] = c.old ?? "";
-    const added = new Set((changes.newIds ?? []).map((id) => entityKey("line", id)));
-    return idsOf.size || added.size ? { changed, added } : null;
-  }, [changes]);
+  const textChanges = useMemo<TextChanges>(() => buildTextChanges(changes), [changes]);
   const idx = useMemo(() => indexEntities(snap?.entities ?? []), [snap]);
   const items = useMemo(() => (snap ? buildListItems(snap) : []), [snap]);
   const problems = useMemo(() => problemCount(items), [items]);

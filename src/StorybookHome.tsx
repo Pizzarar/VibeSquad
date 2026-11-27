@@ -7,6 +7,7 @@ import {
 } from "./storybookLogic";
 
 const BUCKETS: FindingScope[] = ["problems", "story", "text"];
+const GONE_PREVIEW_CAP = 60;
 
 type HomeProps = {
   snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void; onSignal?: (signal: string) => void;
@@ -30,6 +31,7 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
     );
   }
   const g = goneBreakdown(ch);
+  const shownGone = ch.gone.slice(0, GONE_PREVIEW_CAP);
   return (
     <div className={`sb-changes${total === 0 ? " sb-changes-zero" : ""}`} data-testid="sb-changes">
       <div className="sb-changes-head"><b>New / changed / gone since {changesSince(ch)}</b><span className="sb-changes-sub">{ch.from?.sha === ch.to.sha ? "same commit" : `${shortSha(ch.from?.sha)}..${shortSha(ch.to.sha)}`}</span></div>
@@ -40,9 +42,9 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
       </div>
       {g && <p className="sb-changes-why" data-testid="sb-changes-why">Gone: {g}.</p>}
       {total === 0 && <p className="sb-changes-why">Nothing new since your last session.</p>}
-      {ch.gone.length > 0 && (
-        <details className="sb-changes-gonelist"><summary>Show gone rows{ch.capped && ch.counts.gone > ch.capped ? ` (first ${ch.capped})` : ""}</summary>
-          <ul>{ch.gone.slice(0, 60).map((r) => <li key={r.key}><span className="sb-tag">{r.reason === "efi" ? "EFI" : "hidden"}</span> {r.text} <span className="sb-mono">{r.file}</span><span className="sb-changes-reason"> · {r.why}</span></li>)}</ul>
+      {shownGone.length > 0 && (
+        <details className="sb-changes-gonelist"><summary>Show gone rows{ch.counts.gone > shownGone.length ? ` (first ${shownGone.length} of ${ch.counts.gone})` : ""}</summary>
+          <ul>{shownGone.map((r) => <li key={r.key}><span className="sb-tag">{r.reason === "efi" ? "EFI" : "hidden"}</span> {r.text} <span className="sb-mono">{r.file}</span><span className="sb-changes-reason"> · {r.why}</span></li>)}</ul>
         </details>
       )}
       <div className="sb-changes-act">

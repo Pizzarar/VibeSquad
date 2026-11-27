@@ -265,14 +265,15 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-changes { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; margin-bottom: 10px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-left: 4px solid var(--sb-accent); border-radius: 8px; }
 .sb-changes-zero { border-left-color: var(--st-ok, #79dfa8); }
 .sb-changes-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
-.sb-changes-sub, .sb-changes-reason { color: var(--sb-dim, #9aa); font-size: 12px; }
+.sb-changes-sub, .sb-changes-reason { color: var(--sb-text2); font-size: 12px; }
 .sb-changes-counts { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 15px; }
 .sb-changes-counts b { font-size: 20px; }
 .sb-changes-why { margin: 0; font-size: 13px; }
+.sb-changes-gonelist summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .sb-changes-gonelist ul { margin: 6px 0 0; padding-left: 18px; max-height: 240px; overflow: auto; font-size: 12px; }
 .sb-changes-act { display: flex; flex-wrap: wrap; gap: 8px; }
 .sb-changes-act .sb-btn { min-height: 44px; }
-.sb-signal-rest { display: block; margin-top: 4px; font-size: 11px; color: var(--sb-dim, #9aa); }
+.sb-signal-rest { display: block; margin-top: 4px; font-size: 11px; color: var(--sb-text2); }
 .sb-diff .sb-del { background: rgba(255, 90, 90, .22); text-decoration: line-through; }
 .sb-diff .sb-ins { background: rgba(80, 200, 120, .25); text-decoration: none; }
 .sb-tag-new, .sb-tag-changed { font-size: 11px; text-transform: uppercase; padding: 0 5px; border-radius: 4px; border: 1px solid var(--sb-accent); }

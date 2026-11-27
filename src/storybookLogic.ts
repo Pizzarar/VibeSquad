@@ -696,6 +696,29 @@ export function changesSince(ch: SbChanges): string {
   return `${etClock(ch.from.at) ? `${etDate(ch.from.at)} ${etClock(ch.from.at)}` : ""}${ch.from.sha ? `, ${shortSha(ch.from.sha)}` : ""}`.replace(/^, /, "");
 }
 export const changesTotal = (ch: SbChanges): number => ch.counts.new + ch.counts.changed + ch.counts.gone;
+
+/** V8: Review-tab changed/added row lookup. `changed` holds old text for the capped sample; `changedIds` holds every changed row id. */
+export type TextChanges = { changed: Record<string, string>; changedIds: ReadonlySet<string>; added: ReadonlySet<string> } | null;
+
+/** Build the Review-tab TextChanges lookup from /changes. Uses all changedIds/newIds so Changed filter + count match Home past the 500-row sample cap. */
+export function buildTextChanges(changes: SbChanges | null | undefined): TextChanges {
+  if (!changes || changes.first) return null;
+  const changed: Record<string, string> = {};
+  const changedIds = new Set<string>();
+  for (const id of changes.changedIds ?? []) if (id) changedIds.add(entityKey("line", id));
+  for (const c of changes.changed) {
+    if (!c.id) continue;
+    const k = entityKey("line", c.id);
+    changed[k] = c.old ?? "";
+    changedIds.add(k);
+  }
+  const added = new Set((changes.newIds ?? []).map((id) => entityKey("line", id)));
+  return changedIds.size || added.size ? { changed, changedIds, added } : null;
+}
+
+export function isRowChanged(rowId: string, changes: TextChanges): boolean {
+  return changes != null && (changes.changedIds.has(rowId) || Object.hasOwn(changes.changed, rowId) || changes.added.has(rowId));
+}
 /** "181 hidden dev strings, 108 merged duplicates, 0 removed in EFI": the answer to "why did my line count drop?". */
 export function goneBreakdown(ch: SbChanges): string {
   const g = ch.counts.goneBy;

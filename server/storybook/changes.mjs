@@ -47,6 +47,7 @@ function droppedIndex(snap) {
   return m;
 }
 const stripN = (k) => k.replace(/#\d+$/, "");
+const isKeylessCsvKey = (k) => /^csv\|[^|]*\|~[0-9a-f]{10}(?:#\d+)?$/.test(k);
 
 /** The compact last-seen record stored per project (text kept so "changed" can show old -> new without the old sha). */
 export function seenRecord(snap, now = Date.now()) {
@@ -91,10 +92,10 @@ export function diffChanges(seen, snap, { cap = 500 } = {}) {
   }
   // in-place edits of keyless gd rows: a removed + an added row at the same file:line is one changed row
   const goneAtLine = new Map();
-  for (const k of goneKeys) if (!goneUsed.has(k) && old[k][3]) goneAtLine.set(`${old[k][2]}\0${old[k][3]}`, k);
+  for (const k of goneKeys) if (!goneUsed.has(k) && isKeylessCsvKey(k) && old[k][3]) goneAtLine.set(`${old[k][2]}\0${old[k][3]}`, k);
   const paired = new Set();
   added.forEach(([k, r], i) => {
-    if (addedUsed.has(i) || !r.l) return;
+    if (addedUsed.has(i) || !isKeylessCsvKey(k) || !r.l) return;
     const gk = goneAtLine.get(`${r.f}\0${r.l}`);
     if (gk && !paired.has(gk)) { paired.add(gk); addedUsed.add(i); goneUsed.add(gk); changed.push({ id: r.id, key: k, old: old[gk][1], new: r.t, file: r.f }); }
   });

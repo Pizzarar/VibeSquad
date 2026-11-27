@@ -131,3 +131,54 @@ test("buildSnapshot keeps adapter dropped list non-enumerable (server-only, not 
   assert.equal("dropped" in JSON.parse(JSON.stringify(s)), false);
   assert.deepEqual(s.dropped, dropped);
 });
+
+test("goneAtLine pairs keyless gd rows only; keyed native/csv rows on the same line stay gone + new", () => {
+  const a = snap("a1", [
+    nat("squad:doc:flaw", "Hates needles"),
+    csv("data/squad.json", "members.doc.note", "Old note", 42),
+    csv("scripts/ui.gd", "", "Build now", 14),
+  ]);
+  const b = snap("b2", [
+    nat("squad:doc:synergy", "Works well with Popper"),
+    csv("data/squad.json", "members.doc.tag", "New tag", 42),
+    csv("scripts/ui.gd", "", "Build later", 14),
+  ]);
+  const d = diffChanges(seenRecord(a), b);
+  assert.deepEqual([d.counts.new, d.counts.changed, d.counts.gone], [2, 1, 2]);
+  assert.deepEqual(d.changed.map((c) => [c.old, c.new]), [["Build now", "Build later"]]);
+  assert.deepEqual(d.new.map((r) => r.text).sort(), ["New tag", "Works well with Popper"]);
+  assert.deepEqual(d.gone.map((r) => r.text).sort(), ["Hates needles", "Old note"]);
+});
+
+test("buildTextChanges + isRowChanged include all changedIds past the 500-row sample cap", async () => {
+  const L = await import("../src/storybookLogic.ts");
+  const aEnts = Array.from({ length: 5 }, (_, i) => csv("f.json", `k${i}`, `old ${i}`, i + 1));
+  const bEnts = [
+    ...Array.from({ length: 5 }, (_, i) => csv("f.json", `k${i}`, `new ${i}`, i + 1)),
+    csv("f.json", "k5", "brand new", 6),
+  ];
+  const d = diffChanges(seenRecord(snap("a1", aEnts)), snap("b2", bEnts), { cap: 2 });
+  assert.equal(d.counts.changed, 5);
+  assert.equal(d.changed.length, 2);
+  assert.equal(d.changedIds.length, 5);
+  const tc = L.buildTextChanges(d);
+  assert.ok(tc);
+  assert.equal(Object.keys(tc.changed).length, 2);
+  assert.equal(tc.changedIds.size, 5);
+  const matched = bEnts.filter((e) => L.isRowChanged(L.entityKey("line", e.id), tc));
+  assert.equal(matched.length, d.counts.changed + d.counts.new);
+});
+
+test("V8 UI/CSS regressions: gone preview cap matches summary, no --sb-dim, 44px summary, real checks button, changesSeq guard", () => {
+  const home = fs.readFileSync(new URL("../src/StorybookHome.tsx", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+  const view = fs.readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
+  assert.match(home, /const shownGone = ch\.gone\.slice\(0, GONE_PREVIEW_CAP\)/);
+  assert.match(home, /first \$\{shownGone\.length\} of \$\{ch\.counts\.gone\}/);
+  assert.ok(!css.includes("--sb-dim"), "no undefined --sb-dim token in storybook.css");
+  assert.match(css, /\.sb-changes-gonelist summary\s*\{[^}]*min-height:\s*44px/);
+  assert.match(view, /<button type="button" className="sb-fbtn"[^>]*data-testid="sb-checks-chip"[^>]*onClick=\{\(\) => clearChecks\?\.\(\)\}/);
+  assert.match(view, /const changesSeq = useRef\(0\)/);
+  assert.match(view, /if \(changesSeq\.current !== my\) return;/);
+  assert.match(view, /changesSeq\.current\+\+;\s*setChanges\(null\);/);
+});
