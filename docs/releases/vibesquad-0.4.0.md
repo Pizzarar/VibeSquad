@@ -4,12 +4,12 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `d8881601` (re-frozen from `b219e906`, then `405779e6`) |
+| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`); re-frozen from `b219e906`, then `405779e6` |
 | Release commits | `a95a4f53` (version bump, record, licenses), merge of master `405779e6`, `11a2ea14` (lockfile, credits format, record), then merges of `d8881601` on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
 | Release URL | _pending (P3)_ |
-| Range | `v0.3.0..d8881601`: 2212 commits, 767 merges |
+| Range | `v0.3.0..d6c23109`: 2213 commits, 767 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only. No Android APK is built or attached.
 
