@@ -601,21 +601,74 @@ export function resolveAnswerTarget(item, agents, teams, pickLiveAgent) {
   return null;
 }
 
+const normQuoteInner = (s) => JSON.parse(quoteLine(s, 100000));
+
 // quoteLine cut to `max` chars, with "…" when it cut.
 const quoteShort = (s, max = 60) => {
-  const full = JSON.parse(quoteLine(s, 100000));
-  return full.length > max ? quoteLine(`${full.slice(0, max - 1)}…`, max) : JSON.stringify(full);
+  const full = normQuoteInner(s);
+  if (full.length <= max) return JSON.stringify(full);
+  if (max <= 1) return JSON.stringify("…");
+  return quoteLine(`${full.slice(0, max - 1)}…`, max);
 };
-const choiceLabelBase = (item, ans) => {
+const choiceLabelBase = (item, ans, max = 60) => {
   if (ans.choice === "lean") {
     const li = resolveLeanAltIndex(item);
-    return li >= 0 ? `lean, option ${li + 1} ${quoteShort(item.alts[li])}` : `lean ${quoteShort(item.lean)}`;
+    return li >= 0 ? `lean, option ${li + 1} ${quoteShort(item.alts[li], max)}` : `lean ${quoteShort(item.lean, max)}`;
   }
-  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteShort(item.alts[ans.altIndex])}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteShort(ans.text)}` : "dismissed";
+  return ans.choice === "alt" ? `option ${ans.altIndex + 1} ${quoteShort(item.alts[ans.altIndex], max)}` : ans.choice === "not" ? (optionCount(item) >= 2 ? "none of these" : "not that") : ans.choice === "reply" ? `reply ${quoteShort(ans.text, max)}` : "dismissed";
 };
 // C2b idea-1152: an option picked with a typed note keeps the note in the summary.
-export const choiceLabel = (item, ans) =>
-  ans.choice !== "reply" && ans.choice !== "dismiss" && ans.text ? `${choiceLabelBase(item, ans)} + reply ${quoteShort(ans.text)}` : choiceLabelBase(item, ans);
+export const choiceLabel = (item, ans, { optMax = 60, replyMax = 60 } = {}) => {
+  if (ans.choice === "reply") return choiceLabelBase(item, ans, replyMax);
+  const base = choiceLabelBase(item, ans, optMax);
+  return ans.choice !== "dismiss" && ans.text ? `${base} + reply ${quoteShort(ans.text, replyMax)}` : base;
+};
+
+/**
+ * L2 idea-1154: build the <=240-char delivery log summary without dropping the end of the question.
+ * Shrinks the quoted option/reply parts first (with "…") before ever shortening the question.
+ */
+export function deliveryLogSummary(item, ans, { deliveredTo = null, via = "asker", maxLen = 240 } = {}) {
+  const target = deliveredTo ? ` → ${deliveredTo}${via !== "asker" ? ` (${via}; asker ${item.askerId || "unknown"} gone)` : ""}` : "";
+  const hasOpt = ans.choice === "lean" || ans.choice === "alt";
+  const hasReply = Boolean(ans.text) && (ans.choice === "reply" || ans.choice !== "dismiss");
+  const li = ans.choice === "lean" ? resolveLeanAltIndex(item) : -1;
+  const optSrc = ans.choice === "lean" ? (li >= 0 ? item.alts[li] : item.lean) : ans.choice === "alt" ? item.alts[ans.altIndex] : "";
+  let optMax = hasOpt ? Math.min(60, normQuoteInner(optSrc).length) : 0;
+  let replyMax = hasReply ? Math.min(60, normQuoteInner(ans.text).length) : 0;
+  let askMax = Math.min(120, normQuoteInner(item.ask).length);
+
+  const render = () => `Decision Desk: ${choiceLabel(item, ans, { optMax, replyMax })}${target} re ${quoteShort(item.ask, askMax)}`;
+  let out = render();
+  const MIN_QUOTE = 4;
+
+  while (out.length > maxLen && (optMax > MIN_QUOTE || replyMax > MIN_QUOTE)) {
+    const excess = out.length - maxLen;
+    if (optMax > MIN_QUOTE && replyMax > MIN_QUOTE) {
+      if (optMax > replyMax) {
+        const drop = Math.min(excess, optMax - replyMax);
+        optMax = Math.max(MIN_QUOTE, optMax - Math.max(1, drop));
+      } else if (replyMax > optMax) {
+        const drop = Math.min(excess, replyMax - optMax);
+        replyMax = Math.max(MIN_QUOTE, replyMax - Math.max(1, drop));
+      } else {
+        const half = Math.max(1, Math.ceil(excess / 2));
+        optMax = Math.max(MIN_QUOTE, optMax - half);
+        replyMax = Math.max(MIN_QUOTE, replyMax - half);
+      }
+    } else if (optMax > MIN_QUOTE) {
+      optMax = Math.max(MIN_QUOTE, optMax - excess);
+    } else {
+      replyMax = Math.max(MIN_QUOTE, replyMax - excess);
+    }
+    out = render();
+  }
+  while (out.length > maxLen && askMax > MIN_QUOTE) {
+    askMax = Math.max(MIN_QUOTE, askMax - (out.length - maxLen));
+    out = render();
+  }
+  return out.length > maxLen ? out.slice(0, maxLen) : out;
+}
 
 // Process-wide answer state: ids being sent right now, and ids answered / dismissed by this process (a log append that
 // failed after a delivery must not reopen the item for a second send). Single server process per VIBESQUAD_HOME.
@@ -685,8 +738,8 @@ async function deliverOne(item, ans, { agents, teams, backend, appendLog, ownerN
       via = target.via;
     }
     closedHere.set(item.id, Date.now());
-    const target = deliveredTo ? ` → ${deliveredTo}${via !== "asker" ? ` (${via}; asker ${item.askerId || "unknown"} gone)` : ""}` : "";
-    const text = `Decision Desk: ${choiceLabel(item, ans)}${target} re ${quoteLine(item.ask, 120)}`.slice(0, 240);
+    const summary = choiceLabel(item, ans);
+    const text = deliveryLogSummary(item, ans, { deliveredTo, via });
     let logged = true;
     try {
       appendLog({ teamId: item.squad, laneId: item.lane, agent: ownerName, type: "you", text, refs: [`${DECISION_REF_PREFIX}${item.id}`] });
@@ -700,7 +753,7 @@ async function deliverOne(item, ans, { agents, teams, backend, appendLog, ownerN
         console.warn(`[vibesquad] decisions: could not clear the needs-you label on ${item.askerId}: ${e?.message ?? e}`),
       );
     }
-    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged };
+    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged, summary };
   } catch (e) {
     // Only reached before a send (target resolution / prompt build): the item stays open.
     console.warn(`[vibesquad] decisions: answer ${item.id} failed: ${e?.message ?? e}`);
@@ -762,6 +815,7 @@ export async function answerDecisions(answers, deps) {
       results.push({
         ...base,
         status: okCount === per.length ? okStatus : okCount === 0 ? "failed" : "partial",
+        ...(okCount > 0 ? { summary: choiceLabel(item, ans) } : {}),
         ...(okCount < per.length ? { error: "some source items were not delivered; they stay open" } : {}),
         members: [...per, ...skipped],
       });

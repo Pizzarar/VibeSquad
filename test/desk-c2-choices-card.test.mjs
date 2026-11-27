@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, test } from "node:test";
 import { transformSync } from "rolldown/utils";
-import { buildAnswerPrompt, choiceLabel, resolveLeanAltIndex, validateAnswerBatch } from "../server/decisions.mjs";
+import { buildAnswerPrompt, choiceLabel, deliveryLogSummary, resolveLeanAltIndex, validateAnswerBatch } from "../server/decisions.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const dir = mkdtempSync(join(tmpdir(), "vs-desk-c2-"));
@@ -50,6 +50,7 @@ const {
   hasDecisionOptions,
   hasSourceDisclosure,
   sourceExcerptText,
+  formatSentChoiceSummary,
   applyChoiceToggle,
   applyReplyText,
   buildAnswerBatch,
@@ -68,8 +69,9 @@ test("C2 helpers: hasDecisionOptions, hasSourceDisclosure, and plain-text source
   assert.equal(hasDecisionOptions({ kind: "answer", lean: "", alts: [] }), false);
   assert.equal(hasDecisionOptions({ kind: "offscreen", lean: "", alts: ["A: one"] }), false);
 
-  assert.equal(hasSourceDisclosure({ inferred: true, context: "" }), true, "every inferred card gets Show source");
-  assert.equal(hasSourceDisclosure({ inferred: false, context: "A) foo\nB) bar" }), true, "any card with context gets Show source");
+  assert.equal(hasSourceDisclosure({ inferred: true, context: "" }), false, "inferred card with empty excerpt hides Show source (idea-1150)");
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Pick A or B?", context: "A) foo\nB) bar" }), true, "card with informative context gets Show source");
+  assert.equal(hasSourceDisclosure({ inferred: false, ask: "Pick A or B?", context: "A) foo\nB) bar" }), true, "any card with informative context gets Show source");
   assert.equal(hasSourceDisclosure({ inferred: false, context: "   " }), false);
   assert.equal(hasSourceDisclosure({ inferred: false }), false);
 
@@ -271,4 +273,81 @@ test("C2b fix: choiceLabel marks a truncated quote with an ellipsis", () => {
   const out = choiceLabel(c2bItem(), { choice: "reply", text: long });
   assert.match(out, /^reply "x{59}…"$/);
   assert.equal(choiceLabel(c2bItem(), { choice: "reply", text: "short" }), 'reply "short"');
+});
+
+// ---- L2 (PLAN_DESK_DD_LOWS: idea-1150, idea-1154) ----
+
+test("L2 idea-1150: Show source hides when excerpt is empty or redundant with ask (case + whitespace normalized)", () => {
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", context: "", rawText: "" }), false);
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", context: "   \n\t  " }), false);
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", context: "  SHIP   V2\nNOW?  " }), false, "equal after whitespace/case norm");
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now? Also update docs.", context: "ship v2   now?" }), false, "contained in ask after norm");
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", rawText: "  ship  v2  now? " }), false, "rawText fallback equal to ask");
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", rawText: "Ship v2 now? Details: A) canary, B) full rollout" }), true, "inferred rawText adds info");
+  assert.equal(hasSourceDisclosure({ inferred: false, ask: "Ship v2 now?", context: "Context with extra details" }), true, "context adds info");
+  assert.equal(hasSourceDisclosure({ inferred: false, ask: "Ship v2 now?", rawText: "Ship v2 now? Full raw log text with extra words" }), false, "structured non-inferred item with only rawText hides Show source");
+
+  // C2b bare-letter hint uses the same hasSourceDisclosure predicate
+  const redundantBare = c2bItem({ lean: "Z", ask: "Pick one", context: "  PICK   ONE " });
+  assert.equal(isUnresolvedBareLean(redundantBare), true);
+  assert.equal(hasSourceDisclosure(redundantBare), false, "redundant context hides Show source and switches bare-letter hint");
+  const structuredRawOnly = c2bItem({ structured: true, inferred: false, lean: "Z", ask: "Pick one", rawText: "Pick one: A) alpha, B) beta" });
+  assert.equal(isUnresolvedBareLean(structuredRawOnly), true);
+  assert.equal(hasSourceDisclosure(structuredRawOnly), false, "structured non-inferred item with only rawText -> option not defined");
+});
+
+test("L2 idea-1154: client formatSentChoiceSummary matches server choiceLabel and banner disclosure is keyboard-accessible", () => {
+  const item = c2bItem();
+  const oneLean = c2bItem({ lean: "Ship it", alts: [] });
+  const cases = [
+    { it: item, srv: { choice: "alt", altIndex: 1, text: "add a 30s veto" }, cli: { choice: "alt:1", text: "add a 30s veto" } },
+    { it: item, srv: { choice: "alt", altIndex: 0 }, cli: { choice: "alt:0" } },
+    { it: item, srv: { choice: "lean" }, cli: { choice: "lean" } },
+    { it: item, srv: { choice: "lean", text: "go ahead" }, cli: { choice: "lean", text: "go ahead" } },
+    { it: oneLean, srv: { choice: "lean" }, cli: { choice: "lean" } },
+    { it: item, srv: { choice: "not" }, cli: { choice: "not" } },
+    { it: oneLean, srv: { choice: "not" }, cli: { choice: "not" } },
+    { it: item, srv: { choice: "reply", text: "x".repeat(90) }, cli: { choice: "reply", text: "x".repeat(90) } },
+    { it: item, srv: { choice: "dismiss" }, cli: { choice: "dismiss" } },
+  ];
+  for (const c of cases) {
+    assert.equal(formatSentChoiceSummary(c.it, c.cli), choiceLabel(c.it, c.srv), `match for ${c.cli.choice}`);
+  }
+  assert.match(ddSrc, /data-testid="boring-decision-banner-toggle"/);
+  assert.match(ddSrc, /aria-expanded=\{bannerOpen\}/);
+  assert.match(ddSrc, /aria-controls=\{bannerOpen \? "boring-decision-banner-details" : undefined\}/);
+  assert.match(ddSrc, /data-testid="boring-decision-banner-details"/);
+});
+
+test("L2 idea-1154: deliveryLogSummary preserves the end of the question by shrinking quoted option/reply first", () => {
+  const ask = "Partial-fill entry handling: A, B, or C? Also add a veto window on the check-5 same-ticker block?";
+  const item = c2bItem({
+    ask,
+    askerId: "a-vs-ov",
+    alts: [
+      "A: fill-or-kill at entry — cancel the order unless it fills completely right away",
+      "B: keep the partial fill and resize the stop to the filled size immediately",
+    ],
+  });
+  const ans = { choice: "alt", altIndex: 1, text: "Yes, add a 30s veto window on the check-5 same-ticker block too please" };
+  const summary = deliveryLogSummary(item, ans, { deliveredTo: "a-vs-ov", via: "asker" });
+  assert.ok(summary.length <= 240, `summary <= 240 chars (got ${summary.length}): ${summary}`);
+  assert.ok(summary.endsWith(`re ${JSON.stringify(ask)}`), `full question preserved at end: ${summary}`);
+  assert.match(summary, /…"/, "shrunk quoted part carries ellipsis");
+
+  // Long option + short reply: shrinks the long option first, keeps short reply intact
+  const shortReplyAns = { choice: "alt", altIndex: 1, text: "add veto" };
+  const s2 = deliveryLogSummary(item, shortReplyAns, { deliveredTo: "a-vs-lead-fallback", via: "lead" });
+  assert.ok(s2.length <= 240, `s2 <= 240 chars (got ${s2.length}): ${s2}`);
+  assert.ok(s2.endsWith(`re ${JSON.stringify(ask)}`), `full question preserved: ${s2}`);
+  assert.match(s2, /\+ reply "add veto"/, "short reply stays un-truncated when option absorbs shrink");
+
+  // Extreme target + ask still stays <= 240 and ends with closing quote
+  const hugeAsk = "Should we migrate the entire distributed storage engine? ".repeat(4).trim();
+  const s3 = deliveryLogSummary(c2bItem({ ask: hugeAsk, askerId: "very-long-asker-id-1234567890" }), ans, {
+    deliveredTo: "very-long-target-agent-id-1234567890",
+    via: "buddy",
+  });
+  assert.ok(s3.length <= 240, `s3 <= 240 chars (got ${s3.length})`);
+  assert.ok(s3.endsWith('…"'), `graceful ellipsis ending when ask must shrink: ${s3}`);
 });
