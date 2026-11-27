@@ -374,6 +374,27 @@ export const useEffect = (...a) => globalThis.__sbTextReact.useEffect(...a);`,
     assert.match(css, /\.sb-needs-txt\s*\{\s*display:\s*none;\s*\}/, "needs-you text hidden on <=600px");
     assert.doesNotMatch(css, /\.sb-head:has\(\.sb-needs\)/, "needs-you no longer forces a second header row on phone");
   });
+
+  test("V7 rn-e56176218a8a m4: Contracts chip count follows the active class filter too", async () => {
+    const { StorybookText } = await loadMod();
+    const ents = [
+      { id: "c_doc_1", kind: "contract", display: "c_doc_1", aliases: [], source: { path: "data/contracts.json", line: 1 }, links: [], production: null, data: { trader: "doc", type: "kill", rendered: { title: "Eliminate 5 Scavs for Doc", detail: "Kill 5." } } },
+      { id: "c_doc_2", kind: "contract", display: "c_doc_2", aliases: [], source: { path: "data/contracts.json", line: 2 }, links: [], production: null, data: { trader: "doc", type: "deliver", rendered: { title: "Deliver 10 Scrap for Doc", detail: "Bring 10." } } },
+      { id: "story_1", kind: "line", display: "s", aliases: [], source: { path: "data/questlines.json", line: 9 }, links: [], production: null, data: { text: "Bring thirty casings.", rowClass: "story", speakerKind: "narrator", speakerId: "narrator" } },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const rows = R.buildReviewRows(ents, localIdx, []);
+    const m = mount(StorybookText);
+    const props = { rows, idx: localIdx, focus: null, renderChip: (e, label) => label ?? e.display };
+    let tree = m.render(props);
+    const byId = (t, id) => findAll(t, (n) => n.props?.["data-testid"] === id)[0];
+    const chipCount = (t) => { const btn = byId(t, "sb-text-contracts"); return btn ? findAll(btn, (n) => n.props?.className === "sb-count")[0]?.children[0] : null; };
+    assert.equal(chipCount(tree), 2);
+    byId(tree, "sb-text-class-story").props.onClick();
+    tree = m.render(props);
+    assert.equal(byId(tree, "sb-text-class-story").props["aria-pressed"], true);
+    assert.equal(byId(tree, "sb-text-contracts"), undefined, "with only Story lines shown, no contract matches: the chip hides (count 0), like the other counts");
+  });
 });
 
 test("real EFI (if /tmp snapshot present): counts", { skip: !existsSync("/tmp/sbv3_snap.json") }, () => {

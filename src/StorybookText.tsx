@@ -82,9 +82,9 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
     if (areaFilter && progress) list = list.filter((r) => r.kind === "line" && progress.lineAreas[r.entityId] === areaFilter);
     if (entityFilter) list = list.filter((r) => matchesEntityKey(r, idx, entityFilter.key, progress));
     if (statusFilter) list = list.filter((r) => r.kind === "line" && (rowStatusBucket ? rowStatusBucket(r) : statusBucket(r.status)) === statusFilter);
-    const f = filterRows(list, { query, speakerKey, classes: new Set(), tooLong, unreviewed });
+    const f = filterRows(list, { query, speakerKey, classes, tooLong, unreviewed });
     return (mine && mineTest ? f.filter(mineTest) : f).filter((r) => r.kind === "contract").length;
-  }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket, query, speakerKey, tooLong, unreviewed, mine, mineTest]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows, only, changes, areaFilter, progress, entityFilter, idx, statusFilter, rowStatusBucket, query, speakerKey, classes, tooLong, unreviewed, mine, mineTest]); // eslint-disable-line react-hooks/exhaustive-deps
   const nMine = useMemo(() => (mineTest ? rows.filter(mineTest).length : 0), [rows, mineTest]);
   useEffect(() => {
     if (!preset) return;
