@@ -225,7 +225,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles, { stakes, kind, prefer, tier, override } = {}) {
+    async resolveProfile(name, profiles, { stakes, kind, prefer, tier, armModel, override } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
       // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
       // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
@@ -235,8 +235,9 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const stored = (Array.isArray(profiles) ? profiles : []).some((p) => clean(p?.name).toLowerCase() === key || (p?.id && p.id === clean(name)));
       if (!stored) {
         const { roleSpawnConfig } = await import("../spawn-route.mjs");
-        // prefer: R1 arm provider for a role spawn; tier: R8 opt-in arm tier. override: the caller's own provider/model (H1), which win.
-        const roleCfg = roleSpawnConfig(name, { profiles, stakes, kind, prefer, tier, override });
+        // prefer: R1 arm provider for a role spawn; tier: R8 opt-in arm tier; armModel: X2 arm model (carbon).
+        // override: the caller's own provider/model (H1), which win.
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes, kind, prefer, tier, armModel, override });
         if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
       }
       const profile = findProfile(name, profiles);
@@ -455,6 +456,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
       ...(kindNow ? { kind: kindNow } : {}),
       ...(ab?.role && ab.provider ? { prefer: ab.provider } : {}),
       ...(ab?.role && ab.tier ? { tier: ab.tier } : {}),
+      ...(ab?.role && ab.armModel ? { armModel: ab.armModel } : {}),
       ...(given.provider || given.model ? { override: { provider: given.provider, model: given.model } } : {}),
     };
     let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);

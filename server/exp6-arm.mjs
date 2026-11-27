@@ -1,6 +1,7 @@
 // Normal implementer arm pick (PLAN_PER_ROLES_LADDER_1125 R0; grew out of the EXP6 pick, idea-440). The server alternates
 // (weighted 2:1 Neon:Sonnet, ARM_WEIGHTS, @per G1) stakes=normal implementer spawns per lane between the Claude Sonnet arm (`Implement - Sonnet`, wf=sonnet) and the Gemini
 // Neon arm (`Implement - Gemini (trial)`, wf=neon), so the alternation survives lead handoffs and feeds EXP10/EXP11.
+// X2 (11-27): a third arm, Gemini Carbon (wf=carbon, role spawns only), takes half of Neon's share (1:1:1) for EXP13.
 // DSP (`Work Order - DSP`) is never an arm: it runs only when asked for by name or reached by provider failover.
 // Every pick is visible: decideArm returns { arm, reason, swapped, profile } and spawn_worker prints/stamps it (no silent swap).
 // R1 (roles only): the role name `Implement` joins the same alternation. A role spawn is never swapped onto an old
@@ -11,6 +12,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { GEMINI_CARBON_MODEL } from "./model-ids.mjs";
 import { isInterruptibleWork, normalizeProviderFamily } from "./provider-failover.mjs";
 
 // EXP6 (Sonnet vs DSP, 11-19..11-23) is closed; these stay for the history readers (verdict probe, EXP6.md re-reads).
@@ -26,11 +28,22 @@ export const ARMS = {
   neon: { profile: "Implement - Gemini (trial)", wf: "neon", provider: "antigravity-cli" },
   // R8 (PLAN_PER_ROLES_LADDER_1125 Amend 11-25): opt-in cheap-tier arm on Gemini; model comes from the ladder, never named here.
   flash: { profile: null, wf: "flash", provider: "antigravity-cli", tier: "cheap", optIn: true },
+  // X2 (@per PLAN_PER_CRUNCH_1127, idea-1118): Gemini Carbon as a third Implement arm, a quality trial next to Neon (EXP13),
+  // not a quota shift. Same provider as Neon, so the arm names its own model (`model`, applied by spawn-route
+  // roleSpawnProfile `armModel` only while the route stays on antigravity-cli at stakes=normal). No old profile runs Carbon:
+  // an old-name spawn (`Implement - Sonnet`, `Worker`) folds this arm into `legacyAs` (weight + picks), see decideArm.
+  carbon: { profile: null, wf: "carbon", provider: "antigravity-cli", model: GEMINI_CARBON_MODEL, legacyAs: "neon" },
 };
 /** The live arm set for stakes=normal implementer spawns (order = tie-break order). [] turns the alternation off. */
-export const IMPLEMENTER_ARMS = ["sonnet", "neon"];
-/** Alternation weights (@per G1): picks go to the uncapped arm with the lowest picks/weight, so Neon gets 2 of every 3. */
-export const ARM_WEIGHTS = { sonnet: 1, neon: 2 };
+export const IMPLEMENTER_ARMS = ["sonnet", "neon", "carbon"];
+/**
+ * Alternation weights: picks go to the uncapped arm with the lowest picks/weight. @per G1 set Claude:Gemini to 1:2
+ * (sonnet 1, neon 2). X2 keeps that family split unchanged and halves Neon's share for Carbon: sonnet 1, neon 1, carbon 1,
+ * so each arm gets 1 of every 3 picks and Gemini still gets 2 of 3. Carbon is a quality trial (EXP13 reads it against Neon on
+ * first-try review PASS), so it takes picks from Neon only, never from Sonnet. An old-name spawn folds carbon into neon
+ * (sonnet 1, neon 1+1 = 2): exactly the G1 split.
+ */
+export const ARM_WEIGHTS = { sonnet: 1, neon: 1, carbon: 1 };
 const weightOf = (weights, wf) => {
   const w = weights?.[wf];
   return typeof w === "number" && Number.isFinite(w) && w > 0 ? w : 1;
@@ -57,7 +70,10 @@ const roleArmKey = (name) => String(name ?? "").trim().toLowerCase().replace(/[\
 // Provider families whose cap blocks picking that arm. Keys as readCappedProviders normalizes them (claude,
 // antigravity-cli) plus the raw spellings a hand-written cap map may use. The `wf` arms of other spawns are unaffected.
 const AGY_CAP_FAMILIES = ["antigravity-cli", "antigravity", "agy", "gemini"];
-export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP_FAMILIES, flash: AGY_CAP_FAMILIES, dsp: ["opencode", "deepseek"] };
+export const ARM_CAP_FAMILIES = { sonnet: ["claude", "anthropic"], neon: AGY_CAP_FAMILIES, carbon: AGY_CAP_FAMILIES, flash: AGY_CAP_FAMILIES, dsp: ["opencode", "deepseek"] };
+// Arms on the Gemini family: a `gemini-*` cap key (a model-spelled cap) caps all of them. Neon and Carbon share one family and
+// one quota, so a capped / past-soft-line antigravity-cli caps both at once (X2).
+const GEMINI_ARMS = new Set(["neon", "carbon", "flash"]);
 
 /**
  * Live `vs cap` map (capped-providers.json, expired caps dropped) for the spawn caller's VibeSquad home. Lazy import:
@@ -98,7 +114,7 @@ export function armCapKey(wf, capped, { role = false } = {}) {
   const keys = Array.isArray(capped) ? capped : Object.keys(capped ?? {});
   for (const k of keys) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
-    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
+    if (fams.includes(fam) || (GEMINI_ARMS.has(wf) && fam.startsWith("gemini-"))) {
       // R10 fu2/fu3: a role-spawn (`Implement`) sonnet arm lands on agy-claude first and falls back to direct claude, so it
       // is capped only when BOTH are. Legacy `Implement - Sonnet` does not walk agy-claude, so direct claude alone caps it.
       if (role && wf === "sonnet" && !keys.some((x) => String(x ?? "").trim().toLowerCase().split("/")[0] === "agy-claude")) continue;
@@ -134,13 +150,20 @@ export function armTier(wf) {
   return ARMS[String(wf ?? "").trim().toLowerCase()]?.tier ?? "";
 }
 
+/** Model a `vs.arm` label value pins on its provider ("" = the ladder rung names it). X2: carbon -> gemini-4-carbon. */
+export function armModel(wf) {
+  return ARMS[String(wf ?? "").trim().toLowerCase()]?.model ?? "";
+}
+
 /**
  * Route options a `vs.arm` label gives a role-name spawn: only arm-eligible roles (`Implement`, via ROLE_ARM_SOURCES)
- * take the arm's provider/tier; Review, Pre-check, Planner... never do, even when they inherit a vs.arm label.
+ * take the arm's provider/tier/model; Review, Pre-check, Planner... never do, even when they inherit a vs.arm label.
+ * `armModel` applies only at stakes=normal on the arm's own provider (spawn-route roleSpawnProfile), so an inherited
+ * vs.arm=carbon on a tierA or mechanical respawn keeps the ladder rung.
  */
 export function armRouteFor(roleName, wf) {
-  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "" };
-  return { prefer: armProvider(wf), tier: armTier(wf) };
+  if (!ROLE_ARM_SOURCES[roleArmKey(roleName)]) return { prefer: "", tier: "", armModel: "" };
+  return { prefer: armProvider(wf), tier: armTier(wf), armModel: armModel(wf) };
 }
 
 /** EXP6 history: open until a verdict is logged or the end date passes. `endIso` is VS_EXP6_END (or the default). */
@@ -239,7 +262,7 @@ function softReasonForArm(wf, caps, { role = false } = {}) {
   }
   for (const k of Object.keys(caps)) {
     const fam = String(k ?? "").trim().toLowerCase().split("/")[0];
-    if (fams.includes(fam) || ((wf === "neon" || wf === "flash") && fam.startsWith("gemini-"))) {
+    if (fams.includes(fam) || (GEMINI_ARMS.has(wf) && fam.startsWith("gemini-"))) {
       const normFam = fam === "agy" ? "antigravity-cli" : normalizeProviderFamily(k);
       const r = check(k, normFam);
       if (r) return r;
@@ -295,7 +318,15 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
       ...(roleSpawn ? { role: true, provider: optInArm.provider, ...(optInArm.tier ? { tier: optInArm.tier } : {}) } : {}),
     };
   }
-  const set = (Array.isArray(arms) ? arms : []).filter((wf) => ARMS[wf]);
+  const fullSet = (Array.isArray(arms) ? arms : []).filter((wf) => ARMS[wf]);
+  // X2: an old-name spawn can only swap onto an arm with an old profile; a profile-less arm (carbon) folds into its
+  // `legacyAs` arm (weight and picks), so the old-name family split stays what it was before that arm existed.
+  const folded = roleSpawn ? [] : fullSet.filter((wf) => !ARMS[wf].profile && fullSet.includes(ARMS[wf].legacyAs));
+  const set = fullSet.filter((wf) => roleSpawn || ARMS[wf].profile);
+  if (folded.length) {
+    weights = { ...weights };
+    for (const wf of folded) weights[ARMS[wf].legacyAs] = weightOf(weights, ARMS[wf].legacyAs) + weightOf(weights, wf);
+  }
   if (set.length < 2 || !set.includes(requested.wf)) return null;
   if (abVal === "pin") return keep("pin");
   if (wfVal) return keep("wf");
@@ -314,7 +345,11 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   }
   let counts;
   try {
-    counts = countArms(await listAgents(), { lane, team, arms: set });
+    counts = countArms(await listAgents(), { lane, team, arms: [...set, ...folded] });
+    for (const wf of folded) {
+      counts[ARMS[wf].legacyAs] += counts[wf];
+      delete counts[wf];
+    }
   } catch {
     return keep("fail-open");
   }
@@ -347,7 +382,7 @@ export async function decideArm({ profile, stakes, asLead, labels = {}, lane, te
   const profileOut = swapped && !roleSpawn ? arm.profile : String(profile);
   return {
     mode: "arm", arm: arm.wf, requestedArm: requested.wf, swapped, reason, counts, profile: profileOut,
-    ...(roleSpawn ? { role: true, provider: arm.provider } : {}),
+    ...(roleSpawn ? { role: true, provider: arm.provider, ...(arm.model ? { armModel: arm.model } : {}) } : {}),
     ...(reason !== "alternation" && !softFailover ? { capped: true } : {}),
     ...(softFailover ? { soft: true, softFailover: true } : {}),
   };

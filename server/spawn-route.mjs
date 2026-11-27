@@ -144,10 +144,13 @@ export function unknownQuotaFamilies(usageList, extra = [], opts = {}) {
  * rest keep their order, so a capped/over-quota preferred family still fails over along the role's list. The model is
  * still that family's tier-ladder rung. Unknown/blank = the role's own order. An override provider beats it.
  * `directClaude` (R10): the walk skips agy-claude (resolveRoute), so the route is exactly the pre-R10 one.
+ * `armModel` (X2): the model an arm pins on its own provider (exp6-arm armModel, e.g. carbon -> gemini-4-carbon). It
+ * replaces the rung's model only when the route really lands on the preferred family at stakes=normal with no override;
+ * a failover hop, a capped family, tierA/mechanical stakes or a caller override keep the rung (or the caller's) model.
  * @param {string} hint
- * @param {{stakes?: string, kind?: string, caps?: string[], softCaps?: Record<string, string | boolean> | string[], unknown?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
+ * @param {{stakes?: string, kind?: string, caps?: string[], softCaps?: Record<string, string | boolean> | string[], unknown?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string, prefer?: string, tier?: string, armModel?: string, override?: {provider?: string, model?: string} | null, directClaude?: boolean}} [opts]
  */
-export function roleSpawnProfile(hint, { stakes, kind, caps = [], softCaps = {}, unknown = [], roles, ladder, explicitModel, prefer, tier, override, directClaude = false } = {}) {
+export function roleSpawnProfile(hint, { stakes, kind, caps = [], softCaps = {}, unknown = [], roles, ladder, explicitModel, prefer, tier, armModel, override, directClaude = false } = {}) {
   let table = roles ?? ROLE_TABLE;
   const found0 = roleNameHit(hint, table);
   if (!found0) return null;
@@ -209,6 +212,11 @@ export function roleSpawnProfile(hint, { stakes, kind, caps = [], softCaps = {},
       const probe = resolveRoute({ ...base, explicit: { model: exModel } }, { roles: table });
       explicitCapped = Boolean(probe?.reasons?.includes("explicit-capped"));
     }
+  }
+  // X2: an arm model (Carbon) only on its own family, at stakes=normal, with no caller override and no cap.
+  const armModelId = String(armModel ?? "").trim();
+  if (armModelId && !explicit && fam && route.provider === fam && !route.capped && normalizeStakes(stakes) === "normal" && routeProviderFamily(armModelId) === fam) {
+    route = { ...route, model: armModelId };
   }
   const def = found.role;
   // agy-claude runs on the antigravity-cli runner with that provider's mode set (unless a stored role names its own).
@@ -356,13 +364,13 @@ export function routeMetricText({ stakes, model, effort, reason, legacyName = fa
  * the same values it would pick. null = not a role name (callers keep their profile path). `override` = the caller's own
  * provider/model (spawn_worker, H1): routed as in roleSpawnProfile, so the spawn config already names that provider's rung.
  */
-export function roleSpawnConfig(name, { profiles, profilesPath, stakes, kind, usageList = [], prefer, tier, override, softThreshold, softThresholds, env } = {}) {
+export function roleSpawnConfig(name, { profiles, profilesPath, stakes, kind, usageList = [], prefer, tier, armModel, override, softThreshold, softThresholds, env } = {}) {
   const roles = liveRoles(profiles, profilesPath);
   if (!roleNameHit(name, roles)) return null;
   const caps = cappedFamilies(usageList, [], { ignoreDiskCaps: true });
   const softCaps = softCappedFamilies(usageList, [], { ignoreDiskCaps: true, stakes, kind, role: name, softThreshold, softThresholds, env });
   const unknown = unknownQuotaFamilies(usageList, [], { ignoreDiskCaps: true, stakes, kind, role: name });
-  const hit = roleSpawnProfile(name, { stakes, kind, caps, softCaps, unknown, roles, prefer, tier, override });
+  const hit = roleSpawnProfile(name, { stakes, kind, caps, softCaps, unknown, roles, prefer, tier, armModel, override });
   if (!hit) return null;
   const p = hit.profile;
   return {

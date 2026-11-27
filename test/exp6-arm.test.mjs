@@ -18,9 +18,9 @@ const ag = (arm, over = {}) => ({ createdAt: "2026-11-25T00:00:00Z", labels: { l
 const base = (extra = {}) => ({ team: "mx", profile: SONNET, stakes: "", labels: {}, lane: "feat", listAgents: async () => [], capProbe: async () => ({}), ...extra });
 const pick3 = (r) => [r.arm, r.reason, r.swapped, r.profile];
 
-test("arm table: Sonnet + Neon only, DSP is never an arm", () => {
-  assert.deepEqual(IMPLEMENTER_ARMS, ["sonnet", "neon"]);
-  assert.deepEqual(IMPLEMENTER_ARMS.map((wf) => ARMS[wf].profile), [SONNET, NEON]);
+test("arm table: Sonnet + Neon + Carbon (X2), DSP is never an arm", () => {
+  assert.deepEqual(IMPLEMENTER_ARMS, ["sonnet", "neon", "carbon"]);
+  assert.deepEqual(IMPLEMENTER_ARMS.map((wf) => ARMS[wf].profile), [SONNET, NEON, null]); // carbon: role spawns only
   assert.equal(armOfProfile(SONNET).wf, "sonnet");
   assert.equal(armOfProfile("worker").wf, "sonnet");
   assert.equal(armOfProfile(NEON).wf, "neon");
@@ -41,13 +41,13 @@ test("decideArm: per-lane alternation sonnet -> neon -> sonnet (only vs.arm pick
     lane.push(ag(r.arm));
   }
   assert.deepEqual(seen, ["sonnet", "neon", "neon", "sonnet", "neon", "neon"]); // G1: 2:1 Neon:Sonnet
-  assert.deepEqual(ARM_WEIGHTS, { sonnet: 1, neon: 2 });
+  assert.deepEqual(ARM_WEIGHTS, { sonnet: 1, neon: 1, carbon: 1 }); // X2: old names fold carbon into neon = G1's 1:2
   // EXP6-era history (wf only, no vs.arm), other lanes/teams, respawned, digests, non-normal and leads never count.
   const noise = [ag(null, { labels: { wf: "sonnet" } }), ag("sonnet", { labels: { lane: "other" } }), ag("sonnet", { labels: { team: "zz" } }), ag("sonnet", { labels: { respawnedAs: "x" } }), ag("sonnet", { labels: { digestFor: "x" } }), ag("sonnet", { labels: { stakes: "tierA-invariant" } }), ag("sonnet", { labels: { role: "lead" } })];
-  assert.deepEqual(countArms(noise, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0 });
+  assert.deepEqual(countArms(noise, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0, carbon: 0 });
   const r = await decideArm(base({ listAgents: async () => [ag("sonnet")] }));
   assert.deepEqual(pick3(r), ["neon", "alternation", true, NEON]);
-  assert.deepEqual(r.counts, { sonnet: 1, neon: 0 });
+  assert.deepEqual(r.counts, { sonnet: 1, neon: 0 }); // old name: carbon folded into neon
   // A Neon request on a tie keeps Neon; lagging Sonnet swaps a Neon request back.
   assert.deepEqual(pick3(await decideArm(base({ profile: NEON }))), ["neon", "alternation", false, NEON]);
   assert.deepEqual(pick3(await decideArm(base({ profile: NEON, listAgents: async () => [ag("neon")] }))), ["sonnet", "alternation", true, SONNET]);
@@ -93,7 +93,7 @@ test("decideArm opt-outs and non-arm requests", async () => {
   // Arm set off ([] or one arm) = no pick at all.
   assert.equal(await decideArm(base({ arms: [], listAgents: skew })), null);
   assert.equal(await decideArm(base({ arms: ["sonnet"], listAgents: skew })), null);
-  assert.equal(pickArm(ARMS.sonnet, { sonnet: 0, neon: 0 }, { capped: new Set(["sonnet", "neon"]) }), null);
+  assert.equal(pickArm(ARMS.sonnet, { sonnet: 0, neon: 0, carbon: 0 }, { capped: new Set(["sonnet", "neon", "carbon"]) }), null);
 });
 
 const PLANNING = [
@@ -105,7 +105,7 @@ const PLANNING = [
 test("R1 decideArm: the role name Implement alternates but keeps its name; the arm only picks the provider", async () => {
   const r1 = await decideArm(base({ profile: "Implement", listAgents: async () => [ag("sonnet")] }));
   assert.deepEqual([r1.arm, r1.reason, r1.swapped, r1.profile, r1.role, r1.provider], ["neon", "alternation", true, "Implement", true, "antigravity-cli"]);
-  const r2 = await decideArm(base({ profile: "implement", listAgents: async () => [ag("sonnet"), ag("neon"), ag("neon")] }));
+  const r2 = await decideArm(base({ profile: "implement", listAgents: async () => [ag("sonnet"), ag("neon"), ag("carbon")] }));
   assert.deepEqual([r2.arm, r2.swapped, r2.profile, r2.provider], ["sonnet", false, "implement", "claude"]);
   // Shared per-lane counts: old-name and role-name picks feed one alternation.
   const r3 = await decideArm(base({ profile: SONNET, listAgents: async () => [ag("neon")] }));
@@ -260,16 +260,19 @@ test("spawn_worker: tierA/mechanical/lead-less/planning/role-name spawns keep to
   }
 });
 
-test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon visibly, keeps profile=Implement, model from the ladder", async () => {
+test("R1 spawn_worker: role-name Implement alternates Sonnet -> Neon -> Carbon visibly, keeps profile=Implement", async () => {
   const agents = [];
   const logs = [];
   const { ctx, creates } = ctxWith(agents, logs);
   // R10: the sonnet arm on role-name Implement walks agy-claude first (runner antigravity-cli, claude-sonnet-5-5-medium).
+  // Neon's model is the ladder rung; X2: the Carbon arm pins gemini-4-carbon on the same provider.
   const want = [
     ["sonnet", "antigravity-cli", "claude-sonnet-5-5-medium", false],
     ["neon", "antigravity-cli", "gemini-4-neon", true],
-    ["neon", "antigravity-cli", "gemini-4-neon", true],
+    ["carbon", "antigravity-cli", "gemini-4-carbon", true],
     ["sonnet", "antigravity-cli", "claude-sonnet-5-5-medium", false],
+    ["neon", "antigravity-cli", "gemini-4-neon", true],
+    ["carbon", "antigravity-cli", "gemini-4-carbon", true],
   ];
   for (const [i, [arm, provider, model, swapped]] of want.entries()) {
     const res = await go(ctx, { profile: "Implement", stakes: "normal" });
@@ -320,28 +323,31 @@ test("ctx.implementerArms: [] turns the alternation off (R3/R8 seam)", async () 
 });
 
 test("G1 pickArm: weighted 2:1 Neon:Sonnet, ties keep requested, caps win, bad weights count as 1", () => {
+  // The G1 two-arm table (pickArm mechanics; X2's live table is sonnet/neon/carbon 1:1:1, tested in exp6-arm-carbon).
+  const G1 = { arms: ["sonnet", "neon"], weights: { sonnet: 1, neon: 2 } };
+  const pickArmG1 = (req, counts, opts = {}) => pickArm(req, counts, { ...G1, ...opts });
   const counts = { sonnet: 0, neon: 0 };
   const seq = [];
-  for (let i = 0; i < 6; i++) { const a = pickArm(ARMS.sonnet, counts); seq.push(a.wf); counts[a.wf]++; }
+  for (let i = 0; i < 6; i++) { const a = pickArmG1(ARMS.sonnet, counts); seq.push(a.wf); counts[a.wf]++; }
   assert.deepEqual(seq, ["sonnet", "neon", "neon", "sonnet", "neon", "neon"]);
   assert.equal(seq.filter((w) => w === "neon").length, 4);
   // Tie keeps the requested arm; neon requested on {0,0} keeps neon.
-  assert.equal(pickArm(ARMS.neon, { sonnet: 0, neon: 0 }).wf, "neon");
-  assert.equal(pickArm(ARMS.sonnet, { sonnet: 1, neon: 2 }).wf, "sonnet");
-  assert.equal(pickArm(ARMS.neon, { sonnet: 1, neon: 2 }).wf, "neon");
+  assert.equal(pickArmG1(ARMS.neon, { sonnet: 0, neon: 0 }).wf, "neon");
+  assert.equal(pickArmG1(ARMS.sonnet, { sonnet: 1, neon: 2 }).wf, "sonnet");
+  assert.equal(pickArmG1(ARMS.neon, { sonnet: 1, neon: 2 }).wf, "neon");
   // Neon capped -> sonnet.
-  assert.equal(pickArm(ARMS.sonnet, { sonnet: 5, neon: 0 }, { capped: new Set(["neon"]) }).wf, "sonnet");
+  assert.equal(pickArmG1(ARMS.sonnet, { sonnet: 5, neon: 0 }, { capped: new Set(["neon"]) }).wf, "sonnet");
   // Bad weights fall back to 1 (plain 1:1 alternation).
   for (const bad of [{ neon: 0 }, { neon: -3 }, { neon: NaN }, { neon: Infinity }, { neon: "2" }, {}, null]) {
-    assert.equal(pickArm(ARMS.sonnet, { sonnet: 1, neon: 1 }, { weights: bad }).wf, "sonnet", JSON.stringify(bad));
-    assert.equal(pickArm(ARMS.sonnet, { sonnet: 1, neon: 0 }, { weights: bad }).wf, "neon", JSON.stringify(bad));
+    assert.equal(pickArmG1(ARMS.sonnet, { sonnet: 1, neon: 1 }, { weights: bad }).wf, "sonnet", JSON.stringify(bad));
+    assert.equal(pickArmG1(ARMS.sonnet, { sonnet: 1, neon: 0 }, { weights: bad }).wf, "neon", JSON.stringify(bad));
   }
 });
 
 test("G1 decideArm: weights param, capped neon -> sonnet with reason capped:*", async () => {
   const two = async () => [ag("sonnet"), ag("neon")];
   assert.equal((await decideArm(base({ listAgents: two }))).arm, "neon"); // 1 sonnet vs 1 neon: neon 0.5 < 1
-  const flat = await decideArm(base({ listAgents: two, weights: { sonnet: 1, neon: 1 } }));
+  const flat = await decideArm(base({ listAgents: two, arms: ["sonnet", "neon"], weights: { sonnet: 1, neon: 1 } }));
   assert.deepEqual([flat.arm, flat.reason], ["sonnet", "alternation"]);
   const c = await decideArm(base({ listAgents: two, capProbe: async () => ({ "antigravity-cli": {} }) }));
   assert.deepEqual([c.arm, c.reason, c.capped], ["sonnet", "capped:antigravity-cli", true]);
