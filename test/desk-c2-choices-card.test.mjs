@@ -283,13 +283,17 @@ test("L2 idea-1150: Show source hides when excerpt is empty or redundant with as
   assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", context: "  SHIP   V2\nNOW?  " }), false, "equal after whitespace/case norm");
   assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now? Also update docs.", context: "ship v2   now?" }), false, "contained in ask after norm");
   assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", rawText: "  ship  v2  now? " }), false, "rawText fallback equal to ask");
-  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", rawText: "Ship v2 now? Details: A) canary, B) full rollout" }), true, "rawText adds info");
+  assert.equal(hasSourceDisclosure({ inferred: true, ask: "Ship v2 now?", rawText: "Ship v2 now? Details: A) canary, B) full rollout" }), true, "inferred rawText adds info");
   assert.equal(hasSourceDisclosure({ inferred: false, ask: "Ship v2 now?", context: "Context with extra details" }), true, "context adds info");
+  assert.equal(hasSourceDisclosure({ inferred: false, ask: "Ship v2 now?", rawText: "Ship v2 now? Full raw log text with extra words" }), false, "structured non-inferred item with only rawText hides Show source");
 
   // C2b bare-letter hint uses the same hasSourceDisclosure predicate
   const redundantBare = c2bItem({ lean: "Z", ask: "Pick one", context: "  PICK   ONE " });
   assert.equal(isUnresolvedBareLean(redundantBare), true);
   assert.equal(hasSourceDisclosure(redundantBare), false, "redundant context hides Show source and switches bare-letter hint");
+  const structuredRawOnly = c2bItem({ structured: true, inferred: false, lean: "Z", ask: "Pick one", rawText: "Pick one: A) alpha, B) beta" });
+  assert.equal(isUnresolvedBareLean(structuredRawOnly), true);
+  assert.equal(hasSourceDisclosure(structuredRawOnly), false, "structured non-inferred item with only rawText -> option not defined");
 });
 
 test("L2 idea-1154: client formatSentChoiceSummary matches server choiceLabel and banner disclosure is keyboard-accessible", () => {
@@ -311,7 +315,7 @@ test("L2 idea-1154: client formatSentChoiceSummary matches server choiceLabel an
   }
   assert.match(ddSrc, /data-testid="boring-decision-banner-toggle"/);
   assert.match(ddSrc, /aria-expanded=\{bannerOpen\}/);
-  assert.match(ddSrc, /aria-controls="boring-decision-banner-details"/);
+  assert.match(ddSrc, /aria-controls=\{bannerOpen \? "boring-decision-banner-details" : undefined\}/);
   assert.match(ddSrc, /data-testid="boring-decision-banner-details"/);
 });
 

@@ -312,10 +312,12 @@ for (const cfg of [
         assert.equal(await page.locator('[data-testid="boring-decision-banner"]').textContent(), "Sent 1 answer.");
         const bannerToggle = page.locator('[data-testid="boring-decision-banner-toggle"]');
         assert.equal(await bannerToggle.getAttribute("aria-expanded"), "false", "sent banner collapsed by default");
+        assert.equal(await bannerToggle.getAttribute("aria-controls"), null, "no dangling aria-controls while collapsed");
         assert.equal(await page.locator('[data-testid="boring-decision-banner-details"]').count(), 0);
         await bannerToggle.focus();
         await page.keyboard.press("Enter");
         assert.equal(await bannerToggle.getAttribute("aria-expanded"), "true");
+        assert.equal(await bannerToggle.getAttribute("aria-controls"), "boring-decision-banner-details");
         const sentRow = page.locator(`[data-testid="boring-decision-banner-item-${pfId}"]`);
         assert.match((await sentRow.textContent()) ?? "", new RegExp(delivered.summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
         await page.keyboard.press("Enter");

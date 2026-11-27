@@ -200,14 +200,14 @@ export function notChoiceLabel(item: Pick<DecisionItem, "lean" | "alts">): strin
 const normalizeSourceCompare = (s: string | undefined): string =>
   typeof s === "string" ? s.replace(/\s+/g, " ").trim().toLowerCase() : "";
 
-/** True when a card should show the `Show source ▾` disclosure: the excerpt is non-empty and adds info beyond `ask` (L2 idea-1150). */
+/** True when a card should show the `Show source ▾` disclosure: has context (or rawText when inferred) and adds info beyond `ask` (L2 idea-1150). */
 export function hasSourceDisclosure(item: Partial<Pick<DecisionItem, "ask" | "inferred" | "context" | "rawText">>): boolean {
-  const raw =
-    typeof item.context === "string" && item.context.trim().length > 0
-      ? item.context
-      : typeof item.rawText === "string" && item.rawText.trim().length > 0
-        ? item.rawText
-        : "";
+  const hasContext = typeof item.context === "string" && item.context.trim().length > 0;
+  const raw = hasContext
+    ? item.context
+    : item.inferred && typeof item.rawText === "string" && item.rawText.trim().length > 0
+      ? item.rawText
+      : "";
   const normExcerpt = normalizeSourceCompare(raw);
   if (!normExcerpt) return false;
   const normAsk = normalizeSourceCompare(item.ask);
@@ -1399,7 +1399,7 @@ export function BoringDecisionDesk({
                     className="boring-decision-banner-toggle"
                     data-testid="boring-decision-banner-toggle"
                     aria-expanded={bannerOpen}
-                    aria-controls="boring-decision-banner-details"
+                    aria-controls={bannerOpen ? "boring-decision-banner-details" : undefined}
                     onClick={() => setBannerOpen((v) => !v)}
                   >
                     {bannerOpen ? "Hide details ▴" : "Details ▾"}
