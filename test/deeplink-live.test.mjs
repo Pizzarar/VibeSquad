@@ -168,6 +168,40 @@ test("R5-4: in Normal an explicit ?team= with no ?agent= beats the saved pane, a
   assert.ok((await import("../src/panes.ts?r54-link")).getPanes().leftTabs.includes("rn-deep"));
 });
 
+test("idea-1105: reload on an empty card (?lane= / ?slot=) in Normal keeps split rightActiveId while clearing leftActiveId and activePane", async () => {
+  const prefs = await import("../src/prefs.ts");
+  prefs.setPref("app.vibe", "boring");
+  for (const [tag, search] of [
+    ["lane", "?team=vibesquad&lane=bug-chaser&role=lead"],
+    ["slot", "?team=efi&slot=overlord"],
+  ]) {
+    store.set(
+      "vs.panes.v1",
+      JSON.stringify({
+        leftTabs: ["rn-left", "rn-gone"],
+        rightTabs: ["rn-right"],
+        leftActiveId: "rn-left",
+        rightActiveId: "rn-right",
+        split: true,
+        activePane: "right",
+      }),
+    );
+    globalThis.location = { search, pathname: "/", hash: "" };
+    const fresh = await import(`../src/panes.ts?idea1105-${tag}`);
+    let p = fresh.getPanes();
+    assert.equal(p.leftActiveId, null, `${tag}: leftActiveId cleared so empty card opens`);
+    assert.equal(p.activePane, "left", `${tag}: activePane reset to left so rightActiveId does not hijack landing`);
+    assert.equal(p.split, true, `${tag}: split stays true`);
+    assert.equal(p.rightActiveId, "rn-right", `${tag}: rightActiveId survives reload`);
+    fresh.pruneRestoredTabs((id) => id !== "rn-gone");
+    p = fresh.getPanes();
+    assert.deepEqual(p.leftTabs, ["rn-left"], `${tag}: dead left tab pruned`);
+    assert.equal(p.leftActiveId, null, `${tag}: prune never promotes leftover left tab`);
+    assert.equal(p.split, true, `${tag}: split survives prune`);
+    assert.equal(p.rightActiveId, "rn-right", `${tag}: rightActiveId survives prune`);
+  }
+});
+
 // R5-4 review (M1/M2/L1): Normal's ?agent= is the agent on screen, and an explicit ?team= lands on that project's Overview.
 const logic = await import("../src/pinFocusLogic.ts");
 

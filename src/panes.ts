@@ -74,9 +74,10 @@ function load(): PanesState {
   // Old deep links (?agent=) open as a tab.
   const linked = url?.get("agent") || null;
   restoredIds = new Set([...s.leftTabs, ...s.rightTabs].filter((id) => id !== linked));
-  // R5-4: in Normal an explicit ?team= with no ?agent= beats the saved pane: the tabs stay, none is shown, so that
-  // project's Overview opens instead of the last agent from another project.
-  if (!linked && url?.get("team") && getPref("app.vibe") === "boring") s = { ...s, leftActiveId: null, rightActiveId: null };
+  // R5-4 + idea-1105: in Normal an explicit ?team= with no ?agent= beats the saved left pane: the tabs stay,
+  // leftActiveId is cleared (and activePane resets to "left") so that project's Overview or empty card opens instead
+  // of the last agent, while a split's rightActiveId stays intact so returning to the split restores the right pane.
+  if (!linked && url?.get("team") && getPref("app.vibe") === "boring") s = { ...s, leftActiveId: null, activePane: "left" };
   if (linked) s = place(s, linked, s.activePane, false);
   return settle(s, [s.leftActiveId, s.rightActiveId]);
 }
@@ -163,7 +164,11 @@ export function pruneRestoredTabs(live: (id: string) => boolean) {
   const { leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane } = state;
   const pruned = pruneView({ leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane }, (id) => !restoredIds.has(id) || live(id));
   // Nothing shown (R5-4: ?team= beat the saved pane) stays nothing shown: pruning never promotes a leftover tab.
-  const p = leftActiveId || rightActiveId ? pruned : { ...pruned, leftActiveId: null, rightActiveId: null };
+  const p = {
+    ...pruned,
+    leftActiveId: leftActiveId ? pruned.leftActiveId : null,
+    rightActiveId: rightActiveId ? pruned.rightActiveId : null,
+  };
   if (sameIds(p.leftTabs, leftTabs) && sameIds(p.rightTabs, rightTabs)) return;
   commit({ ...state, ...p }, [p.leftActiveId, p.rightActiveId]);
 }
