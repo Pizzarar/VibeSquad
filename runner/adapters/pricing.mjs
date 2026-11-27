@@ -18,16 +18,21 @@ export const MODEL_PRICES = {
 };
 
 export function validateModelPrices(prices = MODEL_PRICES) {
+  const badKeys = [];
   for (const [key, entry] of Object.entries(prices)) {
     const tiers = Array.isArray(entry) ? entry : [entry];
     for (const tier of tiers) {
       if (tier && tier.from != null) {
         if (Number.isNaN(Date.parse(tier.from))) {
-          throw new Error(`Invalid 'from' date for ${key}: ${tier.from}`);
+          console.error(`Invalid 'from' date for ${key}: ${tier.from}`);
+          badKeys.push(key);
+          delete prices[key];
+          break;
         }
       }
     }
   }
+  return badKeys;
 }
 
 validateModelPrices(MODEL_PRICES);
@@ -50,7 +55,11 @@ export function pickTier(entry, atMs) {
     tier = best;
   }
   if (!tier) return null;
-  return { input: tier.input, output: tier.output, cachedRead: tier.cachedRead };
+  const { from: _from, ...rest } = tier;
+  if ('cachedRead' in rest && rest.cachedRead === undefined) {
+    delete rest.cachedRead;
+  }
+  return rest;
 }
 
 export function priceFor(model, atMs = Date.now()) {
