@@ -6,7 +6,7 @@ import {
   type FindingScope, type ListItem, type SbSnapshot,
 } from "./storybookLogic";
 
-const BUCKETS: FindingScope[] = ["problems", "story", "text"];
+const BUCKETS: FindingScope[] = ["problems", "story", "coverage", "text"];
 
 export function StorybookHome({ snap, items, onTab, onFindings, onSignal }: { snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void; onSignal?: (signal: string) => void }) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);

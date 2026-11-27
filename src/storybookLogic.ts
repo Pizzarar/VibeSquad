@@ -453,11 +453,13 @@ export const titleCase = (s: string): string => s.replace(/(^|[\s_-])([a-z])/g, 
 // ── Overview + Findings split (V2) ──────────────────────────────────────────────
 
 /** Findings scopes: Problems = real checker findings; Text to review = the unreviewed text inventory; Story issues = coherence checks (J4-2). */
-export type FindingScope = "problems" | "story" | "text" | "toolong" | "dev" | "all";
-export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "text", "toolong", "dev", "all"];
-export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
+export type FindingScope = "problems" | "story" | "coverage" | "other" | "text" | "toolong" | "dev" | "all";
+export const FINDING_SCOPES: FindingScope[] = ["problems", "story", "coverage", "other", "text", "toolong", "dev", "all"];
+export const FINDING_SCOPE_LABEL: Record<FindingScope, string> = { problems: "Problems", story: "Story issues", coverage: "Coverage", other: "Other checks", text: "Text to review", toolong: "Too long", dev: "Dev TODOs", all: "All" };
 export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
-  problems: "Real findings from the checks: broken references, mismatches, missing pieces.",
+  problems: "Broken references plus story issues. Story still to write is under Coverage; doc drift and orphan items under Other checks.",
+  coverage: "Story not written yet: items with no story line (#15) and STORY-TODO placeholders on entities (#8). Writing work, not breakage.",
+  other: "Checks worth a look that are not story breakage: doc vs data drift (#3), repeated templates (#6), pronoun and tone notes (#9, #10), orphan items (#14).",
   story: "Coherence checks only: speaker and voice-card rules, duplicate ids or names, quest title vs task mismatches, and lore contradictions.",
   text: "The text inventory: rows from text_review.csv the owner has not marked OWNER-OK. Not problems, just lines to read.",
   toolong: "Text longer than its screen budget (check #18). Fix by trimming the copy or raising the pinned length_budget.",
@@ -467,8 +469,12 @@ export const FINDING_SCOPE_HELP: Record<FindingScope, string> = {
 /** Story-coherence checks (J4-2): #4 speaker/voice rules, #7 id/display collisions, #11 title vs task, #12 lore contradictions. */
 export const STORY_CHECKS: ReadonlySet<string> = new Set(["#4", "#7", "#11", "#12"]);
 export const isTextToReview = (it: ListItem): boolean => it.category === "unreviewed";
-/** A real problem: not a text-inventory row, not a Too-long fit note, not a dev code comment. */
-export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev;
+/** V6: story not written yet (#8 entity STORY-TODO, #15 item with no story): Coverage, not a problem. */
+export const isCoverage = (it: ListItem): boolean => it.category === "missing" && !it.dev;
+/** V6 (lead decision): Problems = broken + story issues ONLY. Text rows, Too long, Dev TODOs and Coverage never count. */
+export const isProblem = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && (it.category === "broken" || isStoryIssue(it));
+/** V6: checker findings that are neither a Problem nor Coverage / Too long / Dev (doc drift #3, orphan #14, #6/#9/#10). */
+export const isOtherCheck = (it: ListItem): boolean => !isTextToReview(it) && !isTooLong(it) && !it.dev && !isCoverage(it) && !isProblem(it);
 export const isTooLong = (it: ListItem): boolean => it.category === "toolong";
 export const isDevTodo = (it: ListItem): boolean => it.dev === true;
 /** #8 findings with no entity are the `# STORY-TODO` comments in .gd source (V3). */
@@ -479,6 +485,8 @@ export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
   switch (scope) {
     case "problems": return items.filter(isProblem);
     case "story": return items.filter(isStoryIssue);
+    case "coverage": return items.filter(isCoverage);
+    case "other": return items.filter(isOtherCheck);
     case "text": return items.filter(isTextToReview);
     case "toolong": return items.filter(isTooLong);
     case "dev": return items.filter(isDevTodo);
@@ -487,8 +495,8 @@ export function scopeItems(items: ListItem[], scope: FindingScope): ListItem[] {
 }
 
 export function scopeCounts(items: ListItem[]): Record<FindingScope, number> {
-  const c: Record<FindingScope, number> = { problems: 0, story: 0, text: 0, toolong: 0, dev: 0, all: items.length };
-  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else c.problems++; if (isStoryIssue(it)) c.story++; }
+  const c: Record<FindingScope, number> = { problems: 0, story: 0, coverage: 0, other: 0, text: 0, toolong: 0, dev: 0, all: items.length };
+  for (const it of items) { if (isTextToReview(it)) c.text++; else if (isTooLong(it)) c.toolong++; else if (it.dev) c.dev++; else if (isCoverage(it)) c.coverage++; else if (isProblem(it)) c.problems++; else c.other++; if (isStoryIssue(it)) c.story++; }
   return c;
 }
 
@@ -583,8 +591,8 @@ export function entityNavTarget(e: SbEntity): NavTarget | null {
 export function auditSignalTarget(signal: string): NavTarget {
   switch (signal) {
     case "integrity": return { tab: "problems", scope: "problems", category: "broken" };
-    case "cohesion": return { tab: "problems", scope: "problems", category: "inconsistent" };
-    case "coverage": return { tab: "problems", scope: "problems", category: "missing" };
+    case "cohesion": return { tab: "problems", scope: "all", category: "inconsistent" }; // V6: #3/#6/#9/#10 live in Other checks, not Problems
+    case "coverage": return { tab: "problems", scope: "coverage", category: null };
     case "signoff": return { tab: "review", scope: "text", category: null };
     default: return { tab: "problems", scope: "problems", category: null };
   }

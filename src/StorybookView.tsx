@@ -17,6 +17,7 @@ import { StorybookHome } from "./StorybookHome";
 import { StorybookText, type TextFocus } from "./StorybookText";
 import { buildReviewRows } from "./storybookReview";
 import { StorybookArc } from "./StorybookArc";
+import { MarkBatch, MarkButtons, MarksBar, useMarks, type MarksApi } from "./StorybookMarks";
 import { StorybookItems } from "./StorybookItems";
 import { CharacterSheet, EnemySheet, MapSheet, type ChipRenderer } from "./StorybookSheet";
 import "./storybook.css";
@@ -349,7 +350,7 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
 
 type QuestMode = "web" | "arcs" | "order";
 const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
-function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer }) {
+function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi }) {
   const [mode, setMode] = useState<QuestMode>("arcs");
   const chip = renderChip;
   return (
@@ -357,7 +358,9 @@ function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip }:
       <div className="sb-seg" role="tablist" aria-label="Quest views">
         {QUEST_MODES.map(([m, l]) => <button key={m} type="button" role="tab" aria-selected={mode === m} className="sb-seg-btn" onClick={() => setMode(m)}>{l}</button>)}
       </div>
-      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode} />}
+      {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode}
+        actions={marks ? (l) => <MarkButtons e={l} m={marks} /> : undefined} batch={marks ? (ls, label) => <MarkBatch entities={ls} label={label} m={marks} /> : undefined} />}
+      {marks && mode === "arcs" && <MarksBar m={marks} />}
     </div>
   );
 }
@@ -526,6 +529,9 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   const goToRef = useRef<(e: SbEntity) => void>(() => {});
   const card = useCard(idx, (e) => goToRef.current(e));
   const reviewRows = useMemo(() => (snap ? buildReviewRows(snap.entities, idx, items) : []), [snap, idx, items]);
+  const marks = useMarks(projectId, idx); // V6 owner marks
+  const rowEntity = useCallback((r: { kind: string; entityId: string }) => idx.get(r.kind, r.entityId), [idx]);
+  const mineTest = useCallback((r: { kind: string; entityId: string }) => marks.stateOf(rowEntity(r)).kind !== "none", [marks, rowEntity]);
 
   const refresh = async () => {
     const my = ++seq.current;
@@ -649,18 +655,20 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
           <nav className="sb-tabs" role="tablist" aria-label="Storybook views">
             {TABS.filter((t) => t.built).map(({ id: t, label }) => (
               <button key={t} type="button" role="tab" aria-selected={tab === t} className="sb-tab" data-testid={`sb-tab-${t}`} onClick={() => setTab(t)}>
-                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Real problems only; the text inventory is under Review, code TODOs under Dev TODOs">{problems}</span>}
+                {label}{t === "problems" && <span className="sb-count" data-testid="sb-problem-count" title="Broken references and story issues only; text is under Review, writing gaps under Coverage, drift under Other checks">{problems}</span>}
               </button>
             ))}
           </nav>
           <main className="sb-body">
             {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); } }} onSignal={onSignal} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
-            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
+              header={<MarksBar m={marks} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
+              renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} />}
-            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "toolong", "dev"]} goTo={goTo} />}
+            {tab === "problems" && <Findings items={items} idx={idx} card={card} active={activeProblems} setActive={setActiveProblems} scope={scope} setScope={setScope} scopes={["problems", "story", "coverage", "other", "toolong", "dev"]} goTo={goTo} />}
           </main>
         </>
       )}

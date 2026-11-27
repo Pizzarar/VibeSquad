@@ -2,33 +2,38 @@
 // toasts/system/UI; grouped by speaker or screen; full line text (never truncated); one search box over lines and entities.
 // Row hook for V6: every row carries data-sb-row=<row.id> and an action slot (`renderActions`) for OK / Redo / Edit; nothing writes here.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { groupRows, filterRows, searchEntities, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
+import { groupRows, filterRows, type ReviewGroup, searchEntities, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
 
 const GROUP_PAGE = 60; // rows shown per group before "show more" (a screen has hundreds)
 
 export type TextFocus = { id: string; n: number } | null;
 
-export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions }: {
+export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions, renderGroupExtra, mineTest, header }: {
   rows: ReviewRow[]; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; focus: TextFocus; onFocusConsumed?: () => void; renderActions?: (row: ReviewRow) => React.ReactNode;
+  /** V6: progress + batch marks on a group header. */ renderGroupExtra?: (g: ReviewGroup) => React.ReactNode;
+  /** V6 "My marks" filter: rows the owner has marked. */ mineTest?: (row: ReviewRow) => boolean;
+  /** V6 session bar above the search. */ header?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [classes, setClasses] = useState<ReadonlySet<RowClass>>(new Set());
   const [tooLong, setTooLong] = useState(false);
   const [unreviewed, setUnreviewed] = useState(false);
+  const [mine, setMine] = useState(false);
   const [toggled, setToggled] = useState<Record<string, boolean>>({}); // explicit user open/collapse overrides (always win over defaults/search)
   const [more, setMore] = useState<Record<string, number>>({});
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
   const filter = useMemo(() => ({ query, classes, tooLong, unreviewed }), [query, classes, tooLong, unreviewed]);
-  const filtered = useMemo(() => filterRows(rows, filter), [rows, filter]);
+  const filtered = useMemo(() => { const f = filterRows(rows, filter); return mine && mineTest ? f.filter(mineTest) : f; }, [rows, filter, mine, mineTest]);
+  const nMine = useMemo(() => (mineTest ? rows.filter(mineTest).length : 0), [rows, mineTest]);
   const blocks = useMemo(() => groupRows(filtered), [filtered]);
   const counts = useMemo(() => classCounts(rows), [rows]);
   const nTooLong = useMemo(() => rows.filter((r) => r.tooLong).length, [rows]);
   const nUnrev = useMemo(() => rows.filter((r) => r.unreviewed).length, [rows]);
   const ents = useMemo(() => searchEntities(idx, query), [idx, query]);
-  const searching = query.trim() !== "" || tooLong || unreviewed;
+  const searching = query.trim() !== "" || tooLong || unreviewed || mine;
   const isOpen = (cls: RowClass, gid: string): boolean => (Object.hasOwn(toggled, gid) ? toggled[gid] : searching || cls === "story");
   const toggle = (cls: RowClass, gid: string) => {
     const was = isOpen(cls, gid);
@@ -41,7 +46,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
     onFocusConsumed?.();
     const row = rows.find((r) => r.id === focus.id);
     if (!row) return;
-    setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false);
+    setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setMine(false);
     setToggled((m) => ({ ...m, [row.groupId]: true }));
     const pos = (groupRows(rows).find((b) => b.cls === row.cls)?.groups.find((g) => g.id === row.groupId)?.rows.findIndex((r) => r.id === row.id) ?? 0) + 1;
     setMore((m) => ({ ...m, [row.groupId]: Math.max(m[row.groupId] ?? 0, pos) }));
@@ -58,10 +63,30 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   }, [flash]);
 
   const toggleClass = (c: RowClass) => setClasses((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
-  const active = query !== "" || classes.size > 0 || tooLong || unreviewed;
+  const active = query !== "" || classes.size > 0 || tooLong || unreviewed || mine;
+  // V6 keys: j/k or arrows move between rows, 1/2/3 press the focused row's OK / Redo / Edit.
+  const onKey = (ev: React.KeyboardEvent) => {
+    const t = ev.target as HTMLElement;
+    if (ev.altKey || ev.ctrlKey || ev.metaKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable) return;
+    const all = [...(root.current?.querySelectorAll<HTMLElement>("[data-sb-row]") ?? [])];
+    const cur = t.closest<HTMLElement>("[data-sb-row]");
+    const k = ev.key;
+    if (k === "j" || k === "k" || k === "ArrowDown" || k === "ArrowUp") {
+      if (!all.length) return;
+      const at = cur ? all.indexOf(cur) : -1;
+      const next = all[Math.max(0, Math.min(all.length - 1, k === "j" || k === "ArrowDown" ? at + 1 : at < 0 ? 0 : at - 1))];
+      ev.preventDefault();
+      next.focus();
+      next.scrollIntoView({ block: "nearest" });
+    } else if ((k === "1" || k === "2" || k === "3") && cur) {
+      const b = cur.querySelector<HTMLButtonElement>(`[data-mark-key="${k}"]`);
+      if (b && !b.disabled) { ev.preventDefault(); b.click(); }
+    }
+  };
 
   return (
-    <div ref={root} className="sb-text" data-testid="sb-text">
+    <div ref={root} className="sb-text" data-testid="sb-text" onKeyDown={onKey}>
+      {header}
       <div className="sb-search">
         <input type="search" className="sb-search-input" data-testid="sb-text-search" placeholder="Search lines and entities: text, speaker, key, file" aria-label="Search text" value={query} onChange={(e) => setQuery(e.target.value)} />
         <span className="sb-search-n" data-testid="sb-text-n" role="status">{filtered.length === rows.length ? `${rows.length} rows` : `${filtered.length} of ${rows.length} rows`}</span>
@@ -71,8 +96,9 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
           <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
         ))}
         {nUnrev > 0 && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
+        {mineTest && <button type="button" className="sb-fbtn" aria-pressed={mine} data-testid="sb-text-mine" title="Rows you marked OK / Redo / Edit" onClick={() => setMine((v) => !v)}>My marks <span className="sb-count">{nMine}</span></button>}
         {nTooLong > 0 && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
-        {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false); }}>Clear</button>}
+        {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setMine(false); }}>Clear</button>}
       </div>
       {ents.length > 0 && (
         <div className="sb-ents" data-testid="sb-text-ents"><span className="sb-ents-lbl">Entities</span>{ents.map((e) => <span key={`${e.kind}\u0000${e.id}`} className="sb-ent">{renderChip(e)}<span className="sb-kind">{e.kind.replace(/_/g, " ")}</span></span>)}</div>
@@ -90,6 +116,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
                 <button type="button" className="sb-tgroup-head" aria-expanded={o} onClick={() => toggle(b.cls, g.id)}>
                   <span className="sb-tgroup-caret" aria-hidden="true">{o ? "▾" : "▸"}</span> {g.label} <span className="sb-count">{g.rows.length}</span>
                 </button>
+                {renderGroupExtra && <div className="sb-tgroup-extra">{renderGroupExtra(g)}</div>}
                 {o && (
                   <ul className="sb-rows">
                     {shown.map((r) => <Row key={r.id} r={r} idx={idx} renderChip={renderChip} renderActions={renderActions} />)}
@@ -109,7 +136,7 @@ function Row({ r, idx, renderChip, renderActions }: { r: ReviewRow; idx: EntityI
   const sp = r.speakerRef ? idx.get(r.speakerRef.kind, r.speakerRef.id) : null;
   const st = r.status ? r.status.toLowerCase().replace(/[^a-z]+/g, "-") : "";
   return (
-    <li className="sb-row" data-sb-row={r.id} data-testid="sb-row">
+    <li className="sb-row" data-sb-row={r.id} data-testid="sb-row" tabIndex={-1}>
       <div className="sb-row-head">
         {sp ? renderChip(sp, r.speaker) : r.speaker && r.kind === "line" ? <span className="sb-row-speaker">{r.speaker}</span> : null}
         {r.title && <span className="sb-row-title">{r.title}</span>}

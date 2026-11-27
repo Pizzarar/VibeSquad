@@ -10,6 +10,10 @@ export type ArcProps = {
   chip: (e: SbEntity, label?: string) => React.ReactNode;
   /** Open a dialogue line's row in Review. */
   openLine: (e: SbEntity) => void;
+  /** V6: OK / Redo / Edit on a step title or story line. */
+  actions?: (e: SbEntity) => React.ReactNode;
+  /** V6: progress + batch marks on an arc card (its step + reaction lines). */
+  batch?: (lines: SbEntity[], label: string) => React.ReactNode;
 };
 
 const KIND_LABEL: Record<string, string> = { map: "Map", reveal: "Reveal", quest_step: "Quest", contract: "Contract" };
@@ -41,7 +45,7 @@ function taskText(e: SbEntity | null): string {
   return parts.join(" ").replace(/_/g, " ");
 }
 
-export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mode: "arcs" | "order" }) {
+export function StorybookArc({ arc, idx, chip, openLine, mode, actions, batch }: ArcProps & { mode: "arcs" | "order" }) {
   const byTrader = useMemo(() => (arc?.arcs ?? []).filter((a) => a.steps.length || a.reactions.length), [arc]);
   if (!arc) return <p className="sb-empty">No arc data in this snapshot.</p>;
   const lineRow = (id: string, field?: string) => {
@@ -53,6 +57,7 @@ export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mo
         {field && <span className="sb-arc-field">{field}</span>}
         <span className="sb-arc-text">{text}</span>
         <button type="button" className="sb-arc-open" onClick={() => openLine(l)} aria-label="Open this line in Review">Review row →</button>
+        {actions && <div className="sb-arc-actions">{actions(l)}</div>}
       </div>
     );
   };
@@ -89,6 +94,7 @@ export function StorybookArc({ arc, idx, chip, openLine, mode }: ArcProps & { mo
           return (
             <section key={a.trader} className="sb-arc" data-testid={`sb-arc-${a.trader}`}>
               <h3 className="sb-arc-h">{t ? chip(t, a.display) : a.display}<span className="sb-count">{a.steps.length} steps · rep {a.chain_rep}</span></h3>
+              {batch && batch([...a.steps.flatMap((s) => s.lines.map((l) => l.id)), ...a.reactions].map((id) => idx.get("line", id)).filter((x): x is SbEntity => Boolean(x)), a.display)}
               {!a.level_0 && <div className="sb-arc-gates">Not available at the start (unlock rule not in data).</div>}
               <ol className="sb-arc-steps">
                 {a.steps.map((s) => {
