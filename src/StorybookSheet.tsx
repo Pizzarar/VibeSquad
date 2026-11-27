@@ -6,6 +6,8 @@ import {
   checkLabel, cleanTodo, enemySheetData, entityFindings, fmtSource, fmtWindow, itemSheetData, locationView, plainText,
   type CharacterView, type EntityIndex, type SbEntity, type SbFinding,
 } from "./storybookLogic";
+import { ProgressBarRow, type ProgressOpenHandler } from "./StorybookProgress";
+import type { ProgressEntry } from "./storybookProgress";
 
 export type ChipRenderer = (e: SbEntity, label?: string) => ReactNode;
 
@@ -49,8 +51,9 @@ function LineRow({ line, renderChip, onReview }: { line: SbEntity; renderChip: C
 }
 
 /** Map sheet (World tab): lore/vibe, roster, boss, containers, quests, contracts, lines, findings. */
-export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
+export function MapSheet({ loc, idx, findings, renderChip, onReview, progress, onProgress }: {
   loc: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler;
 }) {
   const v = useMemo(() => locationView(loc, idx), [loc, idx]);
   const ownFindings = useMemo(() => entityFindings(loc, findings), [loc, findings]);
@@ -70,6 +73,7 @@ export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(loc.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-location-${loc.id}`} />}
 
       <SheetSection title="Lore & vibe" n={v.lore.length} empty="No lore/vibe entry for this map.">
         {v.lore.map((l) => (
@@ -133,8 +137,9 @@ export function MapSheet({ loc, idx, findings, renderChip, onReview }: {
 }
 
 /** Character sheet (Cast tab): voice card, rivals, links, every line (linking to Review), findings. */
-export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
+export function CharacterSheet({ ch, idx, findings, renderChip, onReview, progress, onProgress }: {
   ch: CharacterView; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler;
 }) {
   const d = ch.card?.data ?? {};
   const rivalIds: string[] = Array.isArray(d.rivals) ? d.rivals : Array.isArray(ch.entity?.data?.rivals) ? ch.entity.data.rivals : [];
@@ -157,6 +162,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
         <h3>{ch.speaker} <span className="sb-kind">{ch.kind}</span></h3>
         {ch.entity && <span className="sb-mono">{fmtSource(ch.entity.source)}</span>}
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-${ch.id}`} />}
 
       {ch.card ? (
         <section className="sb-voice" data-testid="sb-voice-card">
@@ -201,8 +207,9 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview }: {
 }
 
 /** Enemy sheet (Cast tab): name + CONTENT_BREADTH look line, missing-description flag, spawns, drops, quests, findings. */
-export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
+export function EnemySheet({ enemy, idx, findings, renderChip, onReview, progress, onProgress }: {
   enemy: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler;
 }) {
   const s = useMemo(() => enemySheetData(enemy, idx, findings), [enemy, idx, findings]);
   const d = enemy.data ?? {};
@@ -219,6 +226,7 @@ export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(enemy.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-enemy-${enemy.id}`} />}
 
       <section className="sb-section">
         <h4 className="sb-h">Description &amp; look</h4>
@@ -265,8 +273,9 @@ export function EnemySheet({ enemy, idx, findings, renderChip, onReview }: {
 }
 
 /** Item sheet (Items tab): description y/n, sources (loot/trader/recipe/node), uses (quests/contracts/recipes/rooms), lines, findings. */
-export function ItemSheet({ item, idx, findings, renderChip, onReview }: {
+export function ItemSheet({ item, idx, findings, renderChip, onReview, progress, onProgress }: {
   item: SbEntity; idx: EntityIndex; findings: SbFinding[]; renderChip: ChipRenderer; onReview: (e: SbEntity) => void;
+  progress?: ProgressEntry | null; onProgress?: ProgressOpenHandler;
 }) {
   const s = useMemo(() => itemSheetData(item, idx, findings), [item, idx, findings]);
   const d = item.data ?? {};
@@ -288,6 +297,7 @@ export function ItemSheet({ item, idx, findings, renderChip, onReview }: {
           <span className="sb-mono">{fmtSource(item.source)}</span>
         </div>
       </header>
+      {progress && <ProgressBarRow entry={progress} onOpen={onProgress} compact testId={`sb-sheet-progress-item-${item.id}`} />}
 
       <section className="sb-section">
         <h4 className="sb-h">Description</h4>
