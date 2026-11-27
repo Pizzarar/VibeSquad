@@ -23,9 +23,9 @@ auth.setNetInterfacesForTest({ lo: [{ address: "127.0.0.1", family: "IPv4", inte
 const tls = auth.ensureTls({ meshnetHost: "forge.example.test", meshnetIp: "100.64.0.10", lanIp: "" });
 const caFile = join(home, "tls", "ca.crt");
 /** Async spawn (the mux runs in this process, so spawnSync would block it): -> combined stdout+stderr. */
-function run(cmd, args, timeoutMs) {
+function run(cmd, args, timeoutMs, opts = {}) {
   return new Promise((ok) => {
-    const p = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], timeout: timeoutMs });
+    const p = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], timeout: timeoutMs, windowsHide: true, ...opts });
     let out = "";
     p.stdout.on("data", (c) => (out += c));
     p.stderr.on("data", (c) => (out += c));
@@ -53,7 +53,7 @@ test("the CA under test has the real shape: critical nameConstraints", () => {
 });
 
 test("the https listener presents exactly one certificate, the leaf (never the CA)", async () => {
-  const out = await run("openssl", ["s_client", "-connect", `127.0.0.1:${port}`, "-servername", "localhost", "-showcerts"], 15000);
+  const out = await run(auth.opensslBin(), ["s_client", "-connect", `127.0.0.1:${port}`, "-servername", "localhost", "-showcerts"], 15000);
   const sent = out.match(/-----BEGIN CERTIFICATE-----/g) ?? [];
   assert.equal(sent.length, 1, out);
   assert.match(out, /0 s:CN\s*=\s*forge\.example\.test/, out);
@@ -71,10 +71,16 @@ test("a client pinned to the CA still verifies the leaf-only chain (RFC 8446 4.4
   assert.equal(authorized, true);
 });
 
-const godot = process.env.GODOT_BIN || "godot";
-const hasGodot = spawnSync(godot, ["--version"], { shell: true }).status === 0;
+const win = process.platform === "win32";
+const godot = process.env.GODOT_BIN || (win && (process.env.GODOT_PATH || process.env.GODOT)) || "godot";
+// .cmd/.bat shims (or bare `godot` resolving to godot.cmd on PATH) need cmd.exe on Windows; .exe and POSIX spawn directly.
+const godotCmd = (args) => (win && !/\.exe$/i.test(godot) ? [process.env.ComSpec || "cmd.exe", ["/d", "/c", godot, ...args]] : [godot, args]);
+const [probeCmd, probeArgs] = godotCmd(["--version"]);
+const hasGodot = spawnSync(probeCmd, probeArgs, { windowsHide: true }).status === 0;
 test("Godot addon: pinned HTTPRequest to the listener succeeds (result 0, HTTP 200)", { skip: !hasGodot && "godot not on PATH (set GODOT_BIN)", timeout: 180000 }, async () => {
   const proj = resolve(import.meta.dirname, "..", "godot");
-  const out = await run(godot, ["--headless", "--path", proj, "-s", "tests/pinned_https_probe.gd", "--", caFile, `https://localhost:${port}/ca.crt`], 120000);
+  // Connect to 127.0.0.1 directly (mux binds 127.0.0.1 only; on Windows `localhost` resolves ::1 first and times out).
+  const [cmd, args] = godotCmd(["--headless", "--path", proj, "-s", "tests/pinned_https_probe.gd", "--", caFile, `https://127.0.0.1:${port}/ca.crt`]);
+  const out = await run(cmd, args, 120000);
   assert.match(out, /PROBE result=0 http=200/, out);
 });
