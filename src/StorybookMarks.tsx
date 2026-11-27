@@ -7,6 +7,8 @@ import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMa
 export type MarksApi = {
   state: MarksState;
   busy: boolean;
+  /** True while the very first mark of a session is creating the EFI review worktree/branch. */
+  starting: boolean;
   /** The session bar's error; `session` errors block marking, transient ones are dismissible (see MarksError). */
   error: MarksError | null;
   /** Clear the error (transient: dismiss; session: retry, re-reading the session from the server). */
@@ -27,6 +29,9 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const url = `/api/storybook/${encodeURIComponent(projectId)}/marks`;
   const [state, setState] = useState<MarksState>(EMPTY);
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const existsRef = useRef(false);
+  existsRef.current = state.exists;
   const [error, setErrorState] = useState<MarksError | null>(null);
   const setError = useCallback((msg: string | null, session = false) => setErrorState(msg ? { msg, session } : null), []);
   const [lastCommit, setLastCommit] = useState<string | null>(null);
@@ -46,7 +51,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   }, []);
   useEffect(() => {
     // project switch: nothing of the previous project's session may show while this one loads
-    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false); setSiblingOks(new Set());
+    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false); setStarting(false); setSiblingOks(new Set());
     void reload(url);
   }, [url, reload]);
   const lines = useMemo(() => allLines(idx), [idx]);
@@ -54,6 +59,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists, siblingOks), [lines, byKey, state.exists, siblingOks]);
   const mark = useCallback(async (marks: Mark[]) => {
     if (!marks.length) return true;
+    if (!existsRef.current) setStarting(true);
     setBusy(true); setError(null);
     try {
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ marks }) });
@@ -66,7 +72,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       if (bad.length) setError(`${bad.length} of ${marks.length} not saved: ${bad[0].error}${bad[0].error?.startsWith("stale") ? " (Refresh to see the current text)" : ""}`);
       else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`, true);
       return bad.length === 0;
-    } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); return false; } finally { if (cur.current === url) setBusy(false); }
+    } catch (e) { if (cur.current === url) setError(e instanceof Error ? e.message : String(e)); return false; } finally { if (cur.current === url) { setBusy(false); setStarting(false); } }
   }, [url]);
   const commit = useCallback(async () => {
     setBusy(true); setError(null);
@@ -90,7 +96,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
     setBusy(true);
     try { await reload(url); } finally { if (cur.current === url) setBusy(false); }
   }, [url, reload]);
-  return { state, busy, error, dismissError, retrySession, lines, byKey, stateOf, mark, commit, lastCommit };
+  return { state, busy, starting, error, dismissError, retrySession, lines, byKey, stateOf, mark, commit, lastCommit };
 }
 
 
@@ -102,6 +108,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
 export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: MarksApi }) {
   const [open, setOpen] = useState<"redo" | "edit" | "note" | null>(null);
   const [draft, setDraft] = useState("");
+  const [busyAction, setBusyAction] = useState<"ok" | "redo" | "edit" | "note" | "clear" | null>(null);
   const hit = entityTarget(e, m.lines);
   if (!e || !hit) return null;
   const st = m.stateOf(e);
@@ -109,7 +116,14 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
   const errBlocked = hasSessionError(m.error, m.state);
   const disabled = m.busy || errBlocked;
   const errTip = "Resolve the review session error in the session bar first";
-  const send = async (mk: Omit<Mark, "target">) => { if (await m.mark([{ target: hit.target, ...(hit.contract ? { contract: hit.contract } : {}), ...mk }])) setOpen(null); };
+  const send = async (mk: Omit<Mark, "target">) => {
+    setBusyAction(mk.action === "redo" && hit.contract && open === "note" ? "note" : mk.action);
+    try {
+      if (await m.mark([{ target: hit.target, ...(hit.contract ? { contract: hit.contract } : {}), ...mk }])) setOpen(null);
+    } finally {
+      setBusyAction(null);
+    }
+  };
   const start = (k: "redo" | "edit" | "note") => { setDraft(k === "redo" ? (st.contractNote || st.note) : k === "note" ? "" : (st.rewrite || drafted || hit.target.seen.replace(/^'(?=[+\-=@])/, ""))); setOpen(open === k ? null : k); };
   return (
     <span className="sb-mark" data-testid="sb-mark" data-mark={st.kind}>
@@ -129,12 +143,12 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
         </span>
       )}
       <span className="sb-mark-btns">
-        <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
-        <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={disabled} title={errBlocked ? errTip : "Redo with a note (key 2)"} onClick={() => start("redo")}>Redo</button>
+        <button type="button" className={`sb-mbtn sb-mbtn-ok${busyAction === "ok" ? " sb-mbtn-busy" : ""}`} data-mark-key="1" aria-pressed={st.kind === "ok"} aria-busy={busyAction === "ok" || undefined} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>{busyAction === "ok" ? "OK…" : "OK"}</button>
+        <button type="button" className={`sb-mbtn sb-mbtn-redo${busyAction === "redo" ? " sb-mbtn-busy" : ""}`} data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} aria-busy={busyAction === "redo" || undefined} disabled={disabled} title={errBlocked ? errTip : "Redo with a note (key 2)"} onClick={() => start("redo")}>Redo</button>
         {hit.contract
-          ? <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={false} aria-expanded={open === "note"} disabled={disabled} title={errBlocked ? errTip : "Note for this contract only: how it should read (the shared template is not changed) (key 3)"} onClick={() => start("note")}>Note</button>
-          : <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={disabled} title={errBlocked ? errTip : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>}
-        {st.kind !== "none" && !hit.contract && <button type="button" className="sb-mbtn sb-mbtn-clear" disabled={disabled} title={errBlocked ? errTip : "Undo your mark"} aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
+          ? <button type="button" className={`sb-mbtn sb-mbtn-edit${busyAction === "note" ? " sb-mbtn-busy" : ""}`} data-mark-key="3" aria-pressed={false} aria-expanded={open === "note"} aria-busy={busyAction === "note" || undefined} disabled={disabled} title={errBlocked ? errTip : "Note for this contract only: how it should read (the shared template is not changed) (key 3)"} onClick={() => start("note")}>Note</button>
+          : <button type="button" className={`sb-mbtn sb-mbtn-edit${busyAction === "edit" ? " sb-mbtn-busy" : ""}`} data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} aria-busy={busyAction === "edit" || undefined} disabled={disabled} title={errBlocked ? errTip : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>}
+        {st.kind !== "none" && !hit.contract && <button type="button" className={`sb-mbtn sb-mbtn-clear${busyAction === "clear" ? " sb-mbtn-busy" : ""}`} aria-busy={busyAction === "clear" || undefined} disabled={disabled} title={errBlocked ? errTip : "Undo your mark"} aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
       </span>
       {open && (
         <form className="sb-mark-form" data-testid="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void send(formMark(open, draft, hit.contract)); }}>
@@ -142,7 +156,7 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
           <textarea className="sb-mark-input" aria-label={open === "redo" ? "What should change" : open === "note" ? "Note for this contract" : "New text"} placeholder={open === "redo" ? "What should change?" : open === "note" ? "How should this contract read?" : ""} rows={open === "edit" ? 3 : 2} value={draft} autoFocus
             onChange={(ev) => setDraft(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Escape") setOpen(null); if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) (ev.currentTarget.form as HTMLFormElement | null)?.requestSubmit(); ev.stopPropagation(); }} />
           <span className="sb-mark-formbtns">
-            <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !draft.trim()}>{open === "edit" ? "Save edit" : "Save note"}</button>
+            <button type="submit" className={`sb-mbtn sb-mbtn-save${busyAction ? " sb-mbtn-busy" : ""}`} aria-busy={Boolean(busyAction) || undefined} disabled={disabled || !draft.trim()}>{busyAction ? "Saving…" : open === "edit" ? "Save edit" : "Save note"}</button>
             <button type="button" className="sb-mbtn" onClick={() => setOpen(null)}>Cancel</button>
           </span>
         </form>
@@ -155,20 +169,25 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
 export function MarkBatch({ entities, label, m }: { entities: SbEntity[]; label?: string; m: MarksApi }) {
   const [redo, setRedo] = useState(false);
   const [note, setNote] = useState("");
+  const [busyBatch, setBusyBatch] = useState<"ok" | "redo" | null>(null);
   const markable = entities.filter((e) => entityTarget(e, m.lines));
   if (!markable.length) return null;
   const p = progress(markable.map((e) => m.stateOf(e)));
   const okAll = batchMarks(markable, m.lines, m.byKey, m.state.exists, "ok");
   const disabled = m.busy || hasSessionError(m.error, m.state);
+  const runBatch = async (kind: "ok" | "redo", list: Mark[]) => {
+    setBusyBatch(kind);
+    try { return await m.mark(list); } finally { setBusyBatch(null); }
+  };
   return (
     <span className="sb-batch" data-testid="sb-batch">
       <span className="sb-progress" data-testid="sb-progress">{label ? `${label} ` : ""}{p.done}/{p.total} reviewed</span>
-      {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-ok" disabled={disabled} data-testid="sb-ok-all" title="Mark every row without a mark OK (your Redo/Edit marks stay)" onClick={() => void m.mark(okAll)}>OK all ({okAll.length})</button>}
+      {okAll.length > 0 && <button type="button" className={`sb-mbtn sb-mbtn-ok${busyBatch === "ok" ? " sb-mbtn-busy" : ""}`} aria-busy={busyBatch === "ok" || undefined} disabled={disabled} data-testid="sb-ok-all" title="Mark every row without a mark OK (your Redo/Edit marks stay)" onClick={() => void runBatch("ok", okAll)}>{busyBatch === "ok" ? "OK all…" : `OK all (${okAll.length})`}</button>}
       {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-redo" disabled={disabled} aria-expanded={redo} onClick={() => setRedo((v) => !v)}>Redo all…</button>}
       {redo && (
-        <form className="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void m.mark(batchMarks(markable, m.lines, m.byKey, m.state.exists, "redo", note)).then((ok) => { if (ok) { setRedo(false); setNote(""); } }); }}>
+        <form className="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void runBatch("redo", batchMarks(markable, m.lines, m.byKey, m.state.exists, "redo", note)).then((ok) => { if (ok) { setRedo(false); setNote(""); } }); }}>
           <input className="sb-mark-input" aria-label="One note for every unmarked row" placeholder={`One note for ${okAll.length} rows`} value={note} autoFocus onChange={(ev) => setNote(ev.target.value)} onKeyDown={(ev) => ev.stopPropagation()} />
-          <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !note.trim()}>Redo {okAll.length}</button>
+          <button type="submit" className={`sb-mbtn sb-mbtn-save${busyBatch === "redo" ? " sb-mbtn-busy" : ""}`} aria-busy={busyBatch === "redo" || undefined} disabled={disabled || !note.trim()}>{busyBatch === "redo" ? "Saving…" : `Redo ${okAll.length}`}</button>
         </form>
       )}
     </span>
@@ -181,7 +200,12 @@ export function MarksBar({ m, onMarkSeen, seenBusy, canMarkSeen }: { m: MarksApi
   return (
     <div className="sb-marksbar" data-testid="sb-marksbar" role="status">
       <span className="sb-marksbar-txt">
-        {m.state.exists ? (
+        {m.starting ? (
+          <span className="sb-marksbar-starting" data-testid="sb-marksbar-starting" aria-busy="true">
+            <span className="sb-marksbar-full">Starting session… creating review branch (never main).</span>
+            <span className="sb-marksbar-short">Starting session…</span>
+          </span>
+        ) : m.state.exists ? (
           <>
             <span className="sb-marksbar-full">Review session <span className="sb-mono">{m.state.branch}</span> · {n} marked · {m.state.pending ? `${m.state.pending} unsaved row${m.state.pending === 1 ? "" : "s"}` : "all committed"}</span>
             <span className="sb-marksbar-short">{n} marked · {m.state.pending ? `${m.state.pending} unsaved` : "committed"}</span>
