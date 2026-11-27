@@ -1,26 +1,39 @@
 // PTO-B3: a Release export (no vs_playtest tag) has zero vs_playtest/adapter paths and boots clean,
 // in Text and compiled script modes; a Playtest export (tag) keeps the addon; an attached McpBridge
-// autoload never reaches the pack. Skips only when no Godot is found (see resolveGodot).
+// autoload never reaches the pack. Skips only when no Godot is found (see resolveGodotBin).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const proj = resolve(import.meta.dirname, '..', 'godot');
-// Same conventions the project already uses (GODOT_BIN: runner/EFI run_godot.sh; GODOT_PATH: RUNBOOK;
-// GODOT_4_8/GODOT_4_7: forge systemd drop-in, docs/lanes/forge-host/ENV_GAPS.md). Host has no bare `godot`.
-// 4.8-dev7 first: it is the only one with export templates installed on the forge.
-const probe = (bin) => bin && spawnSync(bin, ['--version'], { encoding: 'utf8' }).status === 0;
-const bin = join(homedir(), '.local', 'bin');
-const candidates = [['GODOT_BIN', process.env.GODOT_BIN], ['GODOT_PATH', process.env.GODOT_PATH], ['PATH godot', 'godot'],
-  ['GODOT_4_8', process.env.GODOT_4_8], ['GODOT_4_7', process.env.GODOT_4_7],
-  ['~/.local/bin/godot-4.8-dev7', join(bin, 'godot-4.8-dev7')], ['~/.local/bin/godot-4.7.2', join(bin, 'godot-4.7.2')]];
-const found = candidates.find(([, b]) => probe(b));
-const godot = found?.[1];
-const run = (args, cwd) => spawnSync(godot, ['--headless', ...args], { cwd, encoding: 'utf8', timeout: 180000 });
-const skip = !found && `no Godot found; searched: ${candidates.map(([n]) => n).join(', ')}`;
+// Godot resolution follows the conventions the project already uses (GODOT_BIN: EFI run_godot.sh; GODOT_PATH:
+// RUNBOOK; GODOT_4_x: forge systemd drop-in, docs/lanes/forge-host/ENV_GAPS.md), then bare `godot`, then any
+// ~/.local/bin/godot-4.* (newest first, versions with export templates preferred).
+const shell = process.platform === 'win32'; // .cmd/.bat shims need a shell on Windows; POSIX stays shell-free
+const probe = (bin) => !!bin && spawnSync(bin, ['--version'], { encoding: 'utf8', shell }).status === 0;
+const verKey = (n) => n.replace(/^godot-/, '').split(/[.-]/).map((p) => (/^\d+$/.test(p) ? p.padStart(4, '0') : '~' + p)).join('.');
+const verDirs = () => { try { return readdirSync(join(homedir(), '.local', 'share', 'godot', 'export_templates')); } catch { return []; } };
+function resolveGodotBin() {
+  for (const name of ['GODOT_BIN', 'GODOT_PATH']) {
+    if (process.env[name]) { if (probe(process.env[name])) return { name, bin: process.env[name] }; throw new Error(`${name}=${process.env[name]} is set but does not run --version`); }
+  }
+  const dir = join(homedir(), '.local', 'bin');
+  let versioned = [];
+  try { versioned = readdirSync(dir).filter((n) => /^godot-4\./.test(n)); } catch { /* none */ }
+  const tpl = verDirs();
+  const hasTpl = (n) => tpl.some((t) => t.replace(/\.stable$/, '') === n.replace(/^godot-/, '').replace(/-(dev\d+)$/, '.$1').replace(/-stable$/, ''));
+  versioned.sort((x, y) => (hasTpl(y) - hasTpl(x)) || (verKey(y) < verKey(x) ? -1 : verKey(y) > verKey(x) ? 1 : 0));
+  const candidates = [['PATH godot', 'godot'], ['GODOT_4_8', process.env.GODOT_4_8], ['GODOT_4_7', process.env.GODOT_4_7], ...versioned.map((n) => [`~/.local/bin/${n}`, join(dir, n)])];
+  const hit = candidates.find(([, b]) => probe(b));
+  return hit ? { name: hit[0], bin: hit[1] } : { searched: ['GODOT_BIN', 'GODOT_PATH', ...candidates.map(([n]) => n)] };
+}
+const resolved = resolveGodotBin();
+const godot = resolved.bin;
+const run = (args, cwd) => spawnSync(godot, ['--headless', ...args], { cwd, encoding: 'utf8', timeout: 180000, shell });
+const skip = !godot && `no Godot found; searched: ${resolved.searched.join(', ')}`;
 
 function exportPack(out, preset) {
   const pck = join(out, `${preset}.pck`);
