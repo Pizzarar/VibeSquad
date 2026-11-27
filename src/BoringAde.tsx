@@ -29,6 +29,7 @@ import type { PinHandler } from "./PinGrid";
 import { bustUrl, type BustRole } from "./boringBusts";
 import { BoringEmptyJumps, BoringPanePicker, buildPickerData, buildQuickJumps, type CardTarget, type OtherProject, type PickerHandlers, type StripItem } from "./BoringPanePicker";
 import { useTheme } from "./useBotFace";
+import { MainMarker } from "./MainMarker";
 import { StatusDot } from "./ui";
 import { ProjectTabs } from "./ProjectTabs";
 import { useStorybookPresent } from "./StorybookView";
@@ -1243,6 +1244,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
             {!open && badge(m.totalNeedsYou, m.projectErr)}
           </button>
           {isMain && <button type="button" className="boring-main-open" data-testid="boring-main-open" title={`Open ${v.team.name}'s Buddy chat`} aria-label={`Open ${v.team.name} Buddy chat`} onClick={() => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id)}>Open</button>}
+          {isMain && <MainMarker />}
           <button type="button" className="boring-row-menu-btn" data-testid={`boring-project-menu-${v.team.id}`} aria-haspopup="menu" aria-label={`${v.team.name} actions`} title="Project actions" onClick={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>⋯</button>
           {active && (
             <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>

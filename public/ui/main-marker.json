@@ -1,0 +1,19 @@
+{
+  "unit": "MM1 Main project pin marker: pushpin whose head is a floating googly eye (@art MM1)",
+  "source": "art/ui/main-marker/marker.lua + build.lua (Aseprite batch, P0 palettes)",
+  "native": 16,
+  "master2x": 32,
+  "themes": ["dark", "light"],
+  "sheet": "public/ui/main-marker-<theme>.png (48x16 strip), public/ui/main-marker-<theme>@2x.png (96x32 strip)",
+  "frame": { "w": 16, "h": 16, "w2x": 32, "h2x": 32 },
+  "display": "16 kit px box = calc(var(--u3-px) * 16), integer device-px snap like the S2b icons; background-size: 300% 100%, image-rendering: pixelated",
+  "keys": {
+    "idle": { "x": 0, "y": 0 },
+    "blink": [ { "x": 16, "y": 0 }, { "x": 32, "y": 0 } ]
+  },
+  "css": {
+    "idle": "background-position: 0 0",
+    "blink": ["background-position: 50% 0", "background-position: 100% 0"]
+  },
+  "animation": "one blink every ~4s: blink[0] (half-closed), blink[1] (closed), back to idle, ~100 ms per frame (steps); prefers-reduced-motion: idle only"
+}

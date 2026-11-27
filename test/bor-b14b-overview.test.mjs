@@ -52,6 +52,7 @@ stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; ex
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
+stub("MainMarker.mjs", `export function MainMarker() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const useCrunchMode = () => false;`);
 writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);

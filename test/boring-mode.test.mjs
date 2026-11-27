@@ -154,6 +154,7 @@ stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { ret
 writeFileSync(join(dir, "BoringPanePicker.mjs"), `import React from ${JSON.stringify(reactUrl)};\n` + transformSync("BoringPanePicker.tsx", readFileSync(resolve(import.meta.dirname, "..", "src", "BoringPanePicker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace(/from "react"/, `from ${JSON.stringify(reactUrl)}`));
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
+stub("MainMarker.mjs", `export function MainMarker() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const useCrunchMode = () => false;`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const setCrunchMode = async () => true;`);

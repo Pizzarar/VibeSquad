@@ -179,3 +179,39 @@ test("r1: phone project picker lists Main first, then teams.json order (no drag,
   const views = [T("a"), T("b"), T("c", null, true)].map((team) => ({ team }));
   assert.deepEqual(po.orderViews(views).map((v) => v.team.id), ["c", "a", "b"]);
 });
+
+// MM1 (@ui-bois): Main project pin marker, skip-if-absent + reduced motion (src/MainMarker.tsx + MainMarker.css).
+test("MM1 main marker renders nothing until the sheet loads, decorative, blink contract", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const root = resolve(import.meta.dirname, "..");
+  const tsx = readFileSync(resolve(root, "src", "MainMarker.tsx"), "utf8");
+  const ade = readFileSync(resolve(root, "src", "BoringAde.tsx"), "utf8");
+  const css = readFileSync(resolve(root, "src", "MainMarker.css"), "utf8");
+  assert.match(tsx, /const ok = useImageOk\(sheet\);\s*if \(!ok\) return null;/);
+  assert.match(tsx, /aria-hidden="true"/);
+  assert.match(ade, /\{isMain && <MainMarker \/>\}/);
+  assert.match(css, /\.boring-main-marker \{[^}]*background-size: 300% 100%[^}]*image-rendering: pixelated[^}]*animation: main-marker-blink 4s/);
+  assert.match(css, /@keyframes main-marker-blink \{[^@]*50% 0[^@]*100% 0/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{[^}]*\.boring-main-marker \{ animation: none; \}/);
+});
+
+test("MM1 mainMarkerSheetSrc picks the theme and the 1x/2x sheet by device px", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const dir = mkdtempSync(join(tmpdir(), "mm1-"));
+  const code = transformSync("MainMarker.tsx", readFileSync(join(root, "src", "MainMarker.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code
+    .replace(/import "\.\/MainMarker\.css";/, "")
+    .replace(/from "\.\/pins"/, 'from "./pins.mjs"').replace(/from "\.\/uiScale"/, 'from "./uiScale.mjs"').replace(/from "\.\/useBotFace"/, 'from "./useBotFace.mjs"');
+  writeFileSync(join(dir, "MainMarker.mjs"), code);
+  writeFileSync(join(dir, "pins.mjs"), 'export function integerSheetSrc(base, devicePx = 32) { return Math.round(devicePx) % 32 === 0 ? `${base}@2x.png` : `${base}.png`; }');
+  writeFileSync(join(dir, "uiScale.mjs"), "export const snapDeviceSize = () => ({ device: 16, css: 16 }); export const useUiScale = () => 1;");
+  writeFileSync(join(dir, "useBotFace.mjs"), 'export const useDpr = () => 1; export const useImageOk = () => false; export const useTheme = () => "dark";');
+  const { mainMarkerSheetSrc } = await import(pathToFileURL(join(dir, "MainMarker.mjs")).href);
+  assert.equal(mainMarkerSheetSrc("dark", 16), "/ui/main-marker-dark.png");
+  assert.equal(mainMarkerSheetSrc("light", 16), "/ui/main-marker-light.png");
+  assert.equal(mainMarkerSheetSrc("dark", 32), "/ui/main-marker-dark@2x.png");
+  assert.equal(mainMarkerSheetSrc("light", 32), "/ui/main-marker-light@2x.png");
+});

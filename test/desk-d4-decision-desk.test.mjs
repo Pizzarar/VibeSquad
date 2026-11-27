@@ -94,6 +94,7 @@ stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.childr
 stub("CommandPalette.mjs", `export { parseUrlState, serializeUrlState } from "./urlState.mjs"; export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = () => []; export const laneCtxItems = () => []; export const openContextMenu = () => {};`);
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
+stub("MainMarker.mjs", `export function MainMarker() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false;`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; }`);
