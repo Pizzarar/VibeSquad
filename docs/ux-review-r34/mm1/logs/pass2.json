@@ -1,0 +1,1250 @@
+{
+  "dark-4k120": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 315.7,
+          "y": 656.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": true,
+        "rowBg": "rgb(38, 38, 50)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      }
+    },
+    "errs": []
+  },
+  "light-4k120": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 315.7,
+          "y": 656.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": true,
+        "rowBg": "rgb(230, 227, 221)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 263.3,
+          "y": 657.3,
+          "w": 13.3,
+          "h": 13.3
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 335,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 355,
+          "h": 300
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          298
+        ]
+      }
+    },
+    "errs": []
+  },
+  "dark-720": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 223,
+          "y": 671,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 672,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": true,
+        "rowBg": "rgb(38, 38, 50)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          218
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 672,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          218
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          218
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          218
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          80,
+          298,
+          218
+        ]
+      }
+    },
+    "errs": []
+  },
+  "light-720": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 223,
+          "y": 671,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 672,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": true,
+        "rowBg": "rgb(230, 227, 221)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          218
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 672,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 637,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 636,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          218
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          218
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          218
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 170.6,
+          "y": 408,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 373,
+          "w": 245,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 372,
+          "w": 265,
+          "h": 220
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          80,
+          298,
+          218
+        ]
+      }
+    },
+    "errs": []
+  },
+  "dark-1080": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 240.2,
+          "y": 655,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": true,
+        "rowBg": "rgb(38, 38, 50)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          227
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          227
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          227
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          227
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          71,
+          298,
+          227
+        ]
+      }
+    },
+    "errs": []
+  },
+  "light-1080": {
+    "steps": {
+      "made": true,
+      "afterMain": {
+        "url": "?demo=&view=decisions",
+        "markers": 1,
+        "marker": {
+          "x": 240.2,
+          "y": 655,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 56
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 60
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "false",
+        "head": "DECISIONS",
+        "pinScroll": [
+          0,
+          58,
+          58
+        ]
+      },
+      "selected": {
+        "url": "?demo=&team=site",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": true,
+        "rowBg": "rgb(230, 227, 221)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "pinScroll": [
+          0,
+          298,
+          227
+        ]
+      },
+      "markerClick": {
+        "before": "?demo=&team=site",
+        "after": "?demo=&team=site",
+        "menuOpen": true
+      },
+      "open": {
+        "url": "?demo=&view=squads&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          0,
+          298,
+          227
+        ]
+      },
+      "afterJ": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          227
+        ]
+      },
+      "expanded": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          40,
+          298,
+          227
+        ]
+      },
+      "expandedScrolled": {
+        "url": "?demo=&team=site&slot=riffbot",
+        "markers": 1,
+        "marker": {
+          "x": 187.8,
+          "y": 656,
+          "w": 16,
+          "h": 16
+        },
+        "line": {
+          "x": 22,
+          "y": 621,
+          "w": 262.2,
+          "h": 58
+        },
+        "pin": {
+          "x": 12,
+          "y": 620,
+          "w": 282.2,
+          "h": 229
+        },
+        "rowOn": false,
+        "rowBg": "rgba(0, 0, 0, 0)",
+        "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+        "onRows": 1,
+        "open": "true",
+        "head": "Desk · no Overlord or RiffBot running",
+        "pinScroll": [
+          71,
+          298,
+          227
+        ]
+      }
+    },
+    "errs": []
+  }
+}

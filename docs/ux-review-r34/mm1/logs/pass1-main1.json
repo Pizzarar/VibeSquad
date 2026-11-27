@@ -1,0 +1,576 @@
+{
+  "dark-720": {
+    "R": {
+      "marker": {
+        "x": 223,
+        "y": 671,
+        "w": 16,
+        "h": 16
+      },
+      "open": {
+        "x": 42,
+        "y": 667,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 245,
+        "y": 668,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 648,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 642,
+        "w": 164,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 637,
+        "w": 229,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 637,
+        "w": 245,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 636,
+        "w": 265,
+        "h": 60
+      }
+    },
+    "dpr": 1,
+    "devicePx": 16,
+    "bg": "main-marker-dark.png",
+    "anim": "main-marker-blink",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 164,
+    "nameW0": 164,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 122.2,
+    "markerCount": 1,
+    "sidebarW": 290,
+    "errs": [],
+    "target": 1
+  },
+  "dark-1080": {
+    "R": {
+      "marker": {
+        "x": 240.19,
+        "y": 655,
+        "w": 16,
+        "h": 16
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 262.19,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 181.19,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 246.19,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 262.19,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 282.19,
+        "h": 60
+      }
+    },
+    "dpr": 1,
+    "devicePx": 16,
+    "bg": "main-marker-dark.png",
+    "anim": "main-marker-blink",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 181.1875,
+    "nameW0": 181.1875,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 139.39,
+    "markerCount": 1,
+    "sidebarW": 307.1875,
+    "errs": [],
+    "target": 1
+  },
+  "light-1080": {
+    "R": {
+      "marker": {
+        "x": 240.19,
+        "y": 655,
+        "w": 16,
+        "h": 16
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 262.19,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 181.19,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 246.19,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 262.19,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 282.19,
+        "h": 60
+      }
+    },
+    "dpr": 1,
+    "devicePx": 16,
+    "bg": "main-marker-light.png",
+    "anim": "main-marker-blink",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 181.1875,
+    "nameW0": 181.1875,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 139.39,
+    "markerCount": 1,
+    "sidebarW": 307.1875,
+    "errs": [],
+    "target": 1
+  },
+  "dark-4k120": {
+    "R": {
+      "marker": {
+        "x": 315.67,
+        "y": 656.33,
+        "w": 13.33,
+        "h": 13.33
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 335,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 254,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 319,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 335,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 355,
+        "h": 60
+      }
+    },
+    "dpr": 1.2000000476837158,
+    "devicePx": 15.994,
+    "bg": "main-marker-dark.png",
+    "anim": "main-marker-blink",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 254,
+    "nameW0": 254,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 214.87,
+    "markerCount": 1,
+    "sidebarW": 380,
+    "errs": [],
+    "target": 1
+  },
+  "light-4k120": {
+    "R": {
+      "marker": {
+        "x": 315.67,
+        "y": 656.33,
+        "w": 13.33,
+        "h": 13.33
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 335,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 254,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 319,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 335,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 355,
+        "h": 60
+      }
+    },
+    "dpr": 1.2000000476837158,
+    "devicePx": 15.994,
+    "bg": "main-marker-light.png",
+    "anim": "main-marker-blink",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 254,
+    "nameW0": 254,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 214.87,
+    "markerCount": 1,
+    "sidebarW": 380,
+    "errs": [],
+    "target": 1
+  },
+  "dark-4k120-rm": {
+    "R": {
+      "marker": {
+        "x": 315.67,
+        "y": 656.33,
+        "w": 13.33,
+        "h": 13.33
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 335,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 254,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 319,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 335,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 355,
+        "h": 60
+      }
+    },
+    "dpr": 1.2000000476837158,
+    "devicePx": 15.994,
+    "bg": "main-marker-dark.png",
+    "anim": "none",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 254,
+    "nameW0": 254,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.220078 0.173961 0.174431)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 214.87,
+    "markerCount": 1,
+    "sidebarW": 380,
+    "errs": [],
+    "target": 1
+  },
+  "light-1080-rm": {
+    "R": {
+      "marker": {
+        "x": 240.19,
+        "y": 655,
+        "w": 16,
+        "h": 16
+      },
+      "open": {
+        "x": 42,
+        "y": 651,
+        "w": 58.8,
+        "h": 24
+      },
+      "menu": {
+        "x": 262.19,
+        "y": 652,
+        "w": 22,
+        "h": 22
+      },
+      "chev": {
+        "x": 22,
+        "y": 632,
+        "w": 16,
+        "h": 32
+      },
+      "name": {
+        "x": 91,
+        "y": 626,
+        "w": 181.19,
+        "h": 20
+      },
+      "row": {
+        "x": 38,
+        "y": 621,
+        "w": 246.19,
+        "h": 30
+      },
+      "add": null,
+      "line": {
+        "x": 22,
+        "y": 621,
+        "w": 262.19,
+        "h": 56
+      },
+      "pin": {
+        "x": 12,
+        "y": 620,
+        "w": 282.19,
+        "h": 60
+      }
+    },
+    "dpr": 1,
+    "devicePx": 16,
+    "bg": "main-marker-light.png",
+    "anim": "none",
+    "rendering": "pixelated",
+    "bgSize": "300% 100%",
+    "lineH": 56,
+    "lineH0": 56,
+    "pinH": 60,
+    "pinH0": 60,
+    "nameW": 181.1875,
+    "nameW0": 181.1875,
+    "nameTrunc": false,
+    "rowOn": false,
+    "rowBg": "rgba(0, 0, 0, 0)",
+    "lineBg": "color(srgb 0.917176 0.859922 0.813176)",
+    "overlaps": {
+      "open": false,
+      "menu": false,
+      "chev": false,
+      "name": false,
+      "add": null
+    },
+    "gapToMenu": 6,
+    "gapFromOpen": 139.39,
+    "markerCount": 1,
+    "sidebarW": 307.1875,
+    "errs": [],
+    "target": 1
+  }
+}
