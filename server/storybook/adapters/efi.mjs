@@ -612,7 +612,72 @@ async function load(reader, sha) {
       warnings.push(`${P.art}: no slots object, no art slots imported`);
     }
   }
+  await attachItemEconomy(reader, ents, locations);
   return { entities: ents, warnings };
+}
+
+/**
+ * V4: attach item sources/uses from optional EFI data files (nodes.json, actions.json, plants.json, power.json, camp.json)
+ * and location containers onto existing entities. Kept as a separate function so parallel adapter edits merge cleanly.
+ */
+async function attachItemEconomy(reader, ents, locations) {
+  const locById = new Map(ents.filter((e) => e.kind === "location").map((e) => [e.id, e]));
+  for (const l of locations) {
+    const ent = locById.get(l.id);
+    if (!ent || !Array.isArray(l.containers)) continue;
+    ent.data.containers = l.containers.map((c) => ({
+      id: c.id ?? "",
+      name: c.name ?? titleCase(String(c.id ?? "container")),
+      weight: c.weight ?? null,
+      rows: (c.rows ?? []).filter((r) => r?.item_id).map((r) => ({ item_id: r.item_id, quantity: r.quantity ?? 1, chance_bp: r.chance_bp ?? null })),
+    }));
+  }
+  const itemById = new Map(ents.filter((e) => e.kind === "item").map((e) => [e.id, e]));
+  if (!itemById.size) return;
+  const addSrc = (itemId, rec) => {
+    const it = itemById.get(itemId);
+    if (!it) return;
+    if (!Array.isArray(it.data.node_sources)) it.data.node_sources = [];
+    if (!it.data.node_sources.some((x) => x.kind === rec.kind && x.id === rec.id)) it.data.node_sources.push(rec);
+  };
+  const addUse = (itemId, rec) => {
+    const it = itemById.get(itemId);
+    if (!it) return;
+    if (!Array.isArray(it.data.extra_uses)) it.data.extra_uses = [];
+    if (!it.data.extra_uses.some((x) => x.kind === rec.kind && x.id === rec.id && x.label === rec.label)) it.data.extra_uses.push(rec);
+  };
+  const optJson = async (file) => {
+    const raw = await reader.readFile(file);
+    if (raw == null) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  };
+  const [nodesJson, actionsJson, plantsJson, powerJson, campJson] = await Promise.all([
+    optJson("data/nodes.json"), optJson("data/actions.json"), optJson("data/plants.json"),
+    optJson("data/power.json"), optJson("data/camp.json"),
+  ]);
+  for (const [nid, n] of Object.entries(nodesJson?.nodes ?? {})) {
+    for (const d of n?.drops ?? []) if (d?.item_id) addSrc(d.item_id, { kind: "node", id: nid, label: n.display_name ?? titleCase(nid), skill: "scavenging", level_req: n.level_req ?? null });
+  }
+  const acts = actionsJson?.actions ?? (actionsJson && !actionsJson.meta ? actionsJson : {});
+  for (const [aid, a] of Object.entries(acts ?? {})) {
+    if (aid === "meta" || !a || typeof a !== "object") continue;
+    for (const d of a.drops ?? []) if (d?.item_id) addSrc(d.item_id, { kind: "action", id: aid, label: a.name ?? titleCase(aid), skill: a.skill ?? null, level_req: a.level_req ?? null });
+  }
+  for (const [pid, p] of Object.entries(plantsJson?.plants ?? {})) {
+    if (p?.crop_id) addSrc(p.crop_id, { kind: "plant", id: pid, label: titleCase(pid), skill: "farming" });
+    if (p?.seed_id) addUse(p.seed_id, { kind: "plant", id: pid, label: `Grow ${titleCase(p.crop_id ?? pid)}` });
+  }
+  for (const fuelId of Object.keys(powerJson?.fuels ?? {})) {
+    addUse(fuelId, { kind: "power", id: "generator", label: "Generator fuel" });
+  }
+  for (const [sid, s] of Object.entries(campJson?.structures ?? {})) {
+    const sname = s?.name ?? titleCase(sid);
+    for (const itemId of Object.keys(s?.cost ?? {})) addUse(itemId, { kind: "camp", id: sid, label: `Build ${sname}` });
+    for (const r of s?.convert?.rows ?? []) {
+      if (r?.from) addUse(r.from, { kind: "camp", id: sid, label: `${sname} input` });
+      if (r?.to) addSrc(r.to, { kind: "camp", id: sid, label: sname });
+    }
+  }
 }
 
 // ---------- hooks (computed from entity data) ----------

@@ -154,7 +154,7 @@ function splitStatements(lines: string[]): string[] {
         if (ch === quote && line[i - 1] !== "\\") quote = null;
         continue;
       }
-      if (ch === '"' || ch === "'") {
+      if (ch === '"' || (ch === "'" && (i === 0 || !/[A-Za-z0-9_]/.test(line[i - 1])))) {
         quote = ch;
         cur += ch;
         continue;
@@ -212,7 +212,7 @@ function scanBalanced(
       i++;
       continue;
     }
-    if (ch === '"' || ch === "'") {
+    if (ch === '"' || (ch === "'" && (i === startPos + openSeq.length || !/[A-Za-z0-9_]/.test(s[i - 1])))) {
       quote = ch;
       i++;
       continue;
@@ -304,7 +304,7 @@ function scanUntilClosingOp(
       i++;
       continue;
     }
-    if (ch === '"' || ch === "'") {
+    if (ch === '"' || (ch === "'" && (i === startPos || !/[A-Za-z0-9_]/.test(s[i - 1])))) {
       quote = ch;
       i++;
       continue;

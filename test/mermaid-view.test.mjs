@@ -236,6 +236,29 @@ describe("V1 MermaidView — XSS / XML-escaping & security", () => {
     assert.match(res.svg, /&amp; &apos;quote&apos;/);
   });
 
+  test("preserves apostrophes in quoted and unquoted node and edge labels without mangling", () => {
+    const code = [
+      "flowchart LR",
+      '  n0["1. Someone Else\'s Gear"] --> n1[Popper\'s Press]; n1 -- Doc\'s kit --> n2(Workers\' Locker)',
+    ].join("\n");
+    const parsed = parseMermaid(code);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.nodeCount, 3);
+    assert.equal(parsed.edgeCount, 2);
+    const byId = Object.fromEntries(parsed.nodes.map((n) => [n.id, n.label]));
+    assert.equal(byId.n0, "1. Someone Else's Gear");
+    assert.equal(byId.n1, "Popper's Press");
+    assert.equal(byId.n2, "Workers' Locker");
+    assert.equal(parsed.edges[1].label, "Doc's kit");
+
+    const res = renderMermaidSvg(code);
+    assert.equal(res.ok, true);
+    assert.match(res.svg, /Someone Else&apos;s Gear/);
+    assert.match(res.svg, /Popper&apos;s Press/);
+    assert.match(res.svg, /Doc&apos;s kit/);
+    assert.match(res.svg, /Workers&apos; Locker/);
+  });
+
   test("escapeXml and sanitizeSvg strip dangerous constructs", () => {
     assert.equal(
       escapeXml(`<tag attr="1" single='2'>a & b</tag>`),
