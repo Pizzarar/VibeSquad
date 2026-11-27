@@ -753,7 +753,7 @@ async function deliverOne(item, ans, { agents, teams, backend, appendLog, ownerN
         console.warn(`[vibesquad] decisions: could not clear the needs-you label on ${item.askerId}: ${e?.message ?? e}`),
       );
     }
-    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged, summary };
+    return { status: ans.choice === "dismiss" ? "dismissed" : "delivered", ...(deliveredTo ? { target: deliveredTo, via } : {}), logged, summary, summaryFull: choiceLabel(item, ans, { optMax: Infinity, replyMax: Infinity }) };
   } catch (e) {
     // Only reached before a send (target resolution / prompt build): the item stays open.
     console.warn(`[vibesquad] decisions: answer ${item.id} failed: ${e?.message ?? e}`);
@@ -815,7 +815,7 @@ export async function answerDecisions(answers, deps) {
       results.push({
         ...base,
         status: okCount === per.length ? okStatus : okCount === 0 ? "failed" : "partial",
-        ...(okCount > 0 ? { summary: choiceLabel(item, ans) } : {}),
+        ...(okCount > 0 ? { summary: choiceLabel(item, ans), summaryFull: choiceLabel(item, ans, { optMax: Infinity, replyMax: Infinity }) } : {}),
         ...(okCount < per.length ? { error: "some source items were not delivered; they stay open" } : {}),
         members: [...per, ...skipped],
       });
