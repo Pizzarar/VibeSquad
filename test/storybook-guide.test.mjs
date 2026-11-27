@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import * as G from "../src/storybookGuide.ts";
+import * as G from "../src/storybookGuideLogic.ts";
 
 const viewSrc = readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8");
 const textSrc = readFileSync(new URL("../src/StorybookText.tsx", import.meta.url), "utf8");

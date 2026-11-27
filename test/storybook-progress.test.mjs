@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildProgress, lineAreaId, lineMarkKey, PROGRESS_AREAS, statusToBucket } from "../server/storybook/progress.mjs";
-import { markState, marksByKey } from "../src/storybookMarks.ts";
-import { applyLiveMarks, formatArtSummary, formatProgressSummary, liveLineBucket } from "../src/storybookProgress.ts";
+import { markState, marksByKey } from "../src/storybookMarksLogic.ts";
+import { applyLiveMarks, formatArtSummary, formatProgressSummary, liveLineBucket } from "../src/storybookProgressLogic.ts";
 import { buildListItems, indexEntities, isUnreviewedLine, scopeCounts, signalCard } from "../src/storybookLogic.ts";
 import { applyLiveUnreviewed, buildReviewRows, filterRows, NO_FILTER } from "../src/storybookReview.ts";
 

@@ -7,9 +7,9 @@ import {
   type CharacterView, type EntityIndex, type SbEntity, type SbFinding,
 } from "./storybookLogic";
 import { MarkButtons, type MarksApi } from "./StorybookMarks";
-import { PROGRESS_BUCKET_LABEL, liveLineBucket } from "./storybookProgress";
+import { PROGRESS_BUCKET_LABEL, liveLineBucket } from "./storybookProgressLogic";
 import { ProgressBarRow, type ProgressOpenHandler } from "./StorybookProgress";
-import type { ProgressEntry } from "./storybookProgress";
+import type { ProgressEntry } from "./storybookProgressLogic";
 
 export type ChipRenderer = (e: SbEntity, label?: string) => ReactNode;
 

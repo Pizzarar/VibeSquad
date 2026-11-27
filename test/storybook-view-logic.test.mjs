@@ -285,7 +285,7 @@ export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
     .code.replace(/^/, `import React from "./react.mjs";\n`)
     .replace(/import "\.\/storybook\.css";\n?/, "")
     .replace(/from "react"/g, `from "./react.mjs"`)
-    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookGlossary|\.\/StorybookArc|\.\/StorybookSheet|\.\/StorybookMarks|\.\/storybookProgress|\.\/StorybookGuide|\.\/storybookGuide)"/g, `from "./stub.mjs"`);
+    .replace(/from "(react-dom|\.\/MermaidView|\.\/pinMenuPlace|\.\/storybookLogic|\.\/ProjectTabs|\.\/StorybookHome|\.\/StorybookText|\.\/storybookReview|\.\/StorybookItems|\.\/StorybookGlossary|\.\/StorybookArc|\.\/StorybookSheet|\.\/StorybookMarks|\.\/storybookProgressLogic|\.\/StorybookGuide|\.\/storybookGuideLogic)"/g, `from "./stub.mjs"`);
   writeFileSync(join(dir, "StorybookView.mjs"), sbCode);
 
   let mod;
