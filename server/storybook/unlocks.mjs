@@ -131,7 +131,7 @@ export function buildArc(entities) {
         basis.push("placed after chain (rep source unknown)");
       }
     } else basis.push("rep 0: available when the trader is");
-    playOrder.push({ kind: "contract", id: c.id, label: c.display, trader: tid || null, stage, sub, gates, basis });
+    playOrder.push({ kind: "contract", id: c.id, label: c.data?.rendered?.title || c.display, trader: tid || null, stage, sub, gates, basis });
   }
 
   playOrder.sort((a, b) => a.stage - b.stage || a.sub - b.sub || String(a.trader ?? "").localeCompare(String(b.trader ?? "")) || a.id.localeCompare(b.id));
