@@ -1567,10 +1567,9 @@ function commandProfiles(flags) {
     writeRoleRows(listedRows);
     if (!flags.aliases) {
       // Roles only: custom (non-legacy) profiles are still spawnable by name, so they stay listed; old names are counted.
-      // idea-732: UX Reviewer - Opus maps to the review role for routing but is a distinct, named UX-gate profile: keep it listed.
-      const namedOnly = (p) => /^ux reviewer - /i.test(p.name);
-      const legacy = matched.filter((p) => aliasOf(p) && !namedOnly(p));
-      shown = matched.filter((p) => !aliasOf(p) || namedOnly(p));
+      // R1 fu: UX Reviewer - Opus is now a hidden alias of the UX Review role (was listed by name, idea-732).
+      const legacy = matched.filter((p) => aliasOf(p));
+      shown = matched.filter((p) => !aliasOf(p));
       const builtinNames = new Set(DEFAULT_PACK_PROFILES.map((d) => String(d.name).toLowerCase()));
       const isBuiltin = (p) => builtinNames.has(String(p.name).toLowerCase());
       if (shown.length) process.stdout.write("\nOther profiles (spawn by exact name; [built-in] ships with the server, no role label):\n");

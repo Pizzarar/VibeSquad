@@ -131,7 +131,8 @@ test("getRolesState on a missing file falls back to ROLE_TABLE defaults", () => 
   try {
     const s = getRolesState({ profilesPath: join(dir, "nope.json"), ladderPath: join(dir, "nol.json") });
     assert.equal(s.source, "default");
-    assert.equal(Object.keys(s.roles).length, 9);
+    assert.equal(Object.keys(s.roles).length, 10);
+    assert.equal(s.roles["ux-review"]?.name, "UX Review", "R1 fu: UX Review is listed (not hidden)");
     assert.deepEqual(s.hiddenRoles, ["work-order"], "R1: work-order routes but is left out of role listings");
   } finally {
     rmSync(dir, { recursive: true, force: true });

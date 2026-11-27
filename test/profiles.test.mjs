@@ -587,7 +587,18 @@ test("UX Reviewer - Opus: profile wired (vision+code+playwright, no edit-source)
   assert.ok(UX_REVIEWER_NOTE_BODY.includes("n counts per lane") && UX_REVIEWER_NOTE_BODY.includes("two lanes never pick the same file")); // idea-984
   assert.equal(new Set(DEFAULT_PACK_PROFILES.map((p) => p.id)).size, DEFAULT_PACK_PROFILES.length, "profile ids unique");
   assert.ok(LEAD_NOTE_BODY.includes("Art Painter + Art Director duet (spawning one starts the other). Pick by best result per unit: first-try review PASS, then fix-after-merge, then fit for the job; $ only breaks ties. Normal-mode UI phases"));
-  assert.ok(LEAD_NOTE_BODY.includes("also go to UX Reviewer - Opus"));
+  // R1 fu: the lead note names the UX Review role, never the legacy model-named profile.
+  assert.ok(LEAD_NOTE_BODY.includes("also go to UX Review at phase end"));
+  assert.ok(!LEAD_NOTE_BODY.includes("UX Reviewer - Opus"));
+  const uiSrc = readFileSync(resolve(import.meta.dirname, "..", "src", "profiles.ts"), "utf8");
+  assert.ok(uiSrc.includes("also go to UX Review at phase end") && !uiSrc.includes("also go to UX Reviewer - Opus"), "src/profiles.ts lead note mirrors it");
+  // The UX Review role carries the UX brief and Playwright, so a role spawn behaves like the old profile did.
+  const { buildRolesFromProfiles } = await import("../server/profiles-v2.mjs");
+  const role = buildRolesFromProfiles([]).roles["ux-review"];
+  assert.deepEqual([role.name, role.tier, role.providers], ["UX Review", "top", ["claude", "antigravity-cli"]]);
+  assert.equal(role.prompt, ux.notes);
+  assert.deepEqual(role.mcpExtras, ["playwright"]);
+  assert.equal(role.modes["antigravity-cli"].prompt, undefined, "Gemini hop keeps the UX brief");
   assert.ok(ART_DIRECTOR_NOTE_BODY.startsWith("Art Director in the standard Painter + Director artwork loop"));
   assert.ok(!ART_DIRECTOR_NOTE_BODY.includes("UX"));
 });
@@ -608,7 +619,7 @@ test("findProfile resolves a newly shipped built-in from the default pack when a
 test("defaultBriefFor gives UX Reviewer the review brief, so hydration keeps it (L1)", () => {
   const src = readFileSync(resolve(import.meta.dirname, "..", "src", "profiles.ts"), "utf8");
   const line = src.split(/\r?\n/).find((l) => l.includes("return REVIEW_BRIEF") && l.includes("test(name)"));
-  assert.ok(line && line.includes("UX Reviewer"), line);
+  assert.ok(line && line.includes("UX Review(?:er)?"), line);
 });
 
 // Root cause: stored built-in notes that still equal an older default must follow default changes.

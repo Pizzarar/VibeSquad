@@ -502,7 +502,7 @@ export const HUB_LEAD_RULES = [
 
 /** Appended to the Buddy and Lead packs only while the Squad's `vibeMode` is on (teams.json). Off = pack text unchanged. */
 export const CRUNCH_MODE_RULES =
-  "Crunch mode is ON for this Squad: act on your lean end-to-end (plan, hand off, dispatch, merge through the normal gates) until the lane has a tryable build. Log each call as `vs log decision \"(auto) ...\"`. Stop only for deletes, releases, money and outward/public actions: put those in ONE needs-you digest and keep working on everything else. Review, suite, UX Reviewer and merge gates still apply; Crunch skips asking, not checking.";
+  "Crunch mode is ON for this Squad: act on your lean end-to-end (plan, hand off, dispatch, merge through the normal gates) until the lane has a tryable build. Log each call as `vs log decision \"(auto) ...\"`. Stop only for deletes, releases, money and outward/public actions: put those in ONE needs-you digest and keep working on everything else. Review, suite, UX Review and merge gates still apply; Crunch skips asking, not checking.";
 
 /** Alias kept for tests that import the old name (PLAN_CRUNCH_MODE C1). */
 export const VIBE_MODE_BUDDY_RULES = CRUNCH_MODE_RULES;

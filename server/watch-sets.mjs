@@ -497,7 +497,7 @@ export function itemVerdict(item) {
 /** The verdict tag a finished agent item shows: its verdict line, `done (impl)` for known non-reviewers, or NO VERDICT (fail safe). */
 const NO_VERDICT = "NO VERDICT";
 const IMPL_DONE = "done (impl)";
-const REVIEW_ROLE_KEYS = new Set(["review", "reviewer", "pre-check", "precheck", "digest"]);
+const REVIEW_ROLE_KEYS = new Set(["review", "reviewer", "ux-review", "pre-check", "precheck", "digest"]);
 const IMPL_ROLE_KEYS = new Set(["implement", "implementer", "planner", "work-order", "art-director", "art-painter", "lead", "brainstorm", "buddy", "overlord"]);
 const REVIEW_PROFILE_RE = /^(?:review|reviewer|ux-review|ux-reviewer|pre-check|precheck|check|audit|scout)(?:-|$)/;
 const IMPL_PROFILE_RE = /^(?:implement|implementer|planner|spec|work-order|mechanical|senior-reasoning|art-director|art-painter|art|lead|brainstorm|buddy|worker|coder)(?:-|$)/;

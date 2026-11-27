@@ -78,15 +78,17 @@ test("vs profiles --role / --name / --json keep today's profile rows (lead hando
   assert.equal(js.find((p) => p.name === "Planner - Sonnet").aliasOf, "planner");
 });
 
-test("vs profiles lists server built-ins missing from a stored profiles.json, marked [built-in] (idea-732)", (t) => {
+test("vs profiles: built-ins missing from a stored profiles.json still resolve; UX Review is a role, its old name a hidden alias (idea-732, R1 fu)", (t) => {
   const { run } = setup(t);
   const r = run([]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /^UX Reviewer - Opus · .* \[built-in\]$/m);
+  // R1 fu: UX Reviewer - Opus is now a hidden alias of the UX Review role, listed as a role instead.
+  assert.doesNotMatch(r.stdout, /^UX Reviewer - Opus · /m);
+  assert.match(r.stdout, /^UX Review · label=UX Review · tier=top · claude=claude-opus-5-5\/high > antigravity-cli=gemini-4-neon\/high$/m);
   assert.doesNotMatch(r.stdout, /^My Custom .*\[built-in\]/m, "custom profiles are not marked");
   assert.match(r.stdout, /^Implement · label=Implement/m, "role names still listed as routing labels");
   const j = JSON.parse(run(["--name", "UX Reviewer", "--json"]).stdout);
-  assert.ok(j.some((p) => p.name === "UX Reviewer - Opus"));
+  assert.equal(j.find((p) => p.name === "UX Reviewer - Opus")?.aliasOf, "ux-review");
 });
 
 test("vs profiles roles carry their ladder rung per provider; --roles --json has rungs; no model-named profile is listed (idea-732)", (t) => {
