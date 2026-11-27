@@ -105,6 +105,7 @@ test('max hold: a hold past parkHoldMaxMs is a logged forced park, not a silent 
   h.shell(id);
   h.endTurn(id);
   await until(() => types(h.runner, id).includes('park-held'));
+  assert.deepEqual(h.kills, []);
   await until(() => h.kills.length === 1);
   const forced = h.runner.timeline(id).filter((e) => e.type === 'park-forced');
   assert.equal(forced.length, 1);
