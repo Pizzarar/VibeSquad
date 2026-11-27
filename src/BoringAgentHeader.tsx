@@ -82,13 +82,13 @@ export function readableLeadTitle(a: PaseoAgent): string | null {
   const l = (a.labels ?? {}) as Record<string, string>;
   const laneKey = (l.lane ?? l.lead ?? "").trim();
   if (!l.ord || !laneKey) return null;
-  const found = findLaneInRegistry(laneKey, TEAMS);
+  const found = findLaneInRegistry(laneKey, TEAMS, l.team);
   return formatDisplayTitle({ role: "lead", laneName: found ? laneDisplayName(found.team, found.lane.id) : laneDisplayName({ id: "", lanes: [] }, laneKey), laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
 }
 
 /** The header's lane code comes from the same helper as the tree (R4-2). */
-function headerLaneCode(laneKey: string): string {
-  const found = findLaneInRegistry(laneKey, TEAMS);
+function headerLaneCode(laneKey: string, teamId?: string): string {
+  const found = findLaneInRegistry(laneKey, TEAMS, teamId);
   return found ? laneCode(found.team, found.lane.id) : `@${laneKey.replace(/^@/, "")}`;
 }
 
@@ -183,7 +183,7 @@ function BoringAgentHeaderBody({ p, cfg }: { p: BoringAgentHeaderProps; cfg: Ret
     }
   };
   const running = agent.status === "running" && !agent.archivedAt;
-  const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane) : ""].filter(Boolean).join(" · ");
+  const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane, labels.team) : ""].filter(Boolean).join(" · ");
   const { roles: storedRoles } = useProfiles();
   // R2 fix r1: no role in the chip (the boring-agent-role span already shows it); the reason is its own non-shrinking span.
   const chipReason = drawerSpawnWhy(labels, agent.model, !!cfg.staged);

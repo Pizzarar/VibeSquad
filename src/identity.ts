@@ -227,7 +227,7 @@ function resolveLaneCode(q: string, teams: RegistryTeam[], isPref: (t: RegistryT
   const holders: LaneHit[] = [];
   const bumped: LaneHit[] = [];
   for (const team of teams) {
-    const codes = laneCodesForTeam(team as any);
+    const codes = laneCodesForTeam(team);
     const holdsQ = (lane: RegistryLane): boolean =>
       String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q;
     const lanes = team.lanes ?? [];

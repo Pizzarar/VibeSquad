@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findLaneInRegistry as srv } from "../server/identity.mjs";
-import { findLaneInRegistry as front } from "../src/identity.ts";
+import { findLaneInRegistry as srv, resolveAgentIdentity as srvResolve } from "../server/identity.mjs";
+import { findLaneInRegistry as front, resolveAgentIdentity as frontResolve } from "../src/identity.ts";
 
 // idea-1220: src/identity.ts mirrors the server's live-first lane handle rule (idea-1215).
 const lane = (id, name, extra = {}) => ({ id, name, ...extra });
@@ -12,6 +12,23 @@ test("removed lane never shadows a live lane's code (frontend mirrors server)", 
   const [f, s] = both("@rel", teams, "s");
   assert.equal(f, "release-desk");
   assert.equal(s, "release-desk");
+  // Same bumped live lane with empty preferTeamId
+  assert.deepEqual(both("@rel", teams), ["release-desk", "release-desk"]);
+});
+
+test("resolveAgentIdentity forwards preferTeamId across Squads sharing a code", () => {
+  const teams = [
+    { id: "alpha", name: "Alpha", lanes: [lane("alpha-rel", "Release Alpha", { code: "Rel" })] },
+    { id: "beta", name: "Beta", lanes: [lane("beta-rel", "Release Beta", { code: "Rel" })] },
+  ];
+  const fBeta = frontResolve({ labels: { lane: "@rel", team: "beta" } }, { teams });
+  const sBeta = srvResolve({ labels: { lane: "@rel", team: "beta" } }, { teams });
+  assert.equal(fBeta.teamId, "beta");
+  assert.equal(fBeta.laneId, "beta-rel");
+  assert.equal(fBeta.teamMismatch, false);
+  assert.equal(sBeta.teamId, "beta");
+  assert.equal(sBeta.laneId, "beta-rel");
+  assert.equal(sBeta.teamMismatch, false);
 });
 
 test("live lane beats removed lane with same code across Squads", () => {
