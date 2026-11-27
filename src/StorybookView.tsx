@@ -457,7 +457,7 @@ function Findings({ items: allItems, idx, card, active, setActive, scope, setSco
             {SB_CATEGORY_LABEL[c]} <span className="sb-count">{counts[c]}</span>
           </button>
         ))}
-        {checks && <span className="sb-fbtn" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card">Checks {[...checks].join(" ")}</span>}
+        {checks && <span className="sb-fbtn" data-testid="sb-checks-chip" title="Filtered to the checks behind the Home signal card">Checks {[...checks].join(" ")} <span className="sb-count">{scoped.length}</span></span>}
         {(active.size > 0 || checks) && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setActive(new Set()); clearChecks?.(); }}>Clear</button>}
       </div>
       <dl className="sb-legend" data-testid="sb-legend">
@@ -618,10 +618,11 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
   }, [card, pick]);
   goToRef.current = goTo;
 
+  const clearTextPreset = useCallback(() => setPreset(null), []);
   const onSignal = useCallback((signal: string) => {
     const nav = signalCard(signal, items, null).target;
     if (nav.tab === "review") {
-      setPreset(null);
+      setPreset({ only: "unreviewed", n: Date.now() });
       setTab("review");
       return;
     }
@@ -692,8 +693,8 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") setTab("review"); else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} />}
-            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} />}
+            {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip} />}
             {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} />}

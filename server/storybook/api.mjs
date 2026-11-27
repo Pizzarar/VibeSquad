@@ -106,7 +106,7 @@ async function buildOnce(project, { refresh, deps }) {
   const reader = makeReader(repoPath, sha);
   const { entities, warnings, dropped } = await adapter.load(reader, sha);
   const snap = makeSnapshot({ project: adapter.id, ref, sha, entities, warnings: [...warnings] });
-  if (Array.isArray(dropped) && dropped.length) snap.dropped = dropped; // V8: adapter-excluded rows (changes.mjs explains 'gone' with it)
+  if (Array.isArray(dropped) && dropped.length) Object.defineProperty(snap, "dropped", { value: dropped, enumerable: false, configurable: true }); // V8: server-only adapter-excluded rows for changes.mjs (keep out of JSON schema)
   const { runChecks, runAudit, warning } = await loadRunChecks(deps.runChecks);
   if (warning) snap.warnings.push(warning);
   if (runChecks) {

@@ -17,7 +17,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sb8r-"));
 process.env.VIBESQUAD_HOME = path.join(tmp, "home");
 const fake = makeFakeRepo();
 after(() => { fake.cleanup(); fs.rmSync(tmp, { recursive: true, force: true }); });
-const { handleStorybookRoute, clearStorybookCache } = await import("../server/storybook/api.mjs");
+const { ADAPTERS, buildSnapshot, handleStorybookRoute, clearStorybookCache } = await import("../server/storybook/api.mjs");
 
 
 test("row key survives csv line shifts (file + data_path)", () => {
@@ -112,4 +112,22 @@ test("view logic: wordDiff, goneBreakdown, signalCard counts equal what the clic
   assert.equal(c.integrity.n, 3); assert.equal(c.integrity.rest, 1); assert.deepEqual(c.integrity.target.checks, L.SIGNAL_CHECKS.integrity);
   assert.equal(c.cohesion.n, 1); assert.equal(c.coverage.n, 1); assert.equal(c.coverage.rest, 4);
   assert.equal(c.signoff.n, 1); assert.equal(c.signoff.target.tab, "review");
+});
+
+test("buildSnapshot keeps adapter dropped list non-enumerable (server-only, not in JSON)", async () => {
+  clearStorybookCache();
+  const dropped = [{ kind: "line", id: null, origin: "csv", reason: "dev-string", file: "g.gd", data_path: "", text: "DEBUG" }];
+  const adapter = {
+    ...ADAPTERS.efi,
+    load: async () => ({ entities: [csv("f.json", "a", "one")], warnings: [], dropped }),
+  };
+  const s = await buildSnapshot("efi", {
+    teams: [{ id: "efi", paths: ["fake-efi"] }],
+    adapters: { efi: adapter },
+    resolvePath: (p) => (p === "fake-efi" ? fake.clone : null),
+    runChecks: async () => [],
+  });
+  assert.equal(Object.keys(s).includes("dropped"), false);
+  assert.equal("dropped" in JSON.parse(JSON.stringify(s)), false);
+  assert.deepEqual(s.dropped, dropped);
 });

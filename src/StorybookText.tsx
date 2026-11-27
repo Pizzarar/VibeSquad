@@ -10,10 +10,10 @@ const GROUP_PAGE = 60; // rows shown per group before "show more" (a screen has 
 export type TextFocus = { id: string; n: number } | null;
 /** V8: rows to flag as changed (row id -> old text; "" for new rows) and a request (n) to open the Changed or Contracts view. */
 export type TextChanges = { changed: Record<string, string>; added: ReadonlySet<string> } | null;
-export type TextPreset = { only: "changed" | "contracts"; n: number } | null;
+export type TextPreset = { only: "changed" | "contracts" | "unreviewed"; n: number } | null;
 
-export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions, changes = null, preset = null }: {
-  changes?: TextChanges; preset?: TextPreset;
+export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions, changes = null, preset = null, onPresetConsumed }: {
+  changes?: TextChanges; preset?: TextPreset; onPresetConsumed?: () => void;
   rows: ReviewRow[]; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; focus: TextFocus; onFocusConsumed?: () => void; renderActions?: (row: ReviewRow) => React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
@@ -32,7 +32,15 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const nContracts = useMemo(() => rows.filter((r) => r.kind === "contract").length, [rows]);
   const base = useMemo(() => (only === "changed" ? rows.filter(isChanged) : only === "contracts" ? rows.filter((r) => r.kind === "contract") : rows), [rows, only, changes]); // eslint-disable-line react-hooks/exhaustive-deps
   const filtered = useMemo(() => filterRows(base, filter), [base, filter]);
-  useEffect(() => { if (preset) { setOnly(preset.only); setQuery(""); setClasses(new Set()); setTooLong(false); setUnreviewed(false); } }, [preset]);
+  useEffect(() => {
+    if (!preset) return;
+    onPresetConsumed?.();
+    setOnly(preset.only === "unreviewed" ? null : preset.only);
+    setQuery("");
+    setClasses(new Set());
+    setTooLong(false);
+    setUnreviewed(preset.only === "unreviewed");
+  }, [preset, onPresetConsumed]);
   const blocks = useMemo(() => groupRows(filtered), [filtered]);
   const counts = useMemo(() => classCounts(rows), [rows]);
   const nTooLong = useMemo(() => rows.filter((r) => r.tooLong).length, [rows]);
