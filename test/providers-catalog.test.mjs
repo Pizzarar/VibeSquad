@@ -749,14 +749,81 @@ test('usage v2: spawn storms detect spawn bursts and zero-turn exits, skip non-s
   const u = getUsage({ home, git: noGit });
   const storms = u.spawnStorms;
   const burst = storms.find((s) => s.lane === 'usage' && s.role === 'worker');
-  assert.ok(burst, 'spawn burst detected');
+  assert.ok(burst, 'zero-turn spawn burst detected as fail storm');
   assert.equal(burst.count, 3);
   assert.equal(burst.zeroTurnExits, 0);
+  assert.equal(burst.kind, 'fail');
   const zero = storms.find((s) => s.lane === 'usage' && s.role === 'lead');
   assert.ok(zero, 'zero-turn exit storm detected');
   assert.equal(zero.count, 3);
   assert.equal(zero.zeroTurnExits, 3);
+  assert.equal(zero.kind, 'fail');
   assert.ok(!storms.some((s) => s.lane === 'other'), 'non-storm lane has no entry');
+  assert.equal(u.spawnFanOut.length, 0, 'fail storms are not duplicated into spawnFanOut');
+});
+
+test('usa-70: spawn storms split fail storms vs healthy parallel fan-out', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 14);
+  const workEvs = (ts, lane, extra = {}) => [
+    { ts, type: 'created', provider: 'claude', model: 'm', meta: { lane, role: 'worker', profile: 'Implement - Sonnet', ...extra } },
+    { ts: ts + 10_000, type: 'turn_done', costUsd: 0.01, inputTokens: 100, outputTokens: 50 },
+    { ts: ts + 12_000, type: 'exit', code: 0 },
+  ];
+  const zeroEvs = (ts, lane, extra = {}) => [
+    { ts, type: 'created', provider: 'claude', model: 'm', meta: { lane, role: 'worker', profile: 'Implement - Sonnet', ...extra } },
+    { ts: ts + 5_000, type: 'exit', code: 0 },
+  ];
+
+  // 1. Fan-out of 4 working spawns in 2m -> NOT a storm, IS fan-out.
+  [0, 20_000, 40_000, 60_000].forEach((off, i) => writeAgent(home, `rn-fan${i}`, workEvs(T0 + off, 'fanout-lane')));
+
+  // 2. 3 zero-turn spawns in 2m -> IS a fail storm, NOT fan-out.
+  [0, 30_000, 60_000].forEach((off, i) => writeAgent(home, `rn-fail${i}`, zeroEvs(T0 + off, 'fail-lane')));
+
+  // 3. Mixed 2 fail + 2 working in 2m -> NOT a storm, IS fan-out.
+  writeAgent(home, 'rn-mix-a1', zeroEvs(T0, 'mixed-ok-lane'));
+  writeAgent(home, 'rn-mix-a2', workEvs(T0 + 20_000, 'mixed-ok-lane'));
+  writeAgent(home, 'rn-mix-a3', zeroEvs(T0 + 40_000, 'mixed-ok-lane'));
+  writeAgent(home, 'rn-mix-a4', workEvs(T0 + 60_000, 'mixed-ok-lane'));
+
+  // 4. Mixed 3 fail + 1 working in 2m -> IS a fail storm, NOT fan-out.
+  writeAgent(home, 'rn-mix-b1', zeroEvs(T0, 'mixed-fail-lane'));
+  writeAgent(home, 'rn-mix-b2', workEvs(T0 + 20_000, 'mixed-fail-lane'));
+  writeAgent(home, 'rn-mix-b3', zeroEvs(T0 + 40_000, 'mixed-fail-lane'));
+  writeAgent(home, 'rn-mix-b4', zeroEvs(T0 + 60_000, 'mixed-fail-lane'));
+
+  // 5. 3 quota/failover respawns in 2m (even with turns > 0) -> IS a fail storm.
+  [0, 25_000, 50_000].forEach((off, i) => writeAgent(home, `rn-resp${i}`, workEvs(T0 + off, 'respawn-lane', { labels: { respawnOf: `rn-dead-${i}` } })));
+
+  const u = getUsage({ home, git: noGit });
+  assert.ok(!u.spawnStorms.some((s) => s.lane === 'fanout-lane'), '4 working spawns in 2m is not a storm');
+  const fan = u.spawnFanOut.find((s) => s.lane === 'fanout-lane');
+  assert.ok(fan, '4 working spawns in 2m recorded in spawnFanOut');
+  assert.equal(fan.count, 4);
+  assert.equal(fan.kind, 'fan-out');
+
+  const fail = u.spawnStorms.find((s) => s.lane === 'fail-lane');
+  assert.ok(fail, '3 zero-turn spawns is a fail storm');
+  assert.equal(fail.count, 3);
+  assert.equal(fail.kind, 'fail');
+  assert.ok(!u.spawnFanOut.some((s) => s.lane === 'fail-lane'));
+
+  assert.ok(!u.spawnStorms.some((s) => s.lane === 'mixed-ok-lane'), 'mixed 2 fail + 2 working is not a storm');
+  const mixOk = u.spawnFanOut.find((s) => s.lane === 'mixed-ok-lane');
+  assert.ok(mixOk, 'mixed 2 fail + 2 working recorded as fan-out');
+  assert.equal(mixOk.count, 4);
+
+  const mixFail = u.spawnStorms.find((s) => s.lane === 'mixed-fail-lane');
+  assert.ok(mixFail, 'mixed 3 fail + 1 working is a fail storm');
+  assert.equal(mixFail.count, 3);
+  assert.ok(!u.spawnFanOut.some((s) => s.lane === 'mixed-fail-lane'));
+
+  const resp = u.spawnStorms.find((s) => s.lane === 'respawn-lane');
+  assert.ok(resp, '3 quota/failover respawns in 2m is a fail storm');
+  assert.equal(resp.count, 3);
+  assert.equal(resp.countExclRespawns, 0);
 });
 
 // ---------------------------------------------------------------- usage review API (usa-7)
@@ -1112,6 +1179,13 @@ test('idea-580: 20 or fewer spawn storms list in full with no "(+N more)" tail',
   const prompt = buildUsageReviewPrompt({ totals: { turns: 1 }, spawnStorms: storms }, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
   assert.match(prompt, /lane19\/worker x20/);
   assert.doesNotMatch(prompt, /more\)/);
+});
+
+test('usa-70: buildUsageReviewPrompt labels fan-out as normal parallel dispatch and omits it from Spawn storms', () => {
+  const fanOut = [{ lane: 'usage', role: 'worker', count: 4, kind: 'fan-out' }, { lane: 'bug', role: 'worker', count: 3, kind: 'fan-out' }];
+  const prompt = buildUsageReviewPrompt({ totals: { turns: 10 }, spawnStorms: [], spawnFanOut: fanOut }, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.doesNotMatch(prompt, /Spawn storms:/);
+  assert.match(prompt, /Parallel dispatch fan-out \(normal, not storms.*2 bursts \(7 spawns\)\./);
 });
 
 test('idea-580: the review prompt (storm list included) spawns over stdin, never argv', async () => {

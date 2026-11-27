@@ -408,7 +408,8 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   }
   const stale = (data.squad ?? null) !== activeSquad; // scope switch in flight: keep the old numbers visible but dimmed
   const flagged = data.loops?.flagged ?? [];
-  const storms = data.spawnStorms ?? [];
+  const storms = (data.spawnStorms ?? []).filter((s) => s.kind !== "fan-out");
+  const fanOut = data.spawnFanOut ?? [];
   const leadLongRows = leadLongTurnRows(data.leadLongTurns, activeSquad);
   const laneRoleTile = laneRoleRows(data.leadLongTurns, activeSquad);
   const roles = foldRoles(data.byRole ?? []);
@@ -652,9 +653,12 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </div>
         {data.spawnStorms && (
           <div className="usage-storms" data-testid="usage-storms">
-            <div className="usage-sub">Spawn storms {storms.length > 0 && <span className="usage-flag usage-flag-storm">{storms.length}</span>}</div>
+            <div className="usage-sub">
+              Spawn storms {storms.length > 0 && <span className="usage-flag usage-flag-storm">{storms.length}</span>}
+              {fanOut.length > 0 && <span className="small muted"> · {fanOut.length} fan-out</span>}
+            </div>
             {storms.length === 0 ? (
-              <div className="small muted">none (&lt;3 spawns or zero-turn exits per window)</div>
+              <div className="small muted">none (&lt;3 failed spawns or zero-turn exits per window)</div>
             ) : (
               storms.slice(0, 5).map((s, i) => (
                 <div className="usage-loop small" key={`${s.lane}|${s.role}|${i}`} title={`${s.firstAt} → ${s.lastAt}`}>

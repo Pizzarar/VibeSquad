@@ -78,6 +78,7 @@ export type SpawnStorm = {
   lastAt: string;
   zeroTurnExits: number;
   countExclRespawns?: number;
+  kind?: "fail" | "fan-out";
 };
 export type LongTurnBucket = { turns: number; costUsd: number };
 export type LongTurnSplit = { productive: LongTurnBucket; waiting?: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
@@ -162,6 +163,7 @@ export type UsageData = {
   loops?: { threshold: number; flagged: LoopRow[] };
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
+  spawnFanOut?: SpawnStorm[];
   leadLongTurns?: LeadLongTurns;
   usageReview?: UsageReview;
   cohorts?: Cohorts;
