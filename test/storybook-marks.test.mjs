@@ -396,8 +396,7 @@ test("M3: a failed review_pack --write is never committed; marks stay, half-writ
     // the auto-commit path keeps the failure for the owner's next read
     const auto = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 25, managedPath: wtPathFor(wtRoot) });
     await auto.set([{ target: WARY, action: "redo", note: "colder still" }]);
-    await new Promise((r) => setTimeout(r, 400));
-    const after = await auto.get();
+    const after = await pollUntil(() => auto.get(), (g) => g.autoCommitError);
     assert.match(after.autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
     assert.equal(git(wt, "rev-parse", "HEAD"), head);
     // idea-1170: once pending drops to 0 (e.g. committed/reverted externally), get() clears autoError so marking cannot stay stuck
@@ -407,8 +406,7 @@ test("M3: a failed review_pack --write is never committed; marks stay, half-writ
     assert.equal(cleared.autoCommitError, undefined, "get() must clear stale autoCommitError when pending === 0");
     // idea-1170: a subsequent successful set() also clears autoError on the server
     await auto.set([{ target: WARY, action: "redo", note: "trigger auto-fail again" }]);
-    await new Promise((r) => setTimeout(r, 400));
-    assert.match((await auto.get()).autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
+    assert.match((await pollUntil(() => auto.get(), (g) => g.autoCommitError)).autoCommitError ?? "", /review_pack --write failed \(exit 3\)/);
     const noAuto = marksFor(fake.clone, { now: () => new Date("2026-11-27T12:00:00Z"), autoCommitMs: 0, managedPath: wtPathFor(wtRoot) });
     await noAuto.set([{ target: BIO, action: "ok" }]);
     assert.equal((await noAuto.get()).autoCommitError, undefined, "successful set() clears stale autoError");
@@ -443,6 +441,18 @@ test("m1: scrubPaths masks repo, VIBESQUAD_HOME, home (both slash styles) and an
   for (const m of ["x /srv/vs/a", "x /home/u/b", "x /tmp/sb-1/c", "x C:/Users/u/d", "x E:/e"]) assert.doesNotMatch(s(m), /\/srv|\/home|\/tmp|[A-Z]:[\\/]/, m);
 });
 
+// Bounded poll: slow hosts (Windows) take seconds for the auto-commit's git spawns, so a fixed sleep races.
+async function pollUntil(fn, ok, ms = 10000) {
+  const end = Date.now() + ms;
+  let v;
+  for (;;) {
+    try { v = await fn(); } catch { v = undefined; }
+    if (v !== undefined && ok(v)) return v;
+    if (Date.now() > end) return v;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 test("m2: one lock per repo however spelled; auto-commit after midnight commits the branch the marks were written on", async () => withGitEnv(async () => {
   assert.equal(lockKey("/a/b/"), lockKey("/a/b"));
   assert.equal(lockKey("/a/b/../b"), lockKey("/a/b"));
@@ -453,8 +463,8 @@ test("m2: one lock per repo however spelled; auto-commit after midnight commits 
     const api = marksFor(fake.clone, { now: () => clock, autoCommitMs: 25, managedPath: wtPathFor(wtRoot) });
     assert.equal((await api.set([{ target: WARY, action: "redo", note: "colder" }])).pending, 1);
     clock = new Date("2026-11-28T00:00:10Z");
-    await new Promise((r) => setTimeout(r, 400));
     const wt = path.join(wtRoot, "storybook-review-2026-11-27");
+    await pollUntil(() => git(wt, "log", "-1", "--format=%s"), (l) => /^storybook review 2026-11-27: /.test(l));
     assert.match(git(wt, "log", "-1", "--format=%s"), /^storybook review 2026-11-27: 0 OK, 1 redo, 0 edit$/);
     const got = await api.get();
     assert.equal(got.branch, "storybook/review-2026-11-27", "after midnight the read side shows yesterday's unmerged branch");
