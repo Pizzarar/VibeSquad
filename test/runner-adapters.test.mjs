@@ -10,7 +10,7 @@ import { Runner, defaultAdapters } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { RunnerBackend, toAgent, reduceTurn, newFoldState, feedFoldLine } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../runner/adapters/acp.mjs';
-import { priceFor, estimateCostUsd } from '../runner/adapters/pricing.mjs';
+import { priceFor, estimateCostUsd, validateModelPrices, MODEL_PRICES } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
 const tmpDirs = [];
@@ -775,8 +775,8 @@ test('usa-71: gemini-4-carbon dated tiers before and after 2026-12-01, variant/p
   // Intro price through 2026-11-30
   assert.deepEqual(priceFor('gemini-4-carbon', before), { input: 2, output: 10, cachedRead: 0.1 });
   // GA price from 2026-12-01T00:00Z
-  assert.deepEqual(priceFor('gemini-4-carbon', onBoundary), { from: '2026-12-01T00:00:00Z', input: 4, output: 20, cachedRead: 0.2 });
-  assert.deepEqual(priceFor('gemini-4-carbon', after), { from: '2026-12-01T00:00:00Z', input: 4, output: 20, cachedRead: 0.2 });
+  assert.deepEqual(priceFor('gemini-4-carbon', onBoundary), { input: 4, output: 20, cachedRead: 0.2 });
+  assert.deepEqual(priceFor('gemini-4-carbon', after), { input: 4, output: 20, cachedRead: 0.2 });
 
   // Variant suffix and provider prefix still resolve for dated entries
   assert.equal(priceFor('gemini-4-carbon-high', before).input, 2);
@@ -794,4 +794,30 @@ test('usa-71: gemini-4-carbon dated tiers before and after 2026-12-01, variant/p
   assert.deepEqual(priceFor('gemini-4-neon', after), { input: 3, output: 15, cachedRead: 0.15 });
   assert.deepEqual(priceFor('deepseek/deepseek-v4-pro', after), { input: 0.55, output: 2.2, cachedRead: 0.055 });
   assert.equal(priceFor('unknown-model', after), null);
+});
+
+// --- usa-72: malformed tier from validation + fresh copy without from ---
+test('usa-72: validateModelPrices accepts current table and rejects malformed from; pickTier returns fresh copy without from', () => {
+  assert.doesNotThrow(() => validateModelPrices(MODEL_PRICES));
+  assert.doesNotThrow(() => validateModelPrices());
+  assert.throws(
+    () => validateModelPrices({ 'test-model': [{ from: 'not-a-date', input: 1, output: 2, cachedRead: 0.1 }] }),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.ok(err.message.includes('test-model'), 'error includes model key');
+      assert.ok(err.message.includes('not-a-date'), 'error includes bad value');
+      return true;
+    }
+  );
+
+  // Return copy is fresh (mutation does not affect table) and has no 'from' field
+  const before = Date.parse('2026-11-30T23:59:59.999Z');
+  const copy = priceFor('gemini-4-carbon', before);
+  assert.equal('from' in copy, false);
+  copy.input = 999;
+  assert.equal(priceFor('gemini-4-carbon', before).input, 2);
+
+  const onBoundary = Date.parse('2026-12-01T00:00:00.000Z');
+  const gaCopy = priceFor('gemini-4-carbon', onBoundary);
+  assert.equal('from' in gaCopy, false);
 });
