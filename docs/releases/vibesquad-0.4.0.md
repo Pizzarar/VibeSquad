@@ -4,12 +4,12 @@
 | --- | --- |
 | Version | 0.4.0 |
 | Channel | stable |
-| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`); re-frozen from `b219e906`, then `405779e6` |
+| Frozen commit | `d8881601` + `d6c23109` (test-only win32 fix for `test-tmp-preflight`) + `a1ef3fd8` (build-desktop win32 Path fix); re-frozen from `b219e906`, then `405779e6` |
 | Release commits | `a95a4f53` (version bump, record, licenses), merge of master `405779e6`, `11a2ea14` (lockfile, credits format, record), then merges of `d8881601` on `release/vibesquad-0.4.0` |
 | Requester | Release Desk lead Rele7 (rn-8a7d68a8714e) |
 | Approval | the owner; publish is ordered by the desk lead, not by this record |
 | Release URL | _pending (P3)_ |
-| Range | `v0.3.0..d6c23109`: 2213 commits, 767 merges |
+| Range | `v0.3.0..fdd0ef51` (release branch at the `a1ef3fd8` merge, before the licenses commit): 2222 commits, 771 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only. No Android APK is built or attached.
 
@@ -28,6 +28,9 @@ _pending (P2/P3)_
 _pending (P2/P3)_
 
 ## Findings
+- Windows release build regression from `bf4633ad` (Path lost, so `npm.cmd` ENOENT), fixed by `a1ef3fd8`. Review-Gemini PASS 0/0/2 rn-a10ae7fc1087 (Lows: a trailing `;` and the cargo bin dir not deduped in Path, both harmless, queued).
+- Licenses file: Windows-generated (`public/THIRD-PARTY-LICENSES.txt`, 101679 bytes, no CRLF, sha256 `2bcb8a72...6471`). Privacy grep clean (only the crate names signal-hook-registry and windows-registry match). Same 596 unique package@version as before (0 dropped, 0 added), 11 duplicate headers collapsed, 158 bare headers now licensed. credits-attribution, public-release and one-stop-installer 37/37 with it (pre-check rn-4be985923903). Determinism follow-up: idea-1234.
+- `d6c23109` audit: Review-Sonnet PASS 0/0/0 rn-172769f01a2f. Delta `d8881601..d6c23109` = 1 file, `test/test-tmp-preflight.test.mjs` +6/-2, nothing shipped (Buddy-verified).
 _pending_
 
 ## Release notes
