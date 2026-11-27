@@ -2,7 +2,7 @@
 // (Problems, Story issues, Text to review) that each open the matching Findings view. Pure derivation from the snapshot; read-only.
 import { useMemo } from "react";
 import {
-  AUDIT_HELP, AUDIT_LABEL, AUDIT_SIGNALS, FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, auditCounts, changesSince, changesTotal, goneBreakdown, isUnreviewedLine, kindCounts, kindTab, scopeCounts, shortSha, signalCard,
+  AUDIT_HELP, AUDIT_LABEL, AUDIT_SIGNALS, FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, auditCounts, changesSince, changesTotal, firstSessionCopy, goneBreakdown, isUnreviewedLine, kindCounts, kindTab, scopeCounts, shortSha, signalCard,
   type FindingScope, type ListItem, type SbChanges, type SbEntity, type SbSnapshot,
 } from "./storybookLogic";
 import { ProgressBarRow } from "./StorybookProgress";
@@ -13,22 +13,23 @@ const GONE_PREVIEW_CAP = 60;
 
 type HomeProps = {
   snap: SbSnapshot; items: ListItem[]; onTab: (tab: string) => void; onFindings: (scope: FindingScope) => void; onSignal?: (signal: string) => void;
-  changes?: SbChanges | null; onChanges?: () => void; onMarkSeen?: () => void; seenBusy?: boolean; seenError?: string | null;
+  changes?: SbChanges | null; onChanges?: () => void; onMarkSeen?: () => void; seenBusy?: boolean; seenError?: string | null; hasReviewSession?: boolean;
   onContracts?: () => void; renderChip?: (e: SbEntity, label?: string) => React.ReactNode;
   progress?: SbProgress | null; onProgressArea?: (area: ProgressAreaId, status?: ProgressTextBucket | null) => void;
   onOpenGuide?: () => void;
 };
 
 /** V8: first Needs-attention card. New / changed / gone since the owner's last marked-seen session. */
-function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; onOpen?: () => void; onMarkSeen?: () => void; busy?: boolean; error?: string | null }) {
+function ChangesCard({ ch, onOpen, onMarkSeen, busy, error, hasReviewSession }: { ch: SbChanges; onOpen?: () => void; onMarkSeen?: () => void; busy?: boolean; error?: string | null; hasReviewSession?: boolean }) {
   const total = changesTotal(ch);
   const mark = onMarkSeen && (
     <button type="button" className="sb-btn sb-changes-seen" data-testid="sb-changes-seen" disabled={busy} onClick={onMarkSeen}>{busy ? "Saving…" : `Mark seen (up to ${shortSha(ch.to.sha)})`}</button>
   );
   if (ch.first) {
+    const copy = firstSessionCopy(Boolean(hasReviewSession), ch.to.total, ch.to.sha);
     return (
       <div className="sb-changes sb-changes-first" data-testid="sb-changes">
-        <div className="sb-changes-head"><b>First session: everything is new</b><span className="sb-changes-sub">{ch.to.total} text rows at {shortSha(ch.to.sha)}. Nothing is marked seen yet.</span></div>
+        <div className="sb-changes-head"><b>{copy.title}</b><span className="sb-changes-sub">{copy.sub}</span></div>
         <div className="sb-changes-act">{mark}</div>
         {error && <p className="sb-err" role="alert">{error}</p>}
       </div>
@@ -60,7 +61,7 @@ function ChangesCard({ ch, onOpen, onMarkSeen, busy, error }: { ch: SbChanges; o
   );
 }
 
-export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, onContracts, renderChip, progress, onProgressArea, onOpenGuide }: HomeProps) {
+export function StorybookHome({ snap, items, onTab, onFindings, onSignal, changes, onChanges, onMarkSeen, seenBusy, seenError, hasReviewSession, onContracts, renderChip, progress, onProgressArea, onOpenGuide }: HomeProps) {
   const kinds = useMemo(() => kindCounts(snap.entities), [snap]);
   const scopes = useMemo(() => scopeCounts(items), [items]);
   const baseAudit = useMemo(() => auditCounts(snap.audit), [snap]);
@@ -78,7 +79,7 @@ export function StorybookHome({ snap, items, onTab, onFindings, onSignal, change
           <h3 className="sb-h">Needs attention</h3>
           {onOpenGuide && <button type="button" className="sb-btn sb-home-guide" data-testid="sb-home-guide" onClick={onOpenGuide}>How to use</button>}
         </div>
-        {changes && <ChangesCard ch={changes} onOpen={onChanges} onMarkSeen={onMarkSeen} busy={seenBusy} error={seenError} />}
+        {changes && <ChangesCard ch={changes} onOpen={onChanges} onMarkSeen={onMarkSeen} busy={seenBusy} error={seenError} hasReviewSession={hasReviewSession} />}
         <div className="sb-buckets">
           {BUCKETS.map((b) => (
             <button key={b} type="button" className={`sb-bucket sb-bucket-${b}${scopes[b] === 0 ? " sb-bucket-zero" : ""}`} data-testid={`sb-bucket-${b}`} onClick={() => onFindings(b)}>

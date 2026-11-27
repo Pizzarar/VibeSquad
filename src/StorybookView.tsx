@@ -9,7 +9,7 @@ import {
   SB_CATEGORIES, SB_CATEGORY_LABEL, NO_STORYBOOK,
   SB_CATEGORY_HELP, signalCard, buildListItems, chainToMermaid, checkLabel, characterViews, groupCharacterViews, countByCategory, entityCard, entityNavTarget, filterItems, fmtSource,
   FINDING_SCOPE_HELP, FINDING_SCOPE_LABEL, effectiveScope, problemCount, scopeCounts, scopeItems, type FindingScope,
-  entityKey, indexEntities, auditCounts, buildTextChanges, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
+  entityKey, indexEntities, auditCounts, buildTextChanges, canMarkChangesSeen, type SbChanges, interpretLoad, interpretRefresh, questChains, shortSha, toggleCategory, cleanTodo,
   type EntityIndex, type LoadState, type SbCategory, type SbEntity, type SbFinding, type SbSnapshot, type ListItem,
 } from "./storybookLogic";
 import { ProjectTabs } from "./ProjectTabs";
@@ -355,7 +355,7 @@ function QuestWeb({ idx, card, sel, setSel, onGo }: { idx: EntityIndex; card: Ca
 
 type QuestMode = "web" | "arcs" | "order";
 const QUEST_MODES: [QuestMode, string][] = [["arcs", "Story arcs"], ["order", "Play order"], ["web", "Quest web"]];
-function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks, modeReq }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi; modeReq?: { mode: QuestMode; n: number } | null }) {
+function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, marks, modeReq, onMarkSeen, seenBusy, canMarkSeen }: { snap: SbSnapshot; idx: EntityIndex; card: CardApi; sel: string | null; setSel: (s: string) => void; onGo: (e: SbEntity) => void; openLine: (e: SbEntity) => void; renderChip: ChipRenderer; marks?: MarksApi; modeReq?: { mode: QuestMode; n: number } | null; onMarkSeen?: () => void; seenBusy?: boolean; canMarkSeen?: boolean }) {
   const [mode, setMode] = useState<QuestMode>("arcs");
   useEffect(() => { if (modeReq) setMode(modeReq.mode); }, [modeReq]);
   const chip = renderChip;
@@ -366,7 +366,7 @@ function QuestsTab({ snap, idx, card, sel, setSel, onGo, openLine, renderChip, m
       </div>
       {mode === "web" ? <QuestWeb idx={idx} card={card} sel={sel} setSel={setSel} onGo={onGo} /> : <StorybookArc arc={snap.arc} idx={idx} chip={chip} openLine={openLine} mode={mode}
         actions={marks ? (l) => <MarkButtons e={l} m={marks} /> : undefined} batch={marks ? (ls, label) => <MarkBatch entities={ls} label={label} m={marks} /> : undefined} />}
-      {marks && mode === "arcs" && <MarksBar m={marks} />}
+      {marks && mode === "arcs" && <MarksBar m={marks} onMarkSeen={onMarkSeen} seenBusy={seenBusy} canMarkSeen={canMarkSeen} />}
     </div>
   );
 }
@@ -815,12 +815,12 @@ export function StorybookView({ projectId, name, onClose, initial, needsYou = 0,
             ))}
           </nav>
           <main className="sb-body">
-            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} onOpenGuide={() => setGuideOpen(true)} />}
+            {tab === "home" && <StorybookHome snap={snap} items={items} onTab={(t) => setTab(t as Tab)} onFindings={(sc) => { if (sc === "text") { setPreset({ only: "unreviewed", n: Date.now() }); setTab("review"); } else { setScope(sc); setTab("problems"); setActiveProblems(new Set()); setChecks(null); } }} onSignal={onSignal} changes={changes} onChanges={() => { setPreset({ only: "changed", n: Date.now() }); setTab("review"); }} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} seenError={seenError} hasReviewSession={marks.state.exists || Boolean(marks.lastCommit)} onContracts={() => { setPreset({ only: "contracts", n: Date.now() }); setTab("review"); }} renderChip={renderChip} progress={liveProgress} onProgressArea={openProgressArea} onOpenGuide={() => setGuideOpen(true)} />}
             {tab === "review" && <StorybookText rows={reviewRows} idx={idx} changes={textChanges} preset={preset} onPresetConsumed={clearTextPreset} focus={textFocus} onFocusConsumed={clearTextFocus} renderChip={renderChip}
               progress={liveProgress} rowStatusBucket={rowStatusBucket}
-              header={<MarksBar m={marks} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
+              header={<MarksBar m={marks} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />} mineTest={mineTest} renderActions={(r) => <MarkButtons e={rowEntity(r)} m={marks} />}
               renderGroupExtra={(g) => <MarkBatch entities={g.rows.map(rowEntity).filter((x): x is SbEntity => Boolean(x))} label={g.label} m={marks} />} />}
-            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} modeReq={questModeReq} />}
+            {tab === "quests" && <QuestsTab snap={snap} idx={idx} card={card} sel={sel.quests} setSel={pick("quests")} onGo={goTo} openLine={openReviewRow} renderChip={renderChip} marks={marks} modeReq={questModeReq} onMarkSeen={() => void markSeen()} seenBusy={seenBusy} canMarkSeen={canMarkChangesSeen(changes)} />}
             {tab === "world" && <Locations idx={idx} findings={snap.findings} sel={sel.world} setSel={pick("world")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
             {tab === "cast" && <Characters idx={idx} findings={snap.findings} sel={sel.cast} setSel={pick("cast")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}
             {tab === "items" && <StorybookItems idx={idx} findings={snap.findings} sel={sel.items} setSel={pick("items")} renderChip={renderChip} onReview={openReviewRow} marks={marks} progress={liveProgress} onProgressEntity={openProgressEntity} />}

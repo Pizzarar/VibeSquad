@@ -202,3 +202,21 @@ test("V8 UI/CSS regressions: gone preview cap matches summary, no --sb-dim, 44px
   assert.match(view, /if \(changesSeq\.current !== my\) return;/);
   assert.match(view, /changesSeq\.current\+\+;\s*setChanges\(null\);/);
 });
+
+test("V7 minor 3: Home no longer says 'First session' after a review session; MarksBar offers Mark seen after End session", async () => {
+  const L = await import("../src/storybookLogic.ts");
+  const before = L.firstSessionCopy(false, 3328, "d09ff294abcd");
+  assert.equal(before.title, "First session: everything is new");
+  assert.match(before.sub, /3328 text rows at d09ff294\. Nothing is marked seen yet\./);
+  const after = L.firstSessionCopy(true, 3328, "d09ff294abcd");
+  assert.equal(after.title, "No seen baseline yet");
+  assert.match(after.sub, /3328 text rows at d09ff294\. Mark seen to track what changes in EFI after this commit\./);
+  assert.equal(L.canMarkChangesSeen(null), false);
+  assert.equal(L.canMarkChangesSeen({ first: true, from: null, to: { sha: "a1", total: 10 }, counts: { new: 10, changed: 0, gone: 0 }, new: [], changed: [], gone: [] }), true);
+  assert.equal(L.canMarkChangesSeen({ first: false, from: { sha: "a1", at: "", total: 10 }, to: { sha: "a1", total: 10 }, counts: { new: 0, changed: 0, gone: 0 }, new: [], changed: [], gone: [] }), false);
+  assert.equal(L.canMarkChangesSeen({ first: false, from: { sha: "a1", at: "", total: 10 }, to: { sha: "b2", total: 10 }, counts: { new: 0, changed: 0, gone: 0 }, new: [], changed: [], gone: [] }), true);
+  const marksTsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(marksTsx, /data-testid="sb-marksbar-seen"[\s\S]*?onClick=\{onMarkSeen\}/);
+  const homeTsx = fs.readFileSync(new URL("../src/StorybookHome.tsx", import.meta.url), "utf8");
+  assert.match(homeTsx, /firstSessionCopy\(Boolean\(hasReviewSession\), ch\.to\.total, ch\.to\.sha\)/);
+});

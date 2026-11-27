@@ -809,6 +809,21 @@ export function changesSince(ch: SbChanges): string {
 }
 export const changesTotal = (ch: SbChanges): number => ch.counts.new + ch.counts.changed + ch.counts.gone;
 
+/** V7 minor 3: Home changes-card copy when no seen baseline exists yet (distinguish truly first visit vs after a review session). */
+export function firstSessionCopy(hasReviewSession: boolean, total: number, sha: string): { title: string; sub: string } {
+  const s = shortSha(sha);
+  if (hasReviewSession) {
+    return { title: "No seen baseline yet", sub: `${total} text rows at ${s}. Mark seen to track what changes in EFI after this commit.` };
+  }
+  return { title: "First session: everything is new", sub: `${total} text rows at ${s}. Nothing is marked seen yet.` };
+}
+
+/** Whether "Mark seen" is useful for the current V8 changes state (no baseline yet, non-zero diff, or moved sha). */
+export function canMarkChangesSeen(ch: SbChanges | null | undefined): boolean {
+  if (!ch) return false;
+  return ch.first || changesTotal(ch) > 0 || ch.from?.sha !== ch.to.sha;
+}
+
 /** V8: Review-tab changed/added row lookup. `changed` holds old text for the capped sample; `changedIds` holds every changed row id. */
 export type TextChanges = { changed: Record<string, string>; changedIds: ReadonlySet<string>; added: ReadonlySet<string> } | null;
 

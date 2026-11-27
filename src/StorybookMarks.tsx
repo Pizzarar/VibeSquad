@@ -175,8 +175,8 @@ export function MarkBatch({ entities, label, m }: { entities: SbEntity[]; label?
   );
 }
 
-/** Session bar: branch, pending count, End session (commit), last error. */
-export function MarksBar({ m }: { m: MarksApi }) {
+/** Session bar: branch, pending count, End session (commit), optional post-commit Mark seen, last error. */
+export function MarksBar({ m, onMarkSeen, seenBusy, canMarkSeen }: { m: MarksApi; onMarkSeen?: () => void; seenBusy?: boolean; canMarkSeen?: boolean }) {
   const n = m.state.marks.length;
   return (
     <div className="sb-marksbar" data-testid="sb-marksbar" role="status">
@@ -195,6 +195,11 @@ export function MarksBar({ m }: { m: MarksApi }) {
       </span>
       {m.state.exists && <button type="button" className="sb-btn sb-mbtn-commit" data-testid="sb-end-session" disabled={m.busy || !m.state.pending} title="One commit on the EFI review branch (not pushed)" onClick={() => void m.commit()}>End session (commit)</button>}
       {m.lastCommit && <span className="sb-marksbar-ok" data-testid="sb-last-commit">{m.lastCommit}</span>}
+      {m.lastCommit && canMarkSeen && onMarkSeen && (
+        <button type="button" className="sb-mbtn sb-marksbar-seen" data-testid="sb-marksbar-seen" disabled={seenBusy} title="Record this snapshot as seen so future sessions show only what changed in EFI" onClick={onMarkSeen}>
+          {seenBusy ? "Saving…" : "Mark seen"}
+        </button>
+      )}
       {m.state.autoCommitError && (
         <span className="sb-marksbar-err" role="alert" data-testid="sb-autocommit-error">
           Auto-commit failed: {m.state.autoCommitError}
