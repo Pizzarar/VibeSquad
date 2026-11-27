@@ -11,7 +11,7 @@ export type MarksState = { exists: boolean; branch: string | null; pending: numb
  * What a row shows: ok / redo / edit (OWNER-OK with the owner's own rewrite), or none. `draft`: an OK that approved the
  * drafted rewrite (owner_rewrite equals the draft the row carried before review), shown as "OK (draft)", not "Edited".
  */
-export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean; openContracts?: number };
+export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean; openContracts?: number; siblingOk?: boolean };
 
 /** The label a mark state reads as. */
 export function markLabel(st: MarkState): string {
@@ -66,7 +66,7 @@ export const marksByKey = (marks: ServerMark[]): Map<string, ServerMark> => new 
  * The mark a row shows. With a review session the branch's sheet is the truth; before one exists, the snapshot's own
  * status (main's sheet) is.
  */
-export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byKey: Map<string, ServerMark>, exists: boolean): MarkState {
+export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byKey: Map<string, ServerMark>, exists: boolean, siblingOks?: ReadonlySet<string>): MarkState {
   const none: MarkState = { kind: "none", note: "", rewrite: "", contractNote: "" };
   const hit = entityTarget(e, lines);
   if (!hit) return none;
@@ -76,7 +76,10 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
     // and the template itself was marked (not merely set to NEEDS-REWRITE by another contract's note).
     const cn = m?.contracts?.[hit.contract] ?? "";
     if (cn) return { kind: "redo", note: "", rewrite: "", contractNote: cn };
-    if (m && m.status !== "OWNER-OK" && !m.note && Object.keys(m.contracts ?? {}).length > 0) return none;
+    const otherOpen = Object.keys(m?.contracts ?? {}).length;
+    if (m && m.status !== "OWNER-OK" && !m.note && otherOpen > 0) {
+      return siblingOks?.has(hit.contract) ? { ...none, siblingOk: true, openContracts: otherOpen } : none;
+    }
   }
   if (m) {
     // the template row itself: OK / Edit keep NEEDS-REWRITE while contract notes are open (the server never flips it)
@@ -141,8 +144,28 @@ export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[]
 
 /** "2 contract notes still open" on a template row whose OK / Edit stays NEEDS-REWRITE until they are resolved. */
 export function openContractsHint(st: MarkState): string {
+  if (st.siblingOk) return "";
   const n = st.openContracts ?? 0;
   return n ? `${n} contract note${n === 1 ? "" : "s"} still open: stays Redo until each contract is OK'd` : "";
+}
+
+/** Muted feedback on a sibling contract preview OK'd while its shared template still has other open contract notes. */
+export function siblingOkHint(st: MarkState): string {
+  const n = st.openContracts ?? 0;
+  if (!st.siblingOk || !n) return "";
+  return `OK: template still has ${n} open note${n === 1 ? "" : "s"}`;
+}
+
+/** Track sibling contract previews OK'd in this session so they show muted feedback while the template stays NEEDS-REWRITE. */
+export function nextSiblingOks(prev: ReadonlySet<string>, marks: Mark[], results: { ok: boolean }[]): Set<string> {
+  let next: Set<string> | null = null;
+  for (let i = 0; i < marks.length; i++) {
+    const mk = marks[i];
+    if (!mk.contract || !results[i]?.ok) continue;
+    if (mk.action === "ok" && !(next ?? prev).has(mk.contract)) (next ??= new Set(prev)).add(mk.contract);
+    else if (mk.action !== "ok" && (next ?? prev).has(mk.contract)) (next ??= new Set(prev)).delete(mk.contract);
+  }
+  return next ?? (prev instanceof Set ? prev : new Set(prev));
 }
 
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");

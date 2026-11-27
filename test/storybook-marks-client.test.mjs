@@ -154,3 +154,62 @@ test("V7 rn-e56176218a8a m3 client: the template row shows how many contract not
   const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
   assert.match(tsx, /data-testid="sb-open-contracts">\{openContractsHint\(st\)\}/);
 });
+
+test("idea-1169: OK on a sibling contract preview shows muted feedback without counting as OK", () => {
+  const tpl = {
+    kind: "line", id: "tpl_kill", name: "tpl_kill",
+    data: { origin: "csv", file: "scripts/systems/ContractSystem.gd", id: "contract_title", data_path: "", where_seen: "contracts", line: "42", current_text: "Eliminate %d-%d x %s for %s", status: "STORY-TODO", owner_rewrite: "" },
+  };
+  const c1 = { kind: "contract", id: "k_a", name: "k_a", data: { type: "kill" } };
+  const c2 = { kind: "contract", id: "k_b", name: "k_b", data: { type: "kill" } };
+  const c3 = { kind: "contract", id: "k_c", name: "k_c", data: { type: "kill" } };
+  const lines = [tpl];
+  const m1 = server(tpl, { status: "NEEDS-REWRITE", note: "", contracts: { k_a: "too many" } });
+  const byKey1 = M.marksByKey([m1]);
+
+  // Before clicking OK on c2, it stays unmarked without siblingOk hint
+  const before = M.markState(c2, lines, byKey1, true, new Set());
+  assert.equal(before.kind, "none");
+  assert.equal(before.siblingOk, undefined);
+  assert.equal(M.siblingOkHint(before), "");
+
+  // Clicking OK on c2 records it in siblingOks (only when result.ok is true)
+  const failed = M.nextSiblingOks(new Set(), [{ target: M.lineTarget(tpl), action: "ok", contract: "k_b" }], [{ ok: false }]);
+  assert.equal(failed.has("k_b"), false);
+  const oks = M.nextSiblingOks(new Set(), [{ target: M.lineTarget(tpl), action: "ok", contract: "k_b" }], [{ ok: true }]);
+  assert.equal(oks.has("k_b"), true);
+
+  // c2 shows muted feedback while kind stays "none" (not counted in progress or My marks)
+  const st1 = M.markState(c2, lines, byKey1, true, oks);
+  assert.equal(st1.kind, "none");
+  assert.equal(st1.siblingOk, true);
+  assert.equal(st1.openContracts, 1);
+  assert.equal(M.siblingOkHint(st1), "OK: template still has 1 open note");
+  assert.equal(M.openContractsHint(st1), "");
+  assert.equal(M.markLabel(st1), "");
+  assert.equal(M.progress([st1]).done, 0);
+  assert.equal(M.isMarkedCsvRow(c2, lines, byKey1, true), false);
+
+  // Plural when 2 other contracts have open notes
+  const m2 = server(tpl, { status: "NEEDS-REWRITE", note: "", contracts: { k_a: "too many", k_c: "low pay" } });
+  const st2 = M.markState(c2, lines, M.marksByKey([m2]), true, oks);
+  assert.equal(M.siblingOkHint(st2), "OK: template still has 2 open notes");
+  // c3 has its own note so it renders redo, never siblingOk
+  assert.equal(M.markState(c3, lines, M.marksByKey([m2]), true, oks).kind, "redo");
+
+  // Once the other contract notes clear and the template flips to OWNER-OK, c2 becomes normal OK
+  const mOk = server(tpl, { status: "OWNER-OK", note: "", contracts: {} });
+  const stOk = M.markState(c2, lines, M.marksByKey([mOk]), true, oks);
+  assert.equal(stOk.kind, "ok");
+  assert.equal(stOk.siblingOk, undefined);
+  assert.equal(M.siblingOkHint(stOk), "");
+
+  // A subsequent redo on c2 clears it from siblingOks
+  const afterRedo = M.nextSiblingOks(oks, [{ target: M.lineTarget(tpl), action: "redo", note: "fix", contract: "k_b" }], [{ ok: true }]);
+  assert.equal(afterRedo.has("k_b"), false);
+
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /data-testid="sb-sibling-ok"[\s\S]*?\{siblingOkHint\(st\)\}/);
+  const css = fs.readFileSync(new URL("../src/storybook.css", import.meta.url), "utf8");
+  assert.match(css, /\.sb-root \.sb-mark-sibling-ok\b/);
+});

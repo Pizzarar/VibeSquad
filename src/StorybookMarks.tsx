@@ -2,7 +2,7 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, openContractsHint, progress, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, nextSiblingOks, openContractsHint, progress, siblingOkHint, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -28,6 +28,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   const [error, setErrorState] = useState<MarksError | null>(null);
   const setError = useCallback((msg: string | null, session = false) => setErrorState(msg ? { msg, session } : null), []);
   const [lastCommit, setLastCommit] = useState<string | null>(null);
+  const [siblingOks, setSiblingOks] = useState<Set<string>>(() => new Set());
   // The project this hook is bound to right now: a response for a project the owner has since switched away from is dropped.
   const cur = useRef(url);
   cur.current = url;
@@ -43,12 +44,12 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
   }, []);
   useEffect(() => {
     // project switch: nothing of the previous project's session may show while this one loads
-    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false);
+    setState(EMPTY); setError(null); setLastCommit(null); setBusy(false); setSiblingOks(new Set());
     void reload(url);
   }, [url, reload]);
   const lines = useMemo(() => allLines(idx), [idx]);
   const byKey = useMemo(() => marksByKey(state.marks), [state.marks]);
-  const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists), [lines, byKey, state.exists]);
+  const stateOf = useCallback((e: SbEntity | null | undefined) => markState(e, lines, byKey, state.exists, siblingOks), [lines, byKey, state.exists, siblingOks]);
   const mark = useCallback(async (marks: Mark[]) => {
     if (!marks.length) return true;
     setBusy(true); setError(null);
@@ -58,6 +59,7 @@ export function useMarks(projectId: string, idx: EntityIndex): MarksApi {
       if (cur.current !== url) return false;
       if (!r.ok) { setError(b?.error ?? `mark failed (${r.status})`, isSessionStatus(r.status)); return false; }
       setState((s) => ({ ...s, exists: true, branch: b.branch, pending: b.pending, marks: b.marks, autoCommitError: undefined }));
+      setSiblingOks((prev) => nextSiblingOks(prev, marks, b.results));
       const bad = (b.results as { ok: boolean; error?: string }[]).filter((x) => !x.ok);
       if (bad.length) setError(`${bad.length} of ${marks.length} not saved: ${bad[0].error}${bad[0].error?.startsWith("stale") ? " (Refresh to see the current text)" : ""}`);
       else if (b.baseline && b.baseline.ok === false) setError(`Review session started, but ${b.baseline.reason}`, true);
@@ -109,7 +111,12 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
       {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
       {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
       {st.kind === "redo" && st.openContracts && st.rewrite && st.rewrite !== drafted ? <span className="sb-mark-draft" title="Your rewrite (stored; the row stays Redo while contract notes are open)">→ {st.rewrite}</span> : null}
-      {st.openContracts ? <span className="sb-mark-hint" data-testid="sb-open-contracts">{openContractsHint(st)}</span> : null}
+      {!st.siblingOk && st.openContracts ? <span className="sb-mark-hint" data-testid="sb-open-contracts">{openContractsHint(st)}</span> : null}
+      {st.siblingOk && st.openContracts ? (
+        <span className="sb-mark-state sb-mark-sibling-ok" data-testid="sb-sibling-ok" title="This contract has no open note; the shared template stays NEEDS-REWRITE until the other contract notes are resolved">
+          {siblingOkHint(st)}
+        </span>
+      ) : null}
       {st.kind !== "none" && (
         <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || markLabel(st)}>
           {markLabel(st)}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}
