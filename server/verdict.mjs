@@ -14,6 +14,8 @@
  * working exactly as before.
  * `VERDICT_CORE` captures (1) PASS|FAIL, (2) `h/m/l` counts or the highest-severity letter, (3) the hash or docs target.
  */
+import { LEGACY_PROFILE_ROLES, legacyProfileRole } from "./legacy-profile-roles.mjs";
+import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
 const BOLD = "(?:\\*\\*|__)?";
 /** The bold-tolerant verdict prefix, shared with agent-duties / watch-sets: `VERDICT:`, `**VERDICT:**`, `VERDICT: **…**` (matches empty). */
 export const VERDICT_PREFIX_SRC = `${BOLD}[ \\t]*(?:VERDICT[ \\t]*:[ \\t]*${BOLD}[ \\t]*)?`;
@@ -38,14 +40,56 @@ export const VERDICT_LINE_RE = new RegExp(VERDICT_LINE_SRC, "m");
 /** The strict parse of one line. */
 const LINE_PARSE_RE = new RegExp(VERDICT_LINE_SRC);
 const NON_IMPLEMENTER_REVIEW_PROFILE_RE = /^Review\b/i;
-const UX_REVIEWER_RE = /\bUX Review(?:er)?\b/i;
+/** idea-1200: a code-review profile: `Review…` / `Reviewer…` (UX Review(er) profiles are refused before this is read). */
+const REVIEW_PROFILE_RE = /^Review(?:er)?\b/i;
+/** "UX Review", "UX Reviewer", "UX-Review", "ux_reviewer", "UX  Review" (L1). */
+const UX_REVIEWER_RE = /\bUX[\s_-]+Review(?:er)?\b/i;
+const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s-])review(?:\s|$)/i;
+
 /** idea-1200: a UX Review role key / normalized profile (`ux-review`, `ux-reviewer`, `UX_Reviewer`), and the `role=` of a vs.route label. */
 const UX_ROLE_KEY_RE = /^ux-review(?:er)?(?:-|$)/;
-/** idea-1200: implementer-side profiles (role labels and legacy names, normalized): never a code reviewer, whatever the title says. */
-const IMPLEMENTER_PROFILE_RE = /^(?:implement|implementer|planner|spec|work-order|mechanical|senior-reasoning|art-director|art-painter|art|lead|brainstorm|buddy|worker|coder)(?:-|$)/;
-const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+const normKey = (s) => String(s ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-").replace(/-{2,}/g, "-");
 const routeRole = (route) => /(?:^|\s)role=(\S+)/.exec(String(route ?? ""))?.[1] ?? "";
-const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s-])review(?:\s|$)/i;
+/** Legacy roles that verify rather than build (a pre-check is neither a code reviewer nor an implementer: title fallback). */
+const VERIFY_ROLES = new Set(["review", "pre-check"]);
+/** idea-1200 M2/M3: implementer-side role keys, derived from the legacy role table (implement, planner, work-order, art-director,
+ * art-painter, lead, brainstorm) so it can't drift from it; plus aliases of those keys a role label can carry. */
+export const IMPLEMENTER_ROLE_KEYS = Object.freeze([...new Set([
+  ...Object.values(LEGACY_PROFILE_ROLES).filter((r) => !VERIFY_ROLES.has(r)),
+  "implementer", "buddy", "overlord", "builder", "coder",
+])].sort());
+const IMPLEMENTER_ROLE_SET = new Set(IMPLEMENTER_ROLE_KEYS);
+/** A profile-name family: the part before " - " normalized ("Work Order - DSP" -> "work-order", "RiffBot" -> "riffbot"). */
+const profileFamily = (name) => normKey(String(name).split(/\s+-\s+/)[0]);
+/** idea-1200 M3: implementer profile families, derived from server/profile-aliases.mjs + the legacy role table (every old name and
+ * alias whose role is not review/pre-check: "Builder - Gemini", "RiffBot", "Worker", "Coder", "Senior Reasoning - DSP", ...),
+ * plus the role keys themselves (the new role labels "Implement", "Planner", "Art Director", ...). */
+export const IMPLEMENTER_PROFILE_FAMILIES = Object.freeze([...new Set([
+  ...IMPLEMENTER_ROLE_KEYS,
+  ...Object.entries(LEGACY_PROFILE_ROLES).filter(([, r]) => !VERIFY_ROLES.has(r)).map(([n]) => profileFamily(n)),
+  ...Object.entries(LEGACY_PROFILE_ALIASES).filter(([, t]) => !VERIFY_ROLES.has(LEGACY_PROFILE_ROLES[t] ?? "review")).map(([n]) => profileFamily(n)),
+])].sort());
+const IMPL_FAMILY_SET = new Set(IMPLEMENTER_PROFILE_FAMILIES);
+const LOWER_ALIASES = new Map(Object.entries(LEGACY_PROFILE_ALIASES).map(([k, v]) => [k.toLowerCase(), v]));
+/** A lead/Buddy/overlord identity role (live or retired, M2) or a digest: never a reviewer. `worker` is not refused (reviewers are workers). */
+const NON_REVIEWER_IDENTITY_ROLE_RE = /^(?:(?:former|old)-)?(?:lead|brainstorm|buddy|overlord)$|^(?:retired|old|digest)$/;
+
+/** idea-1200: "ux" | "review" | "impl" | null (unknown: pre-check, a custom name) for one profile string. */
+function profileKind(profile) {
+  const p = String(profile ?? "").trim();
+  if (!p) return null;
+  if (UX_REVIEWER_RE.test(p) || UX_ROLE_KEY_RE.test(normKey(p))) return "ux";
+  const legacyName = legacyProfileRole(p)?.name ?? LOWER_ALIASES.get(p.toLowerCase()) ?? null;
+  const legacyRole = legacyName ? LEGACY_PROFILE_ROLES[legacyName] : null;
+  if (legacyName && UX_REVIEWER_RE.test(legacyName)) return "ux";
+  if (legacyRole === "review") return "review";
+  if (legacyRole && IMPLEMENTER_ROLE_SET.has(legacyRole)) return "impl";
+  if (legacyRole) return null; // pre-check family
+  const key = normKey(p);
+  for (const f of IMPL_FAMILY_SET) if (key === f || key.startsWith(`${f}-`)) return "impl";
+  if (REVIEW_PROFILE_RE.test(p)) return "review";
+  return null;
+}
 
 /** The full verdict line (byte-for-byte, minus trailing whitespace) of the message's effective verdict: the first FAIL if any,
  * else the first PASS — agreeing with evaluateVerdictGate's fail-closed scan — or null when there is none. */
@@ -128,30 +172,34 @@ function scanVerdicts(text) {
 }
 
 /**
- * A code-reviewer run (its H/M/L verdict can gate a merge). idea-1200: decided by profile and role label first, the title only
- * as a fallback, so a `Review` profile titled "... UX Review ..." is still a code reviewer. Fail closed, in order:
- * 1. UX Review signal in the profile (`UX Reviewer - Opus`, `UX Review`, `ux-review`) or a role label (`labels.role` /
- *    `role` / vs.route `role=` of `ux-review[er]`) -> false.
- * 2. `Review…` profile -> true (title ignored).
- * 3. implementer-side profile (Implement, Planner, Work Order, Art …, Lead, …) -> false (title ignored).
- * 4. no profile or an unknown one (e.g. Pre-check, a custom name): today's title rules (UX title -> false, "review fix" -> false,
- *    else a reviewer-shaped title "Review - Gemini" / "re-review" / "R2 review").
+ * A code-reviewer run (its H/M/L verdict can gate a merge). idea-1200: decided by profile and role labels first, the title only
+ * as a fallback, so a `Review` profile titled "... UX Review ..." is still a code reviewer. Every profile the record carries
+ * (`labels.profile` and `profile`, blanks dropped) is read. Fail closed, in order:
+ * 1. any UX Review profile (`UX Reviewer - Opus`, `UX Review`, `ux-review`) or role (`labels.role`/`role`/vs.route `role=`) -> false.
+ * 2. a lead/Buddy/overlord identity role (`lead`, `brainstorm`, `buddy`, `former-lead`, `old-lead`, ...) or digest -> false.
+ * 3. a vs.route `role=` that is an implementer key (implement, planner, work-order, art-*, lead, brainstorm) -> false.
+ * 4. any implementer profile (Implement, Planner, Spec, Work Order, Mechanical, Senior Reasoning, Art*, Lead, Brainstorm, and the
+ *    aliases in server/profile-aliases.mjs: Builder, RiffBot, Buddy, Worker, Coder, ...) -> false (title ignored).
+ * 5. a `Review…`/`Reviewer…` profile, with every other profile also a review one -> true (title ignored).
+ * 6. a review profile beside an unknown one -> false (conflict).
+ * 7. no profile or only unknown ones (Pre-check, a custom name): the pre-idea-1200 title rules (UX title -> false,
+ *    "review fix" -> false, else a reviewer-shaped title "Review - Gemini" / "re-review" / "R2 review").
  */
 export function isReviewerAgent(agent) {
   const labels = agent?.labels ?? {};
-  const profile = String(labels.profile ?? agent?.profile ?? "").trim();
   const title = String(agent?.title ?? "").trim();
   // UX Reviewer is not a code reviewer: its verdict is a plain PASS/FAIL line in docs/UX_REVIEW_<lane>_R<n>.md (no H/M/L <hash>),
   // so it is excluded here; its digest is not rewritten to NO-VERDICT and `vs verdict` says "not a reviewer".
-  const profiles = [profile, String(agent?.profile ?? "").trim()].filter(Boolean);
-  if (profiles.some((p) => UX_REVIEWER_RE.test(p) || UX_ROLE_KEY_RE.test(normKey(p)))) return false;
-  const roles = [labels.role, agent?.role, routeRole(labels["vs.route"])].map(normKey);
-  if (roles.some((r) => UX_ROLE_KEY_RE.test(r))) return false;
-  if (profile) {
-    if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;
-    if (IMPLEMENTER_PROFILE_RE.test(normKey(profile))) return false;
-  }
-  // Title fallback (no profile, or one this gate doesn't know): unchanged from before idea-1200.
+  const kinds = [labels.profile, agent?.profile].map((p) => String(p ?? "").trim()).filter(Boolean).map(profileKind);
+  if (kinds.includes("ux")) return false;
+  const identityRoles = [labels.role, agent?.role].map(normKey).filter(Boolean);
+  const route = normKey(routeRole(labels["vs.route"]));
+  if ([...identityRoles, route].some((r) => UX_ROLE_KEY_RE.test(r))) return false;
+  if (identityRoles.some((r) => NON_REVIEWER_IDENTITY_ROLE_RE.test(r))) return false;
+  if (route && IMPLEMENTER_ROLE_SET.has(route)) return false;
+  if (kinds.includes("impl")) return false;
+  if (kinds.includes("review")) return kinds.every((k) => k === "review");
+  // Title fallback (no profile, or only ones this gate doesn't know): unchanged from before idea-1200.
   if (UX_REVIEWER_RE.test(title)) return false;
   if (/\breview\s+fix/i.test(title)) return false; // an implementer fixing review findings
   return NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(title) || REVIEWER_TITLE_RE.test(title);
