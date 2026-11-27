@@ -2,14 +2,17 @@
 // toasts/system/UI; grouped by speaker or screen; full line text (never truncated); one search box over lines and entities.
 // Row hook for V6: every row carries data-sb-row=<row.id> and an action slot (`renderActions`) for OK / Redo / Edit; nothing writes here.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { groupRows, filterRows, searchEntities, speakerEntityKey, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
-import type { EntityIndex, SbEntity } from "./storybookLogic";
+import { wordDiff, groupRows, filterRows, searchEntities, speakerEntityKey, rowSubtitle, classCounts, ROW_CLASSES, ROW_CLASS_LABEL, ROW_CLASS_HELP, type ReviewRow, type RowClass } from "./storybookReview";
+import type { EntityIndex, SbEntity, TextChanges } from "./storybookLogic";
 
 const GROUP_PAGE = 60; // rows shown per group before "show more" (a screen has hundreds)
 
 export type TextFocus = { id: string; n: number } | null;
+export type { TextChanges };
+export type TextPreset = { only: "changed" | "contracts" | "unreviewed"; n: number } | null;
 
-export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions }: {
+export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, renderActions, changes = null, preset = null, onPresetConsumed }: {
+  changes?: TextChanges; preset?: TextPreset; onPresetConsumed?: () => void;
   rows: ReviewRow[]; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; focus: TextFocus; onFocusConsumed?: () => void; renderActions?: (row: ReviewRow) => React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
@@ -19,19 +22,34 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   const [unreviewed, setUnreviewed] = useState(false);
   const [toggled, setToggled] = useState<Record<string, boolean>>({}); // explicit user open/collapse overrides (always win over defaults/search)
   const [more, setMore] = useState<Record<string, number>>({});
+  const [only, setOnly] = useState<"changed" | "contracts" | null>(null);
   const [flash, setFlash] = useState<{ id: string; n: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
+  const isChanged = (r: ReviewRow) => changes != null && (changes.changedIds.has(r.id) || Object.hasOwn(changes.changed, r.id) || changes.added.has(r.id));
+  const nChanged = useMemo(() => (changes ? rows.filter(isChanged).length : 0), [rows, changes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nContracts = useMemo(() => rows.filter((r) => r.kind === "contract").length, [rows]);
+  const base = useMemo(() => (only === "changed" ? rows.filter(isChanged) : only === "contracts" ? rows.filter((r) => r.kind === "contract") : rows), [rows, only, changes]); // eslint-disable-line react-hooks/exhaustive-deps
   const speakerKey = speakerFilter?.key ?? null;
-  const searched = useMemo(() => filterRows(rows, { query, speakerKey, classes: new Set(), tooLong: false, unreviewed: false }), [rows, query, speakerKey]);
+  const searched = useMemo(() => filterRows(base, { query, speakerKey, classes: new Set(), tooLong: false, unreviewed: false }), [base, query, speakerKey]);
   const filter = useMemo(() => ({ query: "", classes, tooLong, unreviewed }), [classes, tooLong, unreviewed]);
   const filtered = useMemo(() => filterRows(searched, filter), [searched, filter]);
+  useEffect(() => {
+    if (!preset) return;
+    onPresetConsumed?.();
+    setOnly(preset.only === "unreviewed" ? null : preset.only);
+    setQuery("");
+    setSpeakerFilter(null);
+    setClasses(new Set());
+    setTooLong(false);
+    setUnreviewed(preset.only === "unreviewed");
+  }, [preset, onPresetConsumed]);
   const blocks = useMemo(() => groupRows(filtered, query), [filtered, query]);
   const counts = useMemo(() => classCounts(filterRows(searched, { query: "", classes: new Set(), tooLong, unreviewed })), [searched, tooLong, unreviewed]);
   const nTooLong = useMemo(() => filterRows(searched, { query: "", classes, tooLong: false, unreviewed }).filter((r) => r.tooLong).length, [searched, classes, unreviewed]);
   const nUnrev = useMemo(() => filterRows(searched, { query: "", classes, tooLong, unreviewed: false }).filter((r) => r.unreviewed).length, [searched, classes, tooLong]);
   const ents = useMemo(() => searchEntities(idx, query), [idx, query]);
-  const searching = query.trim() !== "" || speakerFilter != null || tooLong || unreviewed;
+  const searching = query.trim() !== "" || speakerFilter != null || tooLong || unreviewed || only != null;
   const isOpen = (cls: RowClass, gid: string): boolean => (Object.hasOwn(toggled, gid) ? toggled[gid] : searching || cls === "story");
   const toggle = (cls: RowClass, gid: string) => {
     const was = isOpen(cls, gid);
@@ -44,7 +62,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
     onFocusConsumed?.();
     const row = rows.find((r) => r.id === focus.id);
     if (!row) return;
-    setQuery(""); setSpeakerFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false);
+    setQuery(""); setSpeakerFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setOnly(null);
     setToggled((m) => ({ ...m, [row.groupId]: true }));
     const pos = (groupRows(rows).find((b) => b.cls === row.cls)?.groups.find((g) => g.id === row.groupId)?.rows.findIndex((r) => r.id === row.id) ?? 0) + 1;
     setMore((m) => ({ ...m, [row.groupId]: Math.max(m[row.groupId] ?? 0, pos) }));
@@ -61,7 +79,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   }, [flash]);
 
   const toggleClass = (c: RowClass) => setClasses((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
-  const active = query !== "" || speakerFilter != null || classes.size > 0 || tooLong || unreviewed;
+  const active = query !== "" || speakerFilter != null || classes.size > 0 || tooLong || unreviewed || only != null;
   const pickSpeaker = (e: SbEntity, key: string) => {
     setSpeakerFilter((cur) => (cur?.key === key ? null : { key, label: e.display, entity: e }));
     setQuery("");
@@ -79,12 +97,14 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
             Speaker: {speakerFilter.label} ×
           </button>
         )}
+        {nChanged > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "changed"} data-testid="sb-text-changed" title="New or edited since your last session" onClick={() => setOnly((v) => (v === "changed" ? null : "changed"))}>Changed <span className="sb-count">{nChanged}</span></button>}
+        {nContracts > 0 && <button type="button" className="sb-fbtn" aria-pressed={only === "contracts"} data-testid="sb-text-contracts" title="Contract titles and details as the player sees them" onClick={() => setOnly((v) => (v === "contracts" ? null : "contracts"))}>Contracts <span className="sb-count">{nContracts}</span></button>}
         {ROW_CLASSES.filter((c) => counts[c] > 0 || classes.has(c)).map((c) => (
           <button key={c} type="button" className="sb-fbtn" aria-pressed={classes.has(c)} data-testid={`sb-text-class-${c}`} title={ROW_CLASS_HELP[c]} onClick={() => toggleClass(c)}>{ROW_CLASS_LABEL[c]} <span className="sb-count">{counts[c]}</span></button>
         ))}
         {(nUnrev > 0 || unreviewed) && <button type="button" className="sb-fbtn" aria-pressed={unreviewed} data-testid="sb-text-unreviewed" title="Not yet marked OWNER-OK in text_review.csv" onClick={() => setUnreviewed((v) => !v)}>Unreviewed <span className="sb-count">{nUnrev}</span></button>}
         {(nTooLong > 0 || tooLong) && <button type="button" className="sb-fbtn" aria-pressed={tooLong} data-testid="sb-text-toolong" title="Longer than its screen budget (check #18)" onClick={() => setTooLong((v) => !v)}>Too long <span className="sb-count">{nTooLong}</span></button>}
-        {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setSpeakerFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); }}>Clear</button>}
+        {active && <button type="button" className="sb-fbtn sb-fclear" onClick={() => { setQuery(""); setSpeakerFilter(null); setClasses(new Set()); setTooLong(false); setUnreviewed(false); setOnly(null); }}>Clear</button>}
       </div>
       {ents.length > 0 && (
         <div className="sb-ents" data-testid="sb-text-ents">
@@ -119,7 +139,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
                 </button>
                 {o && (
                   <ul className="sb-rows">
-                    {shown.map((r) => <Row key={r.id} r={r} groupLabel={g.label} idx={idx} renderChip={renderChip} renderActions={renderActions} />)}
+                    {shown.map((r) => <Row key={r.id} r={r} groupLabel={g.label} idx={idx} renderChip={renderChip} renderActions={renderActions} oldText={changes && Object.hasOwn(changes.changed, r.id) ? changes.changed[r.id] : null} isChangedRow={changes?.changedIds.has(r.id) ?? false} isNew={changes?.added.has(r.id) ?? false} />)}
                     {g.rows.length > shown.length && <li><button type="button" className="sb-btn sb-more" onClick={() => setMore((m) => ({ ...m, [g.id]: limit + GROUP_PAGE * 3 }))}>Show {Math.min(GROUP_PAGE * 3, g.rows.length - shown.length)} more ({g.rows.length - shown.length} left)</button></li>}
                   </ul>
                 )}
@@ -132,7 +152,7 @@ export function StorybookText({ rows, idx, renderChip, focus, onFocusConsumed, r
   );
 }
 
-function Row({ r, groupLabel, idx, renderChip, renderActions }: { r: ReviewRow; groupLabel: string; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; renderActions?: (row: ReviewRow) => React.ReactNode }) {
+function Row({ r, groupLabel, idx, renderChip, renderActions, oldText = null, isChangedRow = false, isNew = false }: { oldText?: string | null; isChangedRow?: boolean; isNew?: boolean; r: ReviewRow; groupLabel: string; idx: EntityIndex; renderChip: (e: SbEntity, label?: string) => React.ReactNode; renderActions?: (row: ReviewRow) => React.ReactNode }) {
   const inOwnGroup = Boolean(r.speaker && (groupLabel === r.speaker || groupLabel === `Contracts · ${r.speaker}`));
   const sp = !inOwnGroup && r.speakerRef ? idx.get(r.speakerRef.kind, r.speakerRef.id) : null;
   const showSpeaker = !inOwnGroup && Boolean(sp || (r.speaker && r.kind === "line"));
@@ -145,7 +165,12 @@ function Row({ r, groupLabel, idx, renderChip, renderActions }: { r: ReviewRow; 
           {r.title && <span className="sb-row-title">{r.title}</span>}
         </div>
       )}
-      {r.text && <p className="sb-row-text">{r.text}</p>}
+      {oldText != null ? (
+        <p className="sb-row-text sb-diff" data-testid="sb-row-diff" aria-label="Changed since your last session">
+          <span className="sb-tag sb-tag-changed">changed</span>{" "}
+          {wordDiff(oldText, r.text).map((g, i) => g.k === "same" ? <span key={i}>{g.t}</span> : g.k === "del" ? <del key={i} className="sb-del">{g.t}</del> : <ins key={i} className="sb-ins">{g.t}</ins>)}
+        </p>
+      ) : r.text && <p className="sb-row-text">{isChangedRow ? <><span className="sb-tag sb-tag-changed">changed</span>{" "}</> : isNew && <span className="sb-tag sb-tag-new" data-testid="sb-row-new">new </span>}{r.text}</p>}
       <div className="sb-row-foot">
         <span className="sb-row-meta">
           <span className="sb-row-sub sb-mono">{rowSubtitle(r)}</span>
