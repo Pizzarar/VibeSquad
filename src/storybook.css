@@ -190,16 +190,18 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-tgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 0 12px; font: inherit; font-weight: 600; text-align: left; cursor: pointer; color: var(--sb-text); background: var(--sb-panel2); border: 1px solid var(--sb-line); border-radius: 8px; }
 .sb-tgroup-head:hover { border-color: var(--sb-accent); }
 .sb-tgroup-caret { width: 1em; color: var(--sb-text2); }
-.sb-rows { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.sb-row { padding: 8px 12px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
-.sb-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sb-rows { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.sb-row { padding: 5px 10px; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; }
+.sb-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 2px; }
 .sb-row-speaker { font-weight: 600; }
 .sb-row-title { font-weight: 600; overflow-wrap: anywhere; }
-.sb-row-text { margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--sb-accent); white-space: pre-wrap; overflow-wrap: anywhere; }
-.sb-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.sb-row-text { margin: 2px 0; padding-left: 8px; border-left: 3px solid var(--sb-accent); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.38; }
+.sb-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
+.sb-row-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .sb-row-sub { font-size: 12px; color: var(--sb-text2); overflow-wrap: anywhere; }
 .sb-row-actions:empty { display: none; } /* V6 slot: OK / Redo / Edit buttons mount here */
 .sb-cat-toolong { border-color: var(--sb-warn); }
+.sb-ent-filter[aria-pressed="true"] { background: var(--sb-accent); color: var(--sb-on-accent); border-color: var(--sb-accent); }
 
 /* V5 arcs + play order (StorybookArc.tsx). Mobile-first: one column; wide screens get a grid of trader columns. */
 .sb-arc-note { margin: 0 0 10px; color: var(--sb-text2); font-size: 13px; line-height: 1.45; }
@@ -280,3 +282,20 @@ button.sb-kind-btn:hover { border-color: var(--sb-accent); }
 .sb-skills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
 .sb-changes-first { border-left-color: var(--sb-warn); }
 .sb-changes-seen { background: var(--sb-panel); }
+
+/* W3 riders: Cast grouping + scroll target, Story arc index & live task chips, Play order unordered per trader. */
+.sb-cast-sec { margin-bottom: 8px; }
+.sb-cast-lbl { margin: 0 0 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sb-text2); display: flex; align-items: center; gap: 6px; }
+.sb-cast-screens { margin: 0 0 12px; }
+.sb-cast-screens > summary { min-height: 44px; cursor: pointer; list-style: none; }
+.sb-cast-screens > summary::-webkit-details-marker { display: none; }
+.sb-cast-screens > summary::before { content: "▸"; display: inline-block; width: 1em; }
+.sb-cast-screens[open] > summary::before { content: "▾"; }
+.sb-cast-sheet { scroll-margin-top: 64px; }
+.sb-arc-index { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.sb-arc-task { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.sb-arc-gate { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.sb-order-unordered { margin-top: 16px; }
+.sb-order-ugroup { margin: 6px 0; background: var(--sb-panel); border: 1px solid var(--sb-line); border-radius: 8px; padding: 0 10px 6px; }
+.sb-order-ugroup > summary { min-height: 44px; display: flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+.sb-order-ugroup > .sb-order { margin-top: 4px; }

@@ -274,7 +274,7 @@ export const useMemo = (f) => f();
 export const useRef = (v) => ({ current: v });
 export const useState = (v) => [typeof v === "function" ? v() : v, () => {}];`,
   );
-  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
+  writeFileSync(join(dir, "stub.mjs"), `export const createPortal = () => null; export const MermaidView = () => null; export const rootZoom = () => 1; export const ProjectTabs = () => null; export const SB_CATEGORIES = []; export const SB_CATEGORY_LABEL = {}; export const NO_STORYBOOK = ""; export const SB_CATEGORY_HELP = {}; export const auditSignalTarget = () => ({}); export const signalCard = () => ({ target: {} }); export const auditCounts = () => null; export const buildTextChanges = () => null; export const buildListItems = () => []; export const chainToMermaid = () => ({}); export const checkLabel = () => ""; export const plainText = (s) => s; export const characterViews = () => []; export const groupCharacterViews = () => ({ traders: [], squad: [], screens: [] }); export const speakerKeyOf = () => null; export const countByCategory = () => ({}); export const entityCard = () => ({}); export const entityNavTarget = () => null; export const filterItems = () => []; export const fmtSource = () => ""; export const fmtWindow = () => ""; export const indexEntities = () => ({}); export const interpretLoad = () => ({}); export const interpretRefresh = () => ({}); export const locationView = () => ({}); export const questChains = () => []; export const shortSha = () => ""; export const toggleCategory = () => new Set(); export const cleanTodo = (s) => s; export const StorybookHome = () => null; export const StorybookText = () => null; export const buildReviewRows = () => []; export const entityKey = () => ""; export const StorybookItems = () => null; export const StorybookArc = () => null; export const CharacterSheet = () => null; export const EnemySheet = () => null; export const MapSheet = () => null; export const FINDING_SCOPE_HELP = {}; export const FINDING_SCOPE_LABEL = {}; export const problemCount = () => 0; export const scopeCounts = () => ({}); export const scopeItems = () => [];`);
 
   const sbCode = transformSync("StorybookView.tsx", readFileSync(new URL("../src/StorybookView.tsx", import.meta.url), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } })
     .code.replace(/^/, `import React from "./react.mjs";\n`)
@@ -562,5 +562,51 @@ describe("V2 Home + findings split", () => {
   });
   test("story copy matches STORY_CHECKS", () => {
     assert.ok(!/impossible|duplicate lines/.test(L.FINDING_SCOPE_HELP.story));
+  });
+  test("W3 rider 1: groupCharacterViews splits Traders / Squad / Screens and labels the 2 Squad chips", () => {
+    const mkChar = (id, kind, speaker, n) => ({ id, kind, speaker, card: null, entity: null, lines: Array(n).fill({}), inferred: 0 });
+    const g = L.groupCharacterViews([
+      mkChar("system:raids", "system", "Raids", 100),
+      mkChar("system:squad", "system", "Squad", 93),
+      mkChar("party:squad", "party", "Squad", 51),
+      mkChar("trader:doc", "trader", "Doc", 16),
+      mkChar("squad:doc", "squad", "Saint", 6),
+      mkChar("narrator:narrator", "narrator", "Narrator", 5),
+    ]);
+    assert.deepEqual(g.traders.map((c) => c.id), ["trader:doc"]);
+    assert.deepEqual(g.squad.map((c) => [c.id, c.speaker]), [["party:squad", "Squad (party)"], ["squad:doc", "Saint"]]);
+    assert.deepEqual(g.screens.map((c) => [c.id, c.speaker]), [["system:raids", "Raids"], ["system:squad", "Squad screen"], ["narrator:narrator", "Narrator"]]);
+  });
+  test("W3 rider 3: playItemLabel uses rendered title; partitionPlayOrder separates unordered entries per trader", () => {
+    const ents = [
+      { id: "popper", kind: "trader", display: "Popper", aliases: [], source: { path: "t.json", line: 1 }, links: [], production: null, data: { level_0: true } },
+      { id: "broker", kind: "trader", display: "The Broker", aliases: [], source: { path: "t.json", line: 2 }, links: [], production: null, data: { level_0: false } },
+      { id: "c1", kind: "contract", display: "c1", aliases: [], source: { path: "c.json", line: 1 }, links: [], production: null, data: { trader: "popper", rendered: { title: "Deliver 5 × Scrap for Popper" } } },
+      { id: "c2", kind: "contract", display: "c2", aliases: [], source: { path: "c.json", line: 2 }, links: [], production: null, data: { trader: "popper", rendered: { title: "High rep contract" } } },
+    ];
+    const localIdx = L.indexEntities(ents);
+    const arc = {
+      arcs: [
+        { trader: "popper", display: "Popper", level_0: true, steps: [], chain_rep: 0.2, reactions: [] },
+        { trader: "broker", display: "The Broker", level_0: false, steps: [], chain_rep: 0.2, reactions: [] },
+      ],
+      playOrder: [
+        { pos: 1, kind: "contract", id: "c1", label: "c1", trader: "popper", stage: 0, gates: [], basis: [] },
+        { pos: 2, kind: "quest_step", id: "broker_1", label: "Fine Tolerances", trader: "broker", stage: 0, gates: [{ type: "trader_unlock", id: "broker" }], basis: [] },
+        { pos: 3, kind: "quest_step", id: "broker_2", label: "Step 2", trader: "broker", stage: 0, gates: [{ type: "prev_step", id: "broker_1" }], basis: [] },
+        { pos: 4, kind: "contract", id: "c2", label: "c2", trader: "popper", stage: 1, gates: [{ type: "rep", trader: "popper", rep: 0.9 }], basis: [] },
+      ],
+      gaps: [{ kind: "contract", id: "c2", why: "rep above chain" }, { kind: "trader", id: "broker", why: "level_0 false" }],
+      notDerivable: [],
+      tiedStages: [],
+    };
+    assert.equal(L.playItemLabel(arc.playOrder[0], localIdx), "Deliver 5 × Scrap for Popper");
+    const part = L.partitionPlayOrder(arc, localIdx);
+    assert.deepEqual(part.ordered.map((p) => [p.pos, p.id]), [[1, "c1"]]);
+    assert.equal(part.unorderedCount, 3);
+    assert.deepEqual(part.unordered.map((g) => [g.display, g.items.map((i) => i.id)]), [
+      ["Popper", ["c2"]],
+      ["The Broker", ["broker_1", "broker_2"]],
+    ]);
   });
 });
