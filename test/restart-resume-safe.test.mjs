@@ -73,7 +73,7 @@ async function lostAgent(adapterOpts, runnerOpts = {}, dir = tmp(), { cut = fals
   const a1 = fakeAdapter();
   const r1 = track(new Runner({ dir, adapters: { claude: a1.adapter } }));
   const id = r1.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta });
-  await tick(30);
+  await until(() => r1.timeline(id).some((e) => e.type === "session"), 1000);
   if (cut) r1.shutdown({ keepResumable: true });
   else { a1.starts[0].emit("status", { status: "idle" }); crash(r1); }
   const a2 = fakeAdapter(adapterOpts);
@@ -85,10 +85,15 @@ async function lostAgent(adapterOpts, runnerOpts = {}, dir = tmp(), { cut = fals
 test("109: a prompt-less resume settles to idle once the adapter is ready (not `starting` forever), then parks after the grace", async () => {
   const { id, runner, starts } = await lostAgent({}, { parkGraceMs: 40 });
   assert.equal(runner.resume(id), true);
-  await until(() => runner.status(id).status === "idle", 1000);
+  // Observe the settled `idle` in the timeline rather than polling current status against the 40ms parkGraceMs timer.
+  await until(() => runner.timeline(id).some((e) => e.type === "status" && e.resume === true && e.status === "idle"), 1000);
   assert.equal(starts.length, 1);
   assert.equal(starts[0].resume, `sess-${id}`, "resumed from its saved session");
   await until(() => runner.status(id).status === "parked", 1000); // the normal after-turn park: no live slot held forever
+  assert.deepEqual(
+    runner.timeline(id).filter((e) => e.type === "status" && e.resume === true).map((e) => e.status),
+    ["starting", "idle"],
+  );
   assert.equal(starts[0].killed, 1);
   runner.shutdown();
 });
@@ -465,7 +470,7 @@ test("idea-126: only a cut turn continues: lost-between-turns, parked, retired, 
   runner.resume(id);
   await until(() => runner.status(id).status === "parked", 1000);
   runner.resume(id);
-  await until(() => runner.status(id).status === "idle", 1000);
+  await until(() => runner.timeline(id).filter((e) => e.type === "status" && e.resume === true && e.status === "idle").length >= 2, 1000);
   assert.deepEqual(starts.map((s) => s.sends.length), [0, 0], "parked: nothing sent");
   runner.shutdown();
 });
