@@ -28,10 +28,10 @@ export function restartStateLabel(restartState?: string | null): string | null {
   return (restartState && RESTART_LINES[restartState]) || null;
 }
 
-export type HostRestartReq = { id?: string; state: string } | null;
+export type HostRestartReq = { id?: string | null; state: string } | null;
 /** Identity of the parent's host restart prop: changes when a new request appears or its state moves (idea-894). */
 export function hostRestartKey(fromHost?: HostRestartReq): string {
-  return fromHost ? `${fromHost.id ?? ""}|${fromHost.state}` : "";
+  return fromHost ? `${fromHost.id == null ? "" : `#${fromHost.id}`}|${fromHost.state}` : "";
 }
 /**
  * The restart the drawer shows. A locally fetched/posted request (`local`, stamped with the host key it was taken under) wins
