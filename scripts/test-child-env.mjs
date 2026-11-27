@@ -20,10 +20,29 @@ const KEEP_ENV = /^(VS_TEST_|VS_BENCH$|VS_SMOKE$|VS_ALLOW_REAL_HOME$)/i;
 
 const realHomeDir = () => { try { return os.userInfo().homedir || os.homedir(); } catch { return os.homedir(); } };
 
-/** True when `dir` is the real ~/.vibesquad or inside it (the server/test-guard.mjs rule, without its test-runner gate). */
-export function insideRealVibesquad(dir, home = realHomeDir()) {
-  const rel = path.relative(path.resolve(home, ".vibesquad"), path.resolve(dir));
+/** realpath of `p`, or for a path that does not exist yet: realpath of its deepest existing ancestor plus the missing tail. */
+export function realpathDeep(p) {
+  let cur = path.resolve(p);
+  const tail = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(cur), ...tail.reverse()); } catch {}
+    const up = path.dirname(cur);
+    if (up === cur) return path.resolve(p);
+    tail.push(path.basename(cur));
+    cur = up;
+  }
+}
+
+const within = (base, dir) => {
+  const rel = path.relative(base, dir);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+};
+
+/** True when `dir` is the real ~/.vibesquad or inside it (the server/test-guard.mjs rule, without its test-runner gate). Judged
+ *  lexically and after resolving symlinks (also through a not-yet-existing tail), so a link into ~/.vibesquad does not slip by. */
+export function insideRealVibesquad(dir, home = realHomeDir()) {
+  const base = path.resolve(home, ".vibesquad");
+  return within(base, path.resolve(dir)) || within(realpathDeep(base), realpathDeep(dir));
 }
 
 /** The temp dir a process with `env` would get from os.tmpdir() (same var order as node), so childEnv(otherEnv) judges otherEnv. */
@@ -50,7 +69,9 @@ export function testTmpdirOverride(env = process.env, { home = realHomeDir() } =
  * ~/.vibesquad, else the platform default temp (POSIX /tmp; Windows %LOCALAPPDATA%\Temp, which node reads from TEMP/TMP).
  */
 export function testTmpdirEnv(env = process.env, { platform = process.platform, home = realHomeDir(), current = tmpdirOf(env, platform) } = {}) {
-  const ov = testTmpdirOverride(env, { home });
+  // An inherited per-run scratch (TMPDIR=<dir>/vs-t-XXXX, idea-977) wins: a child must not reset it back to the override dir.
+  const inheritedScratch = path.basename(current).startsWith(TEST_SCRATCH_PREFIX);
+  const ov = inheritedScratch ? {} : testTmpdirOverride(env, { home });
   if (ov.dir) return platform === "win32" ? { TMP: ov.dir, TEMP: ov.dir } : { TMPDIR: ov.dir };
   if (!insideRealVibesquad(current, home)) return {};
   if (platform === "win32") {
@@ -91,6 +112,9 @@ export function hermeticizeEnv(env = process.env, opts = {}) {
   const tmp = testTmpdirEnv(env, opts);
   for (const k of Object.keys(env)) if (LIVE_ENV.test(k) && !KEEP_ENV.test(k)) delete env[k];
   Object.assign(env, tmp);
+  // The override is resolved into TMPDIR/TMP/TEMP above; keeping it would let every child re-apply it (and re-resolve a relative
+  // value against its own cwd), undoing the shared vs-t-* scratch.
+  delete env.VS_TEST_TMPDIR;
   return env;
 }
 
