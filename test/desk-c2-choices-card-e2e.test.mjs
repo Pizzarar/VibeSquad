@@ -150,6 +150,7 @@ before(async () => {
       return;
     }
     if (pathname === "/__vibesquad/decisions/answer" && req.method === "POST") {
+      if (state.failNext) { state.failNext = false; res.statusCode = 500; res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: false, error: "boom" })); return; }
       let raw = "";
       req.on("data", (c) => { raw += c; });
       req.on("end", () => {
@@ -413,5 +414,34 @@ test("L3 e2e: Use all leans skips bare-letter leans ('need a look'); Sent list s
     } finally {
       await context.close();
     }
+  }
+});
+
+test("L3 fix e2e: a failed second batch never shows the previous batch's details", async (t) => {
+  if (unavailable) { t.skip(unavailable); return; }
+  resetBackend();
+  const { context, page, errs } = await openDesk({ theme: "dark", width: 1920, height: 1080, dpr: 1 });
+  try {
+    const sendNow = async () => {
+      await page.locator('[data-testid="boring-decision-send-btn"]').click();
+      await page.locator('[data-testid="boring-decision-send-now-btn"]').click();
+    };
+    const id1 = "ny-00000000000000000001";
+    const id3 = "ny-00000000000000000003";
+    await page.locator(`[data-testid="boring-decision-alt-${id1}-0"]`).click();
+    await sendNow();
+    await page.waitForFunction((i) => !document.querySelector(`[data-testid="boring-decision-card-${i}"]`), id1, { timeout: 10000 });
+    assert.equal((await page.locator('[data-testid="boring-decision-banner"]').textContent())?.trim(), "Sent 1 answer.");
+    assert.equal(await page.locator('[data-testid="boring-decision-banner-toggle"]').count(), 1);
+    state.failNext = true;
+    await page.locator(`[data-testid="boring-decision-alt-${id3}-0"]`).click();
+    await sendNow();
+    await page.waitForFunction(() => /boom|fail|error/i.test(document.querySelector('[data-testid="boring-decision-banner"]')?.textContent ?? ""), null, { timeout: 10000 });
+    assert.equal(await page.locator('[data-testid="boring-decision-banner-toggle"]').count(), 0, "no Details toggle on the error banner");
+    assert.equal(await page.locator(`[data-testid="boring-decision-banner-item-${id1}"]`).count(), 0, "previous batch details not shown");
+    assert.equal(await page.locator('[data-testid="boring-decision-banner-details"]').count(), 0);
+    assert.deepEqual(errs.filter((e) => !/500/.test(e)), []);
+  } finally {
+    await context.close();
   }
 });

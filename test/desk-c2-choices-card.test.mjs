@@ -379,3 +379,10 @@ test("L3 idea-1160: sent details are held in lastSent, not cleared by edits, and
   const edits = ddSrc.slice(ddSrc.indexOf("const toggleChoice"), ddSrc.indexOf("const executeBatch"));
   assert.ok(!/setLastSent/.test(edits), "edit handlers never clear the sent details");
 });
+
+test("L3 fix: executeBatch clears lastSent before dispatch; details list is labelled; banner has no details field", () => {
+  const eb = ddSrc.slice(ddSrc.indexOf("const executeBatch"), ddSrc.indexOf("dispatchAnswerBatch(toSend)"));
+  assert.match(eb, /setLastSent\(null\)/);
+  assert.match(ddSrc, /aria-label="Sent answers"/);
+  assert.ok(!/details\?: SentAnswerSummary/.test(ddSrc));
+});

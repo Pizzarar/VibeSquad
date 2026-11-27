@@ -761,7 +761,7 @@ export function BoringDecisionDesk({
   const [logRev, setLogRev] = useState(0);
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sending, setSending] = useState(false);
-  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string; details?: SentAnswerSummary[] } | null>(null);
+  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [bannerOpen, setBannerOpen] = useState(false);
   // L3 idea-1160: sent details outlive the banner text; kept until the next Send replaces them.
   const [lastSent, setLastSent] = useState<SentAnswerSummary[] | null>(null);
@@ -891,6 +891,7 @@ export function BoringDecisionDesk({
     setSending(true);
     setBanner(null);
     setBannerOpen(false);
+    setLastSent(null); // a send that errors must never expose the previous batch's details
     const itemsById = new Map(store.items.map((i) => [i.id, i]));
     const payloadById = new Map(toSend.map((b) => [b.id, b]));
     try {
@@ -1434,6 +1435,7 @@ export function BoringDecisionDesk({
               {bannerOpen && lastSent && lastSent.length > 0 && (
                 <ul
                   id="boring-decision-banner-details"
+                  aria-label="Sent answers"
                   className="boring-decision-banner-list"
                   data-testid="boring-decision-banner-details"
                 >
