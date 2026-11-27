@@ -179,3 +179,19 @@ test("r1: phone project picker lists Main first, then teams.json order (no drag,
   const views = [T("a"), T("b"), T("c", null, true)].map((team) => ({ team }));
   assert.deepEqual(po.orderViews(views).map((v) => v.team.id), ["c", "a", "b"]);
 });
+
+// MM1 (@ui-bois): Main project pin marker, skip-if-absent + reduced motion (src/MainMarker.tsx, boring.css).
+test("MM1 main marker renders nothing until the sheet loads, decorative, blink contract", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const root = resolve(import.meta.dirname, "..");
+  const tsx = readFileSync(resolve(root, "src", "MainMarker.tsx"), "utf8");
+  const ade = readFileSync(resolve(root, "src", "BoringAde.tsx"), "utf8");
+  const css = readFileSync(resolve(root, "src", "MainMarker.css"), "utf8");
+  assert.match(tsx, /const ok = useImageOk\(sheet\);\s*if \(!ok\) return null;/);
+  assert.match(tsx, /aria-hidden="true"/);
+  assert.match(ade, /\{isMain && <MainMarker \/>\}/);
+  assert.match(css, /\.boring-main-marker \{[^}]*background-size: 300% 100%[^}]*image-rendering: pixelated[^}]*animation: main-marker-blink 4s/);
+  assert.match(css, /@keyframes main-marker-blink \{[^@]*50% 0[^@]*100% 0/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{[^}]*\.boring-main-marker \{ animation: none; \}/);
+});

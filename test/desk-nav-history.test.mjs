@@ -47,6 +47,7 @@ stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.childr
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); }; ` + realParseUrlState);
 stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true }); export const setLastFolder = () => {}; export const getLastFolder = () => undefined; export const migrateLastFolder = () => {};`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
+stub("MainMarker.mjs", `export function MainMarker() { return null; }`);
 stub("ProjectTabs.mjs", `export function ProjectTabs() { return null; }`);
 stub("StorybookView.mjs", `export const useStorybookPresent = () => false; export const closeStorybook = () => {}; export const openStorybook = () => {};`);
 stub("CrunchToggle.mjs", `export function CrunchToggle() { return null; } export const setCrunchMode = async () => true;`);

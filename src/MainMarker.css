@@ -1,0 +1,4 @@
+/* MM1: decorative googly-eye pin marker (public/ui/main-marker.json) in the free row-2 cell right of Open: no row-height change, never squeezes the name. Blink every ~4s (idle, half, closed, idle at 100ms steps); reduced motion = idle only. */
+html[data-vibe="boring"] .boring-main-marker { grid-column: 2; grid-row: 2; justify-self: end; margin-right: 6px; pointer-events: none; background-repeat: no-repeat; background-size: 300% 100%; background-position: 0 0; image-rendering: pixelated; animation: main-marker-blink 4s steps(1, end) infinite; }
+@keyframes main-marker-blink { 0%, 94.9% { background-position: 0 0; } 95%, 97.4% { background-position: 50% 0; } 97.5%, 99.9% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-main-marker { animation: none; } }
