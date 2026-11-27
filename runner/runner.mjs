@@ -1,6 +1,6 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
 import { stat as fspStat } from 'node:fs/promises';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
@@ -888,6 +888,10 @@ export class Runner {
 
   // The only place an agent process is started (create and resume-from-park).
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
+    // idea-1195: never spawn into a missing cwd (a swept worktree). Fail before the live entry exists, with a plain reason:
+    // a resume re-parks (_failJob) and the log carries the error, not a spawn ENOENT that reads as a provider/binary fault.
+    // Not recreated here: the runner does not know whether the worktree is a managed one whose branch still exists.
+    if (typeof cwd === 'string' && cwd && !existsSync(cwd)) throw new Error(`worktree removed: ${cwd}`);
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
     this._startGen.set(id, (this._startGen.get(id) ?? 0) + 1); // before the start: a reap armed by an earlier end sees it at once
