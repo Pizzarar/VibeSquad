@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { REPO_ROOT, ensureDist, findBrowser, resolvePlaywright, browserSkipReason } from "../scripts/ui-overlap/env.mjs";
-import { buildAnswerPrompt, validateAnswerBatch } from "../server/decisions.mjs";
+import { buildAnswerPrompt, choiceLabel, validateAnswerBatch } from "../server/decisions.mjs";
 
 let pw, exe, server, baseUrl, browser, unavailable;
 const SHOTS_DIR = path.join(REPO_ROOT, "docs", "shots", "desk-c2");
@@ -101,6 +101,24 @@ function resetBackend() {
         structured: true,
         ts: m(10),
       },
+      {
+        id: "ny-00000000000000000004",
+        source: "log",
+        squad: "vibesquad",
+        squadName: "VibeSquad",
+        lane: "desk",
+        askerId: "a-vs-ld",
+        asker: { id: "a-vs-ld", title: "Desk · Lead 2", live: true },
+        ask: "Keep default retry count at 3?",
+        decides: "Redundant context matching ask should hide Show source (L2 idea-1150).",
+        lean: "Keep 3",
+        alts: ["Raise to 5"],
+        kind: "yesno",
+        structured: false,
+        inferred: true,
+        context: "  keep   default  retry count at 3?  ",
+        ts: m(5),
+      },
     ],
     logs: {
       vibesquad: [{ ts: iso(15), lane: "desk", agent: "Desk · Lead 2", type: "done", text: "C1 choices context merged", refs: [] }],
@@ -142,9 +160,10 @@ before(async () => {
           const item = state.items.find((i) => i.id === ans.id);
           if (!item) { results.push({ id: ans.id, choice: ans.choice, status: "rejected", error: "unknown" }); continue; }
           const prompt = buildAnswerPrompt(item, ans, { ownerName: "Owner", target: item.asker?.title, via: "asker" });
-          state.deliveredPrompts.push({ id: ans.id, choice: ans.choice, altIndex: ans.altIndex, text: ans.text, prompt });
+          const summary = choiceLabel(item, ans);
+          state.deliveredPrompts.push({ id: ans.id, choice: ans.choice, altIndex: ans.altIndex, text: ans.text, prompt, summary });
           state.items = state.items.filter((i) => i.id !== ans.id);
-          results.push({ id: ans.id, choice: ans.choice, status: ans.choice === "dismiss" ? "dismissed" : "delivered", target: item.askerId, via: "asker", logged: true });
+          results.push({ id: ans.id, choice: ans.choice, status: ans.choice === "dismiss" ? "dismissed" : "delivered", target: item.askerId, via: "asker", logged: true, summary });
         }
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ ok: true, results }));
@@ -221,8 +240,10 @@ for (const cfg of [
       assert.equal((await page.locator(`[data-testid="boring-decision-not-${pfId}"]`).textContent())?.trim(), "None of these");
       assert.equal((await page.locator(`[data-testid="boring-decision-not-${svId}"]`).textContent())?.trim(), "None of these");
 
-      // Plain structured card without context has no Show source toggle
+      // Plain structured card without context and inferred card with redundant context have no Show source toggle (idea-1150)
+      const redundantId = "ny-00000000000000000004";
       assert.equal(await page.locator(`[data-testid="boring-decision-source-toggle-${plainId}"]`).count(), 0);
+      assert.equal(await page.locator(`[data-testid="boring-decision-source-toggle-${redundantId}"]`).count(), 0, "redundant excerpt hides Show source");
 
       // 2. Show source expands to the excerpt (keyboard accessible, aria-expanded)
       const pfToggle = page.locator(`[data-testid="boring-decision-source-toggle-${pfId}"]`);
@@ -286,6 +307,19 @@ for (const cfg of [
         assert.equal(delivered.text, "Yes, add a 30s veto window");
         assert.match(delivered.prompt, /Owner's answer: Go with option 2: "B: keep the partial fill and resize the stop to the filled size"\./);
         assert.match(delivered.prompt, /--- BEGIN owner reply \(Owner\) ---\nYes, add a 30s veto window\n--- END owner reply ---/);
+
+        // L2 idea-1154: "Sent 1 answer." banner is collapsed by default and expands via keyboard to list option + reply matching server log
+        assert.equal(await page.locator('[data-testid="boring-decision-banner"]').textContent(), "Sent 1 answer.");
+        const bannerToggle = page.locator('[data-testid="boring-decision-banner-toggle"]');
+        assert.equal(await bannerToggle.getAttribute("aria-expanded"), "false", "sent banner collapsed by default");
+        assert.equal(await page.locator('[data-testid="boring-decision-banner-details"]').count(), 0);
+        await bannerToggle.focus();
+        await page.keyboard.press("Enter");
+        assert.equal(await bannerToggle.getAttribute("aria-expanded"), "true");
+        const sentRow = page.locator(`[data-testid="boring-decision-banner-item-${pfId}"]`);
+        assert.match((await sentRow.textContent()) ?? "", new RegExp(delivered.summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        await page.keyboard.press("Enter");
+        assert.equal(await bannerToggle.getAttribute("aria-expanded"), "false");
       }
 
       if (cfg.fullDrive) {
@@ -300,6 +334,13 @@ for (const cfg of [
         const d2 = state.deliveredPrompts.find((d) => d.id === svId);
         assert.equal(d2.choice, "alt");
         assert.match(d2.prompt, /Go with option 2: "b: stop at A1/);
+
+        // L2 idea-1154: new send resets disclosure to collapsed; expanding shows d2's server summary
+        const bannerToggle2 = page.locator('[data-testid="boring-decision-banner-toggle"]');
+        assert.equal(await bannerToggle2.getAttribute("aria-expanded"), "false");
+        await bannerToggle2.click();
+        assert.equal(await bannerToggle2.getAttribute("aria-expanded"), "true");
+        assert.match((await page.locator(`[data-testid="boring-decision-banner-item-${svId}"]`).textContent()) ?? "", /option 2 "b: stop at A1.*\+ reply "go"/);
       }
 
       assert.deepEqual(errs, [], `no pageerrors: ${errs.join("; ")}`);

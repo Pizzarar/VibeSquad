@@ -109,6 +109,14 @@ export type AnswerResultItem = {
   via?: string;
   error?: string;
   already?: boolean;
+  summary?: string;
+};
+
+export type SentAnswerSummary = {
+  id: string;
+  lane: string;
+  ask: string;
+  summary: string;
 };
 
 export type StatusLaneLine = {
@@ -189,9 +197,56 @@ export function notChoiceLabel(item: Pick<DecisionItem, "lean" | "alts">): strin
   return decisionOptionCount(item) >= 2 ? "None of these" : "Not that";
 }
 
-/** True when a card should show the `Show source ▾` disclosure: every inferred card, and any card with context (C2). */
-export function hasSourceDisclosure(item: Pick<DecisionItem, "inferred" | "context">): boolean {
-  return Boolean(item.inferred || (typeof item.context === "string" && item.context.trim().length > 0));
+const normalizeSourceCompare = (s: string | undefined): string =>
+  typeof s === "string" ? s.replace(/\s+/g, " ").trim().toLowerCase() : "";
+
+/** True when a card should show the `Show source ▾` disclosure: the excerpt is non-empty and adds info beyond `ask` (L2 idea-1150). */
+export function hasSourceDisclosure(item: Partial<Pick<DecisionItem, "ask" | "inferred" | "context" | "rawText">>): boolean {
+  const raw =
+    typeof item.context === "string" && item.context.trim().length > 0
+      ? item.context
+      : typeof item.rawText === "string" && item.rawText.trim().length > 0
+        ? item.rawText
+        : "";
+  const normExcerpt = normalizeSourceCompare(raw);
+  if (!normExcerpt) return false;
+  const normAsk = normalizeSourceCompare(item.ask);
+  if (normAsk && normAsk.includes(normExcerpt)) return false;
+  return true;
+}
+
+const quoteShortClient = (s: string | undefined, max = 60): string => {
+  const full = String(s ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/-{3,}/g, "—");
+  if (full.length <= max) return JSON.stringify(full);
+  if (max <= 1) return JSON.stringify("…");
+  return JSON.stringify(`${full.slice(0, max - 1)}…`);
+};
+
+/** L2 idea-1154: client-side mirror of server `choiceLabel` for sent-answer disclosure (option + reply). */
+export function formatSentChoiceSummary(
+  item: Pick<DecisionItem, "lean" | "alts">,
+  ans: Pick<AnswerPayloadItem, "choice" | "text">,
+): string {
+  const text = typeof ans.text === "string" ? ans.text.trim() : "";
+  let base: string;
+  if (ans.choice === "lean") {
+    const li = resolveLeanAlt(item);
+    base = li >= 0 ? `lean, option ${li + 1} ${quoteShortClient((item.alts ?? [])[li])}` : `lean ${quoteShortClient(item.lean)}`;
+  } else if (ans.choice.startsWith("alt:")) {
+    const idx = Number(ans.choice.slice(4));
+    base = `option ${idx + 1} ${quoteShortClient((item.alts ?? [])[idx])}`;
+  } else if (ans.choice === "not") {
+    base = decisionOptionCount(item) >= 2 ? "none of these" : "not that";
+  } else if (ans.choice === "reply") {
+    return `reply ${quoteShortClient(text)}`;
+  } else {
+    return "dismissed";
+  }
+  return text ? `${base} + reply ${quoteShortClient(text)}` : base;
 }
 
 /** Plain-text excerpt rendered inside the `Show source` disclosure (never markdown or HTML). */
@@ -702,7 +757,8 @@ export function BoringDecisionDesk({
   const [logRev, setLogRev] = useState(0);
   const [pending, setPending] = useState<PendingSend | null>(null);
   const [sending, setSending] = useState(false);
-  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const [banner, setBanner] = useState<{ tone: "ok" | "err"; text: string; details?: SentAnswerSummary[] } | null>(null);
+  const [bannerOpen, setBannerOpen] = useState(false);
   const wide = useWideRail();
   const [quietOpen, setQuietOpen] = useState<Record<string, boolean>>({});
   const [sourceOpen, setSourceOpen] = useState<Record<string, boolean>>({});
@@ -820,6 +876,9 @@ export function BoringDecisionDesk({
     cancelPending();
     setSending(true);
     setBanner(null);
+    setBannerOpen(false);
+    const itemsById = new Map(store.items.map((i) => [i.id, i]));
+    const payloadById = new Map(toSend.map((b) => [b.id, b]));
     try {
       const res = await dispatchAnswerBatch(toSend);
       if (res.error) {
@@ -828,9 +887,21 @@ export function BoringDecisionDesk({
       }
       const nextErrs: Record<string, string> = {};
       const succeeded = new Set<string>();
+      const sentDetails: SentAnswerSummary[] = [];
       for (const r of res.results) {
         if (r.status === "delivered" || r.status === "dismissed" || r.already) succeeded.add(r.id);
         else nextErrs[r.id] = r.error || "Delivery failed";
+        if (r.status === "delivered" || r.status === "dismissed") {
+          const it = itemsById.get(r.id);
+          const pay = payloadById.get(r.id);
+          const summary = r.summary || (it && pay ? formatSentChoiceSummary(it, pay) : r.choice);
+          sentDetails.push({
+            id: r.id,
+            lane: it?.lane ? `@${it.lane.replace(/^@/, "")}` : "Desk",
+            ask: it?.ask ?? r.id,
+            summary,
+          });
+        }
       }
       setRowErrors(nextErrs);
       setStaged((cur) => {
@@ -838,10 +909,10 @@ export function BoringDecisionDesk({
         for (const id of succeeded) delete copy[id];
         return copy;
       });
-      const okCount = res.results.filter((r) => r.status === "delivered" || r.status === "dismissed").length;
+      const okCount = sentDetails.length;
       const failCount = Object.keys(nextErrs).length;
-      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).` });
-      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.` });
+      if (failCount > 0) setBanner({ tone: "err", text: `Sent ${okCount}; ${failCount} failed (kept open below).`, ...(okCount > 0 ? { details: sentDetails } : {}) });
+      else setBanner({ tone: "ok", text: `Sent ${okCount} ${okCount === 1 ? "answer" : "answers"}.`, ...(okCount > 0 ? { details: sentDetails } : {}) });
       await refreshDecisions();
       setLogRev((n) => n + 1);
     } finally {
@@ -1317,9 +1388,41 @@ export function BoringDecisionDesk({
               {`Sending ${pending.batch.length} ${pending.batch.length === 1 ? "answer" : "answers"} in ${pending.remainingSec}s…`}
             </span>
           ) : banner ? (
-            <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
-              {banner.text}
-            </span>
+            <div className="boring-decision-banner-wrap">
+              <div className="boring-decision-banner-head">
+                <span className={`boring-decision-banner ${banner.tone}`} data-testid="boring-decision-banner">
+                  {banner.text}
+                </span>
+                {banner.details && banner.details.length > 0 && (
+                  <button
+                    type="button"
+                    className="boring-decision-banner-toggle"
+                    data-testid="boring-decision-banner-toggle"
+                    aria-expanded={bannerOpen}
+                    aria-controls="boring-decision-banner-details"
+                    onClick={() => setBannerOpen((v) => !v)}
+                  >
+                    {bannerOpen ? "Hide details ▴" : "Details ▾"}
+                  </button>
+                )}
+              </div>
+              {bannerOpen && banner.details && banner.details.length > 0 && (
+                <ul
+                  id="boring-decision-banner-details"
+                  className="boring-decision-banner-list"
+                  data-testid="boring-decision-banner-details"
+                  aria-label="Sent answers"
+                >
+                  {banner.details.map((d) => (
+                    <li key={d.id} className="boring-decision-banner-item" data-testid={`boring-decision-banner-item-${d.id}`}>
+                      <span className="boring-decision-banner-lane">{d.lane}</span>
+                      <span className="boring-decision-banner-summary">{d.summary}</span>
+                      <span className="boring-decision-banner-ask" title={d.ask}>{`re ${d.ask}`}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           ) : (
             <span className="boring-decision-bar-hint">
               {batch.length > 0
