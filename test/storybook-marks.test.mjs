@@ -138,6 +138,22 @@ test("V7 rn-e56176218a8a M1: edit with a contract is refused, never rewrites the
   assert.equal(markRow(rowsOf(SHEET_TEXT)[3], { action: "edit", text: "Bring {qty} {item}" }).owner_rewrite, "Bring {qty} {item}");
 });
 
+test("V7 rn-e56176218a8a m3: OK / Edit on the template row keep NEEDS-REWRITE while contract notes are open", () => {
+  const row = { ...rowsOf(SHEET_TEXT)[3], status: "NEEDS-REWRITE", owner_note: "contract:d_a: wrong verb | contract:k_b: say hunt" };
+  const ok = markRow(row, { action: "ok" });
+  assert.deepEqual([ok.status, ok.owner_note, ok.reviewed_hash], ["NEEDS-REWRITE", row.owner_note, ""]);
+  const ed = markRow(row, { action: "edit", text: "Bring {qty} {item}" });
+  assert.deepEqual([ed.status, ed.owner_rewrite, ed.owner_note, ed.reviewed_hash], ["NEEDS-REWRITE", "Bring {qty} {item}", row.owner_note, ""], "the rewrite is stored, the row stays open");
+  // once every contract is OK'd, the template OK flips it
+  let r = markRow(ed, { action: "ok", contract: "d_a" });
+  assert.equal(r.status, "NEEDS-REWRITE");
+  r = markRow(r, { action: "ok", contract: "k_b" });
+  assert.equal(r.status, "OWNER-OK");
+  assert.equal(r.owner_rewrite, "Bring {qty} {item}");
+  // a row with only its own Redo note (no contract notes) still flips on OK, as before
+  assert.equal(markRow({ ...row, owner_note: "stiff" }, { action: "ok" }).status, "OWNER-OK");
+});
+
 test("applyMarks rewrites only the marked rows, refuses stale ones, listMarks reads them back", () => {
   const res = applyMarks(SHEET_TEXT, [
     { target: T.armory, action: "ok" },

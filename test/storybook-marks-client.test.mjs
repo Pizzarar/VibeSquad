@@ -136,3 +136,21 @@ test("V7 rn-e56176218a8a M2: a per-mark refusal (stale row, mark failed) never l
   assert.match(tsx, /setBusy\(true\); setError\(null\);\s*try \{\s*const r = await fetch\(url, \{ method: "POST"/);
   assert.match(tsx, /data-testid="sb-marks-error-dismiss"[^>]*onClick=\{m\.dismissError\}/);
 });
+
+test("V7 rn-e56176218a8a m3 client: the template row shows how many contract notes are still open", () => {
+  const tpl = {
+    kind: "line", id: "tpl_kill", name: "tpl_kill",
+    data: { origin: "csv", file: "scripts/systems/ContractSystem.gd", id: "contract_title", data_path: "", where_seen: "contracts", line: "42", current_text: "Eliminate %d-%d x %s for %s", status: "STORY-TODO", owner_rewrite: "" },
+  };
+  const c1 = { kind: "contract", id: "k_a", name: "k_a", data: { type: "kill" } };
+  const m = server(tpl, { status: "NEEDS-REWRITE", rewrite: "Kill %d-%d %s for %s", contracts: { k_a: "too many", k_b: "low pay" } });
+  const st = M.markState(tpl, [tpl], M.marksByKey([m]), true);
+  assert.equal(st.kind, "redo");
+  assert.equal(st.openContracts, 2);
+  assert.equal(st.rewrite, "Kill %d-%d %s for %s", "the stored rewrite still shows");
+  assert.match(M.openContractsHint(st), /^2 contract notes still open/);
+  assert.equal(M.openContractsHint(M.markState(c1, [tpl], M.marksByKey([m]), true)), "", "a contract preview shows its own note, not the count");
+  assert.equal(M.openContractsHint(M.markState(tpl, [tpl], M.marksByKey([server(tpl)]), true)), "");
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /data-testid="sb-open-contracts">\{openContractsHint\(st\)\}/);
+});

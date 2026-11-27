@@ -2,7 +2,7 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, formMark, hasSessionError, isSessionStatus, markLabel, markState, marksByKey, openContractsHint, progress, type Mark, type MarkState, type MarksError, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -108,6 +108,8 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
       {st.kind === "none" && drafted && <span className="sb-mark-draft" title="Drafted rewrite: OK approves it">Draft: {drafted}</span>}
       {st.kind === "edit" && <span className="sb-mark-draft" title="Your rewrite">→ {st.rewrite}</span>}
       {st.kind === "ok" && st.draft && <span className="sb-mark-draft" title="Drafted rewrite you approved">→ {st.rewrite}</span>}
+      {st.kind === "redo" && st.openContracts && st.rewrite && st.rewrite !== drafted ? <span className="sb-mark-draft" title="Your rewrite (stored; the row stays Redo while contract notes are open)">→ {st.rewrite}</span> : null}
+      {st.openContracts ? <span className="sb-mark-hint" data-testid="sb-open-contracts">{openContractsHint(st)}</span> : null}
       {st.kind !== "none" && (
         <span className={`sb-mark-state sb-mark-${st.kind}`} data-testid="sb-mark-state" title={st.contractNote || st.note || st.rewrite || markLabel(st)}>
           {markLabel(st)}{(st.contractNote || st.note) ? `: ${st.contractNote || st.note}` : ""}

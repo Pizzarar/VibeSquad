@@ -11,7 +11,7 @@ export type MarksState = { exists: boolean; branch: string | null; pending: numb
  * What a row shows: ok / redo / edit (OWNER-OK with the owner's own rewrite), or none. `draft`: an OK that approved the
  * drafted rewrite (owner_rewrite equals the draft the row carried before review), shown as "OK (draft)", not "Edited".
  */
-export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean };
+export type MarkState = { kind: "ok" | "redo" | "edit" | "none"; note: string; rewrite: string; contractNote: string; draft?: boolean; openContracts?: number };
 
 /** The label a mark state reads as. */
 export function markLabel(st: MarkState): string {
@@ -79,7 +79,9 @@ export function markState(e: SbEntity | null | undefined, lines: SbEntity[], byK
     if (m && m.status !== "OWNER-OK" && !m.note && Object.keys(m.contracts ?? {}).length > 0) return none;
   }
   if (m) {
-    if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "" };
+    // the template row itself: OK / Edit keep NEEDS-REWRITE while contract notes are open (the server never flips it)
+    const open = hit.contract ? 0 : Object.keys(m.contracts ?? {}).length;
+    if (m.status !== "OWNER-OK") return { kind: "redo", note: m.note, rewrite: m.rewrite, contractNote: "", ...(open ? { openContracts: open } : {}) };
     if (!m.rewrite) return { kind: "ok", note: m.note, rewrite: "", contractNote: "" };
     const drafted = draftRewrite(hit.template ?? e);
     return drafted && csvUnsafe(m.rewrite) === drafted ? { kind: "ok", note: m.note, rewrite: m.rewrite, contractNote: "", draft: true } : { kind: "edit", note: m.note, rewrite: m.rewrite, contractNote: "" };
@@ -135,6 +137,12 @@ export function batchMarks(entities: SbEntity[], lines: SbEntity[], byKey: Map<s
 export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[], byKey: Map<string, ServerMark>, exists: boolean): boolean {
   if (!e || e.kind !== "line") return false;
   return markState(e, lines, byKey, exists).kind !== "none";
+}
+
+/** "2 contract notes still open" on a template row whose OK / Edit stays NEEDS-REWRITE until they are resolved. */
+export function openContractsHint(st: MarkState): string {
+  const n = st.openContracts ?? 0;
+  return n ? `${n} contract note${n === 1 ? "" : "s"} still open: stays Redo until each contract is OK'd` : "";
 }
 
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");

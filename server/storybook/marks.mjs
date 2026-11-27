@@ -125,6 +125,7 @@ const clean = (s) => String(s ?? "").replace(/\r\n?/g, "\n").trim().slice(0, MAX
 /**
  * Apply one mark to a row object (csv cells, already csv_safe'd as stored). Returns the new row object.
  *   ok    -> OWNER-OK, reviewed_hash = text_hash(current_text). A typed/drafted owner_rewrite stays (OK approves it).
+ *            ok / edit on a NEEDS-REWRITE row with open contract:<id> notes keep NEEDS-REWRITE (no reviewed_hash).
  *   redo  -> NEEDS-REWRITE + note (row note replaced; contract:<id> segments kept). With contract: only that segment.
  *   edit  -> owner_rewrite = text, OWNER-OK, reviewed_hash. Text equal to the current text keeps the current text: any
  *            drafted/earlier owner_rewrite is cleared, so `review_pack --apply` cannot write a rewrite the owner discarded.
@@ -148,17 +149,18 @@ export function markRow(row, { action, note, text, contract, base } = {}) {
       if (!t) throw new MarkError("edit needs text");
       r.owner_rewrite = t === cur ? "" : csvSafe(t);
     }
+    const parsed = parseNote(csvUnsafe(r.owner_note));
     if (action === "ok" && contract) {
-      const parsed = parseNote(csvUnsafe(r.owner_note));
       const n = clean(note);
       if (n) parsed.contracts.set(String(contract), n.replace(/\s*\|\s*/g, "; "));
       else parsed.contracts.delete(String(contract));
       r.owner_note = csvSafe(joinNote(parsed));
-      // Never clobber NEEDS-REWRITE to OWNER-OK while another contract on this shared template still has a Redo note.
-      if (r.status === "NEEDS-REWRITE" && parsed.contracts.size > 0) {
-        r.reviewed_hash = "";
-        return r;
-      }
+    }
+    // Never clobber NEEDS-REWRITE to OWNER-OK while a contract on this shared template still has an open note: not from
+    // another contract's OK, and not from OK / Edit on the template row itself (an Edit's owner_rewrite is still stored).
+    if (r.status === "NEEDS-REWRITE" && parsed.contracts.size > 0) {
+      r.reviewed_hash = "";
+      return r;
     }
     r.status = "OWNER-OK";
     r.reviewed_hash = textHash(cur);
