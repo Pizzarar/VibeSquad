@@ -69,7 +69,7 @@ function ctxWith(agents, logs, over = {}) {
 const go = (ctx, args) => callTool(ctx, "spawn_worker", { title: "t", prompt: "go", ...args });
 
 test("R8 flash arm config: opt-in only, provider antigravity-cli + tier cheap, not in IMPLEMENTER_ARMS", () => {
-  assert.deepEqual(IMPLEMENTER_ARMS, ["sonnet", "neon"]);
+  assert.deepEqual(IMPLEMENTER_ARMS, ["sonnet", "neon", "carbon"]);
   assert.equal(IMPLEMENTER_ARMS.includes("flash"), false);
   assert.deepEqual(
     [ARMS.flash.provider, ARMS.flash.tier, ARMS.flash.optIn, armProvider("flash"), armTier("flash")],
@@ -129,7 +129,7 @@ test("R8 spawn-route: roleSpawnProfile / roleSpawnConfig land on cheap rung (gem
   assert.deepEqual([tierA.profile.provider, tierA.profile.model, tierA.route.tier], ["antigravity-cli", "gemini-4-neon", "top"]);
 });
 
-test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8-flash; default alternates sonnet|neon only", async () => {
+test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8-flash; default alternates sonnet|neon|carbon only", async () => {
   const agents = [];
   const logs = [];
   const { ctx, creates } = ctxWith(agents, logs);
@@ -140,9 +140,9 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.deepEqual([creates[0].labels["vs.arm"], creates[0].labels["vs.arm-reason"], creates[0].labels["vs.model"]], ["flash", "opt-in", "gemini-3.8-flash"]);
   assert.deepEqual([fl.ab.arm, fl.ab.reason, fl.ab.model, fl.ab.provider], ["flash", "opt-in", "gemini-3.8-flash", "antigravity-cli"]);
   assert.equal(fl.route, "arm=flash reason=opt-in model=gemini-3.8-flash (Implement -> antigravity-cli)");
-  assert.deepEqual(countArms(agents, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0 }, "flash does not skew sonnet/neon counts");
+  assert.deepEqual(countArms(agents, { lane: "feat", team: "mx" }), { sonnet: 0, neon: 0, carbon: 0 }, "flash does not skew sonnet/neon/carbon counts");
 
-  // Default normal Implement spawns still alternate sonnet, neon, neon (2:1 Neon:Sonnet, @per G1; never flash).
+  // Default normal Implement spawns alternate sonnet, neon, carbon (X2 1:1:1, Gemini keeps G1's 2 of 3; never flash).
   const seq = [];
   for (let i = 0; i < 4; i++) {
     const r = await go(ctx, { profile: "Implement", stakes: "normal" });
@@ -152,7 +152,7 @@ test("R8 spawn_worker: opt-in flash stamps vs.arm=flash and routes to gemini-3.8
   assert.deepEqual(seq, [
     ["sonnet", "claude-sonnet-5-5-medium"],
     ["neon", "gemini-4-neon"],
-    ["neon", "gemini-4-neon"],
+    ["carbon", "gemini-4-carbon"],
     ["sonnet", "claude-sonnet-5-5-medium"],
   ]);
 

@@ -1,7 +1,7 @@
 // Workflow stamp at dispatch (PLAN_PER_POST03 P1, idea-223): every spawn carries a `wf` label naming its workflow arm, so
 // @usage can attribute units from the run record (runner `created` event meta.labels.wf) without merge-subject `[wf:]` tags.
 // The arm vocabulary matches the pilot tags already in git history: sonnet / opus / haiku / fable (Claude tiers),
-// gemini / flash (Antigravity), dsp / dsf (DeepSeek pro / flash via opencode).
+// gemini / flash / carbon (Antigravity), dsp / dsf (DeepSeek pro / flash via opencode).
 
 /** Label key carrying the workflow arm. Not protected or stripped by the runner, so a caller may set it (override wins). */
 export const WF_LABEL = "wf";
@@ -49,15 +49,17 @@ export function deriveWfArm({ provider, model, profile } = {}) {
     for (const tier of ["opus", "sonnet", "haiku", "fable"]) if (hay.includes(tier)) return tier;
     return "claude";
   }
-  if (fam === "gemini") return /flash/.test(hay) ? "flash" : "gemini";
+  // X2 (@per PLAN_PER_CRUNCH_1127): a Carbon run is wf=carbon (EXP13 reads it against Neon), whoever picked it.
+  if (fam === "gemini") return /flash/.test(hay) ? "flash" : /carbon/.test(hay) ? "carbon" : "gemini";
   if (fam === "deepseek") return /flash|\bdsf\b/.test(hay) ? "dsf" : "dsp";
   return normalizeWfLabel(fam) || "unknown";
 }
 
 // R0 (PLAN_PER_ROLES_LADDER_1125): an implementer arm picked by spawn_worker (`vs.arm` label) names its wf only when the
 // spawn really runs on that arm's family: the Neon arm on Gemini is wf=neon (Gemini reviewers/leads keep wf=gemini); a Neon
-// pick that failed over to Claude derives sonnet/opus like any other spawn.
-const ARM_WF_FROM = { neon: "gemini" };
+// pick that failed over to Claude derives sonnet/opus like any other spawn. X2: the Carbon arm is wf=carbon only when the
+// model really is Carbon (a pick whose arm model was dropped, e.g. a failover hop, derives what it ran).
+const ARM_WF_FROM = { neon: "gemini", carbon: "carbon" };
 
 /** The `wf` label for a spawn: the caller's label, else its VS_WF env, else the derived arm (refined by a `vs.arm` pick). */
 export function resolveWfLabel({ labels, env, provider, model, profile } = {}) {
