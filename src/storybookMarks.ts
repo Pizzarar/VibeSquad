@@ -138,3 +138,7 @@ export function isMarkedCsvRow(e: SbEntity | null | undefined, lines: SbEntity[]
 }
 
 export const allLines = (idx: EntityIndex): SbEntity[] => idx.byKind("line");
+
+/** True while a mark request is in flight or the session bar is showing a session error (V7 friction 8). */
+export const hasSessionError = (error: string | null | undefined, state: Pick<MarksState, "autoCommitError"> | null | undefined): boolean =>
+  Boolean(error || state?.autoCommitError);

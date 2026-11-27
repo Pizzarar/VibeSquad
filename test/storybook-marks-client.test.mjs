@@ -96,3 +96,14 @@ test("W4 friction 7 CSS: .sb-row-actions stays right-aligned on Edited/draft row
   assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \{ flex: 1 1 100%; \}/);
   assert.match(css, /\.sb-row-actions:has\(\.sb-mark-draft, \.sb-mark-form\) \.sb-mark \{ width: 100%; \}/);
 });
+
+test("V7 friction 8: mark buttons disable while the session bar shows a session error", () => {
+  assert.equal(M.hasSessionError(null, { autoCommitError: undefined }), false);
+  assert.equal(M.hasSessionError("review worktree folder already exists", { autoCommitError: undefined }), true);
+  assert.equal(M.hasSessionError(null, { autoCommitError: "review_pack --write failed" }), true);
+  const tsx = fs.readFileSync(new URL("../src/StorybookMarks.tsx", import.meta.url), "utf8");
+  assert.match(tsx, /const errBlocked = hasSessionError\(m\.error, m\.state\);/);
+  assert.match(tsx, /data-mark-key="1"[^>]*disabled=\{disabled\}/);
+  assert.match(tsx, /data-mark-key="2"[^>]*disabled=\{disabled\}/);
+  assert.match(tsx, /data-mark-key="3"[^>]*disabled=\{disabled\}/);
+});

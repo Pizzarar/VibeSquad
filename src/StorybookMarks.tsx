@@ -2,7 +2,7 @@
 // or arc line carries, the batch bar on a group/arc header, and the session bar ("End session" = one EFI commit).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityIndex, SbEntity } from "./storybookLogic";
-import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
+import { allLines, batchMarks, commitSummary, draftRewrite, entityTarget, hasSessionError, markLabel, markState, marksByKey, progress, type Mark, type MarkState, type MarksState, type ServerMark } from "./storybookMarks";
 
 export type MarksApi = {
   state: MarksState;
@@ -85,6 +85,9 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
   if (!e || !hit) return null;
   const st = m.stateOf(e);
   const drafted = draftRewrite(hit.template ?? e);
+  const errBlocked = hasSessionError(m.error, m.state);
+  const disabled = m.busy || errBlocked;
+  const errTip = "Resolve the review session error in the session bar first";
   const send = async (mk: Omit<Mark, "target">) => { if (await m.mark([{ target: hit.target, ...(hit.contract ? { contract: hit.contract } : {}), ...mk }])) setOpen(null); };
   const start = (k: "redo" | "edit") => { setDraft(k === "redo" ? (st.contractNote || st.note) : (st.rewrite || drafted || hit.target.seen.replace(/^'(?=[+\-=@])/, ""))); setOpen(open === k ? null : k); };
   return (
@@ -98,10 +101,10 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
         </span>
       )}
       <span className="sb-mark-btns">
-        <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={m.busy} title={hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
-        <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={m.busy} title="Redo with a note (key 2)" onClick={() => start("redo")}>Redo</button>
-        <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={m.busy} title={hit.contract ? "Edit the shared template (every contract of this type) (key 3)" : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>
-        {st.kind !== "none" && !hit.contract && <button type="button" className="sb-mbtn sb-mbtn-clear" disabled={m.busy} title="Undo your mark" aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
+        <button type="button" className="sb-mbtn sb-mbtn-ok" data-mark-key="1" aria-pressed={st.kind === "ok"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "OK the shared contract title template (key 1)" : drafted && st.kind === "none" ? "OK: approves the drafted rewrite (key 1)" : "OK (key 1)"} onClick={() => void send({ action: "ok" })}>OK</button>
+        <button type="button" className="sb-mbtn sb-mbtn-redo" data-mark-key="2" aria-pressed={st.kind === "redo"} aria-expanded={open === "redo"} disabled={disabled} title={errBlocked ? errTip : "Redo with a note (key 2)"} onClick={() => start("redo")}>Redo</button>
+        <button type="button" className="sb-mbtn sb-mbtn-edit" data-mark-key="3" aria-pressed={st.kind === "edit"} aria-expanded={open === "edit"} disabled={disabled} title={errBlocked ? errTip : hit.contract ? "Edit the shared template (every contract of this type) (key 3)" : "Edit the text (key 3)"} onClick={() => start("edit")}>Edit</button>
+        {st.kind !== "none" && !hit.contract && <button type="button" className="sb-mbtn sb-mbtn-clear" disabled={disabled} title={errBlocked ? errTip : "Undo your mark"} aria-label="Undo mark" onClick={() => void send({ action: "clear" })}>↺</button>}
       </span>
       {open && (
         <form className="sb-mark-form" data-testid="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void send(open === "redo" ? { action: "redo", note: draft } : { action: "edit", text: draft }); }}>
@@ -109,7 +112,7 @@ export function MarkButtons({ e, m }: { e: SbEntity | null | undefined; m: Marks
           <textarea className="sb-mark-input" aria-label={open === "redo" ? "What should change" : "New text"} placeholder={open === "redo" ? "What should change?" : ""} rows={open === "edit" ? 3 : 2} value={draft} autoFocus
             onChange={(ev) => setDraft(ev.target.value)} onKeyDown={(ev) => { if (ev.key === "Escape") setOpen(null); if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) (ev.currentTarget.form as HTMLFormElement | null)?.requestSubmit(); ev.stopPropagation(); }} />
           <span className="sb-mark-formbtns">
-            <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={m.busy || !draft.trim()}>{open === "redo" ? "Save note" : "Save edit"}</button>
+            <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !draft.trim()}>{open === "redo" ? "Save note" : "Save edit"}</button>
             <button type="button" className="sb-mbtn" onClick={() => setOpen(null)}>Cancel</button>
           </span>
         </form>
@@ -126,15 +129,16 @@ export function MarkBatch({ entities, label, m }: { entities: SbEntity[]; label?
   if (!markable.length) return null;
   const p = progress(markable.map((e) => m.stateOf(e)));
   const okAll = batchMarks(markable, m.lines, m.byKey, m.state.exists, "ok");
+  const disabled = m.busy || hasSessionError(m.error, m.state);
   return (
     <span className="sb-batch" data-testid="sb-batch">
       <span className="sb-progress" data-testid="sb-progress">{label ? `${label} ` : ""}{p.done}/{p.total} reviewed</span>
-      {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-ok" disabled={m.busy} data-testid="sb-ok-all" title="Mark every row without a mark OK (your Redo/Edit marks stay)" onClick={() => void m.mark(okAll)}>OK all ({okAll.length})</button>}
-      {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-redo" disabled={m.busy} aria-expanded={redo} onClick={() => setRedo((v) => !v)}>Redo all…</button>}
+      {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-ok" disabled={disabled} data-testid="sb-ok-all" title="Mark every row without a mark OK (your Redo/Edit marks stay)" onClick={() => void m.mark(okAll)}>OK all ({okAll.length})</button>}
+      {okAll.length > 0 && <button type="button" className="sb-mbtn sb-mbtn-redo" disabled={disabled} aria-expanded={redo} onClick={() => setRedo((v) => !v)}>Redo all…</button>}
       {redo && (
         <form className="sb-mark-form" onSubmit={(ev) => { ev.preventDefault(); void m.mark(batchMarks(markable, m.lines, m.byKey, m.state.exists, "redo", note)).then((ok) => { if (ok) { setRedo(false); setNote(""); } }); }}>
           <input className="sb-mark-input" aria-label="One note for every unmarked row" placeholder={`One note for ${okAll.length} rows`} value={note} autoFocus onChange={(ev) => setNote(ev.target.value)} onKeyDown={(ev) => ev.stopPropagation()} />
-          <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={m.busy || !note.trim()}>Redo {okAll.length}</button>
+          <button type="submit" className="sb-mbtn sb-mbtn-save" disabled={disabled || !note.trim()}>Redo {okAll.length}</button>
         </form>
       )}
     </span>
