@@ -19,7 +19,7 @@ let pw, exe, server, baseUrl, browser, unavailable;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml" };
 
 before(async () => {
-  pw = resolvePlaywright();
+  pw = resolvePlaywright({ npx: false });
   exe = findBrowser();
   const why = browserSkipReason({ pw, exe });
   if (why) { unavailable = why; return; }

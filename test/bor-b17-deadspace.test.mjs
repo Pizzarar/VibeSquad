@@ -277,7 +277,7 @@ test("CSS: fluid measure vars, B17 section scoped/single-line, Psycho + styles.c
   assert.doesNotMatch(read("src", "BoringPanePicker.tsx"), /Hypnospace/i);
 });
 
-const chromium = resolvePlaywright()?.chromium ?? null;
+const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };

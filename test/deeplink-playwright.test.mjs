@@ -31,7 +31,7 @@ let pw, executablePath, browser, server, baseUrl, unavailable;
 const streams = new Set();
 
 before(async () => {
-  pw = resolvePlaywright();
+  pw = resolvePlaywright({ npx: false });
   executablePath = findBrowser();
   if (!pw || !executablePath) {
     unavailable = !pw ? PLAYWRIGHT_MISSING : "no Edge/Chrome executable";

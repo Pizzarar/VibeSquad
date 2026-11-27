@@ -54,7 +54,7 @@ test("markup: more than six others collapse to a +N badge; needs-you suppresses 
   assert.match(blocked, /data-state="needs-you"/);
 });
 
-const chromium = resolvePlaywright()?.chromium ?? null;
+const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 

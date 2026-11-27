@@ -91,7 +91,7 @@ test("B18c: filter q auto-opening is wired to the same needle, filters other lan
 });
 
 // ---- B18c browser half: the real app (?demo=1, several projects). Skips cleanly without Playwright/Chromium. ----
-const chromium = resolvePlaywright()?.chromium ?? null;
+const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 const initScript = (theme) => `try{localStorage.setItem("vs.vibeMigratedNormal","1");localStorage.setItem("vs.vibePicked","1");const p=JSON.parse(localStorage.getItem("vs.prefs.v1")||"{}");localStorage.setItem("vs.prefs.v1",JSON.stringify({...p,"app.vibe":"boring","app.theme":"${theme}"}))}catch(e){}`;

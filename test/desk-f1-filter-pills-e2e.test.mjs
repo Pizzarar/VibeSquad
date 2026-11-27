@@ -47,7 +47,7 @@ function resetBackend() {
 }
 
 before(async () => {
-  pw = resolvePlaywright();
+  pw = resolvePlaywright({ npx: false });
   exe = findBrowser();
   const why = browserSkipReason({ pw, exe });
   if (why) { unavailable = why; return; }

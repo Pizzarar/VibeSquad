@@ -111,7 +111,7 @@ function resetErrors() {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 before(async () => {
-  pw = resolvePlaywrightInfo();
+  pw = resolvePlaywrightInfo({ npx: false });
   if (!pw) {
     unavailable = PLAYWRIGHT_MISSING;
     return;

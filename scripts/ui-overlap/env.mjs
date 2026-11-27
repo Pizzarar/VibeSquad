@@ -46,6 +46,7 @@ const NPX_SCAN_LIMIT = 50; // bounded: at most this many ~/.npm/_npx entries are
 export function playwrightCandidates({
   env = process.env, home = os.homedir(), resolveLocal = (n) => require2.resolve(n),
   readdir = fs.readdirSync, exists = fs.existsSync, mtime = (p) => fs.statSync(p).mtimeMs,
+  npx = true, // false: skip the npx-cache scan (the test suite passes this, see resolvePlaywright)
 } = {}) {
   const out = [];
   if (env.PLAYWRIGHT_DIR) out.push(path.join(env.PLAYWRIGHT_DIR, "playwright-core"));
@@ -59,14 +60,14 @@ export function playwrightCandidates({
   const durable = path.join(home, ".vibesquad", "tools", "playwright", "node_modules");
   out.push(path.join(durable, "playwright-core"), path.join(durable, "playwright"));
   // npx caches: ~/.npm/_npx, plus %LOCALAPPDATA%/npm-cache/_npx when LOCALAPPDATA is set (Windows npm).
-  const roots = [path.join(home, ".npm", "_npx")];
-  if (env.LOCALAPPDATA) roots.push(path.join(env.LOCALAPPDATA, "npm-cache", "_npx"));
+  const roots = npx ? [path.join(home, ".npm", "_npx")] : [];
+  if (npx && env.LOCALAPPDATA) roots.push(path.join(env.LOCALAPPDATA, "npm-cache", "_npx"));
   const hits = [];
-  for (const npx of roots) {
+  for (const root of roots) {
     let dirs = [];
-    try { dirs = readdir(npx).slice(0, NPX_SCAN_LIMIT); } catch {}
+    try { dirs = readdir(root).slice(0, NPX_SCAN_LIMIT); } catch {}
     for (const d of dirs) {
-      const p = path.join(npx, d, "node_modules", "playwright-core");
+      const p = path.join(root, d, "node_modules", "playwright-core");
       let has = false;
       try { has = exists(path.join(p, "package.json")); } catch {}
       if (!has) continue;
@@ -88,6 +89,11 @@ export function resolvePlaywrightInfo({ load = (c) => require2(c), ...opts } = {
   return null;
 }
 
+/**
+ * Scripts (ui-clicks, ui-overlap) and agents take the default, which includes the npx-cache scan. The test suite passes
+ * `{ npx: false }`: a stray npx cache must not flip browser-gated tests from skip to run (a snap Chromium cannot launch
+ * in our tmp profile dirs and fails them). Tests still run when PLAYWRIGHT_DIR, repo node_modules or the durable dir has it.
+ */
 export function resolvePlaywright(opts) {
   return resolvePlaywrightInfo(opts)?.mod ?? null;
 }

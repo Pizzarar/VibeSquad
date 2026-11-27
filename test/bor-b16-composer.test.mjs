@@ -113,7 +113,7 @@ test("bar renders the switch button, visible Think/Mode hints and the staged hin
   assert.ok(!renderToStaticMarkup(React.createElement(BoringComposerBar, base())).includes("boring-composer-staged"));
 });
 
-const chromium = resolvePlaywright()?.chromium ?? null;
+const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 const page = (theme, vibe, width, over = {}) => `<!doctype html><html data-vibe="${vibe}" data-theme="${theme}"><head><meta charset="utf-8"><style>${read("src", "styles.css")}\n${read("src", "boring.css")}</style></head><body style="margin:0;width:${width}px"><footer class="composer"><div class="composer-row boring-composer-row"><textarea placeholder="Message Worker…"></textarea>${renderToStaticMarkup(React.createElement(BoringComposerBar, base({ running: true, isBs: true, ...over })))}</div></footer></body></html>`;

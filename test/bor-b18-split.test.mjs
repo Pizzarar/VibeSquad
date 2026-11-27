@@ -21,7 +21,7 @@ test("B18e static: Back to split pill, clearRightPane, Shift+click dormant Desk/
   assert.match(ade, /clearRightPane\(\)/);
 });
 
-const chromium = resolvePlaywright()?.chromium ?? null;
+const chromium = resolvePlaywright({ npx: false })?.chromium ?? null;
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const skip = chromium && exe ? false : `no Playwright/Chromium (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; Playwright: ${PLAYWRIGHT_INSTALL_CMD})`;
 

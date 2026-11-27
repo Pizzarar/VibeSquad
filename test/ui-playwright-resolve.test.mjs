@@ -146,6 +146,17 @@ test("falls through to the npx scan when the durable dir is absent", () => {
   assert.equal(info.from, npxCore);
 });
 
+test("npx:false (the test suite) skips the npx scan on both roots but keeps the durable dir", () => {
+  const c = playwrightCandidates({
+    home: HOME, env: { LOCALAPPDATA: LAD }, resolveLocal: noLocal, npx: false,
+    ...fakeFs({ npxDirs: ["posix"], winDirs: ["win"] }),
+  });
+  assert.deepEqual(c.filter((p) => p.startsWith(NPX) || p.startsWith(WIN_NPX)), []);
+  assert.ok(c.some((p) => p.includes(path.join(".vibesquad", "tools", "playwright"))));
+  const npxCore = path.join(NPX, "abc", "node_modules", "playwright-core");
+  assert.equal(resolvePlaywrightInfo({ home: HOME, env: {}, resolveLocal: noLocal, npx: false, load: (x) => { if (x === npxCore) return {}; throw new Error("m"); }, ...fakeFs({ npxDirs: ["abc"] }) }), null);
+});
+
 test("shellQuote: a home dir with spaces stays one argument; POSIX escapes $ and quotes; cmd.exe takes it as-is", () => {
   assert.equal(shellQuote("/home/a b/.vibesquad", "linux"), `"/home/a b/.vibesquad"`);
   assert.equal(shellQuote(`/x/$y"z\\`, "darwin"), `"/x/\\$y\\"z\\\\"`);
