@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { AgentDrawer, triggerBrainstormRestart } from "./AgentDrawer";
 import type { RunnerConn } from "./daemonOverlay";
 import { oppositeProviderTarget } from "./DrawerHeader";
@@ -84,7 +84,10 @@ function RestartHost({ hostRestart }: { hostRestart?: HostRestartReq }) {
   const [h, setH] = useState<RestartState>({ phase: "idle" });
   const [local, setLocal] = useState<{ req: HostRestartReq; hostKey: string } | undefined>(undefined);
   const hostKey = hostRestartKey(hostRestart);
-  const setReq = (r: HostRestartReq) => setLocal({ req: r, hostKey });
+  // Read the key at stamp time (after awaits), not the render-time closure: a status refresh may have advanced the prop meanwhile.
+  const hostKeyRef = useRef(hostKey);
+  hostKeyRef.current = hostKey;
+  const setReq = (r: HostRestartReq) => setLocal({ req: r, hostKey: hostKeyRef.current });
   const live = pickLiveRestart(local, hostRestart);
   const liveState = live && ACTIVE.has(live.state) ? live.state : null;
   useEffect(() => {
@@ -171,7 +174,7 @@ function Empty({ what, action, busy, onAction }: { what: string; action: string;
   );
 }
 
-type HostStatus = { hostLabel?: string; headless?: boolean; restartRequest?: { state: string; summary?: string } | null; relay?: { running?: boolean; connected?: boolean } | null };
+type HostStatus = { hostLabel?: string; headless?: boolean; restartRequest?: { id?: string | null; state: string; summary?: string } | null; relay?: { running?: boolean; connected?: boolean } | null };
 
 /** H1: host label / headless / relay / restart window from /api/auth/status; once on mount, then every 30s only while the ⋯ drawer is open. */
 function useHostStatus(open: boolean): HostStatus | null {
