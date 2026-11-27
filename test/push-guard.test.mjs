@@ -1107,6 +1107,40 @@ describe("push-guard: stale and ambiguous lane tags (idea-1215)", () => {
     assert.equal(evaluatePush({ merges: tagged("@release-desk"), pusherLane: "release-desk", pusherTeam: "sq", teams: bumped, findLane: resolveLaneQuery }).ok, true);
   });
 
+  test("two live holders in one Squad are ambiguous with an empty preferTeamId too (review M1)", () => {
+    const squads = [
+      { id: "other", lanes: [{ id: "x-lane", name: "Xylo", state: "pinned", code: "Xyl" }] },
+      {
+        id: "sq",
+        lanes: [
+          { id: "relay", name: "Relay", state: "pinned", code: "Rel" },
+          { id: "release-desk", name: "Release Desk", state: "pinned", code: "Rel" },
+        ],
+      },
+    ];
+    assert.equal(findLaneInRegistry("rel", squads), null);
+    assert.equal(findLaneInRegistry("rel", squads, "other"), null);
+    assert.deepEqual(resolveLaneQuery("@rel", squads, "").ambiguous.map((h) => h.lane.id), ["relay", "release-desk"]);
+    const r = evaluatePush({ merges: tagged("@rel"), pusherLane: "release-desk", pusherTeam: "", teams: squads, findLane: resolveLaneQuery });
+    assert.equal(r.refused[0].reason, "ambiguous-tag");
+    // Different Squads sharing a code stay a pick, not ambiguity (standing bug lanes).
+    assert.equal(findLaneInRegistry("rel", SQUADS).lane.id, "release-desk-2");
+  });
+
+  test("an unheld or typo prefix with no removed holder stays unknown, never inherited (review M2)", () => {
+    const squads = [{ id: "sq", lanes: [{ id: "release-desk", name: "Release Desk", state: "pinned", code: "Reld" }] }];
+    for (const q of ["rel", "@relea", "rele"]) {
+      assert.equal(findLaneInRegistry(q, squads, "sq"), null, q);
+      assert.equal(resolveLaneQuery(q, squads, "sq"), null, q);
+    }
+    const r = evaluatePush({ merges: tagged("@relea"), pusherLane: "release-desk", pusherTeam: "sq", teams: squads, findLane: resolveLaneQuery });
+    assert.deepEqual(r.refused.map((x) => [x.reason, x.lane]), [["other-lane", "relea"]]);
+    // A removed lane in another Squad holding the code does not let this Squad's lane inherit it either.
+    const cross = [...squads, { id: "s2", lanes: [{ id: "old", name: "Rel Old", state: "removed", code: "Rel" }] }];
+    assert.equal(findLaneInRegistry("rel", cross, "sq").lane.id, "old");
+    assert.equal(resolveLaneQuery("rel", cross, "sq").stale, true);
+  });
+
   test("an unknown tag is still refused for the desk", () => {
     const r = evaluatePush({ merges: tagged("@nosuch"), pusherLane: "release-desk", pusherTeam: "vibesquad", ...reg });
     assert.equal(r.ok, false);

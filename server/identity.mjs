@@ -239,6 +239,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
 }
 
 /** A lane `vs pin remove` retired (state removed). It keeps its stored code, but never shadows a live lane's handle (idea-1215). */
+// Intentionally not state "done": a done lane may still have merges to push, so it keeps its code reserved like a live lane.
 export function isRemovedLane(lane) {
   return String(lane?.state ?? "").toLowerCase() === "removed" || Boolean(lane?.removedAt);
 }
@@ -276,9 +277,10 @@ function lookupLane(laneQuery, teams, preferTeamId) {
  * Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches (q lowercased, no `@`).
  * Order (idea-1215: a removed lane must never shadow a live lane's handle):
  *  1. the caller's Squad, live lanes only: a live code holder, else a live lane that was bumped past that code at
- *     creation because a now-removed lane held it (Release Desk got Rele while Release 0.2.0 held Rel, so @rel is the
+ *     creation because a now-removed lane of that Squad holds it (Release Desk got Rele while Release 0.2.0 held Rel, so @rel is the
  *     desk once 0.2.0 is removed). Two live claimants in one Squad -> { ambiguous }: fail closed, never guess.
- *  2. every other Squad, the same two live passes. Several Squads can share a code (standing bug lanes): a non-hidden
+ *  2. every other Squad, the same two live passes (two live holders within one Squad -> { ambiguous }, even with no
+ *     caller Squad). Several Squads can share a code (standing bug lanes): a non-hidden
  *     holder wins (the pre-backfill holder: bug-chaser is standing but visible, backfilled lanes are hidden), then
  *     array order; bumped lanes only when exactly one exists.
  *  3. a removed lane holding the code, the caller's Squad first, so `vs who --lane <old code>` still names it.
@@ -291,12 +293,14 @@ function resolveLaneCode(q, teams, isPref) {
     const holdsQ = (lane) => String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q;
     const lanes = team.lanes || [];
     const liveHolder = lanes.some((l) => !isRemovedLane(l) && holdsQ(l));
+    // Inherit only a code a removed lane of this Squad really holds: an unheld or typo prefix stays unknown.
+    const removedHolder = lanes.some((l) => isRemovedLane(l) && holdsQ(l));
     for (const lane of lanes) {
       if (holdsQ(lane)) {
         holders.push({ team, lane });
         continue;
       }
-      if (liveHolder || isRemovedLane(lane)) continue;
+      if (liveHolder || !removedHolder || isRemovedLane(lane)) continue;
       // Bumped past q: q ranks before the lane's own code among its candidates, so it took a later one only because q was taken.
       const cands = laneCodeCandidates(lane).map((c) => c.toLowerCase());
       const at = cands.indexOf(q);
@@ -308,6 +312,11 @@ function resolveLaneCode(q, teams, isPref) {
   const own = one(live.filter((h) => isPref(h.team))) ?? one(bumped.filter((h) => isPref(h.team)));
   if (own) return own;
   const otherLive = live.filter((h) => !isPref(h.team));
+  // Two live holders inside any one Squad are ambiguous whoever asks (an empty preferTeamId included): fail closed.
+  for (const team of teams) {
+    const same = otherLive.filter((h) => h.team === team);
+    if (same.length > 1) return { ambiguous: same };
+  }
   if (otherLive.length) return otherLive.find((h) => !h.lane.hidden) ?? otherLive[0];
   const otherBumped = one(bumped.filter((h) => !isPref(h.team)));
   if (otherBumped) return otherBumped;
