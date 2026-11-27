@@ -1,0 +1,299 @@
+{
+ "dark-1920": {
+  "wide": true,
+  "ellipsized": [
+   "@art-direction (title=@art-direction)",
+   "@runner-pilot (title=@runner-pilot)",
+   "@main-game (title=@main-game)",
+   "@site-polish (title=@site-polish)"
+  ],
+  "eightChar": [
+   "@plugins 52.8/52.8",
+   "@ui-bois 52.8/52.8",
+   "@lane-10 52.8/52.8",
+   "@lane-11 52.8/52.8",
+   "@lane-12 52.8/52.8",
+   "@lane-13 52.8/52.8",
+   "@lane-14 52.8/52.8",
+   "@lane-15 52.8/52.8",
+   "@lane-16 52.8/52.8",
+   "@lane-17 52.8/52.8",
+   "@lane-18 52.8/52.8",
+   "@lane-19 52.8/52.8",
+   "@lane-20 52.8/52.8",
+   "@lane-21 52.8/52.8",
+   "@lane-22 52.8/52.8",
+   "@lane-23 52.8/52.8",
+   "@lane-24 52.8/52.8"
+  ],
+  "truncatedEvents": [],
+  "minSlack": 3,
+  "desk": [
+   {
+    "lane": "Desk",
+    "text": "decisionDecision Desk approved for Normal default landing",
+    "colW": 379,
+    "textW": 376,
+    "slack": 3,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "doneNightly build green on all zones",
+    "colW": 379,
+    "textW": 228,
+    "slack": 151,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "No recent done/decision",
+    "colW": 379,
+    "textW": 154,
+    "slack": 225,
+    "lineH": 24
+   }
+  ],
+  "lineHeights": [
+   24
+  ],
+  "errs": []
+ },
+ "light-1920": {
+  "wide": true,
+  "ellipsized": [
+   "@art-direction (title=@art-direction)",
+   "@runner-pilot (title=@runner-pilot)",
+   "@main-game (title=@main-game)",
+   "@site-polish (title=@site-polish)"
+  ],
+  "eightChar": [
+   "@plugins 52.8/52.8",
+   "@ui-bois 52.8/52.8",
+   "@lane-10 52.8/52.8",
+   "@lane-11 52.8/52.8",
+   "@lane-12 52.8/52.8",
+   "@lane-13 52.8/52.8",
+   "@lane-14 52.8/52.8",
+   "@lane-15 52.8/52.8",
+   "@lane-16 52.8/52.8",
+   "@lane-17 52.8/52.8",
+   "@lane-18 52.8/52.8",
+   "@lane-19 52.8/52.8",
+   "@lane-20 52.8/52.8",
+   "@lane-21 52.8/52.8",
+   "@lane-22 52.8/52.8",
+   "@lane-23 52.8/52.8",
+   "@lane-24 52.8/52.8"
+  ],
+  "truncatedEvents": [],
+  "minSlack": 3,
+  "desk": [
+   {
+    "lane": "Desk",
+    "text": "decisionDecision Desk approved for Normal default landing",
+    "colW": 379,
+    "textW": 376,
+    "slack": 3,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "doneNightly build green on all zones",
+    "colW": 379,
+    "textW": 228,
+    "slack": 151,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "No recent done/decision",
+    "colW": 379,
+    "textW": 154,
+    "slack": 225,
+    "lineH": 24
+   }
+  ],
+  "lineHeights": [
+   24
+  ],
+  "errs": []
+ },
+ "dark-3200": {
+  "wide": true,
+  "ellipsized": [
+   "@art-direction (title=@art-direction)",
+   "@runner-pilot (title=@runner-pilot)",
+   "@main-game (title=@main-game)",
+   "@site-polish (title=@site-polish)"
+  ],
+  "eightChar": [
+   "@plugins 52.8/52.8",
+   "@ui-bois 52.8/52.8",
+   "@lane-10 52.8/52.8",
+   "@lane-11 52.8/52.8",
+   "@lane-12 52.8/52.8",
+   "@lane-13 52.8/52.8",
+   "@lane-14 52.8/52.8",
+   "@lane-15 52.8/52.8",
+   "@lane-16 52.8/52.8",
+   "@lane-17 52.8/52.8",
+   "@lane-18 52.8/52.8",
+   "@lane-19 52.8/52.8",
+   "@lane-20 52.8/52.8",
+   "@lane-21 52.8/52.8",
+   "@lane-22 52.8/52.8",
+   "@lane-23 52.8/52.8",
+   "@lane-24 52.8/52.8"
+  ],
+  "truncatedEvents": [],
+  "minSlack": 208,
+  "desk": [
+   {
+    "lane": "Desk",
+    "text": "decisionDecision Desk approved for Normal default landing",
+    "colW": 584,
+    "textW": 376,
+    "slack": 208,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "doneNightly build green on all zones",
+    "colW": 584,
+    "textW": 228,
+    "slack": 356,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "No recent done/decision",
+    "colW": 584,
+    "textW": 154,
+    "slack": 430,
+    "lineH": 24
+   }
+  ],
+  "lineHeights": [
+   24
+  ],
+  "errs": []
+ },
+ "hoverTitle": "@art-direction",
+ "light-3200": {
+  "wide": true,
+  "ellipsized": [
+   "@art-direction (title=@art-direction)",
+   "@runner-pilot (title=@runner-pilot)",
+   "@main-game (title=@main-game)",
+   "@site-polish (title=@site-polish)"
+  ],
+  "eightChar": [
+   "@plugins 52.8/52.8",
+   "@ui-bois 52.8/52.8",
+   "@lane-10 52.8/52.8",
+   "@lane-11 52.8/52.8",
+   "@lane-12 52.8/52.8",
+   "@lane-13 52.8/52.8",
+   "@lane-14 52.8/52.8",
+   "@lane-15 52.8/52.8",
+   "@lane-16 52.8/52.8",
+   "@lane-17 52.8/52.8",
+   "@lane-18 52.8/52.8",
+   "@lane-19 52.8/52.8",
+   "@lane-20 52.8/52.8",
+   "@lane-21 52.8/52.8",
+   "@lane-22 52.8/52.8",
+   "@lane-23 52.8/52.8",
+   "@lane-24 52.8/52.8"
+  ],
+  "truncatedEvents": [],
+  "minSlack": 208,
+  "desk": [
+   {
+    "lane": "Desk",
+    "text": "decisionDecision Desk approved for Normal default landing",
+    "colW": 584,
+    "textW": 376,
+    "slack": 208,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "doneNightly build green on all zones",
+    "colW": 584,
+    "textW": 228,
+    "slack": 356,
+    "lineH": 24
+   },
+   {
+    "lane": "Desk",
+    "text": "No recent done/decision",
+    "colW": 584,
+    "textW": 154,
+    "slack": 430,
+    "lineH": 24
+   }
+  ],
+  "lineHeights": [
+   24
+  ],
+  "errs": []
+ },
+ "dark-1600": {
+  "wide": false,
+  "ellipsized": [],
+  "eightChar": [
+   "@plugins 52.8/52.8",
+   "@ui-bois 52.8/52.8",
+   "@lane-10 52.8/52.8",
+   "@lane-11 52.8/52.8",
+   "@lane-12 52.8/52.8",
+   "@lane-13 52.8/52.8",
+   "@lane-14 52.8/52.8",
+   "@lane-15 52.8/52.8",
+   "@lane-16 52.8/52.8",
+   "@lane-17 52.8/52.8",
+   "@lane-18 52.8/52.8",
+   "@lane-19 52.8/52.8",
+   "@lane-20 52.8/52.8",
+   "@lane-21 52.8/52.8",
+   "@lane-22 52.8/52.8",
+   "@lane-23 52.8/52.8",
+   "@lane-24 52.8/52.8"
+  ],
+  "truncatedEvents": [],
+  "minSlack": 306,
+  "desk": [
+   {
+    "lane": "Desk",
+    "text": "decisionDecision Desk approved for Normal default landing",
+    "colW": 682,
+    "textW": 376,
+    "slack": 306,
+    "lineH": 26
+   },
+   {
+    "lane": "Desk",
+    "text": "doneNightly build green on all zones",
+    "colW": 682,
+    "textW": 228,
+    "slack": 454,
+    "lineH": 26
+   },
+   {
+    "lane": "Desk",
+    "text": "No recent done/decision",
+    "colW": 702,
+    "textW": 154,
+    "slack": 548,
+    "lineH": 24
+   }
+  ],
+  "lineHeights": [
+   26,
+   24
+  ],
+  "errs": []
+ }
+}

@@ -1,0 +1,1446 @@
+{
+ "dark-1920": [
+  {
+   "label": "default",
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "staged vs",
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs hidden",
+   "send": "Send 0 answers · +1 hidden (VibeSquad)",
+   "sendDisabled": true,
+   "sendTitle": "1 staged answer hidden in: VibeSquad",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +1 hidden (VibeSquad)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +1 hidden (VibeSquad)",
+     "title": "1 staged answer hidden in: VibeSquad",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(154, 151, 168)",
+     "fs": "13px",
+     "w": 285,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs + site staged, both hidden",
+   "send": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "sendDisabled": true,
+   "sendTitle": "2 staged answers hidden in: VibeSquad, Site",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+     "title": "2 staged answers hidden in: VibeSquad, Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(154, 151, 168)",
+     "fs": "13px",
+     "w": 320,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs back, site hidden",
+   "send": "Send 1 answer · +1 hidden (Site)",
+   "sendDisabled": false,
+   "sendTitle": "1 staged answer hidden in: Site",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer · +1 hidden (Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 1 answer · +1 hidden (Site)",
+     "title": "1 staged answer hidden in: Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(20, 17, 28)",
+     "fs": "13px",
+     "w": 230,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "all back",
+   "send": "Send 2 answers",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 ready to send · 1 lean not included | Use all leans (1) | Send 2 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  }
+ ],
+ "light-1920": [
+  {
+   "label": "default",
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "staged vs",
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs hidden",
+   "send": "Send 0 answers · +1 hidden (VibeSquad)",
+   "sendDisabled": true,
+   "sendTitle": "1 staged answer hidden in: VibeSquad",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +1 hidden (VibeSquad)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +1 hidden (VibeSquad)",
+     "title": "1 staged answer hidden in: VibeSquad",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(94, 88, 104)",
+     "fs": "13px",
+     "w": 285,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs + site staged, both hidden",
+   "send": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "sendDisabled": true,
+   "sendTitle": "2 staged answers hidden in: VibeSquad, Site",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+     "title": "2 staged answers hidden in: VibeSquad, Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(94, 88, 104)",
+     "fs": "13px",
+     "w": 320,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs back, site hidden",
+   "send": "Send 1 answer · +1 hidden (Site)",
+   "sendDisabled": false,
+   "sendTitle": "1 staged answer hidden in: Site",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer · +1 hidden (Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 1 answer · +1 hidden (Site)",
+     "title": "1 staged answer hidden in: Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(255, 255, 255)",
+     "fs": "13px",
+     "w": 230,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "all back",
+   "send": "Send 2 answers",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 ready to send · 1 lean not included | Use all leans (1) | Send 2 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  }
+ ],
+ "dark-3200": [
+  {
+   "label": "default",
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "staged vs",
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs hidden",
+   "send": "Send 0 answers · +1 hidden (VibeSquad)",
+   "sendDisabled": true,
+   "sendTitle": "1 staged answer hidden in: VibeSquad",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +1 hidden (VibeSquad)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +1 hidden (VibeSquad)",
+     "title": "1 staged answer hidden in: VibeSquad",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(154, 151, 168)",
+     "fs": "13px",
+     "w": 285,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs + site staged, both hidden",
+   "send": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "sendDisabled": true,
+   "sendTitle": "2 staged answers hidden in: VibeSquad, Site",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+     "title": "2 staged answers hidden in: VibeSquad, Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(154, 151, 168)",
+     "fs": "13px",
+     "w": 320,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs back, site hidden",
+   "send": "Send 1 answer · +1 hidden (Site)",
+   "sendDisabled": false,
+   "sendTitle": "1 staged answer hidden in: Site",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer · +1 hidden (Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 1 answer · +1 hidden (Site)",
+     "title": "1 staged answer hidden in: Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(20, 17, 28)",
+     "fs": "13px",
+     "w": 230,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(155, 114, 232)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "all back",
+   "send": "Send 2 answers",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 ready to send · 1 lean not included | Use all leans (1) | Send 2 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  }
+ ],
+ "light-3200": [
+  {
+   "label": "default",
+   "send": "Send 0 answers",
+   "sendDisabled": true,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 leans not included. Tap a lean, pick an option, or type an answer. | Use all leans (2) | Send 0 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "staged vs",
+   "send": "Send 1 answer",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs hidden",
+   "send": "Send 0 answers · +1 hidden (VibeSquad)",
+   "sendDisabled": true,
+   "sendTitle": "1 staged answer hidden in: VibeSquad",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +1 hidden (VibeSquad)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +1 hidden (VibeSquad)",
+     "title": "1 staged answer hidden in: VibeSquad",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(94, 88, 104)",
+     "fs": "13px",
+     "w": 285,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs + site staged, both hidden",
+   "send": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "sendDisabled": true,
+   "sendTitle": "2 staged answers hidden in: VibeSquad, Site",
+   "sendAria": null,
+   "bar": "1 lean not included. Tap a lean, pick an option, or type an answer. | Use all leans (1) | Send 0 answers · +2 hidden (VibeSquad, Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 0 answers · +2 hidden (VibeSquad, Site)",
+     "title": "2 staged answers hidden in: VibeSquad, Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(94, 88, 104)",
+     "fs": "13px",
+     "w": 320,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "false",
+     "aria": "VibeSquad, 2 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "VibeSquad 2",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "vs back, site hidden",
+   "send": "Send 1 answer · +1 hidden (Site)",
+   "sendDisabled": false,
+   "sendTitle": "1 staged answer hidden in: Site",
+   "sendAria": null,
+   "bar": "1 ready to send · 1 lean not included | Use all leans (1) | Send 1 answer · +1 hidden (Site)",
+   "hiddenEls": [
+    {
+     "tag": "BUTTON",
+     "text": "Send 1 answer · +1 hidden (Site)",
+     "title": "1 staged answer hidden in: Site",
+     "tid": "boring-decision-send-btn",
+     "color": "rgb(255, 255, 255)",
+     "fs": "13px",
+     "w": 230,
+     "clipped": false
+    }
+   ],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "false",
+     "aria": "Site, 1 open, 1 staged hidden",
+     "title": "1 staged answer hidden",
+     "text": "Site 1",
+     "dot": {
+      "title": "",
+      "ariaHidden": "true",
+      "w": 6,
+      "bg": "rgb(109, 75, 201)"
+     }
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  },
+  {
+   "label": "all back",
+   "send": "Send 2 answers",
+   "sendDisabled": false,
+   "sendTitle": "",
+   "sendAria": null,
+   "bar": "2 ready to send · 1 lean not included | Use all leans (1) | Send 2 answers",
+   "hiddenEls": [],
+   "pills": [
+    {
+     "id": "vibesquad",
+     "pressed": "true",
+     "aria": "VibeSquad, 2 open",
+     "title": "",
+     "text": "VibeSquad 2",
+     "dot": null
+    },
+    {
+     "id": "efi",
+     "pressed": "true",
+     "aria": "Main Game Project, 1 open",
+     "title": "",
+     "text": "Main Game Project 1",
+     "dot": null
+    },
+    {
+     "id": "site",
+     "pressed": "true",
+     "aria": "Site, 1 open",
+     "title": "",
+     "text": "Site 1",
+     "dot": null
+    },
+    {
+     "id": "forework",
+     "pressed": "false",
+     "aria": "Forework, 2 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "Forework 2",
+     "dot": null
+    },
+    {
+     "id": "sbb",
+     "pressed": "false",
+     "aria": "SBB, 1 open",
+     "title": "In an asleep folder. Click to show anyway.",
+     "text": "SBB 1",
+     "dot": null
+    }
+   ]
+  }
+ ]
+}
