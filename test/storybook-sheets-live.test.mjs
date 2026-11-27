@@ -1,7 +1,7 @@
 // W4-sheets: sheet line rows use the live V6 mark bucket, clean chrome; contracts show rendered titles; #15 is the engine's only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanTodo, contractTitle, indexEntities, itemSheetData, lineChipLabel } from "../src/storybookLogic.ts";
+import { cleanTodo, contractTitle, formatNeverSays, indexEntities, itemSheetData, lineChipLabel } from "../src/storybookLogic.ts";
 import { liveLineBucket, PROGRESS_BUCKET_LABEL } from "../src/storybookProgress.ts";
 
 const src = { path: "data/items.json", line: 1 };
@@ -35,4 +35,13 @@ test("#15 no-story equals the engine finding only (no client fallback)", () => {
   const findings = [{ check: "#15", severity: "info", msg: "no story", entityRef: { kind: "item", id: "flagged" } }];
   assert.equal(itemSheetData(silent, idx, findings).isNoStory, false);
   assert.equal(itemSheetData(flagged, idx, findings).isNoStory, true);
+});
+
+test("V7 friction 4: formatNeverSays strips raw regex entries and shows plain words", () => {
+  assert.deepEqual(formatNeverSays(["haggle", "re:\\bhaggl\\w*"]), ["haggle"]);
+  assert.deepEqual(formatNeverSays(["please", "re:\\bhaggl\\w*"]), ["please", "haggl…"]);
+  assert.deepEqual(formatNeverSays(["panic", "re:\\bhospital[- ]ward\\b"]), ["panic", "hospital ward"]);
+  assert.deepEqual(formatNeverSays(["improvise", "re:\\bclinic\\b"]), ["improvise", "clinic"]);
+  assert.deepEqual(formatNeverSays(["please", "re:\\b(?:\\w+n't|I'm)\\b", "re:\\b(?:sorry|oops)\\b"]), ["please", "contractions", "sorry", "oops"]);
+  assert.deepEqual(formatNeverSays(["re:\\bleave (?:it|that) behind\\b"]), ["leave it/that behind"]);
 });

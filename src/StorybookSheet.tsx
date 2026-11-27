@@ -3,7 +3,7 @@
 // Line rows share the Review rows' live V6 mark state (useMarks via `marks`), clean chrome, and OK / Redo / Edit buttons.
 import { useMemo, type ReactNode } from "react";
 import {
-  checkLabel, cleanTodo, contractTitle, lineChipLabel, enemySheetData, entityFindings, fmtSource, fmtWindow, itemSheetData, locationView, plainText,
+  checkLabel, cleanTodo, contractTitle, lineChipLabel, enemySheetData, entityFindings, fmtSource, fmtWindow, formatNeverSays, itemSheetData, locationView, plainText,
   type CharacterView, type EntityIndex, type SbEntity, type SbFinding,
 } from "./storybookLogic";
 import { MarkButtons, type MarksApi } from "./StorybookMarks";
@@ -153,6 +153,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview, progre
 }) {
   renderChip = titled(renderChip);
   const d = ch.card?.data ?? {};
+  const neverSays = useMemo(() => formatNeverSays(d.neverSays), [d.neverSays]);
   const rivalIds: string[] = Array.isArray(d.rivals) ? d.rivals : Array.isArray(ch.entity?.data?.rivals) ? ch.entity.data.rivals : [];
   const ownFindings = useMemo(() => {
     const out: SbFinding[] = [];
@@ -182,7 +183,7 @@ export function CharacterSheet({ ch, idx, findings, renderChip, onReview, progre
             {d.who && <><dt>Who</dt><dd>{plainText(String(d.who))}</dd></>}
             {d.pronoun && <><dt>Pronoun</dt><dd>{String(d.pronoun)}</dd></>}
             {d.playerWord && <><dt>Calls player</dt><dd>{[d.playerWord, ...(d.callsPlayer ?? [])].join(", ")}</dd></>}
-            {Array.isArray(d.neverSays) && d.neverSays.length > 0 && <><dt>Never says</dt><dd>{d.neverSays.join(", ")}</dd></>}
+            {neverSays.length > 0 && <><dt>Never says</dt><dd>{neverSays.join(", ")}</dd></>}
             {Array.isArray(d.samples) && d.samples.length > 0 && <><dt>Samples</dt><dd>{d.samples.map((x: unknown) => plainText(String(x))).join(" / ")}</dd></>}
           </dl>
         </section>
