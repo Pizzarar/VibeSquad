@@ -134,7 +134,16 @@ export function adminOnlyProfile(name) {
 export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
 // idea-629: `schedule` / `scheduleName` mark a schedule-spawned agent (server/schedules.mjs execute); only the VS server sets them.
 // idea-1046: digestTurn (agent-duties.ts DIGEST_TURN_LABEL) is a digest marker like digestFor, so a meta patch may not set it either.
-export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'digestTurn', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName'];
+// idea-1205: vs.route (the spawn hook's route, server/hooks/agent-duties.ts ROUTE_LABEL) is read by server/verdict.mjs
+// isReviewerAgent (role=) and the usage fold (family=); no agent may rewrite it after spawn.
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'digestTurn', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived', 'schedule', 'scheduleName', 'vs.route'];
+/**
+ * idea-1205: labels only the before("agent.create") spawn hook writes. Not in STRIPPED_SPAWN_LABELS: the hook runs in-process
+ * in RunnerBackend.createAgent, which also runs in an agent's MCP sidecar / vs CLI and reaches this runner with that agent's
+ * token, so the runner cannot tell the hook's value from a forged one. createAgent drops any caller-supplied value BEFORE the
+ * hook runs instead (server/backend/runner-backend.mjs), and the meta patch 403 above keeps it from being rewritten later.
+ */
+export const HOOK_ONLY_SPAWN_LABELS = ['vs.route'];
 const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
 const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
 // Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.
